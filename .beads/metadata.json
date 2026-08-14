@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "yoyodyne",
+  "project_id": "a91de477-91fb-4f8a-8d91-f41f2cf5ef06"
+}
