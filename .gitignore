@@ -7,3 +7,4 @@
 
 # Local Go build output
 /yoyodyne
+/bin/

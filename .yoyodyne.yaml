@@ -18,8 +18,9 @@ approvals:
   integration: human
 
 checks:
-  - go test ./...
-  - go vet ./...
+  - make test
+  - make race
+  - make vet
 
 agents:
   developer:
