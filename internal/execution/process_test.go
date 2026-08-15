@@ -102,6 +102,16 @@ func TestSensitiveEnvironmentValues(t *testing.T) {
 	}
 }
 
+func TestRedactorReplacesOverlappingSecretsLongestFirst(t *testing.T) {
+	t.Parallel()
+
+	redactor := NewRedactor("token", "token-suffix")
+	got := redactor.Redact("short=token long=token-suffix")
+	if got != "short=[REDACTED] long=[REDACTED]" {
+		t.Fatalf("Redact() = %q", got)
+	}
+}
+
 func helperCommand(mode, secret string) Command {
 	return Command{
 		Name:     os.Args[0],

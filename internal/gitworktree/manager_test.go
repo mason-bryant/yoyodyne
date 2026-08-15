@@ -61,6 +61,37 @@ func TestManagerCreateInspectPreserveAndCleanup(t *testing.T) {
 	}
 }
 
+func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-base", BaseRef: "main"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	var worktreeBase string
+	for _, command := range runner.commands {
+		for index := 0; index+3 < len(command); index++ {
+			if command[index] == "worktree" && command[index+1] == "add" {
+				worktreeBase = command[len(command)-1]
+			}
+		}
+	}
+	if worktreeBase != worktree.BaseCommit {
+		t.Fatalf("git worktree base = %q, want resolved commit %q", worktreeBase, worktree.BaseCommit)
+	}
+}
+
 func TestManagerRejectsReuseAndDirtyPrimaryRepository(t *testing.T) {
 	t.Parallel()
 
@@ -404,4 +435,14 @@ func writeFile(t *testing.T, root, relative, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("WriteFile(%s) error = %v", relative, err)
 	}
+}
+
+type recordingProcessRunner struct {
+	delegate execution.ProcessRunner
+	commands [][]string
+}
+
+func (r *recordingProcessRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	r.commands = append(r.commands, append([]string(nil), command.Args...))
+	return r.delegate.Run(ctx, command, observer)
 }

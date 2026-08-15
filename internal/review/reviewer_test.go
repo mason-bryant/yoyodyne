@@ -93,7 +93,9 @@ func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	t.Parallel()
 
 	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"fine"}`}
-	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: "review-model"}).Review(context.Background(), newRequest(nil)); err != nil {
+	request := newRequest(nil)
+	request.RedactValues = []string{"provider-secret"}
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: "review-model"}).Review(context.Background(), request); err != nil {
 		t.Fatalf("Review() error = %v", err)
 	}
 	got := provider.request
@@ -112,6 +114,9 @@ func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	}
 	if got.WorkingDirectory != "/worktree" || got.Model != "review-model" || got.Timeout != defaultReviewTimeout {
 		t.Errorf("request = %#v", got)
+	}
+	if !reflect.DeepEqual(got.RedactValues, []string{"provider-secret"}) {
+		t.Errorf("redact values = %#v", got.RedactValues)
 	}
 }
 

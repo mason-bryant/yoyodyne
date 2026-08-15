@@ -42,6 +42,7 @@ type Request struct {
 	WorktreePath string
 	Changes      gitworktree.ChangeDiff
 	Checks       []checks.Result
+	RedactValues []string
 	LastSequence uint64
 	EventSink    func(execution.Event) error
 }
@@ -107,6 +108,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		AllowedTools:     []string{"Glob", "Grep", "Read"},
 		Timeout:          r.timeout(),
 		LastSequence:     sequence.Last(),
+		RedactValues:     request.RedactValues,
 		EventSink:        request.EventSink,
 	})
 	if err != nil {

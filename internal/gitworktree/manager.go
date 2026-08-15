@@ -203,7 +203,7 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		return Worktree{}, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, branchResult.ExitCode, strings.TrimSpace(branchResult.Stderr))
 	}
 
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", "-b", branch, path, request.BaseRef)
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", "-b", branch, path, baseCommit)
 	if err != nil {
 		return Worktree{}, err
 	}

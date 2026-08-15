@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -231,6 +232,11 @@ func NewRedactor(values ...string) Redactor {
 			filtered = append(filtered, value)
 		}
 	}
+	// Replace longer overlapping values first. Otherwise redacting "token"
+	// before "token-suffix" would persist "[REDACTED]-suffix".
+	sort.SliceStable(filtered, func(i, j int) bool {
+		return len(filtered[i]) > len(filtered[j])
+	})
 	return Redactor{values: filtered}
 }
 

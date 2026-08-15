@@ -57,7 +57,11 @@ func Assemble(request Request) (Bundle, error) {
 	}
 
 	referencePaths := append([]string(nil), request.References...)
-	referencePaths = append(referencePaths, ExtractMarkdownReferences(request.WorkItem)...)
+	implicitReferences, err := existingImplicitReferences(root, ExtractMarkdownReferences(request.WorkItem))
+	if err != nil {
+		return Bundle{}, err
+	}
+	referencePaths = append(referencePaths, implicitReferences...)
 	referencePaths = uniqueSorted(referencePaths)
 
 	base := renderWorkItem(request.WorkItem)
@@ -111,13 +115,31 @@ func ExtractMarkdownReferences(item beads.WorkItem) []string {
 	return uniqueSorted(references)
 }
 
-func readReference(root, referencePath string, remainingBytes int) (Reference, error) {
-	clean := filepath.Clean(referencePath)
-	if filepath.IsAbs(referencePath) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return Reference{}, fmt.Errorf("reference %q must be a repository-relative path", referencePath)
+func existingImplicitReferences(root string, referencePaths []string) ([]string, error) {
+	existing := make([]string, 0, len(referencePaths))
+	for _, referencePath := range referencePaths {
+		clean, err := validateReferencePath(referencePath)
+		if err != nil {
+			return nil, err
+		}
+		_, err = os.Lstat(filepath.Join(root, clean))
+		if errors.Is(err, os.ErrNotExist) {
+			// Work-item prose can name a Markdown deliverable that does not
+			// exist yet. Only explicit Request.References are required inputs.
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect implicit reference %q: %w", referencePath, err)
+		}
+		existing = append(existing, referencePath)
 	}
-	if strings.ToLower(filepath.Ext(clean)) != ".md" {
-		return Reference{}, fmt.Errorf("reference %q must be a Markdown file", referencePath)
+	return existing, nil
+}
+
+func readReference(root, referencePath string, remainingBytes int) (Reference, error) {
+	clean, err := validateReferencePath(referencePath)
+	if err != nil {
+		return Reference{}, err
 	}
 	path := filepath.Join(root, clean)
 	resolved, err := filepath.EvalSymlinks(path)
@@ -156,6 +178,17 @@ func readReference(root, referencePath string, remainingBytes int) (Reference, e
 	return Reference{Path: filepath.ToSlash(relative), Content: string(data)}, nil
 }
 
+func validateReferencePath(referencePath string) (string, error) {
+	clean := filepath.Clean(referencePath)
+	if filepath.IsAbs(referencePath) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("reference %q must be a repository-relative path", referencePath)
+	}
+	if strings.ToLower(filepath.Ext(clean)) != ".md" {
+		return "", fmt.Errorf("reference %q must be a Markdown file", referencePath)
+	}
+	return clean, nil
+}
+
 func renderWorkItem(item beads.WorkItem) string {
 	return fmt.Sprintf(`# Assigned work item
 
@@ -174,7 +207,11 @@ Status: %s
 ## Acceptance criteria
 
 %s
-`, item.ID, item.Title, item.Status, emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria))
+
+## Notes
+
+%s
+`, item.ID, item.Title, item.Status, emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
 }
 
 func emptyFallback(value string) string {

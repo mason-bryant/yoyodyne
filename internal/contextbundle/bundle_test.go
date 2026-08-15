@@ -23,6 +23,7 @@ func TestAssembleUsesExplicitDeterministicReferences(t *testing.T) {
 		Description:        "Read docs/z.md and docs/a.md.",
 		Design:             "Bounded change",
 		AcceptanceCriteria: "Tests pass",
+		Notes:              "Preserve prior operator guidance.",
 	}
 	bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, References: []string{"docs/z.md"}})
 	if err != nil {
@@ -34,6 +35,28 @@ func TestAssembleUsesExplicitDeterministicReferences(t *testing.T) {
 	}
 	if strings.Index(bundle.Text, "## Referenced file: docs/a.md") > strings.Index(bundle.Text, "## Referenced file: docs/z.md") {
 		t.Fatalf("bundle is not deterministic: %s", bundle.Text)
+	}
+	if !strings.Contains(bundle.Text, "## Notes\n\nPreserve prior operator guidance.") {
+		t.Fatalf("bundle omitted work-item notes: %s", bundle.Text)
+	}
+}
+
+func TestAssembleSkipsMissingImplicitMarkdownDeliverables(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	item := beads.WorkItem{
+		ID:          "yoyodyne-1",
+		Title:       "Create documentation",
+		Status:      "open",
+		Description: "Create docs/new-guide.md.",
+	}
+	bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if len(bundle.References) != 0 {
+		t.Fatalf("references = %#v, want no missing implicit deliverables", bundle.References)
 	}
 }
 
