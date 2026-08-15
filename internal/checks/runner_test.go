@@ -2,6 +2,8 @@ package checks
 
 import (
 	"context"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -31,6 +33,62 @@ func TestRunnerStopsAfterFailedCheck(t *testing.T) {
 	}
 	if len(events) != 5 || lastSequence != 10 {
 		t.Fatalf("events = %d, last sequence = %d", len(events), lastSequence)
+	}
+}
+
+func TestRunnerUsesANonLoginShell(t *testing.T) {
+	t.Parallel()
+
+	process := &recordingRunner{}
+	_, _, err := (Runner{Process: process}).Run(
+		context.Background(),
+		"run-0123456789abcdef0123456789abcdef",
+		t.TempDir(),
+		[]string{"true"},
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !reflect.DeepEqual(process.command.Args, []string{"-c", "true"}) {
+		t.Fatalf("shell args = %#v, want non-login shell", process.command.Args)
+	}
+}
+
+func TestRunnerReturnsOnlyLastAcceptedEventSequence(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name       string
+		rejectType execution.EventType
+		wantLast   uint64
+	}{
+		{name: "started", rejectType: execution.EventCommandStarted, wantLast: 5},
+		{name: "output", rejectType: execution.EventProcessOutput, wantLast: 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			_, lastSequence, err := (Runner{Process: execution.OSProcessRunner{}}).Run(
+				context.Background(),
+				"run-0123456789abcdef0123456789abcdef",
+				t.TempDir(),
+				[]string{"printf 'output\\n'"},
+				5,
+				func(event execution.Event) error {
+					if event.Type == test.rejectType {
+						return errors.New("event rejected")
+					}
+					return nil
+				},
+			)
+			if err == nil || !strings.Contains(err.Error(), "event rejected") {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if lastSequence != test.wantLast {
+				t.Fatalf("last sequence = %d, want %d", lastSequence, test.wantLast)
+			}
+		})
 	}
 }
 
@@ -64,4 +122,13 @@ func TestRunnerRedactsSensitiveCheckOutputBeforeEvents(t *testing.T) {
 			t.Fatalf("event persisted sensitive output: %s", event.Payload)
 		}
 	}
+}
+
+type recordingRunner struct {
+	command execution.Command
+}
+
+func (r *recordingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.command = command
+	return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
 }

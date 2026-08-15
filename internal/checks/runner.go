@@ -46,24 +46,29 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 		timeout = defaultTimeout
 	}
 	sequence := execution.NewSequence(lastSequence)
+	lastAccepted := lastSequence
 	results := make([]Result, 0, len(commands))
 	redactor := execution.NewRedactor(r.RedactValues...)
 	for _, command := range commands {
 		if strings.TrimSpace(command) == "" {
-			return results, sequence.Last(), errors.New("check command cannot be empty")
+			return results, lastAccepted, errors.New("check command cannot be empty")
 		}
 		safeCommand := redactor.Redact(command)
 		if err := emit(runID, sequence, clock, sink, execution.EventCommandStarted, map[string]any{"command": safeCommand, "kind": "check"}); err != nil {
-			return results, sequence.Last(), err
+			return results, lastAccepted, err
 		}
+		lastAccepted = sequence.Last()
 		var observerErrors []error
 		processResult, err := r.Process.Run(ctx, execution.Command{
 			Name:     shell,
-			Args:     []string{"-lc", command},
+			Args:     []string{"-c", command},
 			Dir:      directory,
 			Timeout:  timeout,
 			Redactor: redactor,
 		}, func(output execution.Output) {
+			if len(observerErrors) > 0 {
+				return
+			}
 			if observerErr := emit(runID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
 				"kind":    "check",
 				"command": safeCommand,
@@ -71,13 +76,15 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 				"text":    output.Text,
 			}); observerErr != nil {
 				observerErrors = append(observerErrors, observerErr)
+				return
 			}
+			lastAccepted = sequence.Last()
 		})
 		if err != nil {
-			return results, sequence.Last(), fmt.Errorf("run check %q: %w", safeCommand, err)
+			return results, lastAccepted, fmt.Errorf("run check %q: %w", safeCommand, err)
 		}
 		if len(observerErrors) > 0 {
-			return results, sequence.Last(), errors.Join(observerErrors...)
+			return results, lastAccepted, errors.Join(observerErrors...)
 		}
 		passed := processResult.Status == execution.ProcessSucceeded
 		result := Result{Command: safeCommand, Process: processResult, Passed: passed}
@@ -89,13 +96,14 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			"status":    processResult.Status,
 			"exit_code": processResult.ExitCode,
 		}); err != nil {
-			return results, sequence.Last(), err
+			return results, lastAccepted, err
 		}
+		lastAccepted = sequence.Last()
 		if !passed {
 			break
 		}
 	}
-	return results, sequence.Last(), nil
+	return results, lastAccepted, nil
 }
 
 func emit(runID string, sequence *execution.Sequence, clock execution.Clock, sink func(execution.Event) error, eventType execution.EventType, payload any) error {

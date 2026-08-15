@@ -2,6 +2,7 @@ package gitworktree
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -89,6 +90,31 @@ func TestManagerCreatesWorktreeFromResolvedBaseCommit(t *testing.T) {
 	}
 	if worktreeBase != worktree.BaseCommit {
 		t.Fatalf("git worktree base = %q, want resolved commit %q", worktreeBase, worktree.BaseCommit)
+	}
+}
+
+func TestManagerReturnsCreatedIdentityWhenPostCreateInspectionFails(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &postCreateFailureRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-partial", BaseRef: "main"})
+	if err == nil || !strings.Contains(err.Error(), "verify created worktree") {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if worktree.Path == "" || worktree.Branch == "" || worktree.BaseCommit == "" {
+		t.Fatalf("Create() discarded created identity: %#v", worktree)
+	}
+	if _, err := os.Stat(worktree.Path); err != nil {
+		t.Fatalf("created worktree is not recoverable at %s: %v", worktree.Path, err)
 	}
 }
 
@@ -445,4 +471,29 @@ type recordingProcessRunner struct {
 func (r *recordingProcessRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
 	r.commands = append(r.commands, append([]string(nil), command.Args...))
 	return r.delegate.Run(ctx, command, observer)
+}
+
+type postCreateFailureRunner struct {
+	delegate execution.ProcessRunner
+	created  bool
+}
+
+func (r *postCreateFailureRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if r.created && containsArguments(command.Args, "worktree", "list") {
+		return execution.ProcessResult{}, errors.New("injected post-create inspection failure")
+	}
+	result, err := r.delegate.Run(ctx, command, observer)
+	if err == nil && result.Status == execution.ProcessSucceeded && containsArguments(command.Args, "worktree", "add") {
+		r.created = true
+	}
+	return result, err
+}
+
+func containsArguments(arguments []string, first, second string) bool {
+	for index := 0; index+1 < len(arguments); index++ {
+		if arguments[index] == first && arguments[index+1] == second {
+			return true
+		}
+	}
+	return false
 }

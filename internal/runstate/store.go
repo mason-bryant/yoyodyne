@@ -3,6 +3,7 @@ package runstate
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,6 +29,23 @@ type Store struct {
 	productID domain.ProductID
 }
 
+type ExistingWorkItemError struct {
+	State State
+}
+
+func (e ExistingWorkItemError) Error() string {
+	return fmt.Sprintf("work item %s already has incomplete run %s", e.State.WorkItemID, e.State.RunID)
+}
+
+type CapacityError struct {
+	Limit  int
+	Active int
+}
+
+func (e CapacityError) Error() string {
+	return fmt.Sprintf("developer capacity is full: %d active run(s), limit %d", e.Active, e.Limit)
+}
+
 func NewStore(root string, productID domain.ProductID) (*Store, error) {
 	if !filepath.IsAbs(root) {
 		return nil, errors.New("state root must be an absolute path")
@@ -43,6 +61,50 @@ func NewStore(root string, productID domain.ProductID) (*Store, error) {
 
 func (s *Store) Root() string {
 	return s.root
+}
+
+// Reserve atomically checks duplicate work and global developer capacity and
+// creates the pending run state. The advisory lock serializes this short
+// check/create critical section across Yoyodyne processes and is released by
+// the operating system if a process exits unexpectedly.
+func (s *Store) Reserve(ctx context.Context, state State, maxConcurrent int) error {
+	if maxConcurrent < 1 {
+		return errors.New("max concurrent developers must be greater than zero")
+	}
+	if state.Status != StatusPending {
+		return fmt.Errorf("reserved run state must be pending, got %q", state.Status)
+	}
+	if err := s.validateState(state); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create run state directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(s.root, ".reservation.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("open run reservation lock: %w", err)
+	}
+	defer lock.Close()
+	if err := lockStateFile(ctx, lock); err != nil {
+		return fmt.Errorf("lock run reservations: %w", err)
+	}
+
+	active, err := s.Incomplete()
+	if err != nil {
+		return fmt.Errorf("discover incomplete runs while reserving: %w", err)
+	}
+	for _, existing := range active {
+		if existing.WorkItemID == state.WorkItemID {
+			return ExistingWorkItemError{State: existing}
+		}
+	}
+	if len(active) >= maxConcurrent {
+		return CapacityError{Limit: maxConcurrent, Active: len(active)}
+	}
+	if err := s.Create(state); err != nil {
+		return fmt.Errorf("create reserved run state: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Create(state State) error {

@@ -32,9 +32,8 @@ type WorktreeManager interface {
 }
 
 type StateStore interface {
-	Create(state runstate.State) error
+	Reserve(ctx context.Context, state runstate.State, maxConcurrent int) error
 	Save(state runstate.State) error
-	Incomplete() ([]runstate.State, error)
 	AppendEvent(event execution.Event) error
 }
 
@@ -118,16 +117,6 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("repository is not ready for an isolated run: %w", err)
 	}
-	incomplete, err := p.Store.Incomplete()
-	if err != nil {
-		return Outcome{}, fmt.Errorf("discover incomplete runs: %w", err)
-	}
-	for _, state := range incomplete {
-		if state.WorkItemID == workItemID {
-			return Outcome{}, ExistingRunError{State: state}
-		}
-	}
-
 	runID, err := p.NewRunID()
 	if err != nil {
 		return Outcome{}, err
@@ -144,8 +133,12 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		StartedAt:     now,
 		UpdatedAt:     now,
 	}
-	if err := p.Store.Create(state); err != nil {
-		return Outcome{}, fmt.Errorf("create run state: %w", err)
+	if err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers); err != nil {
+		var existing runstate.ExistingWorkItemError
+		if errors.As(err, &existing) {
+			return Outcome{}, ExistingRunError{State: existing.State}
+		}
+		return Outcome{}, fmt.Errorf("reserve developer run: %w", err)
 	}
 	outcome = Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending}
 	claimed := false
@@ -190,6 +183,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	}
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{RunID: runID, WorkItemID: workItemID, BaseRef: "HEAD"})
 	if err != nil {
+		if worktree.Path != "" {
+			state.WorktreePath = worktree.Path
+			state.Branch = worktree.Branch
+			state.BaseCommit = worktree.BaseCommit
+			outcome.WorktreePath = worktree.Path
+			outcome.Branch = worktree.Branch
+			outcome.BaseCommit = worktree.BaseCommit
+		}
 		return fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
 	}
 	state.WorktreePath = worktree.Path

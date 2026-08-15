@@ -137,6 +137,22 @@ func TestReviewKeepsDeveloperInstructionsOutOfTheSystemPrompt(t *testing.T) {
 	}
 }
 
+func TestReviewRedactsEvidenceBeforeSendingItToTheProvider(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"fine"}`}
+	request := newRequest(nil)
+	request.Context += "\nCredential: review-secret"
+	request.Changes.Patch = "+review-secret\n"
+	request.RedactValues = []string{"review-secret"}
+	if _, err := (Reviewer{Backend: provider, Clock: reviewClock{}}).Review(context.Background(), request); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if strings.Contains(provider.request.Prompt, "review-secret") || !strings.Contains(provider.request.Prompt, "[REDACTED]") {
+		t.Fatalf("provider prompt was not redacted: %q", provider.request.Prompt)
+	}
+}
+
 func TestReviewSequencesItsEventsAroundTheProviderRun(t *testing.T) {
 	t.Parallel()
 
@@ -195,6 +211,26 @@ func TestReviewReturnsHighestSequenceWhenBackendFailsAfterEvents(t *testing.T) {
 	}
 	if result.LastSequence != 10 {
 		t.Fatalf("Review() LastSequence = %d, want 10", result.LastSequence)
+	}
+}
+
+func TestReviewDoesNotAdvanceSequenceWhenProviderEventIsRejected(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{providerEvents: 1}
+	request := newRequest(func(event execution.Event) error {
+		if event.Type == execution.EventAgentMessage {
+			return errors.New("event log unavailable")
+		}
+		return nil
+	})
+	request.LastSequence = 7
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}}).Review(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "event log unavailable") {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.LastSequence != 8 {
+		t.Fatalf("Review() LastSequence = %d, want last accepted sequence 8", result.LastSequence)
 	}
 }
 

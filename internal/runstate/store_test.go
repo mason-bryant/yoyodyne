@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -72,6 +73,62 @@ func TestStoreLifecycleAndIncompleteDiscovery(t *testing.T) {
 	}
 	if len(incomplete) != 0 {
 		t.Fatalf("Incomplete() = %#v, want empty", incomplete)
+	}
+}
+
+func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() first error = %v", err)
+	}
+	second, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() second error = %v", err)
+	}
+	firstState := testState(t, StatusPending)
+	secondState := testState(t, StatusPending)
+	secondState.WorkItemID = "yoyodyne-other"
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	start := make(chan struct{})
+	errorsByCall := make(chan error, 2)
+	for _, reservation := range []struct {
+		store *Store
+		state State
+	}{{first, firstState}, {second, secondState}} {
+		reservation := reservation
+		go func() {
+			<-start
+			errorsByCall <- reservation.store.Reserve(ctx, reservation.state, 1)
+		}()
+	}
+	close(start)
+	var succeeded, capacityRejected int
+	for range 2 {
+		err := <-errorsByCall
+		if err == nil {
+			succeeded++
+			continue
+		}
+		var capacity CapacityError
+		if errors.As(err, &capacity) {
+			capacityRejected++
+			continue
+		}
+		t.Fatalf("Reserve() unexpected error = %v", err)
+	}
+	if succeeded != 1 || capacityRejected != 1 {
+		t.Fatalf("Reserve() succeeded = %d, capacity rejected = %d", succeeded, capacityRejected)
+	}
+	active, err := first.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("Incomplete() = %#v, want exactly one reservation", active)
 	}
 }
 

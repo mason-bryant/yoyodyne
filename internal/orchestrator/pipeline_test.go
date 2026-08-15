@@ -168,6 +168,39 @@ func TestPipelineCapturesChangesWhenBackendReturnsInfrastructureError(t *testing
 	}
 }
 
+func TestPipelineRecordsPartialIdentityWhenWorktreeCreationFailsAfterAdd(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	partial := gitworktree.Worktree{
+		RunID:      pipelineRunID,
+		WorkItemID: tracker.item.ID,
+		Path:       "/preserved/worktree",
+		Branch:     "yoyodyne/yoyodyne-task/01234567",
+		BaseRef:    "HEAD",
+		BaseCommit: strings.Repeat("a", 40),
+	}
+	pipeline.Worktrees = partialWorktreeManager{worktree: partial, err: errors.New("post-create inspection failed")}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "post-create inspection failed") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.WorktreePath != partial.Path || outcome.Branch != partial.Branch || outcome.BaseCommit != partial.BaseCommit {
+		t.Fatalf("Run() discarded partial worktree identity: %#v", outcome)
+	}
+	state, loadErr := store.Load(outcome.RunID)
+	if loadErr != nil {
+		t.Fatalf("Load() error = %v", loadErr)
+	}
+	if state.WorktreePath != partial.Path || !strings.Contains(tracker.notes, partial.Path) {
+		t.Fatalf("state = %#v, notes = %q", state, tracker.notes)
+	}
+}
+
 func TestPipelineRefusesUnauthenticatedOrDuplicateRunBeforeClaim(t *testing.T) {
 	t.Parallel()
 
@@ -208,6 +241,37 @@ func TestPipelineRefusesUnauthenticatedOrDuplicateRunBeforeClaim(t *testing.T) {
 	}
 	if tracker.claimed {
 		t.Fatal("duplicate run claimed work")
+	}
+}
+
+func TestPipelineEnforcesConfiguredDeveloperCapacityBeforeClaim(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{availability: backend.Availability{Installed: true, Authenticated: true}}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	now := time.Now().UTC()
+	active := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         "run-fedcba9876543210fedcba9876543210",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    "yoyodyne-other",
+		Backend:       domain.BackendClaudeCode,
+		Status:        runstate.StatusRunning,
+		StartedAt:     now,
+		UpdatedAt:     now,
+	}
+	if err := store.Create(active); err != nil {
+		t.Fatalf("Create() active state error = %v", err)
+	}
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !strings.Contains(err.Error(), "developer capacity is full") {
+		t.Fatalf("Run() capacity error = %v", err)
+	}
+	if tracker.claimed {
+		t.Fatal("capacity-limited run claimed work")
 	}
 }
 
@@ -313,6 +377,21 @@ type fakeTracker struct {
 	claimed bool
 	notes   string
 	onClaim func() error
+}
+
+type partialWorktreeManager struct {
+	worktree gitworktree.Worktree
+	err      error
+}
+
+func (partialWorktreeManager) ValidateReady(context.Context) error { return nil }
+
+func (m partialWorktreeManager) Create(context.Context, gitworktree.CreateRequest) (gitworktree.Worktree, error) {
+	return m.worktree, m.err
+}
+
+func (partialWorktreeManager) SummarizeChanges(context.Context, gitworktree.Worktree) (gitworktree.ChangeSummary, error) {
+	return gitworktree.ChangeSummary{}, nil
 }
 
 func (f *fakeTracker) Show(context.Context, string) (beads.WorkItem, error) {

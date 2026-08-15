@@ -213,10 +213,10 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	worktree := Worktree{RunID: request.RunID, WorkItemID: request.WorkItemID, Path: path, Branch: branch, BaseRef: request.BaseRef, BaseCommit: baseCommit}
 	inspection, err := m.Inspect(ctx, worktree)
 	if err != nil {
-		return Worktree{}, fmt.Errorf("verify created worktree: %w", err)
+		return worktree, fmt.Errorf("verify created worktree: %w", err)
 	}
 	if !inspection.Registered || inspection.Branch != branch {
-		return Worktree{}, errors.New("created worktree is not registered with the expected branch")
+		return worktree, errors.New("created worktree is not registered with the expected branch")
 	}
 	return worktree, nil
 }

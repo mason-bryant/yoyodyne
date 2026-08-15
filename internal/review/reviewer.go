@@ -78,7 +78,8 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		return Result{}, err
 	}
 	systemPrompt := reviewSystemPrompt()
-	prompt := reviewEvidencePrompt(request)
+	redactor := execution.NewRedactor(request.RedactValues...)
+	prompt := redactor.Redact(reviewEvidencePrompt(request))
 	inputBytes := len(systemPrompt) + len(prompt)
 	if inputBytes > MaxReviewInputBytes {
 		return Result{}, fmt.Errorf("review input is %d bytes, limit is %d", inputBytes, MaxReviewInputBytes)
@@ -91,17 +92,19 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		"patch_bytes":  len(request.Changes.Patch),
 		"truncated":    request.Changes.Truncated,
 	}); err != nil {
-		return Result{LastSequence: sequence.Last()}, err
+		return Result{LastSequence: request.LastSequence}, err
 	}
 	lastSequence := sequence.Last()
 	backendEventSink := func(event execution.Event) error {
+		if request.EventSink != nil {
+			if err := request.EventSink(event); err != nil {
+				return err
+			}
+		}
 		if event.Sequence > lastSequence {
 			lastSequence = event.Sequence
 		}
-		if request.EventSink == nil {
-			return nil
-		}
-		return request.EventSink(event)
+		return nil
 	}
 
 	// The reviewer is independent of the developer that produced the change:
@@ -152,7 +155,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		"decision":     decision,
 		"findings":     len(verdict.Findings),
 	}); err != nil {
-		result.LastSequence = sequence.Last()
+		result.LastSequence = lastSequence
 		return result, err
 	}
 	result.LastSequence = sequence.Last()
