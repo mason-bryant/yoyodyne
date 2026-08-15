@@ -2,7 +2,9 @@ package claudecode
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"reflect"
@@ -123,6 +125,75 @@ func TestRunClassifiesProviderError(t *testing.T) {
 	}
 	if !result.IsError || result.StopReason != "api_error" || result.FinalText != "Not logged in" {
 		t.Fatalf("Run() result = %#v", result)
+	}
+}
+
+func TestRunRedactsDecodedProviderStringsContainingJSONEscapes(t *testing.T) {
+	t.Parallel()
+
+	secret := "quoted\"and\\slashed"
+	assistant, err := json.Marshal(map[string]any{
+		"type":       "assistant",
+		"session_id": "session-1",
+		"message": map[string]any{"content": []map[string]any{{
+			"type": "text",
+			"text": "working with " + secret,
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() assistant error = %v", err)
+	}
+	completed, err := json.Marshal(map[string]any{
+		"type":       "result",
+		"subtype":    "success",
+		"session_id": "session-1",
+		"is_error":   false,
+		"result":     "done with " + secret,
+		"usage":      map[string]any{"provider_note": secret},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() result error = %v", err)
+	}
+	stream := string(assistant) + "\n" + string(completed) + "\n"
+	if strings.Contains(stream, secret) {
+		t.Fatal("test stream did not JSON-escape the secret")
+	}
+	var events []execution.Event
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		RedactValues:     []string{secret},
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.Contains(result.FinalText, secret) || !strings.Contains(result.FinalText, "[REDACTED]") {
+		t.Fatalf("FinalText = %q", result.FinalText)
+	}
+	if result.Process.Stdout != "" {
+		t.Fatalf("raw provider JSON was retained: %q", result.Process.Stdout)
+	}
+	var usage any
+	if err := json.Unmarshal(result.Usage, &usage); err != nil {
+		t.Fatalf("Unmarshal() usage error = %v", err)
+	}
+	if strings.Contains(fmt.Sprint(usage), secret) {
+		t.Fatalf("usage persisted decoded secret: %s", result.Usage)
+	}
+	for _, event := range events {
+		var payload any
+		if err := json.Unmarshal(event.Payload, &payload); err != nil {
+			t.Fatalf("Unmarshal() event payload error = %v", err)
+		}
+		if strings.Contains(fmt.Sprint(payload), secret) {
+			t.Fatalf("event persisted decoded secret: %s", event.Payload)
+		}
 	}
 }
 

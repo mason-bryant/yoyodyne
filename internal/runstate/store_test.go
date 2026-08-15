@@ -110,6 +110,64 @@ func TestStoreEventsAndMalformedDiscovery(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsEventsItsReaderCannotLoad(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	baseEvent, err := execution.NewEvent(state.RunID, 1, state.StartedAt, execution.EventProcessOutput, "harness", map[string]any{
+		"text": "",
+	})
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	baseEncoded, err := encodeEvent(baseEvent)
+	if err != nil {
+		t.Fatalf("encodeEvent() error = %v", err)
+	}
+	maxTextBytes := maxEncodedEventBytes - len(baseEncoded)
+	boundaryEvent, err := execution.NewEvent(state.RunID, 1, state.StartedAt, execution.EventProcessOutput, "harness", map[string]any{
+		"text": strings.Repeat("x", maxTextBytes),
+	})
+	if err != nil {
+		t.Fatalf("NewEvent() boundary error = %v", err)
+	}
+	if err := store.AppendEvent(boundaryEvent); err != nil {
+		t.Fatalf("AppendEvent() boundary error = %v", err)
+	}
+	if events, err := store.LoadEvents(state.RunID); err != nil || len(events) != 1 {
+		t.Fatalf("LoadEvents() boundary = %d events, error %v", len(events), err)
+	}
+
+	path, err := store.eventPath(state.RunID)
+	if err != nil {
+		t.Fatalf("eventPath() error = %v", err)
+	}
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() before oversized append error = %v", err)
+	}
+	oversizedEvent, err := execution.NewEvent(state.RunID, 2, state.StartedAt, execution.EventProcessOutput, "harness", map[string]any{
+		"text": strings.Repeat("x", maxTextBytes+1),
+	})
+	if err != nil {
+		t.Fatalf("NewEvent() oversized error = %v", err)
+	}
+	if err := store.AppendEvent(oversizedEvent); err == nil || !strings.Contains(err.Error(), "encoded event is") {
+		t.Fatalf("AppendEvent() oversized error = %v", err)
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() after oversized append error = %v", err)
+	}
+	if after.Size() != before.Size() {
+		t.Fatalf("oversized append changed event log size from %d to %d", before.Size(), after.Size())
+	}
+}
+
 func TestStoreDoesNotPersistEnvironmentSecrets(t *testing.T) {
 	t.Parallel()
 

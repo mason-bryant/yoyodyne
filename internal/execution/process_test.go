@@ -33,6 +33,24 @@ func TestOSProcessRunnerSuccessAndRedaction(t *testing.T) {
 	}
 }
 
+func TestOSProcessRunnerRedactsEveryLineOfAMultilineSecret(t *testing.T) {
+	t.Parallel()
+
+	secret := "private-key-header\nprivate-key-body\nprivate-key-footer"
+	result, err := (OSProcessRunner{}).Run(context.Background(), helperCommand("success", secret), nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	for _, fragment := range strings.Split(secret, "\n") {
+		if strings.Contains(result.Stdout+result.Stderr, fragment) {
+			t.Fatalf("result persisted multiline secret fragment %q: %q", fragment, result.Stdout+result.Stderr)
+		}
+	}
+	if strings.Count(result.Stdout, "[REDACTED]") != 3 {
+		t.Fatalf("Run() stdout = %q, want three redactions", result.Stdout)
+	}
+}
+
 func TestOSProcessRunnerFailure(t *testing.T) {
 	t.Parallel()
 

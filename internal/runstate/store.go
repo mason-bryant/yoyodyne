@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,11 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 )
+
+// maxEncodedEventBytes is the complete JSONL record bound, including its
+// trailing newline. AppendEvent and LoadEvents share it so the store never
+// writes an event that its own reader cannot load.
+const maxEncodedEventBytes = 1 << 20
 
 type Store struct {
 	root      string
@@ -164,6 +170,13 @@ func (s *Store) AppendEvent(event execution.Event) error {
 	if _, err := s.Load(event.RunID); err != nil {
 		return fmt.Errorf("load run before appending event: %w", err)
 	}
+	encoded, err := encodeEvent(event)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > maxEncodedEventBytes {
+		return fmt.Errorf("encoded event is %d bytes, limit is %d", len(encoded), maxEncodedEventBytes)
+	}
 	path, err := s.eventPath(event.RunID)
 	if err != nil {
 		return err
@@ -177,11 +190,14 @@ func (s *Store) AppendEvent(event execution.Event) error {
 	if err != nil {
 		return fmt.Errorf("open event log: %w", err)
 	}
-	encoder := json.NewEncoder(file)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(event); err != nil {
+	written, err := file.Write(encoded)
+	if err != nil {
 		file.Close()
 		return fmt.Errorf("append event: %w", err)
+	}
+	if written != len(encoded) {
+		file.Close()
+		return fmt.Errorf("append event: %w", io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
@@ -212,7 +228,7 @@ func (s *Store) LoadEvents(runID string) ([]execution.Event, error) {
 
 	var events []execution.Event
 	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 64*1024), 1<<20)
+	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
 	for scanner.Scan() {
 		event, err := execution.DecodeEvent(scanner.Bytes())
 		if err != nil {
@@ -227,6 +243,16 @@ func (s *Store) LoadEvents(runID string) ([]execution.Event, error) {
 		return nil, fmt.Errorf("read event log: %w", err)
 	}
 	return events, nil
+}
+
+func encodeEvent(event execution.Event) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(event); err != nil {
+		return nil, fmt.Errorf("encode event: %w", err)
+	}
+	return buffer.Bytes(), nil
 }
 
 func (s *Store) validateState(state State) error {

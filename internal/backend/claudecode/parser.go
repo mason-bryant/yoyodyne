@@ -16,6 +16,7 @@ type streamParser struct {
 	runID     string
 	sequence  *execution.Sequence
 	clock     execution.Clock
+	redactor  execution.Redactor
 	sink      func(execution.Event) error
 	result    backend.RunResult
 	sawResult bool
@@ -57,8 +58,8 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, sink func(execution.Event) error) *streamParser {
-	return &streamParser{runID: runID, sequence: execution.NewSequence(lastSequence), clock: clock, sink: sink}
+func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error) *streamParser {
+	return &streamParser{runID: runID, sequence: execution.NewSequence(lastSequence), clock: clock, redactor: redactor, sink: sink}
 }
 
 func (p *streamParser) ParseLine(line string) error {
@@ -71,6 +72,9 @@ func (p *streamParser) ParseLine(line string) error {
 	}
 	if envelope.Type == "" {
 		return errors.New("decode stream event: type is required")
+	}
+	if err := p.redactEnvelope(&envelope); err != nil {
+		return err
 	}
 	if envelope.SessionID != "" {
 		p.result.SessionID = envelope.SessionID
@@ -94,7 +98,7 @@ func (p *streamParser) ParseLine(line string) error {
 func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 	return p.emit(execution.EventProcessOutput, map[string]any{
 		"stream": output.Stream,
-		"text":   truncate(output.Text),
+		"text":   truncate(p.redactor.Redact(output.Text)),
 	})
 }
 
@@ -135,6 +139,10 @@ func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) err
 		return fmt.Errorf("decode %s message: %w", messageType, err)
 	}
 	for _, block := range value.Content {
+		block.Text = p.redactor.Redact(block.Text)
+		block.ID = p.redactor.Redact(block.ID)
+		block.Name = p.redactor.Redact(block.Name)
+		block.ToolUseID = p.redactor.Redact(block.ToolUseID)
 		switch block.Type {
 		case "text":
 			if messageType == "assistant" {
@@ -162,6 +170,67 @@ func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) err
 		}
 	}
 	return nil
+}
+
+func (p *streamParser) redactEnvelope(envelope *streamEnvelope) error {
+	// Type and subtype are provider control enums used for dispatch, not
+	// provider-authored text. Redacting them could corrupt parsing if a poorly
+	// chosen credential happened to equal an enum such as "result".
+	envelope.SessionID = p.redactor.Redact(envelope.SessionID)
+	envelope.Result = p.redactor.Redact(envelope.Result)
+	envelope.StopReason = p.redactor.Redact(envelope.StopReason)
+	envelope.TerminalReason = p.redactor.Redact(envelope.TerminalReason)
+	envelope.Model = p.redactor.Redact(envelope.Model)
+	envelope.PermissionMode = p.redactor.Redact(envelope.PermissionMode)
+	envelope.Error = p.redactor.Redact(envelope.Error)
+	envelope.Output = p.redactor.Redact(envelope.Output)
+	for index := range envelope.Tools {
+		envelope.Tools[index] = p.redactor.Redact(envelope.Tools[index])
+	}
+	for index := range envelope.Capabilities {
+		envelope.Capabilities[index] = p.redactor.Redact(envelope.Capabilities[index])
+	}
+	usage, err := p.redactJSONStrings(envelope.Usage)
+	if err != nil {
+		return fmt.Errorf("redact provider usage: %w", err)
+	}
+	envelope.Usage = usage
+	return nil
+}
+
+func (p *streamParser) redactJSONStrings(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, err
+	}
+	value = redactJSONValue(value, p.redactor)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return encoded, nil
+}
+
+func redactJSONValue(value any, redactor execution.Redactor) any {
+	switch typed := value.(type) {
+	case string:
+		return redactor.Redact(typed)
+	case []any:
+		for index := range typed {
+			typed[index] = redactJSONValue(typed[index], redactor)
+		}
+		return typed
+	case map[string]any:
+		for key, item := range typed {
+			typed[key] = redactJSONValue(item, redactor)
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 func (p *streamParser) parseResult(envelope streamEnvelope) error {

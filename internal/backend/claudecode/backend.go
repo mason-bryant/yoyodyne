@@ -179,7 +179,8 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if clock == nil {
 		clock = execution.RealClock{}
 	}
-	parser := newStreamParser(request.RunID, request.LastSequence, clock, request.EventSink)
+	redactor := execution.NewRedactor(request.RedactValues...)
+	parser := newStreamParser(request.RunID, request.LastSequence, clock, redactor, request.EventSink)
 	var parseErrors []error
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name:     b.binary(),
@@ -187,7 +188,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		Dir:      request.WorkingDirectory,
 		Stdin:    strings.NewReader(request.Prompt),
 		Timeout:  timeout,
-		Redactor: execution.NewRedactor(request.RedactValues...),
+		Redactor: redactor,
 	}, func(output execution.Output) {
 		if output.Stream == execution.StreamStdout {
 			if parseErr := parser.ParseLine(output.Text); parseErr != nil {
@@ -205,6 +206,9 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if len(parseErrors) > 0 {
 		return backend.RunResult{}, fmt.Errorf("parse Claude Code stream: %w", errors.Join(parseErrors...))
 	}
+	// The normalized result and events are the durable provider output. Do not
+	// return the raw JSON stream as a second, potentially escape-obfuscated copy.
+	processResult.Stdout = ""
 	result := parser.Result()
 	result.Backend = domain.BackendClaudeCode
 	result.Process = processResult

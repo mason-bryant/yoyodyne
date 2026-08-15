@@ -226,10 +226,15 @@ type Redactor struct {
 }
 
 func NewRedactor(values ...string) Redactor {
+	seen := make(map[string]struct{})
 	filtered := make([]string, 0, len(values))
 	for _, value := range values {
-		if value != "" {
-			filtered = append(filtered, value)
+		for _, candidate := range redactionCandidates(value) {
+			if _, exists := seen[candidate]; exists {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			filtered = append(filtered, candidate)
 		}
 	}
 	// Replace longer overlapping values first. Otherwise redacting "token"
@@ -238,6 +243,26 @@ func NewRedactor(values ...string) Redactor {
 		return len(filtered[i]) > len(filtered[j])
 	})
 	return Redactor{values: filtered}
+}
+
+func redactionCandidates(value string) []string {
+	if value == "" {
+		return nil
+	}
+	candidates := []string{value}
+	if !strings.ContainsAny(value, "\r\n") {
+		return candidates
+	}
+	// Output is scanned one line at a time. Retain the complete value for
+	// other call sites and also protect every non-empty line independently.
+	for _, line := range strings.FieldsFunc(value, func(r rune) bool {
+		return r == '\r' || r == '\n'
+	}) {
+		if line != value {
+			candidates = append(candidates, line)
+		}
+	}
+	return candidates
 }
 
 // SensitiveEnvironmentValues returns values held in conventionally sensitive
