@@ -66,6 +66,7 @@ func TestRunnerReturnsOnlyLastAcceptedEventSequence(t *testing.T) {
 	}{
 		{name: "started", rejectType: execution.EventCommandStarted, wantLast: 5},
 		{name: "output", rejectType: execution.EventProcessOutput, wantLast: 6},
+		{name: "completed", rejectType: execution.EventCommandCompleted, wantLast: 7},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

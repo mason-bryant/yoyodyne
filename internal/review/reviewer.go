@@ -127,9 +127,6 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{LastSequence: lastSequence}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
-	if providerResult.LastEvent > lastSequence {
-		lastSequence = providerResult.LastEvent
-	}
 	sequence = execution.NewSequence(lastSequence)
 
 	if providerResult.IsError {

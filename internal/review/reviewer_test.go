@@ -234,6 +234,44 @@ func TestReviewDoesNotAdvanceSequenceWhenProviderEventIsRejected(t *testing.T) {
 	}
 }
 
+func TestReviewIgnoresUnacceptedProviderSequenceMetadata(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{
+		finalText:         `{"decision":"approve","summary":"fine"}`,
+		reportedLastEvent: 99,
+	}
+	request := newRequest(nil)
+	request.LastSequence = 7
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.LastSequence != 9 {
+		t.Fatalf("Review() LastSequence = %d, want only accepted start and completion sequences", result.LastSequence)
+	}
+}
+
+func TestReviewDoesNotAdvanceSequenceWhenCompletionEventIsRejected(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"fine"}`}
+	request := newRequest(func(event execution.Event) error {
+		if event.Type == execution.EventReviewCompleted {
+			return errors.New("event log unavailable")
+		}
+		return nil
+	})
+	request.LastSequence = 7
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}}).Review(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "event log unavailable") {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.LastSequence != 8 {
+		t.Fatalf("Review() LastSequence = %d, want last accepted sequence 8", result.LastSequence)
+	}
+}
+
 func TestReviewRejectsUnusableProviderOutput(t *testing.T) {
 	t.Parallel()
 
@@ -391,13 +429,14 @@ func newRequest(sink func(execution.Event) error) Request {
 }
 
 type fakeBackend struct {
-	finalText      string
-	isError        bool
-	stopReason     string
-	err            error
-	providerEvents int
-	request        backendapi.RunRequest
-	calls          int
+	finalText         string
+	isError           bool
+	stopReason        string
+	err               error
+	providerEvents    int
+	reportedLastEvent uint64
+	request           backendapi.RunRequest
+	calls             int
 }
 
 func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (backendapi.RunResult, error) {
@@ -418,13 +457,17 @@ func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (bac
 	if f.err != nil {
 		return backendapi.RunResult{}, f.err
 	}
+	lastEvent := sequence.Last()
+	if f.reportedLastEvent != 0 {
+		lastEvent = f.reportedLastEvent
+	}
 	return backendapi.RunResult{
 		Backend:    domain.BackendClaudeCode,
 		SessionID:  "review-session",
 		FinalText:  f.finalText,
 		IsError:    f.isError,
 		StopReason: f.stopReason,
-		LastEvent:  sequence.Last(),
+		LastEvent:  lastEvent,
 		Process:    execution.ProcessResult{Status: execution.ProcessSucceeded},
 	}, nil
 }
