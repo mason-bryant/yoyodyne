@@ -106,14 +106,20 @@ type Outcome struct {
 	WorktreeRemoved bool   `json:"worktree_removed"`
 	BranchRemoved   bool   `json:"branch_removed"`
 	Failure         string `json:"failure,omitempty"`
-	// CleanupFailure is set when the run completed but at least one artifact
-	// survives its post-completion cleanup. The work is integrated and the item
-	// is closed.
+	// CleanupFailure is set when the run completed but its post-completion
+	// cleanup did not finish cleanly. The work is integrated and the item is
+	// closed either way, so this is evidence for reconciliation rather than a
+	// run failure. It covers two different situations, which WorktreeRemoved and
+	// BranchRemoved tell apart: an artifact that survives, when either flag is
+	// false, and a removal that succeeded but could not be confirmed afterwards,
+	// when both are true. Only the first leaves something to remove, so a report
+	// must read these flags rather than infer leftovers from this field alone.
 	CleanupFailure string `json:"cleanup_failure,omitempty"`
 	// CompletionRecordingFailure is set when the run completed, both artifacts
-	// were removed, and only the final completion record could not be written.
-	// It is deliberately distinct from CleanupFailure: nothing remains to clean
-	// up, so nothing must be reported as remaining.
+	// were removed and confirmed gone, and only the final completion record
+	// could not be written. It is deliberately distinct from CleanupFailure:
+	// cleanup itself reported nothing wrong, so nothing must be reported as
+	// remaining or as unconfirmed.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
 }
 

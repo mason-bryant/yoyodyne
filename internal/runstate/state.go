@@ -96,9 +96,14 @@ type State struct {
 	ReviewFindings      int          `json:"review_findings,omitempty"`
 	Integration         *Integration `json:"integration,omitempty"`
 	Failure             string       `json:"failure,omitempty"`
-	// CleanupFailure explains why post-completion cleanup did not finish. The
-	// run's work is already integrated, closed, and durable when it is set, so
-	// it is reconciliation input rather than a run failure.
+	// CleanupFailure explains why post-completion cleanup did not finish
+	// cleanly. The run's work is already integrated, closed, and durable when it
+	// is set, so it is reconciliation input rather than a run failure. It says
+	// nothing on its own about what survives: WorktreeRemoved and BranchRemoved
+	// carry that, and either can still be false, leaving a real artifact behind,
+	// or both can be true because the removals succeeded and only the check that
+	// confirms them could not run. A reconciler resumes cleanup in both cases,
+	// which is a safe no-op over artifacts that are already gone.
 	CleanupFailure string `json:"cleanup_failure,omitempty"`
 }
 
