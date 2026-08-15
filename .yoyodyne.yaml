@@ -1,0 +1,29 @@
+version: 1
+
+product:
+  id: yoyodyne
+  repository_id: yoyodyne
+  repository: .
+
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  # Milestone 0 preserves the branch for external bootstrap integration.
+  integration: human
+
+checks:
+  - make test
+  - make race
+  - make vet
+
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    instances: 1

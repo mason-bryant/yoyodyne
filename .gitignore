@@ -4,3 +4,7 @@
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# Local Go build output
+/yoyodyne
+/bin/
