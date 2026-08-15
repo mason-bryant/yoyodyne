@@ -105,8 +105,8 @@ func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	if got.PermissionMode != "plan" {
 		t.Errorf("permission mode = %q, want %q", got.PermissionMode, "plan")
 	}
-	if !reflect.DeepEqual(got.AllowedTools, []string{"Glob", "Grep", "Read"}) {
-		t.Errorf("allowed tools = %#v, want a read-only set", got.AllowedTools)
+	if len(got.AllowedTools) != 0 {
+		t.Errorf("allowed tools = %#v, want no filesystem or command tools", got.AllowedTools)
 	}
 	// A resumed session would make the reviewer the developer's own continuation.
 	if got.SessionID != "" {
@@ -180,6 +180,21 @@ func TestReviewSequencesItsEventsAroundTheProviderRun(t *testing.T) {
 	}
 	if !strings.Contains(string(events[3].Payload), `"decision":"approve"`) {
 		t.Errorf("review.completed payload = %s", events[3].Payload)
+	}
+}
+
+func TestReviewReturnsHighestSequenceWhenBackendFailsAfterEvents(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{providerEvents: 2, err: errors.New("malformed terminal stream")}
+	request := newRequest(nil)
+	request.LastSequence = 7
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}}).Review(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "malformed terminal stream") {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.LastSequence != 10 {
+		t.Fatalf("Review() LastSequence = %d, want 10", result.LastSequence)
 	}
 }
 
@@ -352,9 +367,6 @@ type fakeBackend struct {
 func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (backendapi.RunResult, error) {
 	f.request = request
 	f.calls++
-	if f.err != nil {
-		return backendapi.RunResult{}, f.err
-	}
 	sequence := execution.NewSequence(request.LastSequence)
 	for index := 0; index < f.providerEvents; index++ {
 		event, err := execution.NewEvent(request.RunID, sequence.Next(), reviewClock{}.Now(), execution.EventAgentMessage, "fake.reviewer", nil)
@@ -366,6 +378,9 @@ func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (bac
 				return backendapi.RunResult{}, err
 			}
 		}
+	}
+	if f.err != nil {
+		return backendapi.RunResult{}, f.err
 	}
 	return backendapi.RunResult{
 		Backend:    domain.BackendClaudeCode,

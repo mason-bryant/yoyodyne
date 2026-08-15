@@ -75,6 +75,72 @@ func TestStoreLifecycleAndIncompleteDiscovery(t *testing.T) {
 	}
 }
 
+func TestStoreRejectsStateItsReaderCannotLoad(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	state.Failure = strings.Repeat("x", maxEncodedStateBytes)
+	if err := store.Create(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
+		t.Fatalf("Create() oversized state error = %v", err)
+	}
+	path, err := store.statePath(state.RunID)
+	if err != nil {
+		t.Fatalf("statePath() error = %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("oversized create left a state file: %v", err)
+	}
+
+	state.Failure = ""
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() valid state error = %v", err)
+	}
+	state.Failure = strings.Repeat("x", maxEncodedStateBytes)
+	if err := store.Save(state); err == nil || !strings.Contains(err.Error(), "encoded run state is") {
+		t.Fatalf("Save() oversized state error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() original state error = %v", err)
+	}
+	if loaded.Failure != "" {
+		t.Fatalf("oversized save replaced original state: failure bytes = %d", len(loaded.Failure))
+	}
+}
+
+func TestStoreRejectsStateFromAnotherRunFile(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	otherRunID, err := NewRunID()
+	if err != nil {
+		t.Fatalf("NewRunID() error = %v", err)
+	}
+	source, err := store.statePath(state.RunID)
+	if err != nil {
+		t.Fatalf("statePath() source error = %v", err)
+	}
+	target, err := store.statePath(otherRunID)
+	if err != nil {
+		t.Fatalf("statePath() target error = %v", err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if err := os.WriteFile(target, data, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.Load(otherRunID); err == nil || !strings.Contains(err.Error(), "belongs to run") {
+		t.Fatalf("Load() mismatched run error = %v", err)
+	}
+}
+
 func TestStoreEventsAndMalformedDiscovery(t *testing.T) {
 	t.Parallel()
 

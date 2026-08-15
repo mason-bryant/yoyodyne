@@ -16,10 +16,12 @@ import (
 	"yoyodyne/internal/execution"
 )
 
-// maxEncodedEventBytes is the complete JSONL record bound, including its
-// trailing newline. AppendEvent and LoadEvents share it so the store never
-// writes an event that its own reader cannot load.
-const maxEncodedEventBytes = 1 << 20
+const (
+	// Both bounds include the trailing newline written by json.Encoder. Each
+	// writer and reader shares its bound so durable state is always reloadable.
+	maxEncodedStateBytes = 1 << 20
+	maxEncodedEventBytes = 1 << 20
+)
 
 type Store struct {
 	root      string
@@ -120,7 +122,14 @@ func (s *Store) Load(runID string) (State, error) {
 		return State{}, fmt.Errorf("open run state: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, 1<<20))
+	info, err := file.Stat()
+	if err != nil {
+		return State{}, fmt.Errorf("stat run state: %w", err)
+	}
+	if info.Size() > maxEncodedStateBytes {
+		return State{}, fmt.Errorf("run state %s is %d bytes, limit is %d", runID, info.Size(), maxEncodedStateBytes)
+	}
+	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
 	decoder.DisallowUnknownFields()
 	var state State
 	if err := decoder.Decode(&state); err != nil {
@@ -128,6 +137,9 @@ func (s *Store) Load(runID string) (State, error) {
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
 		return State{}, fmt.Errorf("decode run state %s: %w", runID, err)
+	}
+	if state.RunID != runID {
+		return State{}, fmt.Errorf("run state file %s belongs to run %s", runID, state.RunID)
 	}
 	if err := s.validateState(state); err != nil {
 		return State{}, err
@@ -277,11 +289,22 @@ func (s *Store) eventPath(runID string) (string, error) {
 }
 
 func writeJSONFile(file *os.File, value any) error {
-	encoder := json.NewEncoder(file)
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
 		return fmt.Errorf("encode run state: %w", err)
+	}
+	if buffer.Len() > maxEncodedStateBytes {
+		return fmt.Errorf("encoded run state is %d bytes, limit is %d", buffer.Len(), maxEncodedStateBytes)
+	}
+	written, err := file.Write(buffer.Bytes())
+	if err != nil {
+		return fmt.Errorf("write run state: %w", err)
+	}
+	if written != buffer.Len() {
+		return fmt.Errorf("write run state: %w", io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync run state: %w", err)

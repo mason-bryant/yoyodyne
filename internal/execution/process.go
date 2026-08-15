@@ -108,13 +108,15 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	}
 
 	runCtx := ctx
-	cancel := func() {}
+	cancelTimeout := func() {}
 	if command.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, command.Timeout)
+		runCtx, cancelTimeout = context.WithTimeout(ctx, command.Timeout)
 	}
-	defer cancel()
+	defer cancelTimeout()
+	processCtx, stopProcess := context.WithCancel(runCtx)
+	defer stopProcess()
 
-	process := exec.CommandContext(runCtx, command.Name, command.Args...)
+	process := exec.CommandContext(processCtx, command.Name, command.Args...)
 	configureProcessTree(process)
 	process.Dir = command.Dir
 	process.Stdin = command.Stdin
@@ -139,8 +141,8 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	scanErrors := make(chan error, 2)
 	var scanners sync.WaitGroup
 	scanners.Add(2)
-	go scanOutput(stdout, StreamStdout, clock, command.Redactor, outputs, scanErrors, &scanners)
-	go scanOutput(stderr, StreamStderr, clock, command.Redactor, outputs, scanErrors, &scanners)
+	go scanOutput(stdout, StreamStdout, clock, command.Redactor, outputs, scanErrors, stopProcess, &scanners)
+	go scanOutput(stderr, StreamStderr, clock, command.Redactor, outputs, scanErrors, stopProcess, &scanners)
 	go func() {
 		scanners.Wait()
 		close(outputs)
@@ -204,7 +206,7 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	return result, nil
 }
 
-func scanOutput(reader io.Reader, stream Stream, clock Clock, redactor Redactor, outputs chan<- Output, scanErrors chan<- error, waitGroup *sync.WaitGroup) {
+func scanOutput(reader io.Reader, stream Stream, clock Clock, redactor Redactor, outputs chan<- Output, scanErrors chan<- error, stopProcess context.CancelFunc, waitGroup *sync.WaitGroup) {
 	defer waitGroup.Done()
 
 	scanner := bufio.NewScanner(reader)
@@ -217,6 +219,10 @@ func scanOutput(reader io.Reader, stream Stream, clock Clock, redactor Redactor,
 		}
 	}
 	if err := scanner.Err(); err != nil {
+		// A scanner that stops draining can leave the child blocked on a full
+		// pipe. Terminate the process tree immediately so the other stream
+		// closes and Run can return the read failure without waiting for timeout.
+		stopProcess()
 		scanErrors <- fmt.Errorf("read %s: %w", stream, err)
 	}
 }

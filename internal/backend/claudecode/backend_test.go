@@ -100,7 +100,7 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if runner.prompts[0] != "implement the task" {
 		t.Fatalf("prompt = %q", runner.prompts[0])
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash,Read,Edit(/**),Write(/**),Glob,Grep"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -208,6 +208,7 @@ func TestRunRejectsMalformedOrIncompleteStream(t *testing.T) {
 		{name: "malformed", stream: "{\n", want: "decode stream event"},
 		{name: "missing type", stream: "{}\n", want: "type is required"},
 		{name: "no result", stream: `{"type":"system","subtype":"init","session_id":"session-1"}` + "\n", want: "without a result"},
+		{name: "event after result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","usage":{}}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"overwrite"}]}}` + "\n", want: "after terminal result"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -258,7 +259,7 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--allowedTools", "Glob,Grep,Read"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -271,16 +272,16 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 		{
 			name:    "write tool",
 			request: backendapi.RunRequest{AllowedTools: []string{"Read", "Edit"}},
-			want:    `write-capable tool "Edit"`,
+			want:    "cannot be granted tools",
 		},
 		{
 			name:    "command execution",
 			request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
-			want:    `write-capable tool "Bash"`,
+			want:    "cannot be granted tools",
 		},
 		{
 			name:    "editing permission mode",
-			request: backendapi.RunRequest{AllowedTools: []string{"Read"}, PermissionMode: "acceptEdits"},
+			request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
 			want:    "reviewer runs require the read-only",
 		},
 	} {
@@ -297,6 +298,27 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 				t.Fatalf("a rejected reviewer run still started %d process(es)", len(blocked.commands))
 			}
 		})
+	}
+}
+
+func TestRunRejectsAllowedToolListDelimiterInjection(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"Read,Edit", "Read Edit", "Read\nEdit"} {
+		runner := &fakeRunner{}
+		_, err := (Backend{Runner: runner}).Run(context.Background(), backendapi.RunRequest{
+			RunID:            testRunID,
+			Role:             domain.RoleDeveloper,
+			WorkingDirectory: "/worktree",
+			Prompt:           "implement",
+			AllowedTools:     []string{tool},
+		})
+		if err == nil || !strings.Contains(err.Error(), "list delimiters") {
+			t.Fatalf("Run() with %q error = %v", tool, err)
+		}
+		if len(runner.commands) != 0 {
+			t.Fatalf("rejected tool rule still started %d process(es)", len(runner.commands))
+		}
 	}
 }
 

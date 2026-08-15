@@ -181,6 +181,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		return fail(fmt.Errorf("claim work item: %w", err), runstate.StatusFailed)
 	}
 	claimed = true
+	if err := validateClaimedItem(item, workItemID); err != nil {
+		return fail(fmt.Errorf("validate claimed work item: %w", err), runstate.StatusFailed)
+	}
 	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item})
 	if err != nil {
 		return fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
@@ -221,7 +224,16 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		EventSink:        eventSink,
 	})
 	if err != nil {
-		return fail(fmt.Errorf("developer backend failed: %w", err), statusForContext(ctx))
+		cause := fmt.Errorf("developer backend failed: %w", err)
+		summaryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		changeSummary, summaryErr := p.Worktrees.SummarizeChanges(summaryCtx, worktree)
+		cancel()
+		if summaryErr != nil {
+			cause = errors.Join(cause, fmt.Errorf("summarize changes after developer backend failure: %w", summaryErr))
+		} else {
+			outcome.Changes = changeSummary
+		}
+		return fail(cause, statusForContext(ctx))
 	}
 	state.ProviderSessionID = providerResult.SessionID
 	state.LastSequence = providerResult.LastEvent
@@ -312,11 +324,19 @@ func (p Pipeline) developer() config.AgentConfig {
 }
 
 func validateReadyItem(item beads.WorkItem, requestedID string) error {
+	return validateWorkItem(item, requestedID, "open")
+}
+
+func validateClaimedItem(item beads.WorkItem, requestedID string) error {
+	return validateWorkItem(item, requestedID, "in_progress")
+}
+
+func validateWorkItem(item beads.WorkItem, requestedID, expectedStatus string) error {
 	if item.ID != requestedID {
 		return fmt.Errorf("Beads returned work item %q for requested id %q", item.ID, requestedID)
 	}
-	if item.Status != "open" {
-		return fmt.Errorf("work item %s is not ready: status is %q, want open", item.ID, item.Status)
+	if item.Status != expectedStatus {
+		return fmt.Errorf("work item %s status is %q, want %s", item.ID, item.Status, expectedStatus)
 	}
 	var blockers []string
 	for _, dependency := range item.Dependencies {

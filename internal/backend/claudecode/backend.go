@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+	"unicode"
 
 	"yoyodyne/internal/backend"
 	"yoyodyne/internal/domain"
@@ -26,9 +27,10 @@ var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob",
 // unable to apply an edit it proposes.
 const readOnlyPermissionMode = "plan"
 
-// readOnlyTools is the largest tool set a reviewer may hold: enough to read the
-// worktree and search it, with nothing that can write a file or run a command.
-var readOnlyTools = []string{"Glob", "Grep", "Read"}
+// reviewerTools is intentionally empty. Review receives a bounded context,
+// patch, and check results; disabling tools prevents injected evidence from
+// reading outside the worktree and exfiltrating unrelated local files.
+var reviewerTools = []string{}
 
 type Backend struct {
 	Runner execution.ProcessRunner
@@ -110,24 +112,23 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	}
 	allowedTools := request.AllowedTools
 	if allowedTools == nil {
-		allowedTools = developerTools
+		if request.Role == domain.RoleReviewer {
+			allowedTools = reviewerTools
+		} else {
+			allowedTools = developerTools
+		}
 	}
 	for _, tool := range allowedTools {
-		if strings.ContainsAny(tool, "\r\n") {
-			return backend.RunResult{}, errors.New("allowed tool names cannot contain newlines")
+		if tool == "" || strings.Contains(tool, ",") || strings.IndexFunc(tool, unicode.IsSpace) >= 0 {
+			return backend.RunResult{}, fmt.Errorf("allowed tool rule %q cannot contain list delimiters", tool)
 		}
 	}
-	// A reviewer must not be able to change what it is reviewing, so the
-	// adapter refuses a reviewer run that was granted any write-capable tool
-	// even if the caller asked for one.
+	// Reviewers consume only the bounded supplied evidence. Refuse every tool,
+	// including nominally read-only tools that could inspect outside the
+	// worktree and send unrelated local data to the provider.
 	if request.Role == domain.RoleReviewer {
-		if request.AllowedTools == nil {
-			allowedTools = readOnlyTools
-		}
-		for _, tool := range allowedTools {
-			if !isReadOnlyTool(tool) {
-				return backend.RunResult{}, fmt.Errorf("reviewer runs cannot be granted write-capable tool %q", tool)
-			}
+		if len(allowedTools) > 0 {
+			return backend.RunResult{}, errors.New("reviewer runs cannot be granted tools; review uses bounded supplied evidence")
 		}
 		if permissionMode != readOnlyPermissionMode {
 			return backend.RunResult{}, fmt.Errorf("reviewer runs require the read-only %q permission mode, not %q", readOnlyPermissionMode, permissionMode)
@@ -157,7 +158,8 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		args = append(args, "--safe-mode")
 	}
 	if len(allowedTools) > 0 {
-		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
+		args = append(args, "--allowedTools")
+		args = append(args, allowedTools...)
 	} else {
 		args = append(args, "--tools", "")
 	}
@@ -235,15 +237,6 @@ func (b Backend) binary() string {
 		return "claude"
 	}
 	return b.Binary
-}
-
-func isReadOnlyTool(tool string) bool {
-	for _, readOnly := range readOnlyTools {
-		if tool == readOnly {
-			return true
-		}
-	}
-	return false
 }
 
 func developerWriteToolIsScoped(tool string) bool {

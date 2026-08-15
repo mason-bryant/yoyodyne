@@ -102,6 +102,21 @@ func TestOSProcessRunnerOutputLimit(t *testing.T) {
 	}
 }
 
+func TestOSProcessRunnerStopsProcessWhenALineExceedsScannerLimit(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("oversized-line", "")
+	command.Timeout = 5 * time.Second
+	started := time.Now()
+	_, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err == nil || !strings.Contains(err.Error(), "token too long") {
+		t.Fatalf("Run() oversized-line error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed >= 2*time.Second {
+		t.Fatalf("Run() waited %s for timeout after scanner failure", elapsed)
+	}
+}
+
 func TestSensitiveEnvironmentValues(t *testing.T) {
 	t.Parallel()
 
@@ -168,6 +183,10 @@ func TestProcessHelper(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "failed")
 		os.Exit(7)
 	case "sleep":
+		time.Sleep(5 * time.Second)
+		os.Exit(0)
+	case "oversized-line":
+		fmt.Print(strings.Repeat("x", 2<<20))
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
 	default:

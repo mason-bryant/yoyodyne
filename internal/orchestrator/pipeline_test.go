@@ -143,6 +143,31 @@ func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	}
 }
 
+func TestPipelineCapturesChangesWhenBackendReturnsInfrastructureError(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Fail", Status: "open"}}
+	provider := &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "partial.txt"), []byte("partial"), 0o600); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{}, errors.New("malformed terminal stream")
+	}}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "developer backend failed") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(outcome.Changes.Status, "?? partial.txt") {
+		t.Fatalf("Run() change summary = %#v", outcome.Changes)
+	}
+	if !strings.Contains(tracker.notes, "Preserved changes:\n?? partial.txt") {
+		t.Fatalf("failure notes omitted preserved changes: %q", tracker.notes)
+	}
+}
+
 func TestPipelineRefusesUnauthenticatedOrDuplicateRunBeforeClaim(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +239,54 @@ func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("blocked run created state: %#v", states)
+	}
+}
+
+func TestPipelineRevalidatesBlockersReturnedByClaim(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	tracker.onClaim = func() error {
+		tracker.item.Dependencies = []beads.Dependency{{ID: "late-blocker", Type: "blocks", Status: "open"}}
+		return nil
+	}
+	providerCalled := false
+	provider := &fakeBackend{run: func(backend.RunRequest) (backend.RunResult, error) {
+		providerCalled = true
+		return backend.RunResult{}, nil
+	}}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !strings.Contains(err.Error(), "late-blocker") {
+		t.Fatalf("Run() late blocker error = %v", err)
+	}
+	if !tracker.claimed || providerCalled {
+		t.Fatalf("claimed = %t, provider called = %t", tracker.claimed, providerCalled)
+	}
+	if !strings.Contains(tracker.notes, "bootstrap run failed") {
+		t.Fatalf("failure notes = %q", tracker.notes)
+	}
+}
+
+func TestValidateClaimedItemRejectsIdentityStatusAndBlockerChanges(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		item beads.WorkItem
+		want string
+	}{
+		{name: "different item", item: beads.WorkItem{ID: "other-task", Status: "in_progress"}, want: "other-task"},
+		{name: "not claimed", item: beads.WorkItem{ID: "yoyodyne-task", Status: "open"}, want: "want in_progress"},
+		{name: "new blocker", item: beads.WorkItem{ID: "yoyodyne-task", Status: "in_progress", Dependencies: []beads.Dependency{{ID: "late-blocker", Type: "blocks", Status: "open"}}}, want: "late-blocker"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if err := validateClaimedItem(test.item, "yoyodyne-task"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateClaimedItem() error = %v, want %q", err, test.want)
+			}
+		})
 	}
 }
 

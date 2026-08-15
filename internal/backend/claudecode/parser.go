@@ -66,6 +66,9 @@ func (p *streamParser) ParseLine(line string) error {
 	if strings.TrimSpace(line) == "" {
 		return nil
 	}
+	if p.sawResult {
+		return errors.New("provider event received after terminal result")
+	}
 	var envelope streamEnvelope
 	if err := json.Unmarshal([]byte(line), &envelope); err != nil {
 		return fmt.Errorf("decode stream event: %w", err)
