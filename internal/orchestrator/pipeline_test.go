@@ -217,6 +217,24 @@ func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
 	}
 }
 
+func TestPipelineRejectsAutomaticIntegrationUntilClosedLoopExists(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{availability: backend.Availability{Installed: true, Authenticated: true}}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Approvals.Integration = domain.ApprovalAutomatic
+	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendClaudeCode, Instances: 1}
+
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !strings.Contains(err.Error(), "does not yet support automatic integration") {
+		t.Fatalf("Run() automatic integration error = %v", err)
+	}
+	if tracker.claimed {
+		t.Fatal("unsupported automatic integration claimed work")
+	}
+}
+
 type fakeTracker struct {
 	item    beads.WorkItem
 	claimed bool

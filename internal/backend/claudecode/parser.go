@@ -147,15 +147,15 @@ func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) err
 			if err := p.emit(execution.EventCommandStarted, map[string]any{
 				"tool_use_id": block.ID,
 				"tool":        block.Name,
-				"input":       truncateRaw(block.Input),
+				"input_bytes": len(block.Input),
 			}); err != nil {
 				return err
 			}
 		case "tool_result":
 			if err := p.emit(execution.EventCommandCompleted, map[string]any{
-				"tool_use_id": block.ToolUseID,
-				"is_error":    block.IsError,
-				"content":     truncateRaw(block.Content),
+				"tool_use_id":   block.ToolUseID,
+				"is_error":      block.IsError,
+				"content_bytes": len(block.Content),
 			}); err != nil {
 				return err
 			}
@@ -218,15 +218,4 @@ func truncate(value string) string {
 		return value
 	}
 	return value[:maxEventTextBytes] + "…[truncated]"
-}
-
-func truncateRaw(value json.RawMessage) json.RawMessage {
-	if len(value) == 0 {
-		return nil
-	}
-	if len(value) <= maxEventTextBytes {
-		return append(json.RawMessage(nil), value...)
-	}
-	encoded, _ := json.Marshal(truncate(string(value)))
-	return encoded
 }

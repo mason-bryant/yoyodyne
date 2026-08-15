@@ -114,6 +114,7 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	defer cancel()
 
 	process := exec.CommandContext(runCtx, command.Name, command.Args...)
+	configureProcessTree(process)
 	process.Dir = command.Dir
 	process.Stdin = command.Stdin
 	if command.Env != nil {
@@ -231,6 +232,46 @@ func NewRedactor(values ...string) Redactor {
 		}
 	}
 	return Redactor{values: filtered}
+}
+
+// SensitiveEnvironmentValues returns values held in conventionally sensitive
+// environment variables. Provider authentication remains CLI-managed, but
+// subprocess output still needs these values removed before it becomes a
+// durable event or result.
+func SensitiveEnvironmentValues(environment []string) []string {
+	seen := make(map[string]struct{})
+	values := make([]string, 0)
+	for _, entry := range environment {
+		name, value, found := strings.Cut(entry, "=")
+		if !found || value == "" || !sensitiveEnvironmentName(name) {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values
+}
+
+func sensitiveEnvironmentName(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, marker := range []string{
+		"TOKEN",
+		"PASSWORD",
+		"PASSWD",
+		"API_KEY",
+		"PRIVATE_KEY",
+		"CLIENT_SECRET",
+		"ACCESS_KEY",
+		"CREDENTIAL",
+	} {
+		if strings.Contains(upper, marker) {
+			return true
+		}
+	}
+	return strings.HasSuffix(upper, "_SECRET")
 }
 
 func (r Redactor) Redact(value string) string {

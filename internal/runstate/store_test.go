@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,23 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 )
+
+func TestCleanupFailedCreateRemovesPartialState(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "partial.json")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	cause := errors.New("sync failed")
+	if err := cleanupFailedCreate(file, path, cause); !errors.Is(err, cause) {
+		t.Fatalf("cleanupFailedCreate() error = %v, want cause", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("partial state still exists: %v", err)
+	}
+}
 
 func TestStoreLifecycleAndIncompleteDiscovery(t *testing.T) {
 	t.Parallel()

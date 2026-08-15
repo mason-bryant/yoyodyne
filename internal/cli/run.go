@@ -78,6 +78,7 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 	}
 
 	processRunner := execution.OSProcessRunner{}
+	redactValues := execution.SensitiveEnvironmentValues(os.Environ())
 	store, err := runstate.NewStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return orchestrator.Pipeline{}, err
@@ -103,11 +104,13 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 			Runner: processRunner,
 		},
 		Checks: checks.Runner{
-			Process: processRunner,
+			Process:      processRunner,
+			RedactValues: redactValues,
 		},
-		NewRunID:   runstate.NewRunID,
-		Repository: repository,
-		Config:     cfg,
+		NewRunID:     runstate.NewRunID,
+		Repository:   repository,
+		Config:       cfg,
+		RedactValues: redactValues,
 	}, nil
 }
 

@@ -56,13 +56,15 @@ func (s *Store) Create(state State) error {
 		return fmt.Errorf("create run state: %w", err)
 	}
 	if err := writeJSONFile(file, state); err != nil {
-		file.Close()
-		return err
+		return cleanupFailedCreate(file, path, err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close run state: %w", err)
+		return cleanupFailedCreate(nil, path, fmt.Errorf("close run state: %w", err))
 	}
-	return syncDirectory(s.root)
+	if err := syncDirectory(s.root); err != nil {
+		return cleanupFailedCreate(nil, path, err)
+	}
+	return nil
 }
 
 func (s *Store) Save(state State) error {
@@ -166,6 +168,11 @@ func (s *Store) AppendEvent(event execution.Event) error {
 	if err != nil {
 		return err
 	}
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return fmt.Errorf("inspect event log: %w", statErr)
+	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("open event log: %w", err)
@@ -182,6 +189,9 @@ func (s *Store) AppendEvent(event execution.Event) error {
 	}
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close event log: %w", err)
+	}
+	if created {
+		return syncDirectory(s.root)
 	}
 	return nil
 }
@@ -251,6 +261,22 @@ func writeJSONFile(file *os.File, value any) error {
 		return fmt.Errorf("sync run state: %w", err)
 	}
 	return nil
+}
+
+func cleanupFailedCreate(file *os.File, path string, cause error) error {
+	var cleanupErrors []error
+	if file != nil {
+		if err := file.Close(); err != nil {
+			cleanupErrors = append(cleanupErrors, fmt.Errorf("close failed run state: %w", err))
+		}
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		cleanupErrors = append(cleanupErrors, fmt.Errorf("remove failed run state: %w", err))
+	}
+	if len(cleanupErrors) == 0 {
+		return cause
+	}
+	return errors.Join(cause, errors.Join(cleanupErrors...))
 }
 
 func ensureJSONEOF(decoder *json.Decoder) error {

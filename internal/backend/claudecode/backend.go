@@ -16,6 +16,12 @@ import (
 
 const defaultTimeout = 30 * time.Minute
 
+const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
+
+// developerTools scopes built-in writes to the worktree project root. Bash is
+// separately confined by Claude Code's OS-level sandbox settings below.
+var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
+
 // readOnlyPermissionMode is the only Claude Code mode that leaves a reviewer
 // unable to apply an edit it proposes.
 const readOnlyPermissionMode = "plan"
@@ -104,7 +110,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	}
 	allowedTools := request.AllowedTools
 	if allowedTools == nil {
-		allowedTools = []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep"}
+		allowedTools = developerTools
 	}
 	for _, tool := range allowedTools {
 		if strings.ContainsAny(tool, "\r\n") {
@@ -127,6 +133,13 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 			return backend.RunResult{}, fmt.Errorf("reviewer runs require the read-only %q permission mode, not %q", readOnlyPermissionMode, permissionMode)
 		}
 	}
+	if request.Role == domain.RoleDeveloper {
+		for _, tool := range allowedTools {
+			if !developerWriteToolIsScoped(tool) {
+				return backend.RunResult{}, fmt.Errorf("developer write tool %q must be scoped to the worktree", tool)
+			}
+		}
+	}
 
 	args := []string{
 		"-p",
@@ -134,6 +147,14 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		"--verbose",
 		"--permission-mode", permissionMode,
 		"--name", "yoyodyne-" + shortRunID(request.RunID),
+	}
+	if request.Role == domain.RoleDeveloper {
+		args = append(args, "--settings", developerSandboxSettings)
+	} else {
+		// A changed CLAUDE.md is part of the evidence, not reviewer policy.
+		// Safe mode prevents repository customizations from entering the
+		// provider's system context alongside the immutable review contract.
+		args = append(args, "--safe-mode")
 	}
 	if len(allowedTools) > 0 {
 		args = append(args, "--allowedTools", strings.Join(allowedTools, ","))
@@ -219,6 +240,24 @@ func isReadOnlyTool(tool string) bool {
 		}
 	}
 	return false
+}
+
+func developerWriteToolIsScoped(tool string) bool {
+	for _, name := range []string{"Edit", "Write"} {
+		if tool == name {
+			return false
+		}
+		prefix := name + "("
+		if !strings.HasPrefix(tool, prefix) {
+			continue
+		}
+		if !strings.HasSuffix(tool, ")") {
+			return false
+		}
+		pattern := strings.TrimSuffix(strings.TrimPrefix(tool, prefix), ")")
+		return strings.HasPrefix(pattern, "/") && !strings.HasPrefix(pattern, "//") && !strings.Contains(pattern, "..")
+	}
+	return true
 }
 
 func validPermissionMode(mode string) bool {

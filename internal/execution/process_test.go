@@ -84,6 +84,24 @@ func TestOSProcessRunnerOutputLimit(t *testing.T) {
 	}
 }
 
+func TestSensitiveEnvironmentValues(t *testing.T) {
+	t.Parallel()
+
+	got := SensitiveEnvironmentValues([]string{
+		"PATH=/usr/bin",
+		"ANTHROPIC_API_KEY=anthropic-secret",
+		"GH_TOKEN=github-secret",
+		"SERVICE_PASSWORD=password-secret",
+		"DUPLICATE_TOKEN=github-secret",
+		"EMPTY_SECRET=",
+		"MALFORMED",
+	})
+	want := []string{"anthropic-secret", "github-secret", "password-secret"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("SensitiveEnvironmentValues() = %#v, want %#v", got, want)
+	}
+}
+
 func helperCommand(mode, secret string) Command {
 	return Command{
 		Name:     os.Args[0],

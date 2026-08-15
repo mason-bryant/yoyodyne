@@ -74,9 +74,9 @@ func TestExtractMarkdownReferences(t *testing.T) {
 	t.Parallel()
 
 	item := beads.WorkItem{
-		Description: "docs/z.md and docs/a.md",
+		Description: "docs/z.md and docs/a.md; see https://example.com/design.md for background",
 		Design:      "docs/a.md",
-		Notes:       "not-a-reference.txt",
+		Notes:       "not-a-reference.txt and /tmp/local.md are not repository references",
 	}
 	got := ExtractMarkdownReferences(item)
 	want := []string{"docs/a.md", "docs/z.md"}

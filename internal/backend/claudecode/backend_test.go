@@ -86,10 +86,19 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if !reflect.DeepEqual(gotTypes, wantTypes) {
 		t.Fatalf("event types = %#v, want %#v", gotTypes, wantTypes)
 	}
+	for _, event := range events {
+		payload := string(event.Payload)
+		if strings.Contains(payload, "main.go") || strings.Contains(payload, "updated") {
+			t.Fatalf("tool payload persisted raw input or result content: %s", payload)
+		}
+	}
+	if !strings.Contains(string(events[2].Payload), `"input_bytes"`) || !strings.Contains(string(events[3].Payload), `"content_bytes"`) {
+		t.Fatalf("tool events do not retain safe size metadata: started=%s completed=%s", events[2].Payload, events[3].Payload)
+	}
 	if runner.prompts[0] != "implement the task" {
 		t.Fatalf("prompt = %q", runner.prompts[0])
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash,Read,Edit(/**),Write(/**),Glob,Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -178,7 +187,7 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--allowedTools", "Glob,Grep,Read"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--allowedTools", "Glob,Grep,Read"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -217,6 +226,27 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 				t.Fatalf("a rejected reviewer run still started %d process(es)", len(blocked.commands))
 			}
 		})
+	}
+}
+
+func TestRunRequiresWorktreeScopedDeveloperWriteTools(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"Edit", "Write", "Edit(//tmp/**)", "Write(~/outside/**)"} {
+		runner := &fakeRunner{}
+		_, err := (Backend{Runner: runner}).Run(context.Background(), backendapi.RunRequest{
+			RunID:            testRunID,
+			Role:             domain.RoleDeveloper,
+			WorkingDirectory: "/worktree",
+			Prompt:           "implement",
+			AllowedTools:     []string{"Read", tool},
+		})
+		if err == nil || !strings.Contains(err.Error(), "must be scoped to the worktree") {
+			t.Fatalf("Run() with %s error = %v", tool, err)
+		}
+		if len(runner.commands) != 0 {
+			t.Fatalf("rejected developer run still started %d process(es)", len(runner.commands))
+		}
 	}
 }
 

@@ -97,7 +97,18 @@ func Assemble(request Request) (Bundle, error) {
 
 func ExtractMarkdownReferences(item beads.WorkItem) []string {
 	text := strings.Join([]string{item.Description, item.Design, item.AcceptanceCriteria, item.Notes}, "\n")
-	return uniqueSorted(markdownReferencePattern.FindAllString(text, -1))
+	matches := markdownReferencePattern.FindAllString(text, -1)
+	references := make([]string, 0, len(matches))
+	for _, match := range matches {
+		// URL matches begin at the authority separator (for example,
+		// //example.com/design.md). Absolute paths are not valid implicit
+		// repository references either, so exclude both before resolution.
+		if strings.HasPrefix(match, "/") {
+			continue
+		}
+		references = append(references, match)
+	}
+	return uniqueSorted(references)
 }
 
 func readReference(root, referencePath string, remainingBytes int) (Reference, error) {

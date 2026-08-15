@@ -43,15 +43,16 @@ type CheckRunner interface {
 }
 
 type Pipeline struct {
-	Tracker    WorkTracker
-	Worktrees  WorktreeManager
-	Store      StateStore
-	Backend    backend.Backend
-	Checks     CheckRunner
-	Clock      execution.Clock
-	NewRunID   func() (string, error)
-	Repository string
-	Config     config.Config
+	Tracker      WorkTracker
+	Worktrees    WorktreeManager
+	Store        StateStore
+	Backend      backend.Backend
+	Checks       CheckRunner
+	Clock        execution.Clock
+	NewRunID     func() (string, error)
+	Repository   string
+	Config       config.Config
+	RedactValues []string
 }
 
 type Outcome struct {
@@ -89,6 +90,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	}
 	if len(p.Config.Checks) == 0 {
 		return Outcome{}, errors.New("Milestone 0 run pipeline requires at least one configured check")
+	}
+	if p.Config.Approvals.Integration == domain.ApprovalAutomatic {
+		return Outcome{}, errors.New("Milestone 0 run pipeline does not yet support automatic integration")
 	}
 	availability, err := p.Backend.CheckAvailability(ctx)
 	if err != nil {
@@ -213,6 +217,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		Prompt:           developerPrompt(bundle.Text),
 		PermissionMode:   "acceptEdits",
 		LastSequence:     state.LastSequence,
+		RedactValues:     p.RedactValues,
 		EventSink:        eventSink,
 	})
 	if err != nil {

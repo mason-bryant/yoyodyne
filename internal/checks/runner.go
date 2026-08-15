@@ -19,10 +19,11 @@ type Result struct {
 }
 
 type Runner struct {
-	Process execution.ProcessRunner
-	Clock   execution.Clock
-	Shell   string
-	Timeout time.Duration
+	Process      execution.ProcessRunner
+	Clock        execution.Clock
+	Shell        string
+	Timeout      time.Duration
+	RedactValues []string
 }
 
 func (r Runner) Run(ctx context.Context, runID, directory string, commands []string, lastSequence uint64, sink func(execution.Event) error) ([]Result, uint64, error) {
@@ -46,23 +47,26 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 	}
 	sequence := execution.NewSequence(lastSequence)
 	results := make([]Result, 0, len(commands))
+	redactor := execution.NewRedactor(r.RedactValues...)
 	for _, command := range commands {
 		if strings.TrimSpace(command) == "" {
 			return results, sequence.Last(), errors.New("check command cannot be empty")
 		}
-		if err := emit(runID, sequence, clock, sink, execution.EventCommandStarted, map[string]any{"command": command, "kind": "check"}); err != nil {
+		safeCommand := redactor.Redact(command)
+		if err := emit(runID, sequence, clock, sink, execution.EventCommandStarted, map[string]any{"command": safeCommand, "kind": "check"}); err != nil {
 			return results, sequence.Last(), err
 		}
 		var observerErrors []error
 		processResult, err := r.Process.Run(ctx, execution.Command{
-			Name:    shell,
-			Args:    []string{"-lc", command},
-			Dir:     directory,
-			Timeout: timeout,
+			Name:     shell,
+			Args:     []string{"-lc", command},
+			Dir:      directory,
+			Timeout:  timeout,
+			Redactor: redactor,
 		}, func(output execution.Output) {
 			if observerErr := emit(runID, sequence, clock, sink, execution.EventProcessOutput, map[string]any{
 				"kind":    "check",
-				"command": command,
+				"command": safeCommand,
 				"stream":  output.Stream,
 				"text":    output.Text,
 			}); observerErr != nil {
@@ -70,16 +74,16 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			}
 		})
 		if err != nil {
-			return results, sequence.Last(), fmt.Errorf("run check %q: %w", command, err)
+			return results, sequence.Last(), fmt.Errorf("run check %q: %w", safeCommand, err)
 		}
 		if len(observerErrors) > 0 {
 			return results, sequence.Last(), errors.Join(observerErrors...)
 		}
 		passed := processResult.Status == execution.ProcessSucceeded
-		result := Result{Command: command, Process: processResult, Passed: passed}
+		result := Result{Command: safeCommand, Process: processResult, Passed: passed}
 		results = append(results, result)
 		if err := emit(runID, sequence, clock, sink, execution.EventCommandCompleted, map[string]any{
-			"command":   command,
+			"command":   safeCommand,
 			"kind":      "check",
 			"passed":    passed,
 			"status":    processResult.Status,
