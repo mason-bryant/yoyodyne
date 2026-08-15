@@ -20,6 +20,8 @@ const (
 	EventCommandStarted   EventType = "command.started"
 	EventCommandCompleted EventType = "command.completed"
 	EventFileChanged      EventType = "file.changed"
+	EventReviewStarted    EventType = "review.started"
+	EventReviewCompleted  EventType = "review.completed"
 )
 
 type Event struct {

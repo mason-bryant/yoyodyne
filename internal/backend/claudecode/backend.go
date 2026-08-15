@@ -16,6 +16,14 @@ import (
 
 const defaultTimeout = 30 * time.Minute
 
+// readOnlyPermissionMode is the only Claude Code mode that leaves a reviewer
+// unable to apply an edit it proposes.
+const readOnlyPermissionMode = "plan"
+
+// readOnlyTools is the largest tool set a reviewer may hold: enough to read the
+// worktree and search it, with nothing that can write a file or run a command.
+var readOnlyTools = []string{"Glob", "Grep", "Read"}
+
 type Backend struct {
 	Runner execution.ProcessRunner
 	Binary string
@@ -87,6 +95,9 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	permissionMode := request.PermissionMode
 	if permissionMode == "" {
 		permissionMode = "acceptEdits"
+		if request.Role == domain.RoleReviewer {
+			permissionMode = readOnlyPermissionMode
+		}
 	}
 	if !validPermissionMode(permissionMode) {
 		return backend.RunResult{}, fmt.Errorf("unsupported Claude Code permission mode %q", permissionMode)
@@ -98,6 +109,22 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	for _, tool := range allowedTools {
 		if strings.ContainsAny(tool, "\r\n") {
 			return backend.RunResult{}, errors.New("allowed tool names cannot contain newlines")
+		}
+	}
+	// A reviewer must not be able to change what it is reviewing, so the
+	// adapter refuses a reviewer run that was granted any write-capable tool
+	// even if the caller asked for one.
+	if request.Role == domain.RoleReviewer {
+		if request.AllowedTools == nil {
+			allowedTools = readOnlyTools
+		}
+		for _, tool := range allowedTools {
+			if !isReadOnlyTool(tool) {
+				return backend.RunResult{}, fmt.Errorf("reviewer runs cannot be granted write-capable tool %q", tool)
+			}
+		}
+		if permissionMode != readOnlyPermissionMode {
+			return backend.RunResult{}, fmt.Errorf("reviewer runs require the read-only %q permission mode, not %q", readOnlyPermissionMode, permissionMode)
 		}
 	}
 
@@ -183,6 +210,15 @@ func (b Backend) binary() string {
 		return "claude"
 	}
 	return b.Binary
+}
+
+func isReadOnlyTool(tool string) bool {
+	for _, readOnly := range readOnlyTools {
+		if tool == readOnly {
+			return true
+		}
+	}
+	return false
 }
 
 func validPermissionMode(mode string) bool {

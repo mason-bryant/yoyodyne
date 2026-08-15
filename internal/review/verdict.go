@@ -99,6 +99,30 @@ func (v Verdict) Validate() error {
 	return nil
 }
 
+// Resolve returns the decision a valid verdict actually supports, rejecting one
+// that contradicts its own findings. Approval cannot carry a blocker or major
+// finding, because a change that still needs that work is not approved
+// whatever the reviewer labelled it. Repair stays authoritative for any valid
+// finding, including a purely minor one.
+func (v Verdict) Resolve() (Decision, error) {
+	if err := v.Validate(); err != nil {
+		return "", err
+	}
+	if v.Decision == DecisionRepair {
+		return DecisionRepair, nil
+	}
+	var actionable []string
+	for _, finding := range v.Findings {
+		if finding.Severity == SeverityBlocker || finding.Severity == SeverityMajor {
+			actionable = append(actionable, string(finding.Severity))
+		}
+	}
+	if len(actionable) > 0 {
+		return "", fmt.Errorf("contradictory review verdict: approve carries %d %s finding(s) that require repair", len(actionable), strings.Join(uniqueStrings(actionable), " and "))
+	}
+	return DecisionApprove, nil
+}
+
 // Validate reports every contract violation in the finding at once.
 func (f Finding) Validate() error {
 	var problems []error
@@ -126,6 +150,19 @@ func (l Location) Validate() error {
 		problems = append(problems, fmt.Errorf("line %d cannot be negative", l.Line))
 	}
 	return errors.Join(problems...)
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	unique := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, duplicate := seen[value]; duplicate {
+			continue
+		}
+		seen[value] = struct{}{}
+		unique = append(unique, value)
+	}
+	return unique
 }
 
 func (d Decision) Valid() bool {

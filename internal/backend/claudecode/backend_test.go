@@ -168,6 +168,58 @@ func TestRunReportsEventSinkFailure(t *testing.T) {
 	}
 }
 
+func TestRunKeepsReviewersReadOnly(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"{\"decision\":\"approve\",\"summary\":\"fine\"}"}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleReviewer, WorkingDirectory: "/worktree", Prompt: "review",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--allowedTools", "Glob,Grep,Read"}
+	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+	}
+
+	for _, test := range []struct {
+		name    string
+		request backendapi.RunRequest
+		want    string
+	}{
+		{
+			name:    "write tool",
+			request: backendapi.RunRequest{AllowedTools: []string{"Read", "Edit"}},
+			want:    `write-capable tool "Edit"`,
+		},
+		{
+			name:    "command execution",
+			request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
+			want:    `write-capable tool "Bash"`,
+		},
+		{
+			name:    "editing permission mode",
+			request: backendapi.RunRequest{AllowedTools: []string{"Read"}, PermissionMode: "acceptEdits"},
+			want:    "reviewer runs require the read-only",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := test.request
+			request.RunID, request.Role, request.WorkingDirectory, request.Prompt = testRunID, domain.RoleReviewer, "/worktree", "review"
+			blocked := &fakeRunner{}
+			if _, err := (Backend{Runner: blocked}).Run(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v, want it to contain %q", err, test.want)
+			}
+			if len(blocked.commands) != 0 {
+				t.Fatalf("a rejected reviewer run still started %d process(es)", len(blocked.commands))
+			}
+		})
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 

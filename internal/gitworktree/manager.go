@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -59,6 +60,40 @@ type Inspection struct {
 type ChangeSummary struct {
 	Status   string `json:"status"`
 	DiffStat string `json:"diff_stat,omitempty"`
+}
+
+// Default bounds for the unified change representation handed to a reviewer.
+const (
+	DefaultMaxDiffBytes     = 256 << 10
+	DefaultMaxDiffFileBytes = 64 << 10
+	DefaultMaxDiffFiles     = 200
+)
+
+// DiffLimits bounds how much of a worktree's change a caller is willing to
+// carry. Zero fields fall back to the defaults above.
+type DiffLimits struct {
+	// MaxTotalBytes bounds the complete tracked-and-untracked patch.
+	MaxTotalBytes int
+	// MaxFileBytes bounds each untracked file before Git renders its patch.
+	// Tracked changes remain bounded by MaxTotalBytes.
+	MaxFileBytes int
+	// MaxFiles bounds separately rendered untracked files. Tracked changes are
+	// already rendered together and remain bounded by MaxTotalBytes.
+	MaxFiles int
+}
+
+// ChangeDiff is a bounded unified view of everything a developer changed in a
+// worktree. Untracked files are diffed against /dev/null so they appear in the
+// same patch as tracked edits without staging them or otherwise mutating the
+// worktree. Truncated reports that the bounds dropped part of the change, so a
+// caller never mistakes a clamped patch for the whole story.
+type ChangeDiff struct {
+	Status         string   `json:"status"`
+	DiffStat       string   `json:"diff_stat,omitempty"`
+	Patch          string   `json:"patch,omitempty"`
+	UntrackedFiles []string `json:"untracked_files,omitempty"`
+	OmittedFiles   []string `json:"omitted_files,omitempty"`
+	Truncated      bool     `json:"truncated"`
 }
 
 var (
@@ -226,27 +261,103 @@ func (m *Manager) unexpectedPrimaryChanges(ctx context.Context) ([]string, error
 }
 
 func (m *Manager) SummarizeChanges(ctx context.Context, worktree Worktree) (ChangeSummary, error) {
-	path, err := m.validateOwnedPath(worktree)
+	path, err := m.verifyOwnedBase(ctx, worktree)
 	if err != nil {
 		return ChangeSummary{}, err
+	}
+	return m.summarize(ctx, path, worktree)
+}
+
+// UnifiedChanges reports the actual change a developer produced, tracked and
+// untracked, as one bounded patch. It only reads: the untracked half is built
+// from `git diff --no-index` rather than from a staged index, so inspecting a
+// worktree never changes what the developer left behind.
+func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits DiffLimits) (ChangeDiff, error) {
+	limits, err := limits.resolve()
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+	path, err := m.verifyOwnedBase(ctx, worktree)
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+	summary, err := m.summarize(ctx, path, worktree)
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+	changes := ChangeDiff{Status: summary.Status, DiffStat: summary.DiffStat}
+
+	tracked, err := m.run(ctx, "-C", path, "diff", "--no-ext-diff", "--patch", worktree.BaseCommit, "--")
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+	if tracked.Status != execution.ProcessSucceeded {
+		return ChangeDiff{}, fmt.Errorf("diff tracked worktree changes failed with exit code %d: %s", tracked.ExitCode, strings.TrimSpace(tracked.Stderr))
+	}
+	untracked, err := m.untrackedFiles(ctx, path)
+	if err != nil {
+		return ChangeDiff{}, err
+	}
+
+	var patch strings.Builder
+	remaining := limits.MaxTotalBytes
+	clamped, truncated := clampToWholeLines(tracked.Stdout, remaining)
+	patch.WriteString(clamped)
+	remaining -= len(clamped)
+	changes.Truncated = truncated || containsBinaryDiff(tracked.Stdout)
+
+	for _, relative := range untracked {
+		if len(changes.UntrackedFiles)+len(changes.OmittedFiles) >= limits.MaxFiles {
+			changes.OmittedFiles = append(changes.OmittedFiles, relative)
+			changes.Truncated = true
+			continue
+		}
+		included, filePatch, err := m.untrackedPatch(ctx, path, relative, limits.MaxFileBytes)
+		if err != nil {
+			return ChangeDiff{}, err
+		}
+		if !included || containsBinaryDiff(filePatch) || len(filePatch) > remaining {
+			changes.OmittedFiles = append(changes.OmittedFiles, relative)
+			changes.Truncated = true
+			continue
+		}
+		patch.WriteString(filePatch)
+		remaining -= len(filePatch)
+		changes.UntrackedFiles = append(changes.UntrackedFiles, relative)
+	}
+	changes.Patch = patch.String()
+	return changes, nil
+}
+
+// verifyOwnedBase confirms the worktree is the one the harness created and that
+// its HEAD is still the recorded base, so every reported change is uncommitted
+// developer work rather than history the agent rewrote.
+func (m *Manager) verifyOwnedBase(ctx context.Context, worktree Worktree) (string, error) {
+	path, err := m.validateOwnedPath(worktree)
+	if err != nil {
+		return "", err
 	}
 	registered, branch, err := m.registeredWorktree(ctx, path)
 	if err != nil {
-		return ChangeSummary{}, err
+		return "", err
 	}
 	if !registered || branch != worktree.Branch {
-		return ChangeSummary{}, errors.New("worktree is not registered with the expected branch")
+		return "", errors.New("worktree is not registered with the expected branch")
 	}
 	head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return ChangeSummary{}, err
+		return "", err
 	}
 	if head.Status != execution.ProcessSucceeded {
-		return ChangeSummary{}, fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+		return "", fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
 	}
 	if strings.TrimSpace(head.Stdout) != worktree.BaseCommit {
-		return ChangeSummary{}, errors.New("developer changed worktree HEAD; Git commits are owned by the harness")
+		return "", errors.New("developer changed worktree HEAD; Git commits are owned by the harness")
 	}
+	return path, nil
+}
+
+func (m *Manager) summarize(ctx context.Context, path string, worktree Worktree) (ChangeSummary, error) {
 	status, err := m.run(ctx, "-C", path, "status", "--short", "--untracked-files=all")
 	if err != nil {
 		return ChangeSummary{}, err
@@ -265,6 +376,98 @@ func (m *Manager) SummarizeChanges(ctx context.Context, worktree Worktree) (Chan
 		Status:   strings.TrimSpace(status.Stdout),
 		DiffStat: strings.TrimSpace(diffStat.Stdout),
 	}, nil
+}
+
+// untrackedFiles lists ignored-file-free untracked paths in a stable order.
+// The NUL-separated form is used so paths containing spaces, quotes, or
+// newlines survive without Git's quoting.
+func (m *Manager) untrackedFiles(ctx context.Context, path string) ([]string, error) {
+	result, err := m.run(ctx, "-C", path, "ls-files", "-z", "--others", "--exclude-standard")
+	if err != nil {
+		return nil, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list untracked worktree files failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	var files []string
+	for _, entry := range strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\x00") {
+		if entry != "" {
+			files = append(files, entry)
+		}
+	}
+	sort.Strings(files)
+	return files, nil
+}
+
+// untrackedPatch renders one untracked file as a new-file patch. It reports
+// included=false when the path is unsafe, is not a regular file, or is larger
+// than the per-file bound, leaving the caller to record it as omitted.
+func (m *Manager) untrackedPatch(ctx context.Context, path, relative string, maxFileBytes int) (bool, string, error) {
+	clean := filepath.Clean(relative)
+	if filepath.IsAbs(relative) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false, "", nil
+	}
+	info, err := os.Lstat(filepath.Join(path, filepath.FromSlash(clean)))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return false, "", nil
+		}
+		return false, "", fmt.Errorf("inspect untracked file: %w", err)
+	}
+	if !info.Mode().IsRegular() || info.Size() > int64(maxFileBytes) {
+		return false, "", nil
+	}
+	result, err := m.run(ctx, "-C", path, "diff", "--no-index", "--no-ext-diff", "--patch", "--", os.DevNull, clean)
+	if err != nil {
+		return false, "", err
+	}
+	// `git diff` exits 1 to report differences, which is the normal outcome
+	// here because every untracked file differs from /dev/null.
+	if result.Status != execution.ProcessSucceeded && result.ExitCode != 1 {
+		return false, "", fmt.Errorf("diff untracked worktree file failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	return true, result.Stdout, nil
+}
+
+func (l DiffLimits) resolve() (DiffLimits, error) {
+	if l.MaxTotalBytes == 0 {
+		l.MaxTotalBytes = DefaultMaxDiffBytes
+	}
+	if l.MaxFileBytes == 0 {
+		l.MaxFileBytes = DefaultMaxDiffFileBytes
+	}
+	if l.MaxFiles == 0 {
+		l.MaxFiles = DefaultMaxDiffFiles
+	}
+	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 {
+		return DiffLimits{}, errors.New("diff limits cannot be negative")
+	}
+	return l, nil
+}
+
+// clampToWholeLines keeps the longest whole-line prefix that fits in limit so a
+// bounded patch never ends mid-line and read as a different change.
+func clampToWholeLines(text string, limit int) (string, bool) {
+	if len(text) <= limit {
+		return text, false
+	}
+	cut := strings.LastIndexByte(text[:limit], '\n')
+	if cut < 0 {
+		return "", true
+	}
+	return text[:cut+1], true
+}
+
+// containsBinaryDiff detects Git's metadata-only representation of a binary
+// change. Such a patch proves that a file changed but does not carry content an
+// independent reviewer can evaluate, so the caller must treat it as truncated.
+func containsBinaryDiff(patch string) bool {
+	for _, line := range strings.Split(patch, "\n") {
+		if strings.HasPrefix(line, "Binary files ") && strings.HasSuffix(line, " differ") {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Manager) Inspect(ctx context.Context, worktree Worktree) (Inspection, error) {

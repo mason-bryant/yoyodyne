@@ -258,6 +258,78 @@ func TestValidateReportsEveryProblemAtOnce(t *testing.T) {
 	}
 }
 
+func TestResolveRejectsDecisionsThatContradictTheirFindings(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		verdict Verdict
+		want    Decision
+		wantErr string
+	}{
+		{
+			name:    "approve with no findings",
+			verdict: Verdict{Decision: DecisionApprove, Summary: "clean"},
+			want:    DecisionApprove,
+		},
+		{
+			name: "approve with only minor findings",
+			verdict: Verdict{Decision: DecisionApprove, Summary: "good enough", Findings: []Finding{
+				{Severity: SeverityMinor, Message: "rename this variable"},
+			}},
+			want: DecisionApprove,
+		},
+		{
+			name: "approve with a blocker finding",
+			verdict: Verdict{Decision: DecisionApprove, Summary: "looks fine", Findings: []Finding{
+				{Severity: SeverityBlocker, Message: "this drops the error"},
+			}},
+			wantErr: "contradictory review verdict",
+		},
+		{
+			name: "approve with a major finding",
+			verdict: Verdict{Decision: DecisionApprove, Summary: "looks fine", Findings: []Finding{
+				{Severity: SeverityMinor, Message: "spelling"},
+				{Severity: SeverityMajor, Message: "no test covers the new branch"},
+			}},
+			wantErr: "contradictory review verdict",
+		},
+		{
+			name: "repair stays authoritative for a minor finding",
+			verdict: Verdict{Decision: DecisionRepair, Summary: "small fix", Findings: []Finding{
+				{Severity: SeverityMinor, Message: "rename this variable"},
+			}},
+			want: DecisionRepair,
+		},
+		{
+			name:    "invalid verdicts are rejected before the policy runs",
+			verdict: Verdict{Decision: DecisionApprove},
+			wantErr: "summary is required",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			decision, err := test.verdict.Resolve()
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("Resolve() error = %v, want it to contain %q", err, test.wantErr)
+				}
+				if decision != "" {
+					t.Fatalf("Resolve() decision = %q, want empty on rejection", decision)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Resolve() error = %v", err)
+			}
+			if decision != test.want {
+				t.Fatalf("Resolve() = %q, want %q", decision, test.want)
+			}
+		})
+	}
+}
+
 func assertVerdictEqual(t *testing.T, got, want Verdict) {
 	t.Helper()
 

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -158,6 +159,164 @@ func TestManagerSummarizeChangesIncludesTrackedAndUntrackedFiles(t *testing.T) {
 	}
 }
 
+func TestManagerUnifiedChangesCoversTrackedAndUntrackedWorkWithoutMutating(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-diff", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "README.txt", "test\nedited\n")
+	writeFile(t, worktree.Path, "new.txt", "brand new\n")
+	writeFile(t, worktree.Path, filepath.Join("sub", "odd name.txt"), "nested\n")
+	writeFile(t, worktree.Path, ".gitignore", "ignored.txt\n")
+	writeFile(t, worktree.Path, "ignored.txt", "should not be reviewed\n")
+
+	before := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all")
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	for _, want := range []string{
+		"diff --git a/README.txt b/README.txt",
+		"+edited",
+		"diff --git a/new.txt b/new.txt",
+		"+brand new",
+		"diff --git a/sub/odd name.txt b/sub/odd name.txt",
+		"+nested",
+	} {
+		if !strings.Contains(changes.Patch, want) {
+			t.Errorf("patch is missing %q:\n%s", want, changes.Patch)
+		}
+	}
+	if strings.Contains(changes.Patch, "should not be reviewed") {
+		t.Errorf("patch includes an ignored file:\n%s", changes.Patch)
+	}
+	wantUntracked := []string{".gitignore", "new.txt", "sub/odd name.txt"}
+	if !reflect.DeepEqual(changes.UntrackedFiles, wantUntracked) {
+		t.Errorf("untracked files = %#v, want %#v", changes.UntrackedFiles, wantUntracked)
+	}
+	if changes.Truncated || len(changes.OmittedFiles) != 0 {
+		t.Errorf("changes = %#v, want an untruncated change", changes)
+	}
+	if !strings.Contains(changes.Status, "?? new.txt") || !strings.Contains(changes.DiffStat, "README.txt") {
+		t.Errorf("changes summary = %#v", changes)
+	}
+
+	// Inspecting a change must never stage or otherwise alter what the
+	// developer left behind.
+	if after := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); after != before {
+		t.Errorf("worktree status changed during inspection:\nbefore %q\nafter  %q", before, after)
+	}
+	if staged := gitOutput(t, worktree.Path, "diff", "--cached", "--name-only"); staged != "" {
+		t.Errorf("inspection staged files: %q", staged)
+	}
+}
+
+func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-bounds", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "big.txt", strings.Repeat("a line of new content\n", 200))
+	writeFile(t, worktree.Path, "small.txt", "small\n")
+
+	perFile, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxFileBytes: 64})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() per-file error = %v", err)
+	}
+	if !perFile.Truncated || !reflect.DeepEqual(perFile.OmittedFiles, []string{"big.txt"}) {
+		t.Fatalf("per-file bound = %#v", perFile)
+	}
+	if !reflect.DeepEqual(perFile.UntrackedFiles, []string{"small.txt"}) {
+		t.Fatalf("per-file untracked = %#v", perFile.UntrackedFiles)
+	}
+	if strings.Contains(perFile.Patch, "a line of new content") {
+		t.Fatalf("patch included an oversized file:\n%s", perFile.Patch)
+	}
+
+	counted, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxFiles: 1})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() file-count error = %v", err)
+	}
+	if len(counted.UntrackedFiles) != 1 || !counted.Truncated || len(counted.OmittedFiles) != 1 {
+		t.Fatalf("file-count bound = %#v", counted)
+	}
+
+	// A total bound clamps to whole lines rather than cutting a diff mid-line.
+	total, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxTotalBytes: 200})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() total error = %v", err)
+	}
+	if !total.Truncated {
+		t.Fatalf("total bound = %#v", total)
+	}
+	if len(total.Patch) > 200 {
+		t.Fatalf("patch is %d bytes, want at most 200", len(total.Patch))
+	}
+	if total.Patch != "" && !strings.HasSuffix(total.Patch, "\n") {
+		t.Fatalf("clamped patch ends mid-line: %q", total.Patch)
+	}
+
+	if _, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{MaxFiles: -1}); err == nil {
+		t.Fatal("UnifiedChanges() negative limit error = nil")
+	}
+}
+
+func TestManagerUnifiedChangesMarksBinaryContentIncomplete(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-binary", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "README.txt", "changed\x00binary\n")
+	writeFile(t, worktree.Path, "new.bin", "new\x00binary\n")
+
+	changes, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{})
+	if err != nil {
+		t.Fatalf("UnifiedChanges() error = %v", err)
+	}
+	if !changes.Truncated {
+		t.Fatalf("binary changes were reported as complete: %#v", changes)
+	}
+	if !reflect.DeepEqual(changes.OmittedFiles, []string{"new.bin"}) {
+		t.Fatalf("omitted files = %#v, want new.bin", changes.OmittedFiles)
+	}
+	if !strings.Contains(changes.Patch, "Binary files a/README.txt and b/README.txt differ") {
+		t.Fatalf("tracked binary change is not disclosed in patch:\n%s", changes.Patch)
+	}
+	if strings.Contains(changes.Patch, "new.bin") {
+		t.Fatalf("unreviewable untracked binary was included in patch:\n%s", changes.Patch)
+	}
+}
+
+func TestManagerUnifiedChangesRejectsAgentOwnedCommits(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-commit", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "new.txt", "new\n")
+	runGit(t, worktree.Path, "add", ".")
+	runGit(t, worktree.Path, "commit", "-m", "agent must not commit")
+
+	if _, err := manager.UnifiedChanges(context.Background(), worktree, DiffLimits{}); err == nil || !strings.Contains(err.Error(), "Git commits are owned by the harness") {
+		t.Fatalf("UnifiedChanges() committed HEAD error = %v", err)
+	}
+}
+
 func TestManagerRejectsUnsafeRootsAndTamperedOwnership(t *testing.T) {
 	t.Parallel()
 
@@ -223,5 +382,26 @@ func runGit(t *testing.T, repository string, args ...string) {
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %v error = %v: %s", args, err, output)
+	}
+}
+
+func gitOutput(t *testing.T, repository string, args ...string) string {
+	t.Helper()
+	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
+	output, err := command.Output()
+	if err != nil {
+		t.Fatalf("git %v error = %v", args, err)
+	}
+	return string(output)
+}
+
+func writeFile(t *testing.T, root, relative, content string) {
+	t.Helper()
+	path := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", relative, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", relative, err)
 	}
 }
