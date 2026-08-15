@@ -108,6 +108,12 @@ func (p *streamParser) EmitProcessOutput(output execution.Output) error {
 func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 	switch envelope.Subtype {
 	case "init":
+		// The init event is where the provider names the model it resolved the
+		// requested selector to. It is recorded as first-class result evidence
+		// rather than left buried in the event payload.
+		if envelope.Model != "" {
+			p.result.ResolvedModel = envelope.Model
+		}
 		return p.emit(execution.EventRunStarted, map[string]any{
 			"session_id":      envelope.SessionID,
 			"model":           envelope.Model,
@@ -239,6 +245,11 @@ func redactJSONValue(value any, redactor execution.Redactor) any {
 func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	p.sawResult = true
 	p.result.SessionID = envelope.SessionID
+	// A terminal result names the model only when no init event did; the model
+	// the run started on stays authoritative.
+	if p.result.ResolvedModel == "" && envelope.Model != "" {
+		p.result.ResolvedModel = envelope.Model
+	}
 	p.result.FinalText = envelope.Result
 	p.result.IsError = envelope.IsError
 	p.result.CostUSD = envelope.TotalCostUSD

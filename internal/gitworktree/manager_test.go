@@ -45,7 +45,8 @@ func TestManagerCreateInspectPreserveAndCleanup(t *testing.T) {
 	if err := os.WriteFile(dirtyPath, []byte("preserve me"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if err := manager.CleanupIntegrated(context.Background(), worktree, "main"); err == nil || !strings.Contains(err.Error(), "dirty") {
+	cleanupRequest := CleanupRequest{Worktree: worktree, TargetBranch: "main", SourceCommit: worktree.BaseCommit}
+	if _, err := manager.CleanupIntegrated(context.Background(), cleanupRequest); err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("CleanupIntegrated() dirty error = %v", err)
 	}
 	if _, err := os.Stat(dirtyPath); err != nil {
@@ -54,8 +55,12 @@ func TestManagerCreateInspectPreserveAndCleanup(t *testing.T) {
 	if err := os.Remove(dirtyPath); err != nil {
 		t.Fatalf("Remove() error = %v", err)
 	}
-	if err := manager.CleanupIntegrated(context.Background(), worktree, "main"); err != nil {
+	cleanup, err := manager.CleanupIntegrated(context.Background(), cleanupRequest)
+	if err != nil {
 		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	if !cleanup.Complete() {
+		t.Fatalf("CleanupIntegrated() = %#v, want both artifacts removed", cleanup)
 	}
 	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
 		t.Fatalf("worktree still exists: %v", err)

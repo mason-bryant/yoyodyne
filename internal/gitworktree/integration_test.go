@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -75,11 +76,213 @@ func TestManagerIntegratePromotesCheckedWorkAndPermitsCleanup(t *testing.T) {
 		t.Errorf("default commit subject = %q", subject)
 	}
 
-	if err := manager.CleanupIntegrated(context.Background(), worktree, worktree.TargetBranch); err != nil {
+	cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	})
+	if err != nil {
 		t.Fatalf("CleanupIntegrated() after integration error = %v", err)
+	}
+	if !cleanup.Complete() {
+		t.Fatalf("CleanupIntegrated() = %#v", cleanup)
 	}
 	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
 		t.Errorf("integrated worktree still exists: %v", err)
+	}
+	if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) != "" {
+		t.Errorf("integrated branch still exists: %q", branches)
+	}
+}
+
+func TestManagerCleanupIsResumableAcrossItsDestructiveSteps(t *testing.T) {
+	t.Parallel()
+
+	newIntegratedWorktree := func(t *testing.T) (string, *Manager, Worktree, Integration) {
+		t.Helper()
+		repository := newRepository(t)
+		manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+		worktree, err := manager.Create(context.Background(), CreateRequest{
+			RunID:        testRunID,
+			WorkItemID:   "yoyodyne-resume",
+			BaseRef:      "HEAD",
+			TargetBranch: "main",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+		integration, err := manager.Integrate(context.Background(), worktree, "")
+		if err != nil {
+			t.Fatalf("Integrate() error = %v", err)
+		}
+		return repository, manager, worktree, integration
+	}
+
+	t.Run("resumes when only the branch is left", func(t *testing.T) {
+		t.Parallel()
+		repository, manager, worktree, integration := newIntegratedWorktree(t)
+		request := CleanupRequest{Worktree: worktree, TargetBranch: worktree.TargetBranch, SourceCommit: integration.SourceCommit}
+
+		// Interrupt cleanup exactly between its two destructive steps.
+		runGit(t, repository, "worktree", "remove", worktree.Path)
+		if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) == "" {
+			t.Fatal("test setup did not leave the branch behind")
+		}
+
+		cleanup, err := manager.CleanupIntegrated(context.Background(), request)
+		if err != nil {
+			t.Fatalf("CleanupIntegrated() retry error = %v", err)
+		}
+		if !cleanup.Complete() {
+			t.Fatalf("retry = %#v, want both artifacts removed", cleanup)
+		}
+		if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) != "" {
+			t.Fatalf("retry did not delete the integrated branch: %q", branches)
+		}
+	})
+
+	t.Run("resumes the exact registration that outlived its directory", func(t *testing.T) {
+		t.Parallel()
+		repository := newRepository(t)
+		worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
+		runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
+		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worktree, err := manager.Create(context.Background(), CreateRequest{
+			RunID:        testRunID,
+			WorkItemID:   "yoyodyne-resume",
+			BaseRef:      "HEAD",
+			TargetBranch: "main",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+		integration, err := manager.Integrate(context.Background(), worktree, "")
+		if err != nil {
+			t.Fatalf("Integrate() error = %v", err)
+		}
+
+		// An unrelated run's worktree is left stale on purpose: recovering this
+		// run must not touch anyone else's registration.
+		foreign, err := manager.Create(context.Background(), CreateRequest{
+			RunID:      "run-fedcba9876543210fedcba9876543210",
+			WorkItemID: "yoyodyne-foreign",
+			BaseRef:    "HEAD",
+		})
+		if err != nil {
+			t.Fatalf("Create() foreign error = %v", err)
+		}
+		if err := os.RemoveAll(foreign.Path); err != nil {
+			t.Fatalf("RemoveAll() foreign error = %v", err)
+		}
+
+		// A removal interrupted partway leaves a registration with no directory.
+		if err := os.RemoveAll(worktree.Path); err != nil {
+			t.Fatalf("RemoveAll() error = %v", err)
+		}
+		cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+			Worktree:     worktree,
+			TargetBranch: worktree.TargetBranch,
+			SourceCommit: integration.SourceCommit,
+		})
+		if err != nil {
+			t.Fatalf("CleanupIntegrated() retry error = %v", err)
+		}
+		if !cleanup.Complete() {
+			t.Fatalf("retry = %#v", cleanup)
+		}
+		if registered, _, err := manager.registeredWorktree(context.Background(), worktree.Path); err != nil || registered {
+			t.Fatalf("stale registration survived: registered = %t, err = %v", registered, err)
+		}
+		if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) != "" {
+			t.Fatalf("retry did not delete the integrated branch: %q", branches)
+		}
+
+		// Recovery is targeted: no repository-wide pruning, and the unrelated
+		// stale registration and its branch are untouched.
+		for _, command := range runner.commands {
+			if len(command) >= 2 && command[len(command)-2] == "worktree" && command[len(command)-1] == "prune" {
+				t.Fatalf("cleanup pruned repository-wide registrations: %#v", command)
+			}
+		}
+		foreignRegistered, _, err := manager.registeredWorktree(context.Background(), foreign.Path)
+		if err != nil {
+			t.Fatalf("registeredWorktree() foreign error = %v", err)
+		}
+		if !foreignRegistered {
+			t.Fatal("cleanup removed an unrelated stale worktree registration")
+		}
+		if branches := gitOutput(t, repository, "branch", "--list", foreign.Branch); strings.TrimSpace(branches) == "" {
+			t.Fatal("cleanup deleted an unrelated branch")
+		}
+	})
+
+	t.Run("is a no-op once both artifacts are gone", func(t *testing.T) {
+		t.Parallel()
+		_, manager, worktree, integration := newIntegratedWorktree(t)
+		request := CleanupRequest{Worktree: worktree, TargetBranch: worktree.TargetBranch, SourceCommit: integration.SourceCommit}
+		if _, err := manager.CleanupIntegrated(context.Background(), request); err != nil {
+			t.Fatalf("CleanupIntegrated() error = %v", err)
+		}
+
+		cleanup, err := manager.CleanupIntegrated(context.Background(), request)
+		if err != nil {
+			t.Fatalf("CleanupIntegrated() repeat error = %v", err)
+		}
+		if !cleanup.Complete() {
+			t.Fatalf("repeat = %#v, want both artifacts reported absent", cleanup)
+		}
+	})
+}
+
+func TestManagerCleanupRefusesUnprovenOrForeignArtifacts(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-unproven",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	request := CleanupRequest{Worktree: worktree, TargetBranch: worktree.TargetBranch, SourceCommit: integration.SourceCommit}
+
+	// A commit that is not in the target proves nothing, so nothing is removed.
+	unproven := request
+	unproven.SourceCommit = strings.Repeat("a", 40)
+	if _, err := manager.CleanupIntegrated(context.Background(), unproven); err == nil || !strings.Contains(err.Error(), "not contained in") {
+		t.Fatalf("CleanupIntegrated() unproven commit error = %v", err)
+	}
+	if _, err := os.Stat(worktree.Path); err != nil {
+		t.Fatalf("unproven cleanup removed the worktree: %v", err)
+	}
+
+	// A branch that moved off the integrated commit is not the branch we
+	// integrated, so it survives even though the worktree is removed.
+	runGit(t, repository, "worktree", "remove", worktree.Path)
+	runGit(t, repository, "branch", "-f", worktree.Branch, worktree.BaseCommit)
+	cleanup, err := manager.CleanupIntegrated(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "want the integrated commit") {
+		t.Fatalf("CleanupIntegrated() moved branch error = %v", err)
+	}
+	if !cleanup.WorktreeRemoved || cleanup.BranchRemoved {
+		t.Fatalf("partial cleanup = %#v, want the worktree absent and the branch kept", cleanup)
+	}
+	if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) == "" {
+		t.Fatal("a branch that moved off the integrated commit was deleted")
 	}
 }
 
@@ -118,6 +321,259 @@ func TestManagerIntegrateAdvancesTargetThatIsNotCheckedOut(t *testing.T) {
 	// integration that only advanced a ref.
 	if _, err := os.Stat(filepath.Join(repository, "release.txt")); !os.IsNotExist(err) {
 		t.Errorf("integration wrote into the primary checkout: %v", err)
+	}
+
+	// Cleanup must be as independent of the checked-out branch as integration
+	// was: deletion is decided against the recorded commit, not against HEAD.
+	cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	})
+	if err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	if !cleanup.Complete() {
+		t.Fatalf("CleanupIntegrated() = %#v", cleanup)
+	}
+	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+		t.Errorf("integrated worktree still exists: %v", err)
+	}
+	if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) != "" {
+		t.Errorf("integrated branch still exists: %q", branches)
+	}
+	if release := gitLine(t, repository, "rev-parse", "refs/heads/release"); release != integration.SourceCommit {
+		t.Errorf("release moved during cleanup: %q", release)
+	}
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != mainCommit {
+		t.Errorf("main moved during cleanup: %q", head)
+	}
+}
+
+// postMutationFaultRunner fails one command, but only once an earlier command
+// has already run. It is how a verification step is broken while the
+// destructive step it verifies genuinely succeeds.
+type postMutationFaultRunner struct {
+	delegate execution.ProcessRunner
+	arm      func(args []string) bool
+	fail     func(args []string) bool
+	armed    bool
+	failed   bool
+}
+
+func (r *postMutationFaultRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if r.armed && !r.failed && r.fail(command.Args) {
+		r.failed = true
+		return execution.ProcessResult{}, errors.New("git process runner is unavailable")
+	}
+	result, err := r.delegate.Run(ctx, command, observer)
+	if !r.armed && r.arm(command.Args) {
+		r.armed = true
+	}
+	return result, err
+}
+
+func hasArgs(args []string, wanted ...string) bool {
+	for index := 0; index+len(wanted) <= len(args); index++ {
+		if reflect.DeepEqual(args[index:index+len(wanted)], wanted) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestManagerCleanupReportsRemovalsWhoseVerificationCouldNotRun(t *testing.T) {
+	t.Parallel()
+
+	// A destructive Git command that succeeded is a fact. When the command that
+	// would confirm it cannot run, the removal must still be reported, or a
+	// caller will send an operator after an artifact that no longer exists.
+	newIntegrated := func(t *testing.T, runner *postMutationFaultRunner) (string, *Manager, Worktree, Integration) {
+		t.Helper()
+		repository := newRepository(t)
+		runner.delegate = execution.OSProcessRunner{}
+		manager, err := New(Options{Runner: runner, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+		if err != nil {
+			t.Fatalf("New() error = %v", err)
+		}
+		worktree, err := manager.Create(context.Background(), CreateRequest{
+			RunID:        testRunID,
+			WorkItemID:   "yoyodyne-verify",
+			BaseRef:      "HEAD",
+			TargetBranch: "main",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+		integration, err := manager.Integrate(context.Background(), worktree, "")
+		if err != nil {
+			t.Fatalf("Integrate() error = %v", err)
+		}
+		return repository, manager, worktree, integration
+	}
+
+	t.Run("worktree removal verification fails", func(t *testing.T) {
+		t.Parallel()
+		runner := &postMutationFaultRunner{
+			arm:  func(args []string) bool { return hasArgs(args, "worktree", "remove") },
+			fail: func(args []string) bool { return hasArgs(args, "worktree", "list") },
+		}
+		repository, manager, worktree, integration := newIntegrated(t, runner)
+
+		cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+			Worktree:     worktree,
+			TargetBranch: worktree.TargetBranch,
+			SourceCommit: integration.SourceCommit,
+		})
+		if err == nil || !strings.Contains(err.Error(), "verify removal of worktree") {
+			t.Fatalf("CleanupIntegrated() error = %v, want a verification failure", err)
+		}
+		if !runner.failed {
+			t.Fatal("the verification fault was never injected")
+		}
+		// The removal really happened, so the result must say so.
+		if !cleanup.WorktreeRemoved {
+			t.Fatalf("cleanup = %#v, want the completed removal preserved", cleanup)
+		}
+		if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+			t.Fatalf("worktree still exists on disk: %v", err)
+		}
+		if registrations := gitOutput(t, repository, "worktree", "list", "--porcelain"); strings.Contains(registrations, worktree.Path) {
+			t.Fatalf("worktree is still registered: %q", registrations)
+		}
+		// Branch deletion is not attempted after a failed verification, so the
+		// branch is honestly reported as still present.
+		if cleanup.BranchRemoved {
+			t.Fatalf("cleanup = %#v, want the untouched branch reported as present", cleanup)
+		}
+	})
+
+	t.Run("branch deletion verification fails", func(t *testing.T) {
+		t.Parallel()
+		runner := &postMutationFaultRunner{
+			arm:  func(args []string) bool { return hasArgs(args, "update-ref", "-d") },
+			fail: func(args []string) bool { return hasArgs(args, "show-ref") },
+		}
+		repository, manager, worktree, integration := newIntegrated(t, runner)
+
+		cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+			Worktree:     worktree,
+			TargetBranch: worktree.TargetBranch,
+			SourceCommit: integration.SourceCommit,
+		})
+		if err == nil || !strings.Contains(err.Error(), "verify deletion of branch") {
+			t.Fatalf("CleanupIntegrated() error = %v, want a verification failure", err)
+		}
+		if !runner.failed {
+			t.Fatal("the verification fault was never injected")
+		}
+		if !cleanup.WorktreeRemoved || !cleanup.BranchRemoved {
+			t.Fatalf("cleanup = %#v, want both completed removals preserved", cleanup)
+		}
+		if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) != "" {
+			t.Fatalf("branch still exists: %q", branches)
+		}
+		if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+			t.Fatalf("worktree still exists on disk: %v", err)
+		}
+	})
+
+	t.Run("verification that observes a surviving artifact still reports it", func(t *testing.T) {
+		t.Parallel()
+		// The flag is only preserved when verification cannot run. An
+		// observation that the artifact survived must still clear it.
+		repository := newRepository(t)
+		manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+		worktree, err := manager.Create(context.Background(), CreateRequest{
+			RunID:        testRunID,
+			WorkItemID:   "yoyodyne-survivor",
+			BaseRef:      "HEAD",
+			TargetBranch: "main",
+		})
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+		integration, err := manager.Integrate(context.Background(), worktree, "")
+		if err != nil {
+			t.Fatalf("Integrate() error = %v", err)
+		}
+		runGit(t, repository, "worktree", "remove", worktree.Path)
+		// A branch re-created at the integrated commit and checked out elsewhere
+		// survives cleanup, and cleanup says so.
+		reused := filepath.Join(t.TempDir(), "reused")
+		runGit(t, repository, "worktree", "add", reused, worktree.Branch)
+
+		cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+			Worktree:     worktree,
+			TargetBranch: worktree.TargetBranch,
+			SourceCommit: integration.SourceCommit,
+		})
+		if err == nil {
+			t.Fatal("CleanupIntegrated() error = nil, want a refusal")
+		}
+		if cleanup.BranchRemoved {
+			t.Fatalf("cleanup = %#v, want the surviving branch reported as present", cleanup)
+		}
+		if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) == "" {
+			t.Fatal("a surviving branch was deleted")
+		}
+	})
+}
+
+func TestManagerCleanupRefusesABranchStillCheckedOut(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-checkedout",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+
+	// Deleting a ref cannot see checkouts, so a branch that is still checked out
+	// somewhere must be refused rather than deleted out from under it.
+	cleanup, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	})
+	if err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	if !cleanup.Complete() {
+		t.Fatalf("CleanupIntegrated() = %#v", cleanup)
+	}
+
+	// Re-create the branch and check it out elsewhere to prove the refusal.
+	runGit(t, repository, "branch", worktree.Branch, integration.SourceCommit)
+	reused := filepath.Join(t.TempDir(), "reused")
+	runGit(t, repository, "worktree", "add", reused, worktree.Branch)
+
+	retry, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	})
+	if err == nil || !strings.Contains(err.Error(), "still checked out") {
+		t.Fatalf("CleanupIntegrated() checked-out branch error = %v", err)
+	}
+	if retry.BranchRemoved {
+		t.Fatalf("cleanup deleted a branch that is still checked out: %#v", retry)
+	}
+	if branches := gitOutput(t, repository, "branch", "--list", worktree.Branch); strings.TrimSpace(branches) == "" {
+		t.Fatal("a checked-out branch was deleted")
 	}
 }
 
@@ -448,6 +904,27 @@ func TestManagerCreateRejectsTargetThatIsNotTheBase(t *testing.T) {
 		TargetBranch: "refs/heads/main",
 	}); err == nil || !strings.Contains(err.Error(), "must be a local branch name") {
 		t.Fatalf("Create() invalid target error = %v", err)
+	}
+}
+
+func TestManagerCurrentBranchNamesTheIntegrationTargetAndRefusesDetachedHead(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+
+	branch, err := manager.CurrentBranch(context.Background())
+	if err != nil {
+		t.Fatalf("CurrentBranch() error = %v", err)
+	}
+	if branch != "main" {
+		t.Fatalf("CurrentBranch() = %q, want main", branch)
+	}
+
+	// A detached HEAD names no branch, so there is nothing to integrate into.
+	runGit(t, repository, "checkout", "--detach", "HEAD")
+	if _, err := manager.CurrentBranch(context.Background()); err == nil || !strings.Contains(err.Error(), "detached") {
+		t.Fatalf("CurrentBranch() detached error = %v", err)
 	}
 }
 

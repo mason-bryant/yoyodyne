@@ -8,15 +8,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"yoyodyne/internal/backend/claudecode"
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/checks"
 	"yoyodyne/internal/config"
+	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
 	"yoyodyne/internal/orchestrator"
+	"yoyodyne/internal/review"
 	"yoyodyne/internal/runstate"
 )
 
@@ -107,11 +110,35 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 			Process:      processRunner,
 			RedactValues: redactValues,
 		},
+		// The reviewer runs its own provider invocation, so it is built from a
+		// separate backend value rather than sharing the developer's, and with
+		// the reviewer agent's own required model selector.
+		Reviewer: review.Reviewer{
+			Backend: claudecode.Backend{Runner: processRunner},
+			Model:   agentModel(cfg, domain.RoleReviewer),
+		},
 		NewRunID:     runstate.NewRunID,
 		Repository:   repository,
 		Config:       cfg,
 		RedactValues: redactValues,
 	}, nil
+}
+
+// agentModel returns the configured selector for a role. Configuration
+// validation already requires one for every agent, so an empty result means the
+// role is not configured at all and the pipeline refuses the run.
+func agentModel(cfg config.Config, role domain.AgentRole) string {
+	names := make([]string, 0, len(cfg.Agents))
+	for name := range cfg.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if agent := cfg.Agents[name]; agent.Role == role {
+			return agent.Model
+		}
+	}
+	return ""
 }
 
 func resolvePath(base, path string) (string, error) {
@@ -141,16 +168,65 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		if outcome.RunID != "" {
 			fmt.Fprintf(stderr, "run: %s\n", outcome.RunID)
 		}
-		if outcome.Branch != "" {
+		// An artifact recorded as removed is never described as preserved.
+		if outcome.Branch != "" && !outcome.BranchRemoved {
 			fmt.Fprintf(stderr, "preserved branch: %s\n", outcome.Branch)
 		}
-		if outcome.WorktreePath != "" {
+		if outcome.WorktreePath != "" && !outcome.WorktreeRemoved {
 			fmt.Fprintf(stderr, "preserved worktree: %s\n", outcome.WorktreePath)
+		}
+		if outcome.BranchRemoved {
+			fmt.Fprintf(stderr, "branch was already removed: %s\n", outcome.Branch)
+		}
+		if outcome.WorktreeRemoved {
+			fmt.Fprintf(stderr, "worktree was already removed: %s\n", outcome.WorktreePath)
+		}
+		if outcome.Integration != nil {
+			fmt.Fprintf(stderr, "already integrated into %s: %s\n", outcome.Integration.TargetBranch, outcome.Integration.TargetCommit)
 		}
 	} else {
 		fmt.Fprintf(stdout, "run succeeded: %s\n", outcome.RunID)
 		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
-		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		if outcome.Integration == nil {
+			fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		} else {
+			fmt.Fprintf(stdout, "review: %s (session %s, model %s)\n", outcome.ReviewDecision, outcome.ReviewSessionID, outcome.ReviewModel)
+			fmt.Fprintf(stdout, "integrated into %s: %s\n", outcome.Integration.TargetBranch, outcome.Integration.TargetCommit)
+			if outcome.WorktreeRemoved {
+				fmt.Fprintf(stdout, "worktree removed: %s\n", outcome.WorktreePath)
+			} else {
+				fmt.Fprintf(stdout, "worktree NOT removed: %s\n", outcome.WorktreePath)
+			}
+			if outcome.BranchRemoved {
+				fmt.Fprintf(stdout, "branch removed: %s\n", outcome.Branch)
+			} else {
+				fmt.Fprintf(stdout, "branch NOT removed: %s\n", outcome.Branch)
+			}
+		}
+		if outcome.CleanupFailure != "" {
+			// The run succeeded; only the artifacts that actually survive still
+			// need an operator, and cleanup can simply be retried. A failure
+			// with nothing left is a failed confirmation, not leftover work.
+			if outcome.WorktreeRemoved && outcome.BranchRemoved {
+				fmt.Fprintf(stderr, "cleanup could not be confirmed after a successful run: %s\n", outcome.CleanupFailure)
+				fmt.Fprintln(stderr, "both artifacts were removed; nothing is known to remain")
+			} else {
+				fmt.Fprintf(stderr, "cleanup incomplete after a successful run: %s\n", outcome.CleanupFailure)
+				if !outcome.BranchRemoved {
+					fmt.Fprintf(stderr, "remaining branch: %s\n", outcome.Branch)
+				}
+				if !outcome.WorktreeRemoved {
+					fmt.Fprintf(stderr, "remaining worktree: %s\n", outcome.WorktreePath)
+				}
+			}
+		}
+		if outcome.CompletionRecordingFailure != "" {
+			// Cleanup finished here; only writing it down did not. Saying
+			// anything about remaining artifacts would send an operator after
+			// files that are gone.
+			fmt.Fprintf(stderr, "completion recording failed after a successful run: %s\n", outcome.CompletionRecordingFailure)
+			fmt.Fprintln(stderr, "cleanup completed: the worktree and branch were both removed and nothing remains to clean up")
+		}
 		fmt.Fprintf(stdout, "base commit: %s\n", outcome.BaseCommit)
 		if outcome.Changes.Status != "" {
 			fmt.Fprintf(stdout, "changes:\n%s\n", outcome.Changes.Status)

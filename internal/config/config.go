@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"unicode"
 
 	"go.yaml.in/yaml/v3"
 
@@ -44,9 +45,14 @@ type Approvals struct {
 }
 
 type AgentConfig struct {
-	Role      domain.AgentRole `yaml:"role" json:"role"`
-	Backend   domain.Backend   `yaml:"backend" json:"backend"`
-	Instances int              `yaml:"instances,omitempty" json:"instances"`
+	Role    domain.AgentRole `yaml:"role" json:"role"`
+	Backend domain.Backend   `yaml:"backend" json:"backend"`
+	// Model is the required provider model selector for every instance of this
+	// agent. There is no implicit harness default: a family alias such as
+	// "opus" intentionally floats to the backend's current default for that
+	// family, while an exact provider identifier pins a version.
+	Model     string `yaml:"model" json:"model"`
+	Instances int    `yaml:"instances,omitempty" json:"instances"`
 }
 
 type configDocument struct {
@@ -67,6 +73,7 @@ type executionDocument struct {
 type agentDocument struct {
 	Role      domain.AgentRole `yaml:"role"`
 	Backend   domain.Backend   `yaml:"backend"`
+	Model     string           `yaml:"model"`
 	Instances *int             `yaml:"instances,omitempty"`
 }
 
@@ -134,6 +141,7 @@ func (d configDocument) resolve() Config {
 		agents[name] = AgentConfig{
 			Role:      rawAgent.Role,
 			Backend:   rawAgent.Backend,
+			Model:     strings.TrimSpace(rawAgent.Model),
 			Instances: instances,
 		}
 	}
@@ -213,6 +221,11 @@ func (c Config) Validate() error {
 		} else if !agent.Backend.SupportsRole(agent.Role) {
 			problems = append(problems, fmt.Sprintf("backend %q does not support role %q for agent %q", agent.Backend, agent.Role, name))
 		}
+		// Every executable agent declares its own selector; the harness never
+		// falls back to a provider default nobody chose or recorded.
+		if err := validateModelSelector(agent.Model); err != nil {
+			problems = append(problems, fmt.Sprintf("agent %q %s", name, err))
+		}
 		if agent.Instances < 1 {
 			problems = append(problems, fmt.Sprintf("agent %q instances must be at least 1", name))
 		}
@@ -246,6 +259,30 @@ func (c Config) Validate() error {
 
 	if len(problems) > 0 {
 		return ValidationError{Problems: problems}
+	}
+	return nil
+}
+
+// MaxModelSelectorBytes bounds a configured selector so it stays a model name
+// rather than an argument smuggled onto a provider command line.
+const MaxModelSelectorBytes = 128
+
+// ValidateModelSelector reports whether a configured model selector is usable.
+// It deliberately accepts both floating family aliases and pinned identifiers,
+// and rejects only what cannot name a model.
+func ValidateModelSelector(model string) error {
+	return validateModelSelector(model)
+}
+
+func validateModelSelector(model string) error {
+	trimmed := strings.TrimSpace(model)
+	switch {
+	case trimmed == "":
+		return errors.New("model selector is required; there is no implicit harness default")
+	case len(trimmed) > MaxModelSelectorBytes:
+		return fmt.Errorf("model selector is %d bytes, limit is %d", len(trimmed), MaxModelSelectorBytes)
+	case strings.IndexFunc(trimmed, unicode.IsSpace) >= 0 || strings.HasPrefix(trimmed, "-"):
+		return fmt.Errorf("model selector %q must be a single model name", model)
 	}
 	return nil
 }
