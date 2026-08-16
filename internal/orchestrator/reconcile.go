@@ -1,0 +1,505 @@
+package orchestrator
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"yoyodyne/internal/execution"
+	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/runstate"
+)
+
+// ReconcileWorktrees is the repository access reconciliation needs: reading
+// what a run's artifacts actually look like now, and finishing the removal an
+// integrated run already earned. It is deliberately narrower than the manager
+// the pipeline uses, because reconciliation must never create a worktree or
+// promote a change.
+type ReconcileWorktrees interface {
+	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
+	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
+}
+
+// ReconcileStore is the durable run state reconciliation reads and settles.
+// AdoptRun is what keeps a reconciled run singular: a run a live process still
+// holds is left to that process rather than decided about from outside.
+type ReconcileStore interface {
+	Outstanding() ([]runstate.State, error)
+	AdoptRun(ctx context.Context, runID string) (runstate.State, *runstate.Lease, error)
+	Save(state runstate.State) error
+}
+
+// Reconciler settles the runs an interrupted process left behind. It compares
+// durable run state against what the repository and the work tracker actually
+// show, and then either finishes the run's own remaining step or records a
+// durable blocker naming what a person has to decide.
+//
+// It has no backend and never invokes a provider. A lost process handle says
+// nothing about what a developer did, so recovering from one is a question
+// about recorded evidence and observable artifacts — never a reason to start a
+// second developer for an item. A run the pipeline can still continue on its
+// own is therefore left exactly as it is rather than resumed from here.
+type Reconciler struct {
+	Tracker   WorkTracker
+	Worktrees ReconcileWorktrees
+	Store     ReconcileStore
+	Clock     execution.Clock
+}
+
+// ReconcileAction names what reconciliation did with one run.
+type ReconcileAction string
+
+const (
+	// ActionHeld reports a run a live process owns, which was left untouched.
+	ActionHeld ReconcileAction = "held"
+	// ActionResumable reports a run whose own pipeline can continue it from
+	// durable state, so it was left exactly as the interrupted process left it.
+	ActionResumable ReconcileAction = "resumable"
+	// ActionCompleted reports a run whose integrated work was carried to its
+	// terminal state: the item closed and the run's artifacts removed.
+	ActionCompleted ReconcileAction = "completed"
+	// ActionBlocked reports a run nothing could finish, whose work item now
+	// carries a durable blocker.
+	ActionBlocked ReconcileAction = "blocked"
+	// ActionFailed reports a run recorded terminal without a blocker, because
+	// it left nothing behind for anyone to act on.
+	ActionFailed ReconcileAction = "failed"
+	// ActionUnsettled reports a run reconciliation could not decide. It stays
+	// outstanding, so the next sweep takes it up again.
+	ActionUnsettled ReconcileAction = "unsettled"
+)
+
+// Reconciliation is what happened to one run. Failure records that
+// reconciliation itself could not finish, which leaves the run outstanding for
+// the next attempt rather than silently settled.
+type Reconciliation struct {
+	RunID           string                `json:"run_id"`
+	WorkItemID      string                `json:"work_item_id"`
+	Action          ReconcileAction       `json:"action"`
+	Status          runstate.Status       `json:"status,omitempty"`
+	Phase           runstate.Phase        `json:"phase,omitempty"`
+	Detail          string                `json:"detail,omitempty"`
+	Integration     *runstate.Integration `json:"integration,omitempty"`
+	WorktreeRemoved bool                  `json:"worktree_removed"`
+	BranchRemoved   bool                  `json:"branch_removed"`
+	CleanupFailure  string                `json:"cleanup_failure,omitempty"`
+	Failure         string                `json:"failure,omitempty"`
+}
+
+// Reconcile settles every run that still owes a step. One run that cannot be
+// settled is reported as such and never stops the sweep: an unreconcilable run
+// must not hide the others from the operator reading the report.
+func (r Reconciler) Reconcile(ctx context.Context) ([]Reconciliation, error) {
+	if err := r.validate(); err != nil {
+		return nil, err
+	}
+	outstanding, err := r.Store.Outstanding()
+	if err != nil {
+		return nil, fmt.Errorf("discover outstanding runs: %w", err)
+	}
+	results := make([]Reconciliation, 0, len(outstanding))
+	for _, recorded := range outstanding {
+		results = append(results, r.reconcileRun(ctx, recorded))
+	}
+	return results, nil
+}
+
+// reconcileRun takes the run's lease and settles what it finds under it. The
+// state is re-read by AdoptRun, so nothing is decided from the listing snapshot
+// that another process may have moved on from in the meantime.
+func (r Reconciler) reconcileRun(ctx context.Context, recorded runstate.State) Reconciliation {
+	state, lease, err := r.Store.AdoptRun(ctx, recorded.RunID)
+	switch {
+	case errors.Is(err, runstate.ErrRunHeld):
+		result := reconciliationOf(recorded, ActionHeld)
+		result.Detail = "a live process holds this run"
+		return result
+	case err != nil:
+		result := reconciliationOf(recorded, ActionUnsettled)
+		result.Failure = fmt.Errorf("adopt run %s: %w", recorded.RunID, err).Error()
+		return result
+	}
+	defer lease.Release()
+
+	result, err := r.settle(ctx, state)
+	if err != nil {
+		// A step that failed partway is never described as settled, however
+		// much of it succeeded. What it did achieve is still reported, because
+		// the next sweep and an operator both act on that.
+		result.Failure = err.Error()
+		result.Action = ActionUnsettled
+	}
+	return result
+}
+
+// settle decides one run from its durable state and what the repository shows.
+func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	// A run its own pipeline can still continue is left alone. Ending it here
+	// would discard a change that can still be finished, and finishing it here
+	// would mean starting the developer reconciliation must never start.
+	if resumableRepair(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the repair loop can continue from durable state at attempt %d", state.RepairAttempts)
+		return result, nil
+	}
+	// Recorded integration means the work is already promoted, whatever else
+	// was interrupted afterwards.
+	if state.Integration != nil {
+		return r.completeIntegrated(ctx, state, false)
+	}
+	observation := gitworktree.Observation{}
+	if state.WorktreePath != "" {
+		var err error
+		observation, err = r.Worktrees.Observe(ctx, worktreeOf(state))
+		if err != nil {
+			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("observe run %s artifacts: %w", state.RunID, err)
+		}
+	}
+	// An interruption inside the integration step is the one boundary durable
+	// state cannot describe: the promotion either landed or it did not, and
+	// only the repository knows which. Containment of the branch's commit in
+	// the recorded target is that answer.
+	if state.Phase == runstate.PhaseIntegrating && observation.BranchIntegrated {
+		return r.recoverIntegration(ctx, state, observation)
+	}
+	return r.abandon(ctx, state, observation)
+}
+
+// recoverIntegration records the promotion an interrupted process made but
+// never wrote down, and then finishes the run from there. The evidence is
+// reconstructed from what integration guarantees rather than from the target as
+// it stands now: integration refuses a target that drifted from the recorded
+// base, and it only ever fast-forwards, so the target moved from exactly the
+// base commit to exactly the branch's commit.
+func (r Reconciler) recoverIntegration(ctx context.Context, state runstate.State, observation gitworktree.Observation) (Reconciliation, error) {
+	// The promotion is only this run's to claim if this run's review approved
+	// it. Without that the commit in the target needs a person, not a closed
+	// item.
+	if state.ReviewDecision != runstate.ReviewApprove {
+		reason := fmt.Sprintf("commit %s from this run's branch is contained in %s, but the run recorded no approving review for it",
+			observation.BranchCommit, state.TargetBranch)
+		itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+		if err != nil {
+			return reconciliationOf(state, ActionBlocked), err
+		}
+		return r.blockRun(ctx, state, itemStatus, observation, reason)
+	}
+	state.Integration = &runstate.Integration{
+		TargetBranch:         state.TargetBranch,
+		SourceCommit:         observation.BranchCommit,
+		TargetCommit:         observation.BranchCommit,
+		PreviousTargetCommit: state.BaseCommit,
+	}
+	// The durable invariants are checked before the tracker is touched, not
+	// after. Closing an item and only then discovering that the evidence for it
+	// cannot be recorded would leave a closed item behind a run that stays
+	// outstanding forever.
+	if err := state.Validate(); err != nil {
+		reason := fmt.Sprintf("commit %s from this run's branch is contained in %s, but the run's evidence does not support recording that promotion: %v",
+			observation.BranchCommit, state.TargetBranch, err)
+		itemStatus, statusErr := r.itemStatus(ctx, state.WorkItemID)
+		if statusErr != nil {
+			return reconciliationOf(state, ActionBlocked), statusErr
+		}
+		state.Integration = nil
+		return r.blockRun(ctx, state, itemStatus, observation, reason)
+	}
+	return r.completeIntegrated(ctx, state, true)
+}
+
+// completeIntegrated carries a run whose work is already promoted to its
+// terminal state. It keeps the pipeline's ordering: the outcome and the closed
+// item first, then the durable terminal record, and only then the removal of
+// artifacts. That order is what stops a closed item from ever sitting behind a
+// run that still says something is in flight.
+func (r Reconciler) completeIntegrated(ctx context.Context, state runstate.State, recovered bool) (Reconciliation, error) {
+	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+	if err != nil {
+		return reconciliationOf(state, ActionCompleted), err
+	}
+	// An item the interrupted process already closed is left alone, so
+	// reconciling twice records one outcome and one closure.
+	if itemStatus != "closed" {
+		if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderReconciledIntegrationNotes(state, recovered)); err != nil {
+			return reconciliationOf(state, ActionCompleted), fmt.Errorf("record reconciled outcome for run %s: %w", state.RunID, err)
+		}
+		if _, err := r.Tracker.Complete(ctx, state.WorkItemID, reconciledCompletionReason(state)); err != nil {
+			return reconciliationOf(state, ActionCompleted), fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
+		}
+	}
+	if !state.Status.Terminal() {
+		completedAt := r.clock().Now()
+		state.Status = runstate.StatusSucceeded
+		state.CompletedAt = &completedAt
+	}
+	state.Phase = runstate.PhaseCleaningUp
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		return reconciliationOf(state, ActionCompleted), fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)
+	}
+
+	cleanup, cleanupErr := r.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
+		Worktree:     worktreeOf(state),
+		TargetBranch: state.Integration.TargetBranch,
+		SourceCommit: state.Integration.SourceCommit,
+	})
+	state.WorktreeRemoved = cleanup.WorktreeRemoved
+	state.BranchRemoved = cleanup.BranchRemoved
+	if cleanupErr != nil {
+		// The run stays outstanding so the next sweep tries again. Repeating
+		// cleanup is safe: it refuses anything that is not this run's proven
+		// artifacts and does nothing at all over artifacts already gone.
+		cleanupErr = fmt.Errorf("clean up reconciled run %s: %w", state.RunID, cleanupErr)
+		state.CleanupFailure = cleanupErr.Error()
+		state.UpdatedAt = r.clock().Now()
+		if saveErr := r.Store.Save(state); saveErr != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("record outstanding cleanup for run %s: %w", state.RunID, saveErr))
+		}
+		return reconciliationOf(state, ActionCompleted), cleanupErr
+	}
+	// Nothing is left to remove, so the run is complete and the outstanding
+	// cleanup marker the interrupted process left is no longer true.
+	state.CleanupFailure = ""
+	state.Phase = runstate.PhaseComplete
+	state.UpdatedAt = r.clock().Now()
+	if err := r.Store.Save(state); err != nil {
+		return reconciliationOf(state, ActionCompleted), fmt.Errorf("save completed run state for %s: %w", state.RunID, err)
+	}
+	result := reconciliationOf(state, ActionCompleted)
+	result.Detail = "integrated work was closed and its artifacts removed"
+	if recovered {
+		result.Detail = "integration recovered from the repository, then closed and cleaned up"
+	}
+	return result, nil
+}
+
+// abandon settles a run whose remaining work cannot be finished from durable
+// state: an interrupted developer attempt leaves uncommitted work nobody has
+// judged, and re-running the developer is exactly what reconciliation must not
+// do. The run becomes terminal either way. When the item is still claimed or
+// the run's artifacts survive, the item also carries a durable blocker, because
+// something is preserved that a person has to replan, reuse, or retire.
+func (r Reconciler) abandon(ctx context.Context, state runstate.State, observation gitworktree.Observation) (Reconciliation, error) {
+	reason := fmt.Sprintf("the run was interrupted in the %s phase with nothing integrated, and no attempt of the harness can finish it", nonEmpty(string(state.Phase), "unrecorded"))
+	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+	if err != nil {
+		return reconciliationOf(state, ActionFailed), err
+	}
+	if itemStatus == "in_progress" || preservedArtifacts(observation) {
+		return r.blockRun(ctx, state, itemStatus, observation, reason)
+	}
+	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderReconciledFailureNotes(state, observation, reason)); err != nil {
+		return reconciliationOf(state, ActionFailed), fmt.Errorf("record reconciled failure for run %s: %w", state.RunID, err)
+	}
+	settled, err := r.recordTerminalFailure(state, reason)
+	result := reconciliationOf(settled, ActionFailed)
+	result.Detail = reason
+	return result, err
+}
+
+// blockRun records the durable blocker a stopped run leaves behind and makes
+// the run terminal. The blocker is recorded before the run is closed out, so an
+// interruption here leaves the run outstanding and the blocker recorded rather
+// than a settled run nobody was told about.
+func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) (Reconciliation, error) {
+	notes := renderReconcileBlockerNotes(state, observation, reason)
+	var err error
+	// An item already blocked keeps the status it has; the reason is still
+	// recorded, because this run's evidence is what a replan needs.
+	if itemStatus == "blocked" {
+		_, err = r.Tracker.RecordOutcome(ctx, state.WorkItemID, notes)
+	} else {
+		_, err = r.Tracker.Block(ctx, state.WorkItemID, notes)
+	}
+	if err != nil {
+		return reconciliationOf(state, ActionBlocked), fmt.Errorf("record blocker for run %s: %w", state.RunID, err)
+	}
+	settled, err := r.recordTerminalFailure(state, reason)
+	result := reconciliationOf(settled, ActionBlocked)
+	result.Detail = reason
+	return result, err
+}
+
+// recordTerminalFailure makes an unfinishable run durably terminal in the phase
+// it stopped in, so the record still says where it got to.
+func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
+	if state.Status.Terminal() {
+		return state, nil
+	}
+	completedAt := r.clock().Now()
+	state.Status = runstate.StatusFailed
+	state.UpdatedAt = completedAt
+	state.CompletedAt = &completedAt
+	state.Failure = "reconciled after an interrupted run: " + reason
+	if err := r.Store.Save(state); err != nil {
+		return state, fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)
+	}
+	return state, nil
+}
+
+// itemStatus reads the tracker's own view of the item, which is the half of
+// reconciliation durable run state cannot supply: a run that died before it
+// wrote anything down may still have claimed its item.
+func (r Reconciler) itemStatus(ctx context.Context, workItemID string) (string, error) {
+	item, err := r.Tracker.Show(ctx, workItemID)
+	if err != nil {
+		return "", fmt.Errorf("load work item %s: %w", workItemID, err)
+	}
+	return item.Status, nil
+}
+
+// preservedArtifacts reports whether anything this run created is still there.
+// A run whose artifacts are already gone leaves nothing to hand to a person.
+func preservedArtifacts(observation gitworktree.Observation) bool {
+	return observation.WorktreeRegistered || observation.WorktreePresent || observation.BranchExists
+}
+
+// worktreeOf rebuilds the worktree identity from what was recorded when it was
+// created, never from what the repository looks like now. Every manager call
+// revalidates ownership of these fields before acting on them.
+func worktreeOf(state runstate.State) gitworktree.Worktree {
+	return gitworktree.Worktree{
+		RunID:        state.RunID,
+		WorkItemID:   state.WorkItemID,
+		Path:         state.WorktreePath,
+		Branch:       state.Branch,
+		BaseCommit:   state.BaseCommit,
+		TargetBranch: state.TargetBranch,
+	}
+}
+
+func reconciliationOf(state runstate.State, action ReconcileAction) Reconciliation {
+	return Reconciliation{
+		RunID:           state.RunID,
+		WorkItemID:      state.WorkItemID,
+		Action:          action,
+		Status:          state.Status,
+		Phase:           state.Phase,
+		Integration:     state.Integration,
+		WorktreeRemoved: state.WorktreeRemoved,
+		BranchRemoved:   state.BranchRemoved,
+		CleanupFailure:  state.CleanupFailure,
+	}
+}
+
+func (r Reconciler) validate() error {
+	var problems []error
+	if r.Tracker == nil {
+		problems = append(problems, errors.New("work tracker is required"))
+	}
+	if r.Worktrees == nil {
+		problems = append(problems, errors.New("worktree observer is required"))
+	}
+	if r.Store == nil {
+		problems = append(problems, errors.New("state store is required"))
+	}
+	if len(problems) > 0 {
+		return errors.Join(problems...)
+	}
+	return nil
+}
+
+func (r Reconciler) clock() execution.Clock {
+	if r.Clock == nil {
+		return execution.RealClock{}
+	}
+	return r.Clock
+}
+
+// renderReconciledIntegrationNotes explains a closure the run itself never got
+// to record. It distinguishes integration the run wrote down from integration
+// found in the repository afterwards, because only the second one is a claim
+// reconciliation made on the run's behalf.
+func renderReconciledIntegrationNotes(state runstate.State, recovered bool) string {
+	headline := "Yoyodyne reconciled an interrupted run: the change was already integrated, so the item is being closed and the run's artifacts removed."
+	if recovered {
+		headline = "Yoyodyne reconciled an interrupted run: its integration commit was found in the target branch even though the run never recorded it, so the item is being closed and the run's artifacts removed."
+	}
+	lines := []string{
+		headline,
+		"Run: " + state.RunID,
+		"Phase when interrupted: " + string(state.Phase),
+		"Branch: " + state.Branch,
+		"Integrated into: " + state.Integration.TargetBranch,
+		"Integrated commit: " + state.Integration.SourceCommit,
+		"Previous target commit: " + state.Integration.PreviousTargetCommit,
+	}
+	if state.ReviewSessionID != "" {
+		lines = append(lines, "Reviewer session: "+state.ReviewSessionID)
+	}
+	if state.ReviewDecision != "" {
+		lines = append(lines, "Review decision: "+state.ReviewDecision)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func reconciledCompletionReason(state runstate.State) string {
+	return fmt.Sprintf("Reconciled by Yoyodyne after run %s was interrupted: %s is at %s",
+		state.RunID, state.Integration.TargetBranch, state.Integration.TargetCommit)
+}
+
+// renderReconcileBlockerNotes hands a stopped run to a person. It names only
+// artifacts that were actually observed, so nobody is sent after a worktree or
+// a branch that is no longer there.
+func renderReconcileBlockerNotes(state runstate.State, observation gitworktree.Observation, reason string) string {
+	lines := []string{
+		"Yoyodyne stopped this item while reconciling an interrupted run. No developer was restarted for it.",
+		"Reason: " + reason,
+		"Run: " + state.RunID,
+		"Phase when interrupted: " + nonEmpty(string(state.Phase), "unrecorded"),
+	}
+	if state.RepairAttempts > 0 {
+		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(state.RepairAttempts))
+	}
+	lines = append(lines, renderObservedArtifacts(state, observation)...)
+	if state.ReviewSummary != "" {
+		lines = append(lines, "Last review summary: "+state.ReviewSummary)
+	}
+	for _, finding := range state.ReviewFindingDetails {
+		location := ""
+		if finding.File != "" {
+			location = fmt.Sprintf(" (%s:%d)", finding.File, finding.Line)
+		}
+		lines = append(lines, fmt.Sprintf("Finding [%s]%s: %s", finding.Severity, location, finding.Message))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderReconciledFailureNotes records a run that left nothing behind. It is
+// deliberately not a blocker: the item is not claimed and no artifact survives,
+// so the work is simply available again.
+func renderReconciledFailureNotes(state runstate.State, observation gitworktree.Observation, reason string) string {
+	lines := []string{
+		"Yoyodyne reconciled an interrupted run that left nothing behind. The item is not blocked and remains available.",
+		"Reason: " + reason,
+		"Run: " + state.RunID,
+	}
+	return strings.Join(append(lines, renderObservedArtifacts(state, observation)...), "\n")
+}
+
+// renderObservedArtifacts reports what the repository actually shows, which is
+// what separates a preserved change from a recorded path that no longer exists.
+func renderObservedArtifacts(state runstate.State, observation gitworktree.Observation) []string {
+	if state.WorktreePath == "" {
+		return []string{"No worktree was recorded for this run."}
+	}
+	var lines []string
+	if observation.WorktreePresent {
+		lines = append(lines,
+			"Preserved worktree: "+state.WorktreePath,
+			"Uncommitted changes in the worktree: "+strconv.FormatBool(observation.WorktreeDirty))
+	} else {
+		lines = append(lines, "Recorded worktree is gone: "+state.WorktreePath)
+	}
+	if observation.BranchExists {
+		lines = append(lines, "Preserved branch: "+state.Branch+" at "+observation.BranchCommit)
+	} else {
+		lines = append(lines, "Recorded branch is gone: "+state.Branch)
+	}
+	if state.TargetBranch != "" {
+		lines = append(lines, "Integration target: "+state.TargetBranch)
+	}
+	return lines
+}

@@ -95,6 +95,115 @@ func TestManagerIntegratePromotesCheckedWorkAndPermitsCleanup(t *testing.T) {
 	}
 }
 
+// Observe is what reconciliation reads instead of trusting durable state. It
+// has to answer through the whole life of a run's artifacts, including after
+// they are gone, and it must only call work integrated once a commit past the
+// base is actually contained in the target.
+func TestManagerObserveReportsArtifactsThroughIntegrationAndRemoval(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-observe",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// A fresh worktree carries uncommitted work and nothing integrated. The
+	// base commit is in the target by construction, which must never on its own
+	// read as a promotion.
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	fresh, err := manager.Observe(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Observe() fresh error = %v", err)
+	}
+	if !fresh.WorktreeRegistered || !fresh.WorktreePresent || !fresh.WorktreeDirty {
+		t.Fatalf("fresh observation = %#v", fresh)
+	}
+	if fresh.WorktreeBranch != worktree.Branch || fresh.WorktreeHead != worktree.BaseCommit {
+		t.Fatalf("fresh observation = %#v, want the recorded branch at its base", fresh)
+	}
+	if !fresh.BranchExists || fresh.BranchCommit != worktree.BaseCommit || fresh.BranchIntegrated {
+		t.Fatalf("fresh observation = %#v, want nothing integrated", fresh)
+	}
+	if !fresh.TargetExists || fresh.TargetCommit != worktree.BaseCommit {
+		t.Fatalf("fresh observation = %#v, want the target at the base", fresh)
+	}
+
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	integrated, err := manager.Observe(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Observe() integrated error = %v", err)
+	}
+	if !integrated.BranchIntegrated || integrated.BranchCommit != integration.SourceCommit {
+		t.Fatalf("integrated observation = %#v, want the promoted commit", integrated)
+	}
+	if integrated.WorktreeDirty || integrated.WorktreeHead != integration.SourceCommit {
+		t.Fatalf("integrated observation = %#v, want a clean worktree at the harness commit", integrated)
+	}
+
+	if _, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	}); err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	// Artifacts that are already gone are an observation, not a failure: this
+	// is exactly what reconciliation asks about a run nobody finished.
+	gone, err := manager.Observe(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Observe() after cleanup error = %v", err)
+	}
+	if gone.WorktreeRegistered || gone.WorktreePresent || gone.BranchExists || gone.BranchIntegrated {
+		t.Fatalf("observation after cleanup = %#v, want every run artifact absent", gone)
+	}
+	if !gone.TargetExists || gone.TargetCommit != integration.TargetCommit {
+		t.Fatalf("observation after cleanup = %#v, want the target still carrying the work", gone)
+	}
+}
+
+// A branch that moved on without reaching the target is not integrated. Saying
+// otherwise would let reconciliation close an item and delete a change that is
+// nowhere in the target's history.
+func TestManagerObserveDoesNotCallUnpromotedWorkIntegrated(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-unpromoted",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	runGit(t, worktree.Path, "add", "feature.txt")
+	runGit(t, worktree.Path, "commit", "-m", "committed but never promoted")
+
+	observation, err := manager.Observe(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("Observe() error = %v", err)
+	}
+	if observation.BranchCommit == worktree.BaseCommit || observation.BranchIntegrated {
+		t.Fatalf("observation = %#v, want a moved branch that is not integrated", observation)
+	}
+	if observation.TargetCommit != worktree.BaseCommit {
+		t.Fatalf("observation = %#v, want the target still at the base", observation)
+	}
+}
+
 func TestManagerCleanupIsResumableAcrossItsDestructiveSteps(t *testing.T) {
 	t.Parallel()
 

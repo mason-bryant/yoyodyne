@@ -64,6 +64,29 @@ type Inspection struct {
 	Branch     string
 }
 
+// Observation is what a run's recorded artifacts actually look like now. It is
+// read-only and every field is optional, because the question it answers is
+// asked exactly when a process died partway through creating or removing them:
+// an absent worktree, a deleted branch, and a target that has moved on are all
+// observations rather than failures.
+type Observation struct {
+	WorktreeRegistered bool   `json:"worktree_registered"`
+	WorktreePresent    bool   `json:"worktree_present"`
+	WorktreeDirty      bool   `json:"worktree_dirty"`
+	WorktreeBranch     string `json:"worktree_branch,omitempty"`
+	WorktreeHead       string `json:"worktree_head,omitempty"`
+	BranchExists       bool   `json:"branch_exists"`
+	BranchCommit       string `json:"branch_commit,omitempty"`
+	TargetExists       bool   `json:"target_exists"`
+	TargetCommit       string `json:"target_commit,omitempty"`
+	// BranchIntegrated reports that the run branch carries a commit past its
+	// base and that commit is contained in the recorded target. It is the only
+	// evidence that an integration nobody managed to write down actually
+	// promoted the work, so it is deliberately not satisfied by the base commit
+	// the target already contains by construction.
+	BranchIntegrated bool `json:"branch_integrated"`
+}
+
 // Integration reports exactly which commits an integration produced, so a
 // caller can record the promoted work and prove the target moved where it
 // expected before removing anything.
@@ -589,6 +612,102 @@ func (m *Manager) Inspect(ctx context.Context, worktree Worktree) (Inspection, e
 		}
 	}
 	return inspection, nil
+}
+
+// Observe reports the current state of one run's recorded artifacts without
+// changing any of them. Reconciliation needs this because durable run state
+// says what a process intended and only the repository says what it achieved.
+// Ownership is still proven first: the path is derived from the recorded
+// identifiers rather than trusted, so this never reports on a directory or a
+// branch that is not this run's.
+func (m *Manager) Observe(ctx context.Context, worktree Worktree) (Observation, error) {
+	path, err := m.ownedPath(worktree)
+	if err != nil {
+		return Observation{}, err
+	}
+	registered, branch, err := m.registeredWorktree(ctx, path)
+	if err != nil {
+		return Observation{}, err
+	}
+	observation := Observation{WorktreeRegistered: registered, WorktreeBranch: branch}
+	info, statErr := os.Lstat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return Observation{}, fmt.Errorf("inspect worktree path: %w", statErr)
+	}
+	observation.WorktreePresent = statErr == nil
+	if observation.WorktreePresent && info.Mode()&os.ModeSymlink != 0 {
+		return Observation{}, errors.New("worktree path must not be a symlink")
+	}
+	// A registration whose directory is gone has nothing left to read, so the
+	// content of the checkout is only inspected while both are still there.
+	if registered && observation.WorktreePresent {
+		observation.WorktreeDirty, err = m.isDirty(ctx, path)
+		if err != nil {
+			return Observation{}, err
+		}
+		head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
+		if err != nil {
+			return Observation{}, err
+		}
+		if head.Status != execution.ProcessSucceeded {
+			return Observation{}, fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+		}
+		observation.WorktreeHead = strings.TrimSpace(head.Stdout)
+	}
+
+	observation.BranchCommit, observation.BranchExists, err = m.optionalBranchCommit(ctx, worktree.Branch)
+	if err != nil {
+		return Observation{}, err
+	}
+	if worktree.TargetBranch == "" {
+		return observation, nil
+	}
+	if err := validateTargetBranch(worktree.TargetBranch); err != nil {
+		return Observation{}, err
+	}
+	observation.TargetCommit, observation.TargetExists, err = m.optionalBranchCommit(ctx, worktree.TargetBranch)
+	if err != nil {
+		return Observation{}, err
+	}
+	if observation.TargetExists && observation.BranchExists && observation.BranchCommit != worktree.BaseCommit {
+		observation.BranchIntegrated, err = m.contains(ctx, observation.BranchCommit, worktree.TargetBranch)
+		if err != nil {
+			return Observation{}, err
+		}
+	}
+	return observation, nil
+}
+
+// optionalBranchCommit resolves a branch that may legitimately be gone, which
+// is the ordinary case after cleanup deleted the run's branch.
+func (m *Manager) optionalBranchCommit(ctx context.Context, branch string) (string, bool, error) {
+	existing, err := m.run(ctx, "-C", m.repositoryRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil {
+		return "", false, err
+	}
+	switch {
+	case existing.ExitCode == 1:
+		return "", false, nil
+	case existing.Status != execution.ProcessSucceeded:
+		return "", false, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, existing.ExitCode, strings.TrimSpace(existing.Stderr))
+	}
+	commit, err := m.resolveBranchCommit(ctx, branch)
+	if err != nil {
+		return "", false, err
+	}
+	return commit, true, nil
+}
+
+// contains reports whether a commit is already part of a branch's history. Any
+// answer other than a clean yes is reported as no, because containment is what
+// permits destructive follow-up work and an unclear answer must never authorize
+// it.
+func (m *Manager) contains(ctx context.Context, commit, branch string) (bool, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", commit, "refs/heads/"+branch)
+	if err != nil {
+		return false, err
+	}
+	return result.Status == execution.ProcessSucceeded, nil
 }
 
 // Integrate promotes an already checked and approved worktree into its

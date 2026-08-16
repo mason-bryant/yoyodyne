@@ -311,6 +311,19 @@ func (s State) Validate() error {
 	return nil
 }
 
+// Outstanding reports that a run still owes a step somebody has to take. A run
+// that never reached a terminal status was interrupted mid-flight. A run that
+// did reach one still owes cleanup while it has recorded integration and has
+// not reached the complete phase, because integration is what schedules the
+// removal of the artifacts that produced it. A terminal run with nothing
+// integrated owes nothing: its artifacts are deliberately preserved.
+func (s State) Outstanding() bool {
+	if !s.Status.Terminal() {
+		return true
+	}
+	return s.Integration != nil && s.Phase != PhaseComplete
+}
+
 // validateIndependentInvocations enforces what an integrated change claims: two
 // separate provider invocations, each with its own recorded session and its own
 // declared model selector. A missing or reused session identity means nothing

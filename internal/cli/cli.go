@@ -37,6 +37,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runChat(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
+	case "reconcile":
+		return reconcileRuns(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -242,6 +244,7 @@ Commands:
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
   run               run one Beads work item in an isolated worktree
+  reconcile         settle runs an interrupted process left behind
   version           print version information
   help              show this help`)
 }
