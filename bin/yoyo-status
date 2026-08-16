@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+#
+# yoyo-status - follow the event stream of a Yoyodyne run.
+#
+# With no arguments it follows the most recent run. The state directory is
+# resolved the same way the harness resolves it, so this keeps working when
+# YOYODYNE_STATE_HOME or XDG_STATE_HOME is set, and on Linux and Windows
+# checkouts as well as macOS.
+#
+#   yoyo-status                  follow the newest run
+#   yoyo-status -L               follow the newest run, and switch when a new one starts
+#   yoyo-status 40b68275         follow a run by id or unique id prefix
+#   yoyo-status -l               list recent runs and exit
+#   yoyo-status -c               report token spend and cost per run, and in total
+#   yoyo-status -c 40b68275      report spend for one run
+#   yoyo-status -n 200           replay the last 200 events before following
+#   yoyo-status --all            include thinking-token noise
+#   yoyo-status --raw            emit raw JSONL, no jq shaping
+#   yoyo-status --no-follow      print and exit instead of following
+
+set -euo pipefail
+
+# Print the header comment block, stopping at the first line that is not a
+# comment, so the usage text cannot drift out of sync with the file.
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; }
+
+product=""
+run_arg=""
+lines=50
+follow=1
+follow_latest=0
+list_only=0
+cost_only=0
+raw=0
+include_all=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    -l|--list) list_only=1; shift ;;
+    -c|--cost) cost_only=1; shift ;;
+    -L|--follow-latest) follow_latest=1; shift ;;
+    -n|--lines) lines="${2:?-n needs a value}"; shift 2 ;;
+    --raw) raw=1; shift ;;
+    --all) include_all=1; shift ;;
+    --no-follow) follow=0; shift ;;
+    --product) product="${2:?--product needs a value}"; shift 2 ;;
+    --) shift; break ;;
+    -*) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+    *) run_arg="$1"; shift ;;
+  esac
+done
+
+# Mirror runstate.SystemDefaultRoot so this agrees with the harness.
+state_root() {
+  if [ -n "${YOYODYNE_STATE_HOME:-}" ]; then printf '%s\n' "$YOYODYNE_STATE_HOME"; return; fi
+  if [ -n "${XDG_STATE_HOME:-}" ]; then printf '%s\n' "$XDG_STATE_HOME/yoyodyne"; return; fi
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/Yoyodyne/state" ;;
+    MINGW*|MSYS*|CYGWIN*) printf '%s\n' "${LOCALAPPDATA:-$HOME/AppData/Local}/Yoyodyne/state" ;;
+    *) printf '%s\n' "$HOME/.local/state/yoyodyne" ;;
+  esac
+}
+
+root="$(state_root)"
+products="$root/products"
+[ -d "$products" ] || { echo "no Yoyodyne state at $products" >&2; exit 1; }
+
+# Prefer an explicit product, then the one this checkout configures, then the
+# only one present. Guessing between several would tail the wrong project.
+if [ -z "$product" ]; then
+  if [ -f .yoyodyne/config.yaml ]; then
+    product="$(sed -n 's/^[[:space:]]*id:[[:space:]]*//p' .yoyodyne/config.yaml | head -1)"
+  fi
+fi
+if [ -z "$product" ] || [ ! -d "$products/$product" ]; then
+  count=$(find "$products" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')
+  if [ "$count" = "1" ]; then
+    product="$(basename "$(find "$products" -mindepth 1 -maxdepth 1 -type d)")"
+  else
+    echo "specify --product; found $count under $products:" >&2
+    find "$products" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; >&2
+    exit 1
+  fi
+fi
+
+runs="$products/$product/runs"
+[ -d "$runs" ] || { echo "no runs directory at $runs" >&2; exit 1; }
+
+newest() { ls -t "$runs"/*.events.jsonl 2>/dev/null | head -1; }
+
+# The state file is pretty-printed and has nested "status" keys, so match the
+# top-level one by its indent rather than the first occurrence anywhere.
+status_of() {
+  local state="${1%.events.jsonl}.json"
+  [ -f "$state" ] || { echo "?"; return; }
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '.status // "?"' "$state" 2>/dev/null || echo "?"
+  else
+    sed -n 's/^  "status":[[:space:]]*"\([a-z_]*\)".*/\1/p' "$state" | head -1
+  fi
+}
+
+if [ "$list_only" = "1" ]; then
+  ls -t "$runs"/*.events.jsonl 2>/dev/null | head -20 | while read -r f; do
+    b="$(basename "$f" .events.jsonl)"
+    printf '%-40s %-10s %s events\n' "$b" "$(status_of "$f")" "$(wc -l < "$f" | tr -d ' ')"
+  done
+  exit 0
+fi
+
+# Every provider invocation ends in a run.completed event carrying that
+# invocation's usage and cost, so a run's spend is the sum over its agents:
+# a developer, plus a reviewer once automatic integration is enabled, plus one
+# more per repair attempt. Cost is what the provider reported, not an estimate.
+cost_report() {
+  command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
+  local pattern="${1:-}" files
+  if [ -n "$pattern" ]; then
+    files=$(ls -tr "$runs"/*"$pattern"*.events.jsonl 2>/dev/null || true)
+  else
+    files=$(ls -tr "$runs"/*.events.jsonl 2>/dev/null || true)
+  fi
+  [ -n "$files" ] || { echo "no runs found" >&2; exit 1; }
+
+  # Aggregate per run at full precision first. Totalling the displayed values
+  # instead would accumulate the rounding error from each row.
+  local tmp
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  printf '%s\n' "$files" | while read -r f; do
+    [ -n "$f" ] || continue
+    jq -r 'select(.type=="run.completed")
+           | [ (.payload.total_cost_usd // 0),
+               (.payload.usage.input_tokens // 0),
+               (.payload.usage.output_tokens // 0),
+               (.payload.usage.cache_creation_input_tokens // 0),
+               (.payload.usage.cache_read_input_tokens // 0) ]
+           | @tsv' "$f" 2>/dev/null \
+    | awk -v run="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" '
+        { n++; cost+=$1; in_+=$2; out+=$3; cw+=$4; cr+=$5 }
+        END { if (n>0) printf "%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
+                            run, n, in_, out, cw, cr, cost, st }'
+  done > "$tmp"
+
+  printf '%-38s %6s %8s %9s %10s %11s %9s  %s\n' run agents in out cache_w cache_r USD status
+  awk -F'\t' '{ printf "%-38s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8 }' "$tmp"
+  awk -F'\t' '
+    { n+=$2; in_+=$3; out+=$4; cw+=$5; cr+=$6; cost+=$7 }
+    END {
+      if (n==0) { print "no completed provider invocations yet"; exit }
+      print  "----------------------------------------------------------------------------------------------";
+      printf "%-38s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", n, in_, out, cw, cr, cost;
+      t=in_+out+cw+cr;
+      printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
+    }' "$tmp"
+}
+
+if [ "$cost_only" = "1" ]; then
+  cost_report "$run_arg"
+  exit 0
+fi
+
+if [ -n "$run_arg" ]; then
+  target="$(ls "$runs"/*"$run_arg"*.events.jsonl 2>/dev/null | head -1 || true)"
+  [ -n "$target" ] || { echo "no run matching '$run_arg' in $runs" >&2; exit 1; }
+else
+  target="$(newest)"
+  # Nothing yet is normal when a run is about to start, so wait rather than fail.
+  while [ -z "$target" ]; do
+    echo "waiting for a run to start in $runs ..." >&2
+    sleep 2
+    target="$(newest)"
+  done
+fi
+
+shape() {
+  if [ "$raw" = "1" ]; then cat; return; fi
+  if ! command -v jq >/dev/null 2>&1; then cat; return; fi
+  if [ "$include_all" = "1" ]; then
+    jq --unbuffered -c '{sequence, timestamp, type, source, payload}'
+  else
+    # Thinking-token pings carry no payload and drown everything else.
+    jq --unbuffered -c 'select(.payload.provider_subtype != "thinking_tokens")
+                        | {sequence, timestamp, type, source, payload}'
+  fi
+}
+
+echo "==> $(basename "$target" .events.jsonl) [$(status_of "$target")]" >&2
+
+if [ "$follow" = "0" ]; then
+  tail -n "$lines" "$target" | shape
+  exit 0
+fi
+
+if [ "$follow_latest" = "0" ]; then
+  tail -n "$lines" -F "$target" | shape
+  exit 0
+fi
+
+# Follow the newest run, moving on when a later one appears. Each tail is
+# killed only after a successor exists, so no events are dropped in between.
+while :; do
+  tail -n "$lines" -F "$target" | shape &
+  tail_pid=$!
+  while :; do
+    sleep 3
+    current="$(newest)"
+    if [ -n "$current" ] && [ "$current" != "$target" ]; then
+      kill "$tail_pid" 2>/dev/null || true
+      wait "$tail_pid" 2>/dev/null || true
+      target="$current"
+      echo "==> $(basename "$target" .events.jsonl) [$(status_of "$target")]" >&2
+      break
+    fi
+    kill -0 "$tail_pid" 2>/dev/null || break
+  done
+done
