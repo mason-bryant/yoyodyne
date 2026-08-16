@@ -384,6 +384,14 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "integration requires an approving review decision",
 		},
 		{
+			name: "integration recorded before the integrating phase",
+			mutate: func(state *State) {
+				state.Phase = PhaseReviewing
+				state.Integration = &integration
+			},
+			problem: "integration requires the integrating phase or later",
+		},
+		{
 			name: "integration onto a fully qualified ref",
 			mutate: func(state *State) {
 				qualified := integration

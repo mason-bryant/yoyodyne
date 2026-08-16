@@ -202,6 +202,13 @@ func (s State) Validate() error {
 		if s.BaseCommit == "" {
 			problems = append(problems, errors.New("integration requires the integrated worktree"))
 		}
+		// Integration is only produced by the integrating step, so evidence of it
+		// alongside an earlier phase describes a run history that cannot have
+		// happened. A reconciler reads the phase to decide what remains to do, so
+		// an impossible pairing must not be storable.
+		if !s.Phase.reached(PhaseIntegrating) {
+			problems = append(problems, errors.New("integration requires the integrating phase or later"))
+		}
 		problems = append(problems, s.validateIndependentInvocations()...)
 		if err := s.Integration.Validate(); err != nil {
 			problems = append(problems, err)
@@ -272,6 +279,29 @@ func (i Integration) Validate() error {
 		problems = append(problems, errors.New("integration target_commit must equal the fast-forwarded source_commit"))
 	}
 	return errors.Join(problems...)
+}
+
+// phaseOrder lists the phases in the order a run reaches them, so evidence can
+// be checked against the step that must have produced it.
+var phaseOrder = []Phase{
+	PhaseDeveloping, PhaseChecking, PhaseReviewing,
+	PhaseIntegrating, PhaseCompleting, PhaseCleaningUp, PhaseComplete,
+}
+
+// reached reports whether this phase is at or past the given one. An unknown
+// phase reaches nothing: it is already rejected as invalid, and treating it as
+// satisfying an ordering would let a malformed record pass a coherence check.
+func (p Phase) reached(other Phase) bool {
+	position := func(phase Phase) int {
+		for index, candidate := range phaseOrder {
+			if candidate == phase {
+				return index
+			}
+		}
+		return -1
+	}
+	self, target := position(p), position(other)
+	return self >= 0 && target >= 0 && self >= target
 }
 
 func (p Phase) Valid() bool {
