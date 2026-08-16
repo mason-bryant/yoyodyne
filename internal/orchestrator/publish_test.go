@@ -941,6 +941,7 @@ func TestPipelineReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	forge := &fakeForge{remote: remote, mergeErr: publish.AutoMergeUnavailable{
 		Number: 1,
+		Status: "BLOCKED",
 		Reason: "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
 	}}
 	provider := roleBackend(func(request backend.RunRequest) error {

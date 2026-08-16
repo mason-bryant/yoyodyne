@@ -144,8 +144,8 @@ func TestGitHubMergeNamesTheMethodAndPinsTheHeadCommit(t *testing.T) {
 }
 
 // A repository whose settings forbid queued merges cannot be published to when
-// its base branch requires checks, and the operator has to be told which setting
-// to change rather than left reading a refusal that names no remedy.
+// something is holding the request back, and the operator has to be told which
+// setting to change rather than left reading a refusal that names no remedy.
 func TestGitHubMergeReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
 	t.Parallel()
 
@@ -159,6 +159,9 @@ func TestGitHubMergeReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
 			runner := &scriptedRunner{}
 			runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
 			runner.reply("pr merge", execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: reason})
+			// The base branch is holding the request back, which is the half that
+			// makes a repository without queued merges unpublishable.
+			runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"BLOCKED"}`})
 			forge := GitHub{Runner: runner, Dir: t.TempDir()}
 
 			_, err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: "0123456789abcdef0123456789abcdef01234567", Method: MergeCommit})
@@ -166,22 +169,66 @@ func TestGitHubMergeReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
 			if !errors.As(err, &unavailable) {
 				t.Fatalf("Merge() error = %v, want an AutoMergeUnavailable", err)
 			}
-			if unavailable.Number != 7 {
-				t.Errorf("unavailable = %#v, want the pull request named", unavailable)
+			if unavailable.Number != 7 || unavailable.Status != "BLOCKED" {
+				t.Errorf("unavailable = %#v, want the pull request and the state that held it back named", unavailable)
 			}
-			for _, want := range []string{"Allow auto-merge", "protection rules", reason} {
+			for _, want := range []string{"Allow auto-merge", "protection rules", "BLOCKED", reason} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error %q does not name %q", err.Error(), want)
 				}
 			}
-			// The one thing that must never be reached for: a merge that overrode
-			// the protection would satisfy nothing the repository asked for.
-			for _, call := range runner.matching("pr merge") {
-				if contains(call, "--admin") {
-					t.Errorf("pr merge args = %v, want no administrator override", call)
-				}
+			// The request was never merged past the requirement, and above all not
+			// with an override: that would satisfy nothing the repository asked for.
+			calls := runner.matching("pr merge")
+			if len(calls) != 1 {
+				t.Fatalf("pr merge calls = %v, want the queued request and nothing after it", calls)
+			}
+			if contains(calls[0], "--admin") {
+				t.Errorf("pr merge args = %v, want no administrator override", calls[0])
 			}
 		})
+	}
+}
+
+// "Allow auto-merge" is off by default on GitHub, so a repository that forbids
+// queued merges is the ordinary case rather than a broken one. When nothing is
+// holding the request back there is nothing for a queue to wait for, and the
+// merge is simply made — reporting the setting instead would fail the
+// publication of every project without branch protection, which is the manual
+// step queuing exists to remove.
+func TestGitHubMergeMergesWhenQueuingIsForbiddenAndNothingIsWaiting(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge", execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
+	})
+	runner.replyAfter("pr merge", 1, execution.ProcessResult{Status: execution.ProcessSucceeded})
+	runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"CLEAN"}`})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	head := "0123456789abcdef0123456789abcdef01234567"
+	result, err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: head, Method: MergeCommit})
+	if err != nil {
+		t.Fatalf("Merge() error = %v, want the request merged rather than reported as unpublishable", err)
+	}
+	if result.Queued {
+		t.Errorf("Merge() = %#v, want a merge the forge performed rather than queued", result)
+	}
+	merges := runner.matching("pr merge")
+	if len(merges) != 2 {
+		t.Fatalf("pr merge calls = %v, want the queued request and then the merge itself", merges)
+	}
+	if contains(merges[1], "--auto") || contains(merges[1], "--admin") {
+		t.Errorf("second pr merge args = %v, want an ordinary merge with no override", merges[1])
+	}
+	for _, expected := range []string{"--merge", "--match-head-commit", head} {
+		if !contains(merges[1], expected) {
+			t.Errorf("second pr merge args = %v, missing %q", merges[1], expected)
+		}
 	}
 }
 

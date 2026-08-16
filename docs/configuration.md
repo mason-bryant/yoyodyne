@@ -181,10 +181,14 @@ With both on, a run works like this:
    The merge is asked for as of *when your branch protection is satisfied*
    rather than as of now, so required checks that are still running are waited
    for by the forge instead of refused seconds after the approval. Administrator
-   override is never used to get past them. This needs **"Allow auto-merge"**
-   enabled in your repository settings; a repository that has required checks
-   and forbids auto-merge cannot be published to, and the run says so and names
-   the setting rather than reporting a merge that mysteriously fails.
+   override is never used to get past them. Waiting that way needs **"Allow
+   auto-merge"** enabled in your repository settings, which is off by default;
+   when it is off and nothing is holding the pull request back, the harness
+   simply merges, so a repository without branch protection needs no setting
+   changed at all. Only the combination of the two — something holding the
+   request back and no way to queue the merge behind it — cannot be published
+   to, and the run says exactly that and names the setting rather than
+   reporting a merge that mysteriously fails.
 3. **The merge method is a merge commit.** The harness names it rather than
    taking your repository's default, because it is the only method that puts the
    reviewed commit itself on your target branch. A squash replaces it with a

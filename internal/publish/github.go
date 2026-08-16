@@ -108,19 +108,32 @@ type MergeResult struct {
 }
 
 // AutoMergeUnavailable reports a repository that does not offer the queued
-// merge the harness asks for. It is distinct from a refusal because the remedy
-// is a repository setting rather than an unmet requirement of this change: a
-// repository whose base branch requires checks and whose settings forbid
-// auto-merge cannot be published to this way at all, and the operator has to be
-// told which setting to change rather than left with a merge that fails on
-// every run.
+// merge the harness asks for, for a pull request that needs one. It is distinct
+// from a refusal because the remedy is a repository setting rather than an
+// unmet requirement of this change: a repository whose base branch holds the
+// request back and whose settings forbid auto-merge cannot be published to at
+// all, and the operator has to be told which setting to change rather than left
+// with a merge that fails on every run.
+//
+// Both halves are required before it is reported. "Allow auto-merge" is off by
+// default, and a repository that has it off and has nothing holding the request
+// back is merged into immediately instead — refusing that one would break every
+// project without branch protection, which is most of them.
 type AutoMergeUnavailable struct {
 	Number int
+	// Status is the forge's merge state for the request, which is what says
+	// there was something for a queued merge to wait for; Reason is what the
+	// forge printed when it would not queue one.
+	Status string
 	Reason string
 }
 
 func (e AutoMergeUnavailable) Error() string {
-	message := fmt.Sprintf("the forge cannot queue a merge for pull request %d: enable \"Allow auto-merge\" in the repository's settings, or remove the required checks from the base branch's protection rules", e.Number)
+	message := fmt.Sprintf("the forge cannot queue a merge for pull request %d, and it cannot merge now either", e.Number)
+	if requirement := mergeRequirement(e.Status); requirement != "" {
+		message += ": " + requirement
+	}
+	message += ": enable \"Allow auto-merge\" in the repository's settings, or take the unmet requirement out of the base branch's protection rules"
 	if e.Reason != "" {
 		message += ": " + e.Reason
 	}
@@ -287,12 +300,19 @@ func (g GitHub) Ensure(ctx context.Context, request Request) (PullRequest, error
 // merging with it would bypass the very checks the protection expresses, which
 // removes the gate rather than satisfying it.
 //
-// A refusal comes back as MergeRefused rather than as a generic failure. A
-// protected branch declining the merge because the pull request conflicts with
-// its base is the repository's rules being applied, not the harness failing,
-// and the answer has to name the requirement. A repository that does not offer
-// queued merges at all is reported separately, as AutoMergeUnavailable, because
-// its remedy is a setting rather than a requirement of this change.
+// A forge that will not queue the merge is asked whether it would make one now,
+// because a request with nothing holding it back has nothing for a queue to
+// wait for. That is the ordinary case for a repository without branch
+// protection, and for one whose settings forbid queued merges — "Allow
+// auto-merge" is off by default — so both are merged into immediately rather
+// than reported as unpublishable.
+//
+// What is left is a request the forge will neither queue nor merge, and that
+// comes back as an answer rather than a generic failure. AutoMergeUnavailable
+// says the repository forbids queued merges and something is holding this
+// request back, so the remedy is a setting; MergeRefused says the repository's
+// rules are being applied to this request — a conflict with its base, a merge
+// method the repository forbids — and names the requirement that was unmet.
 func (g GitHub) Merge(ctx context.Context, request MergeRequest) (MergeResult, error) {
 	if err := request.validate(); err != nil {
 		return MergeResult{}, err
@@ -314,19 +334,24 @@ func (g GitHub) Merge(ctx context.Context, request MergeRequest) (MergeResult, e
 	if queued.Status == execution.ProcessSucceeded {
 		return MergeResult{Queued: true}, nil
 	}
+	// The forge declined to queue, and what that means depends on whether the
+	// request has anything left to wait for. That question is asked before any
+	// other, and asked twice over: the forge says so in words, and the merge state
+	// it reports for the request says so in its own vocabulary. Either answer is
+	// enough, which is what keeps a repository with nothing holding its requests
+	// back — no branch protection, or every requirement already met — publishing
+	// whatever the forge's reason for not queuing was, including "Allow
+	// auto-merge" being off, which is GitHub's default.
 	reason := g.redact(strings.TrimSpace(queued.Stderr))
-	if autoMergeUnavailable(reason) {
-		return MergeResult{}, AutoMergeUnavailable{Number: request.Number, Reason: reason}
-	}
-	// The forge declined to queue. Either it has nothing left to wait for, or the
-	// request cannot merge at all, and the two are told apart twice over: by what
-	// the forge said, and by the merge state it reports for the request. The
-	// second answer is what keeps a repository with no required checks — the case
-	// that worked before queuing existed — publishing if the forge ever rewords
-	// the first. The state is read once here and reported on the refusal, so a
-	// refusal nothing recognized still names the state it was refused in.
 	status := g.mergeState(ctx, request.Number)
 	if !nothingLeftToWaitFor(reason) && !readyToMergeNow(status) {
+		// Something is holding the request back and the forge will not hold the
+		// merge for it. If that is the repository forbidding queued merges, the
+		// remedy is a setting and the operator is told which; anything else is the
+		// repository's rules being applied to this request.
+		if autoMergeUnavailable(reason) {
+			return MergeResult{}, AutoMergeUnavailable{Number: request.Number, Status: status, Reason: reason}
+		}
 		return MergeResult{}, MergeRefused{
 			Number: request.Number,
 			Method: request.Method,
