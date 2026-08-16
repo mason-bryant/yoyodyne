@@ -161,7 +161,7 @@ func readReference(root, referencePath string, remainingBytes int) (Reference, e
 		return Reference{}, fmt.Errorf("reference %q is not a regular file", referencePath)
 	}
 	if info.Size() > int64(remainingBytes) {
-		return Reference{}, fmt.Errorf("reference %q exceeds remaining context limit of %d bytes", referencePath, remainingBytes)
+		return Reference{}, tooLargeError{path: referencePath, remainingBytes: remainingBytes}
 	}
 	file, err := os.Open(resolved)
 	if err != nil {
@@ -173,9 +173,22 @@ func readReference(root, referencePath string, remainingBytes int) (Reference, e
 		return Reference{}, fmt.Errorf("read reference %q: %w", referencePath, err)
 	}
 	if len(data) > remainingBytes {
-		return Reference{}, fmt.Errorf("reference %q exceeds remaining context limit of %d bytes", referencePath, remainingBytes)
+		return Reference{}, tooLargeError{path: referencePath, remainingBytes: remainingBytes}
 	}
 	return Reference{Path: filepath.ToSlash(relative), Content: string(data)}, nil
+}
+
+// tooLargeError reports a reference that did not fit in the remaining budget.
+// It is a distinct type because a required work-item reference that does not
+// fit fails the bundle, while a product document that does not fit is reported
+// to the reader as omitted.
+type tooLargeError struct {
+	path           string
+	remainingBytes int
+}
+
+func (e tooLargeError) Error() string {
+	return fmt.Sprintf("reference %q exceeds remaining context limit of %d bytes", e.path, e.remainingBytes)
 }
 
 func validateReferencePath(referencePath string) (string, error) {

@@ -340,6 +340,64 @@ func TestRunKeepsReviewersReadOnly(t *testing.T) {
 	}
 }
 
+func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
+	t.Parallel()
+
+	stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"the brief is thin"}` + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+	result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleProductManager, WorkingDirectory: "/repository", Prompt: "what is missing?",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.FinalText != "the brief is thin" || result.SessionID != "session-1" {
+		t.Fatalf("Run() result = %#v", result)
+	}
+	// No sandbox settings, because there is nothing to sandbox: the role has no
+	// tools at all and cannot apply an edit it proposes.
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
+		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+	}
+
+	for _, test := range []struct {
+		name    string
+		request backendapi.RunRequest
+		want    string
+	}{
+		{
+			name:    "repository writes",
+			request: backendapi.RunRequest{AllowedTools: []string{"Write(/**)"}},
+			want:    "product-manager runs cannot be granted tools",
+		},
+		{
+			name:    "tracker and git commands",
+			request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
+			want:    "product-manager runs cannot be granted tools",
+		},
+		{
+			name:    "editing permission mode",
+			request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
+			want:    "product-manager runs require the read-only",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			request := test.request
+			request.RunID, request.Role, request.WorkingDirectory, request.Prompt = testRunID, domain.RoleProductManager, "/repository", "advise"
+			blocked := &fakeRunner{}
+			if _, err := (Backend{Runner: blocked}).Run(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Run() error = %v, want it to contain %q", err, test.want)
+			}
+			if len(blocked.commands) != 0 {
+				t.Fatalf("a rejected product-manager run still started %d process(es)", len(blocked.commands))
+			}
+		})
+	}
+}
+
 func TestRunRejectsAllowedToolListDelimiterInjection(t *testing.T) {
 	t.Parallel()
 

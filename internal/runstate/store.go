@@ -241,7 +241,7 @@ func (s *Store) Create(state State) error {
 		}
 		return fmt.Errorf("create run state: %w", err)
 	}
-	if err := writeJSONFile(file, state); err != nil {
+	if err := writeJSONFile(file, "run state", state); err != nil {
 		return cleanupFailedCreate(file, path, err)
 	}
 	if err := file.Close(); err != nil {
@@ -277,7 +277,7 @@ func (s *Store) Save(state State) error {
 		temporary.Close()
 		return fmt.Errorf("secure temporary run state: %w", err)
 	}
-	if err := writeJSONFile(temporary, state); err != nil {
+	if err := writeJSONFile(temporary, "run state", state); err != nil {
 		temporary.Close()
 		return err
 	}
@@ -473,26 +473,29 @@ func (s *Store) leasePath(runID string) (string, error) {
 	return filepath.Join(s.root, runID+".lease"), nil
 }
 
-func writeJSONFile(file *os.File, value any) error {
+// writeJSONFile durably writes one record. The label names what is being
+// written, because runs and conversations share this path and an operator
+// reading a failure has to know which record could not be stored.
+func writeJSONFile(file *os.File, label string, value any) error {
 	var buffer bytes.Buffer
 	encoder := json.NewEncoder(&buffer)
 	encoder.SetEscapeHTML(false)
 	encoder.SetIndent("", "  ")
 	if err := encoder.Encode(value); err != nil {
-		return fmt.Errorf("encode run state: %w", err)
+		return fmt.Errorf("encode %s: %w", label, err)
 	}
 	if buffer.Len() > maxEncodedStateBytes {
-		return fmt.Errorf("encoded run state is %d bytes, limit is %d", buffer.Len(), maxEncodedStateBytes)
+		return fmt.Errorf("encoded %s is %d bytes, limit is %d", label, buffer.Len(), maxEncodedStateBytes)
 	}
 	written, err := file.Write(buffer.Bytes())
 	if err != nil {
-		return fmt.Errorf("write run state: %w", err)
+		return fmt.Errorf("write %s: %w", label, err)
 	}
 	if written != buffer.Len() {
-		return fmt.Errorf("write run state: %w", io.ErrShortWrite)
+		return fmt.Errorf("write %s: %w", label, io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
-		return fmt.Errorf("sync run state: %w", err)
+		return fmt.Errorf("sync %s: %w", label, err)
 	}
 	return nil
 }

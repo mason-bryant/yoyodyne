@@ -23,14 +23,22 @@ const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable"
 // separately confined by Claude Code's OS-level sandbox settings below.
 var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 
-// readOnlyPermissionMode is the only Claude Code mode that leaves a reviewer
-// unable to apply an edit it proposes.
+// readOnlyPermissionMode is the only Claude Code mode that leaves an advisory
+// role unable to apply an edit it proposes.
 const readOnlyPermissionMode = "plan"
 
-// reviewerTools is intentionally empty. Review receives a bounded context,
-// patch, and check results; disabling tools prevents injected evidence from
-// reading outside the worktree and exfiltrating unrelated local files.
-var reviewerTools = []string{}
+// readOnlyTools is intentionally empty. A reviewer receives a bounded context,
+// patch, and check results, and a product manager receives bounded repository
+// and tracker evidence; disabling tools prevents injected evidence from reading
+// outside that evidence and exfiltrating unrelated local files, and is what
+// makes "this role writes nothing" enforced rather than asked for.
+var readOnlyTools = []string{}
+
+// readOnlyRole reports whether a role reasons over supplied evidence rather
+// than changing anything. Such a role gets no tools and cannot be given them.
+func readOnlyRole(role domain.AgentRole) bool {
+	return role == domain.RoleReviewer || role == domain.RoleProductManager
+}
 
 type Backend struct {
 	Runner execution.ProcessRunner
@@ -96,14 +104,16 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if strings.TrimSpace(request.Prompt) == "" {
 		return backend.RunResult{}, errors.New("prompt is required")
 	}
-	if request.Role != domain.RoleDeveloper && request.Role != domain.RoleReviewer {
+	switch request.Role {
+	case domain.RoleDeveloper, domain.RoleReviewer, domain.RoleProductManager:
+	default:
 		return backend.RunResult{}, fmt.Errorf("Claude Code bootstrap backend does not yet support role %q", request.Role)
 	}
 
 	permissionMode := request.PermissionMode
 	if permissionMode == "" {
 		permissionMode = "acceptEdits"
-		if request.Role == domain.RoleReviewer {
+		if readOnlyRole(request.Role) {
 			permissionMode = readOnlyPermissionMode
 		}
 	}
@@ -112,8 +122,8 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	}
 	allowedTools := request.AllowedTools
 	if allowedTools == nil {
-		if request.Role == domain.RoleReviewer {
-			allowedTools = reviewerTools
+		if readOnlyRole(request.Role) {
+			allowedTools = readOnlyTools
 		} else {
 			allowedTools = developerTools
 		}
@@ -123,15 +133,15 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 			return backend.RunResult{}, fmt.Errorf("allowed tool rule %q cannot contain list delimiters", tool)
 		}
 	}
-	// Reviewers consume only the bounded supplied evidence. Refuse every tool,
-	// including nominally read-only tools that could inspect outside the
-	// worktree and send unrelated local data to the provider.
-	if request.Role == domain.RoleReviewer {
+	// Advisory roles consume only the bounded supplied evidence. Refuse every
+	// tool, including nominally read-only tools that could inspect outside that
+	// evidence and send unrelated local data to the provider.
+	if readOnlyRole(request.Role) {
 		if len(allowedTools) > 0 {
-			return backend.RunResult{}, errors.New("reviewer runs cannot be granted tools; review uses bounded supplied evidence")
+			return backend.RunResult{}, fmt.Errorf("%s runs cannot be granted tools; the role reasons over bounded supplied evidence", request.Role)
 		}
 		if permissionMode != readOnlyPermissionMode {
-			return backend.RunResult{}, fmt.Errorf("reviewer runs require the read-only %q permission mode, not %q", readOnlyPermissionMode, permissionMode)
+			return backend.RunResult{}, fmt.Errorf("%s runs require the read-only %q permission mode, not %q", request.Role, readOnlyPermissionMode, permissionMode)
 		}
 	}
 	if request.Role == domain.RoleDeveloper {
@@ -152,9 +162,9 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if request.Role == domain.RoleDeveloper {
 		args = append(args, "--settings", developerSandboxSettings)
 	} else {
-		// A changed CLAUDE.md is part of the evidence, not reviewer policy.
-		// Safe mode prevents repository customizations from entering the
-		// provider's system context alongside the immutable review contract.
+		// Repository instruction files are evidence, not harness policy. Safe
+		// mode prevents a checked-in CLAUDE.md from entering the provider's
+		// system context alongside an immutable harness contract.
 		args = append(args, "--safe-mode")
 	}
 	if len(allowedTools) > 0 {

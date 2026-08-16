@@ -37,6 +37,19 @@ work_item_id="replace-with-a-ready-beads-id"
 
 On success, the JSON result reports the run ID, branch, worktree, base commit, change summary, checks, and agent summary. The bootstrap harness preserves the worktree for external review; it does not yet commit, integrate, or close the item automatically.
 
+## Talking to the product manager
+
+`yoyodyne run` is a bootstrap entry point. The intended interface is a conversation with the product manager about what the product should be:
+
+```sh
+./bin/yoyodyne chat
+./bin/yoyodyne chat --message "What is missing from the brief?" --json
+```
+
+The product manager reads the repository's own Markdown — `README.md` and everything under `docs/` — plus the open Beads items, and discusses product intent with you. It is advisory: it has no tools at all, so it creates, changes, and approves nothing. Anything it concludes is a recommendation for you to act on.
+
+A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyodyne chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, and the provider session identifier, and the normalized event stream is stored beside it.
+
 ## Configuring a project
 
 Yoyodyne carries its own agent defaults, so a project repository stores only its own settings and any deliberate deviation from them. A configuration can be as small as this:

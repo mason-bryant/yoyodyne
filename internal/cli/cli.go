@@ -31,6 +31,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runVersion(args[1:], stdout, stderr, version)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
+	case "chat":
+		// A conversation is the one command that reads from the operator, so
+		// this is where the process's own input is bound to it.
+		return runChat(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
 	default:
@@ -234,6 +238,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyodyne <command> [options]
 
 Commands:
+  chat              talk with the product manager about product intent
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
   run               run one Beads work item in an isolated worktree

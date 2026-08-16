@@ -82,6 +82,42 @@ func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
 	}
 }
 
+func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
+	t.Parallel()
+
+	listed := `[{"id":"yoyodyne-1","title":"First","status":"open","priority":1,"issue_type":"task"},
+	            {"id":"yoyodyne-2","title":"Second","status":"open","priority":2,"issue_type":"feature"}]`
+	runner := &fakeRunner{responses: []string{listed, `[]`}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+
+	items, err := client.List(context.Background(), "open")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(items) != 2 || items[0].ID != "yoyodyne-1" || items[1].IssueType != "feature" {
+		t.Fatalf("List() = %#v", items)
+	}
+	empty, err := client.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List() unfiltered error = %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("List() unfiltered = %#v", empty)
+	}
+	wantArgs := [][]string{
+		{"list", "--json", "--status=open"},
+		{"list", "--json"},
+	}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// A status is a filter, never an argument smuggled onto the command line.
+	if _, err := (Client{Runner: &fakeRunner{}}).List(context.Background(), "--dangerous"); err == nil {
+		t.Fatal("List() invalid status error = nil")
+	}
+}
+
 func TestClientRejectsInvalidIDsAndEmptyUpdates(t *testing.T) {
 	t.Parallel()
 

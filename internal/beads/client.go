@@ -44,7 +44,10 @@ type Client struct {
 	Timeout time.Duration
 }
 
-var issueIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+var (
+	issueIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	statusPattern  = regexp.MustCompile(`^[a-z][a-z_]*$`)
+)
 
 func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
@@ -55,6 +58,24 @@ func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
 		return WorkItem{}, err
 	}
 	return decodeSingleWorkItem(data)
+}
+
+// List reports the work items Beads currently holds, optionally narrowed to one
+// status. It is read-only: nothing about listing work claims, changes, or
+// closes any of it.
+func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
+	args := []string{"list", "--json"}
+	if trimmed := strings.TrimSpace(status); trimmed != "" {
+		if !statusPattern.MatchString(trimmed) {
+			return nil, fmt.Errorf("invalid Beads status %q", status)
+		}
+		args = append(args, "--status="+trimmed)
+	}
+	data, err := c.run(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	return decodeWorkItems(data)
 }
 
 func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
@@ -205,45 +226,56 @@ type dependencyResponse struct {
 }
 
 func decodeSingleWorkItem(data []byte) (WorkItem, error) {
+	items, err := decodeWorkItems(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if len(items) != 1 {
+		return WorkItem{}, fmt.Errorf("bd returned %d work items, want 1", len(items))
+	}
+	return items[0], nil
+}
+
+func decodeWorkItems(data []byte) ([]WorkItem, error) {
 	var rawItems []rawWorkItem
 	if err := decodeJSON(data, &rawItems); err != nil {
-		return WorkItem{}, fmt.Errorf("decode bd work item: %w", err)
+		return nil, fmt.Errorf("decode bd work item: %w", err)
 	}
-	if len(rawItems) != 1 {
-		return WorkItem{}, fmt.Errorf("bd returned %d work items, want 1", len(rawItems))
-	}
-	raw := rawItems[0]
-	if err := validateIssueID(raw.ID); err != nil {
-		return WorkItem{}, fmt.Errorf("bd returned invalid work item: %w", err)
-	}
-	item := WorkItem{
-		ID:                 raw.ID,
-		Title:              raw.Title,
-		Description:        raw.Description,
-		Design:             raw.Design,
-		AcceptanceCriteria: raw.AcceptanceCriteria,
-		Notes:              raw.Notes,
-		Status:             raw.Status,
-		Priority:           raw.Priority,
-		IssueType:          raw.IssueType,
-		Assignee:           raw.Assignee,
-		Parent:             raw.Parent,
-		Dependencies:       make([]Dependency, 0, len(raw.Dependencies)),
-	}
-	for _, dependency := range raw.Dependencies {
-		id := dependency.ID
-		if id == "" {
-			id = dependency.DependsOnID
+	items := make([]WorkItem, 0, len(rawItems))
+	for _, raw := range rawItems {
+		if err := validateIssueID(raw.ID); err != nil {
+			return nil, fmt.Errorf("bd returned invalid work item: %w", err)
 		}
-		dependencyType := dependency.DependencyType
-		if dependencyType == "" {
-			dependencyType = dependency.Type
+		item := WorkItem{
+			ID:                 raw.ID,
+			Title:              raw.Title,
+			Description:        raw.Description,
+			Design:             raw.Design,
+			AcceptanceCriteria: raw.AcceptanceCriteria,
+			Notes:              raw.Notes,
+			Status:             raw.Status,
+			Priority:           raw.Priority,
+			IssueType:          raw.IssueType,
+			Assignee:           raw.Assignee,
+			Parent:             raw.Parent,
+			Dependencies:       make([]Dependency, 0, len(raw.Dependencies)),
 		}
-		if id != "" {
-			item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
+		for _, dependency := range raw.Dependencies {
+			id := dependency.ID
+			if id == "" {
+				id = dependency.DependsOnID
+			}
+			dependencyType := dependency.DependencyType
+			if dependencyType == "" {
+				dependencyType = dependency.Type
+			}
+			if id != "" {
+				item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
+			}
 		}
+		items = append(items, item)
 	}
-	return item, nil
+	return items, nil
 }
 
 func decodeJSON(data []byte, target any) error {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"yoyodyne/internal/chat"
 	"yoyodyne/internal/config"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/gitworktree"
@@ -116,6 +117,96 @@ func TestRunWorkItemRequiresExactlyOneID(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "exactly one Beads work item id") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// Chat talks to whichever agent fills the product-manager role, with the
+// persona that role resolved to. In this repository that is the built-in
+// bundle's agent and its builtin:v1 persona, inherited rather than restated.
+func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("..", "..", config.DirectoryName, config.FileName)
+	resolved, err := config.LoadResolved(path)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	agent := agentForRole(resolved.Config, domain.RoleProductManager)
+	if agent.Role != domain.RoleProductManager {
+		t.Fatal("no product-manager agent is configured; chat would have nobody to talk to")
+	}
+	if agent.Backend != domain.BackendClaudeCode {
+		t.Fatalf("product-manager backend = %q, want %q", agent.Backend, domain.BackendClaudeCode)
+	}
+	if err := config.ValidateModelSelector(agent.Model); err != nil {
+		t.Fatalf("product-manager model: %v", err)
+	}
+	if origin := resolved.Origins["agents.product-manager.persona"]; origin != config.BuiltinV1 {
+		t.Fatalf("product-manager persona origin = %q, want the built-in bundle", origin)
+	}
+	if !strings.Contains(agent.Persona.Text, "You own product intent, not implementation.") {
+		t.Fatalf("product-manager persona = %q", agent.Persona.Text)
+	}
+	// The persona is guidance underneath the contract, never a replacement for
+	// it: the contract is what the conversation actually sends first.
+	if !strings.HasPrefix(chat.SystemPrompt(agent.Persona.Text), "You are the product manager for this product") {
+		t.Fatal("the conversation prompt does not begin with the immutable contract")
+	}
+}
+
+func TestChatRefusesArgumentsItCannotHonor(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "positional message",
+			args: []string{"chat", "what is the brief?"},
+			want: "does not accept positional arguments",
+		},
+		{
+			// An interactive conversation has no single result, so machine
+			// readable output has to name the turn it describes.
+			name: "json without a message",
+			args: []string{"chat", "--json"},
+			want: "requires --message",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			code := Run(test.args, &stdout, &stderr, "test")
+			if code != 2 {
+				t.Fatalf("Run() code = %d, want 2; stderr = %q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), test.want) {
+				t.Fatalf("stderr = %q, want it to contain %q", stderr.String(), test.want)
+			}
+		})
+	}
+}
+
+func TestChatReportsConfigurationFailureAsJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	code := Run([]string{"chat", "--config", missing, "--json", "--message", "hello"}, &stdout, &stderr, "test")
+	if code != 1 {
+		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr.String())
+	}
+	var result chatOutput
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !strings.Contains(result.Error, "open config") {
+		t.Fatalf("error = %q", result.Error)
 	}
 }
 
