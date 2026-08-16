@@ -120,6 +120,37 @@ func TestRunWorkItemRequiresExactlyOneID(t *testing.T) {
 	}
 }
 
+// Reconcile sweeps every outstanding run, so it names no run of its own. A
+// configuration it cannot load is reported as the machine-readable failure of a
+// sweep that settled nothing, rather than as an empty success.
+func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"reconcile", "yoyodyne-task"}, &stdout, &stderr, "test"); code != 2 {
+		t.Fatalf("Run() code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "does not accept positional arguments") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	code := Run([]string{"reconcile", "--config", missing, "--json"}, &stdout, &stderr, "test")
+	if code != 1 {
+		t.Fatalf("Run() code = %d, want 1; stderr = %q", code, stderr.String())
+	}
+	var result reconcileOutput
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if result.Error == "" || len(result.Runs) != 0 {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 // Chat talks to whichever agent fills the product-manager role, with the
 // persona that role resolved to. In this repository that is the built-in
 // bundle's agent and its builtin:v1 persona, inherited rather than restated.

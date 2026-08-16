@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
@@ -22,6 +23,26 @@ const (
 	// writer and reader shares its bound so durable state is always reloadable.
 	maxEncodedStateBytes = 1 << 20
 	maxEncodedEventBytes = 1 << 20
+)
+
+const (
+	// leaseGrace bounds how long taking a lease waits on a lock that looks held
+	// before reporting that a live holder owns the run. It is deliberately far
+	// shorter than any real run: a genuine holder keeps its lease for as long as
+	// it works on the run, so waiting one out would mean queueing behind a
+	// developer rather than refusing a duplicate.
+	//
+	// What this waits out instead is a lease nobody holds any more. The lock
+	// belongs to the open file description, not to the descriptor, so a child
+	// process forked while the lease was open shares it until that child execs
+	// and its close-on-exec descriptor goes away. The harness forks Git and
+	// check processes constantly, so a released lease can keep answering "held"
+	// for a few milliseconds afterwards. Believing that would refuse to resume a
+	// run whose process is already gone, which is exactly the lost-process-handle
+	// mistake recovery exists to avoid.
+	leaseGrace = 250 * time.Millisecond
+	// leaseGracePoll is how often the lock is retried within that grace.
+	leaseGracePoll = 5 * time.Millisecond
 )
 
 type Store struct {
@@ -40,6 +61,11 @@ func (e ExistingWorkItemError) Error() string {
 // ErrNoRunInFlight reports that a work item has no incomplete run to adopt, so
 // the caller may reserve a fresh one.
 var ErrNoRunInFlight = errors.New("work item has no run in flight")
+
+// ErrRunHeld reports that a run's lease belongs to a live holder. Somebody is
+// already acting on the run, so this process must leave it alone rather than
+// decide anything about it.
+var ErrRunHeld = errors.New("run is held by another process")
 
 // Lease is exclusive ownership of one in-flight run, held for as long as a
 // process acts on it. Only one holder exists at a time, so a run resumed by a
@@ -126,7 +152,7 @@ func (s *Store) Reserve(ctx context.Context, state State, maxConcurrent int) (*L
 	}
 	// The lease is taken before the state exists, so no run is ever recorded as
 	// in flight without an owner holding it.
-	lease, held, err := s.takeLease(state.RunID)
+	lease, held, err := s.takeLease(ctx, state.RunID)
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +189,7 @@ func (s *Store) Adopt(ctx context.Context, workItemID string) (State, *Lease, er
 		if existing.WorkItemID != workItemID {
 			continue
 		}
-		lease, held, err := s.takeLease(existing.RunID)
+		lease, held, err := s.takeLease(ctx, existing.RunID)
 		if err != nil {
 			return State{}, nil, err
 		}
@@ -179,6 +205,35 @@ func (s *Store) Adopt(ctx context.Context, workItemID string) (State, *Lease, er
 		return state, lease, nil
 	}
 	return State{}, nil, ErrNoRunInFlight
+}
+
+// AdoptRun takes exclusive ownership of one recorded run by identifier. It is
+// how reconciliation enters a run that no work item lookup would find: a run
+// that already reached a terminal status but still owes cleanup is not in
+// flight, yet it must have exactly one owner for as long as anybody acts on it.
+// A run whose lease a live holder already owns is reported as held rather than
+// picked up.
+func (s *Store) AdoptRun(ctx context.Context, runID string) (State, *Lease, error) {
+	release, err := s.lockReservations(ctx)
+	if err != nil {
+		return State{}, nil, err
+	}
+	defer release()
+
+	lease, held, err := s.takeLease(ctx, runID)
+	if err != nil {
+		return State{}, nil, err
+	}
+	if !held {
+		return State{}, nil, ErrRunHeld
+	}
+	// As in Adopt, the state is re-read under the lease, because only now is
+	// this process the one entitled to act on what it reads.
+	state, err := s.Load(runID)
+	if err != nil {
+		return State{}, nil, errors.Join(err, lease.Release())
+	}
+	return state, lease, nil
 }
 
 // lockReservations serializes the reservation and adoption critical sections
@@ -198,11 +253,11 @@ func (s *Store) lockReservations(ctx context.Context) (func(), error) {
 	return func() { lock.Close() }, nil
 }
 
-// takeLease tries to become the owner of one run without waiting. The lease
-// file outlives the run: it is the name the lock is taken on, and removing it
-// while another process holds it would let a third take a lock on a file
+// takeLease tries to become the owner of one run, reporting whether it did. The
+// lease file outlives the run: it is the name the lock is taken on, and removing
+// it while another process holds it would let a third take a lock on a file
 // nobody else can see.
-func (s *Store) takeLease(runID string) (*Lease, bool, error) {
+func (s *Store) takeLease(ctx context.Context, runID string) (*Lease, bool, error) {
 	path, err := s.leasePath(runID)
 	if err != nil {
 		return nil, false, err
@@ -211,7 +266,7 @@ func (s *Store) takeLease(runID string) (*Lease, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("open run lease: %w", err)
 	}
-	held, err := tryLockStateFile(file)
+	held, err := acquireLease(ctx, file)
 	if err != nil {
 		file.Close()
 		return nil, false, fmt.Errorf("lock run %s: %w", runID, err)
@@ -221,6 +276,28 @@ func (s *Store) takeLease(runID string) (*Lease, bool, error) {
 		return nil, false, nil
 	}
 	return &Lease{file: file}, true, nil
+}
+
+// acquireLease takes the exclusive lock on an open lease file, retrying within
+// leaseGrace before it concludes that a live holder owns the run. A lock that is
+// still held after the grace belongs to somebody, so the caller is told so
+// rather than made to wait for them.
+func acquireLease(ctx context.Context, file *os.File) (bool, error) {
+	deadline := time.Now().Add(leaseGrace)
+	for {
+		held, err := tryLockStateFile(file)
+		if err != nil || held {
+			return held, err
+		}
+		if !time.Now().Before(deadline) {
+			return false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-time.After(leaseGracePoll):
+		}
+	}
 }
 
 func (s *Store) Create(state State) error {
@@ -326,6 +403,18 @@ func (s *Store) Load(runID string) (State, error) {
 }
 
 func (s *Store) Incomplete() ([]State, error) {
+	return s.scan("incomplete", func(state State) bool { return !state.Status.Terminal() })
+}
+
+// Outstanding lists every recorded run that still owes a step. That is a
+// superset of the incomplete runs: a run can be durably terminal and still owe
+// the cleanup its integration scheduled, which is exactly what an interrupted
+// process leaves behind between integrating and cleaning up.
+func (s *Store) Outstanding() ([]State, error) {
+	return s.scan("outstanding", func(state State) bool { return state.Outstanding() })
+}
+
+func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -341,9 +430,9 @@ func (s *Store) Incomplete() ([]State, error) {
 		runID := strings.TrimSuffix(entry.Name(), ".json")
 		state, err := s.Load(runID)
 		if err != nil {
-			return nil, fmt.Errorf("discover incomplete runs: %w", err)
+			return nil, fmt.Errorf("discover %s runs: %w", label, err)
 		}
-		if !state.Status.Terminal() {
+		if keep(state) {
 			states = append(states, state)
 		}
 	}

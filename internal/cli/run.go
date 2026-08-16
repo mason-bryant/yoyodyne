@@ -50,10 +50,22 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	return reportRunResult(stdout, stderr, *jsonOutput, outcome, err)
 }
 
-func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
+// components are the durable and repository-facing parts every command that
+// acts on runs shares. They are built once here so a pipeline and a reconciler
+// always address the same state root, worktree root, and repository.
+type components struct {
+	config       config.Config
+	repository   string
+	runner       execution.OSProcessRunner
+	store        *runstate.Store
+	worktrees    *gitworktree.Manager
+	redactValues []string
+}
+
+func buildComponents(configPath string) (components, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
-		return orchestrator.Pipeline{}, err
+		return components{}, err
 	}
 	cfg := resolved.Config
 	// Relative paths resolve against the project, not against the .yoyodyne
@@ -61,13 +73,13 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 	projectDirectory := config.ProjectDirectory(resolved.Path)
 	repository, err := resolvePath(projectDirectory, cfg.Product.Repository)
 	if err != nil {
-		return orchestrator.Pipeline{}, fmt.Errorf("resolve product repository: %w", err)
+		return components{}, fmt.Errorf("resolve product repository: %w", err)
 	}
 	cfg.Product.Repository = repository
 
 	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
-		return orchestrator.Pipeline{}, err
+		return components{}, err
 	}
 	worktreeRoot := cfg.Execution.WorktreeRoot
 	if worktreeRoot == "auto" {
@@ -75,15 +87,14 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 	} else {
 		worktreeRoot, err = resolvePath(projectDirectory, worktreeRoot)
 		if err != nil {
-			return orchestrator.Pipeline{}, fmt.Errorf("resolve worktree root: %w", err)
+			return components{}, fmt.Errorf("resolve worktree root: %w", err)
 		}
 	}
 
 	processRunner := execution.OSProcessRunner{}
-	redactValues := execution.SensitiveEnvironmentValues(os.Environ())
 	store, err := runstate.NewStore(stateRoot, cfg.Product.ID)
 	if err != nil {
-		return orchestrator.Pipeline{}, err
+		return components{}, err
 	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
@@ -92,16 +103,35 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
 	})
 	if err != nil {
+		return components{}, err
+	}
+	return components{
+		config:       cfg,
+		repository:   repository,
+		runner:       processRunner,
+		store:        store,
+		worktrees:    worktrees,
+		redactValues: execution.SensitiveEnvironmentValues(os.Environ()),
+	}, nil
+}
+
+func (c components) tracker() beads.Client {
+	return beads.Client{Runner: c.runner, Dir: c.repository}
+}
+
+func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
 		return orchestrator.Pipeline{}, err
 	}
+	cfg := parts.config
+	processRunner := parts.runner
+	redactValues := parts.redactValues
 
 	return orchestrator.Pipeline{
-		Tracker: beads.Client{
-			Runner: processRunner,
-			Dir:    repository,
-		},
-		Worktrees: worktrees,
-		Store:     store,
+		Tracker:   parts.tracker(),
+		Worktrees: parts.worktrees,
+		Store:     parts.store,
 		Backend: claudecode.Backend{
 			Runner: processRunner,
 		},
@@ -119,9 +149,23 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 		},
 		NewRunID:     runstate.NewRunID,
-		Repository:   repository,
+		Repository:   parts.repository,
 		Config:       cfg,
 		RedactValues: redactValues,
+	}, nil
+}
+
+func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
+		return orchestrator.Reconciler{}, err
+	}
+	// The reconciler is wired without a backend on purpose: settling an
+	// interrupted run is never a reason to invoke a provider.
+	return orchestrator.Reconciler{
+		Tracker:   parts.tracker(),
+		Worktrees: parts.worktrees,
+		Store:     parts.store,
 	}, nil
 }
 

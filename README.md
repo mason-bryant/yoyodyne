@@ -41,6 +41,16 @@ What happens next depends on `approvals.integration`. This repository sets it to
 
 A reviewer verdict of `repair` returns the findings to the same developer, up to `execution.repair_attempts_before_replan` attempts, before the run gives up and records a blocker.
 
+## Recovering interrupted runs
+
+A process that is killed mid-run leaves durable state describing where it got to. `yoyodyne reconcile` settles what it left behind:
+
+```sh
+./bin/yoyodyne reconcile --json
+```
+
+It compares the recorded run against the repository and Beads, and then finishes the run's own remaining step or hands the item to you. A run whose work reached the target branch is closed and its worktree and branch removed, including when the run died before it could record the promotion. A run stopped anywhere earlier becomes a durable blocker naming the branch and worktree that were preserved. It never invokes a provider: a lost process handle is not a reason to start a second developer for an item. Repeating it is safe — a settled run is no longer outstanding, and cleanup over artifacts that are already gone does nothing. A run another process still holds is left to that process, and a run inside its repair loop is left for `yoyodyne run` to continue.
+
 ## Talking to the product manager
 
 `yoyodyne run` is a bootstrap entry point. The intended interface is a conversation with the product manager about what the product should be:

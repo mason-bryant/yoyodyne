@@ -746,6 +746,210 @@ func TestStoreAdoptGivesOneHolderTheRunInFlight(t *testing.T) {
 	}
 }
 
+// A lease can keep answering "held" for a moment after its holder is gone,
+// because the lock belongs to the open file description and a process forked
+// while the lease was open shares it until that child execs. The harness forks
+// Git and check processes constantly, so believing that answer would refuse to
+// resume a run whose process no longer exists. Adoption waits it out instead.
+func TestAdoptWaitsOutALeaseNobodyHoldsAnyMore(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	path, err := store.leasePath(state.RunID)
+	if err != nil {
+		t.Fatalf("leasePath() error = %v", err)
+	}
+	// A second descriptor on the lease file stands in for the one a forked
+	// child briefly shares: the lock is real while it is open and gone when it
+	// is closed, which is exactly the window being waited out.
+	inherited, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	held, err := tryLockStateFile(inherited)
+	if err != nil || !held {
+		t.Fatalf("tryLockStateFile() = %t, %v", held, err)
+	}
+	go func() {
+		time.Sleep(leaseGrace / 5)
+		inherited.Close()
+	}()
+
+	adopted, lease, err := store.Adopt(ctx, state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Adopt() error = %v, want the run adopted once the phantom lock went away", err)
+	}
+	if adopted.RunID != state.RunID {
+		t.Fatalf("Adopt() = %q, want %q", adopted.RunID, state.RunID)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// A lock that outlasts the grace belongs to somebody. Adoption reports that
+// rather than queueing behind a holder that may work for minutes.
+func TestAdoptRefusesALeaseThatOutlastsTheGrace(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	path, err := store.leasePath(state.RunID)
+	if err != nil {
+		t.Fatalf("leasePath() error = %v", err)
+	}
+	holder, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	defer holder.Close()
+	if held, err := tryLockStateFile(holder); err != nil || !held {
+		t.Fatalf("tryLockStateFile() = %t, %v", held, err)
+	}
+
+	started := time.Now()
+	var existing ExistingWorkItemError
+	if _, _, err := store.Adopt(ctx, state.WorkItemID); !errors.As(err, &existing) {
+		t.Fatalf("Adopt() error = %v, want ExistingWorkItemError", err)
+	}
+	if waited := time.Since(started); waited < leaseGrace {
+		t.Fatalf("Adopt() refused after %s, want at least the %s grace", waited, leaseGrace)
+	}
+	if _, _, err := store.AdoptRun(ctx, state.RunID); !errors.Is(err, ErrRunHeld) {
+		t.Fatalf("AdoptRun() error = %v, want ErrRunHeld", err)
+	}
+}
+
+// A run that reached a terminal status can still owe the cleanup its
+// integration scheduled. Reconciliation has to find those, and nothing else: a
+// terminal run with nothing integrated is finished, and its artifacts are
+// preserved deliberately.
+func TestOutstandingFindsTerminalRunsThatStillOweCleanup(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	live := testState(t, StatusRunning)
+	preserved := testState(t, StatusFailed)
+	preserved.WorkItemID = "yoyodyne-preserved"
+	preserved.Phase = PhaseDeveloping
+	uncleaned := integratedState(t, PhaseCleaningUp)
+	finished := integratedState(t, PhaseComplete)
+	finished.WorktreeRemoved = true
+	finished.BranchRemoved = true
+	for _, state := range []State{live, preserved, uncleaned, finished} {
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create(%s) error = %v", state.RunID, err)
+		}
+	}
+
+	outstanding, err := store.Outstanding()
+	if err != nil {
+		t.Fatalf("Outstanding() error = %v", err)
+	}
+	found := make(map[string]bool, len(outstanding))
+	for _, state := range outstanding {
+		found[state.RunID] = true
+	}
+	if len(found) != 2 || !found[live.RunID] || !found[uncleaned.RunID] {
+		t.Fatalf("Outstanding() = %#v, want the live run and the uncleaned one", outstanding)
+	}
+	// The incomplete set stays what it was: the uncleaned run is new to
+	// Outstanding precisely because it is already terminal.
+	incomplete, err := store.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	if len(incomplete) != 1 || incomplete[0].RunID != live.RunID {
+		t.Fatalf("Incomplete() = %#v, want only the live run", incomplete)
+	}
+}
+
+// AdoptRun is how reconciliation enters a run no work item lookup would find.
+// It has to hold that run as exclusively as a reservation does.
+func TestAdoptRunHoldsATerminalRunThatStillOwesCleanup(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() first error = %v", err)
+	}
+	second, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() second error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	state := integratedState(t, PhaseCleaningUp)
+	if err := first.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The run is terminal, so the work item path cannot reach it at all.
+	if _, _, err := first.Adopt(ctx, state.WorkItemID); !errors.Is(err, ErrNoRunInFlight) {
+		t.Fatalf("Adopt() error = %v, want ErrNoRunInFlight", err)
+	}
+
+	adopted, lease, err := first.AdoptRun(ctx, state.RunID)
+	if err != nil {
+		t.Fatalf("AdoptRun() error = %v", err)
+	}
+	if adopted.RunID != state.RunID || adopted.Integration == nil {
+		t.Fatalf("AdoptRun() = %#v, want the recorded run", adopted)
+	}
+	if _, _, err := second.AdoptRun(ctx, state.RunID); !errors.Is(err, ErrRunHeld) {
+		t.Fatalf("AdoptRun() of a held run error = %v, want ErrRunHeld", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	released, releasedLease, err := second.AdoptRun(ctx, state.RunID)
+	if err != nil {
+		t.Fatalf("AdoptRun() after release error = %v", err)
+	}
+	if released.RunID != state.RunID {
+		t.Fatalf("AdoptRun() = %q, want %q", released.RunID, state.RunID)
+	}
+	if err := releasedLease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
+// integratedState is a succeeded run whose work is promoted, recorded in the
+// phase it was interrupted in.
+func integratedState(t *testing.T, phase Phase) State {
+	t.Helper()
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-integrated-" + string(phase)
+	state.Phase = phase
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.ProviderSessionID = "developer-session"
+	state.ProviderModel = "opus"
+	state.ReviewSessionID = "reviewer-session"
+	state.ReviewModel = "opus"
+	state.ReviewDecision = ReviewApprove
+	state.Integration = &Integration{
+		TargetBranch:         "main",
+		SourceCommit:         strings.Repeat("b", 40),
+		TargetCommit:         strings.Repeat("b", 40),
+		PreviousTargetCommit: strings.Repeat("a", 40),
+	}
+	return state
+}
+
 func TestIncompleteRejectsCorruptStateRatherThanDuplicatingIt(t *testing.T) {
 	t.Parallel()
 
