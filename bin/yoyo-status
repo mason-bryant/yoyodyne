@@ -101,6 +101,21 @@ status_of() {
   fi
 }
 
+# Run start, in local time, to the minute. The stored timestamp is UTC with
+# fractional seconds, which fromdateiso8601 will not parse, so drop them first.
+started_of() {
+  local state="${1%.events.jsonl}.json"
+  [ -f "$state" ] || { echo "-"; return; }
+  if command -v jq >/dev/null 2>&1; then
+    jq -r '(.started_at // empty)
+           | sub("\\.[0-9]+";"")
+           | fromdateiso8601
+           | strflocaltime("%m %d %Y %H:%M")' "$state" 2>/dev/null || echo "-"
+  else
+    echo "-"
+  fi
+}
+
 if [ "$list_only" = "1" ]; then
   ls -t "$runs"/*.events.jsonl 2>/dev/null | head -20 | while read -r f; do
     b="$(basename "$f" .events.jsonl)"
@@ -136,20 +151,20 @@ cost_report() {
                (.payload.usage.cache_creation_input_tokens // 0),
                (.payload.usage.cache_read_input_tokens // 0) ]
            | @tsv' "$f" 2>/dev/null \
-    | awk -v run="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" '
+    | awk -v run="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" -v ts="$(started_of "$f")" '
         { n++; cost+=$1; in_+=$2; out+=$3; cw+=$4; cr+=$5 }
-        END { if (n>0) printf "%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
-                            run, n, in_, out, cw, cr, cost, st }'
+        END { if (n>0) printf "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
+                            run, ts, n, in_, out, cw, cr, cost, st }'
   done > "$tmp"
 
-  printf '%-38s %6s %8s %9s %10s %11s %9s  %s\n' run agents in out cache_w cache_r USD status
-  awk -F'\t' '{ printf "%-38s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8 }' "$tmp"
+  printf '%-38s %-17s %6s %8s %9s %10s %11s %9s  %s\n' run started agents in out cache_w cache_r USD status
+  awk -F'\t' '{ printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9 }' "$tmp"
   awk -F'\t' '
-    { n+=$2; in_+=$3; out+=$4; cw+=$5; cr+=$6; cost+=$7 }
+    { n+=$3; in_+=$4; out+=$5; cw+=$6; cr+=$7; cost+=$8 }
     END {
       if (n==0) { print "no completed provider invocations yet"; exit }
-      print  "----------------------------------------------------------------------------------------------";
-      printf "%-38s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", n, in_, out, cw, cr, cost;
+      print  "----------------------------------------------------------------------------------------------------------------";
+      printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", "", n, in_, out, cw, cr, cost;
       t=in_+out+cw+cr;
       printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
     }' "$tmp"

@@ -35,7 +35,11 @@ work_item_id="replace-with-a-ready-beads-id"
 ./bin/yoyodyne run --json "$work_item_id"
 ```
 
-On success, the JSON result reports the run ID, branch, worktree, base commit, change summary, checks, and agent summary. The bootstrap harness preserves the worktree for external review; it does not yet commit, integrate, or close the item automatically.
+On success, the JSON result reports the run ID, branch, worktree, base commit, change summary, checks, and agent summary.
+
+What happens next depends on `approvals.integration`. This repository sets it to `automatic`, so a run that passes its checks and is approved by the independent reviewer is committed, fast-forwarded into the target branch, closed in Beads, and its worktree and branch removed — the JSON reports the integrated commit and what was cleaned up. The built-in bundle defaults to `human` instead, so a new project preserves the worktree for external integration until it opts in. Either way the harness refuses `automatic` unless deterministic checks and a reviewer agent both exist.
+
+A reviewer verdict of `repair` returns the findings to the same developer, up to `execution.repair_attempts_before_replan` attempts, before the run gives up and records a blocker.
 
 ## Talking to the product manager
 
