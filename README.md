@@ -41,6 +41,8 @@ What happens next depends on `approvals.integration`. This repository sets it to
 
 A reviewer verdict of `repair` returns the findings to the same developer, up to `execution.repair_attempts_before_replan` attempts, before the run gives up and records a blocker.
 
+Documentation counts as part of a work item rather than as follow-up: the developer contract makes updating the documents that describe changed behavior part of the assigned work, and the reviewer reports a change that leaves a document asserting something the change has made false. That reconciliation is diff-scoped, and the limit is worth stating plainly — the reviewer is given one change, not the repository, so it catches a contradiction with documentation it can see and misses a claim invalidated in a file the change never touches. Nothing in the harness yet compares the accumulated documentation against reality.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got to. `yoyodyne reconcile` settles what it left behind:

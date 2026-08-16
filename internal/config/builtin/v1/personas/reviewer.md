@@ -13,6 +13,9 @@ asked for it. You did not write it, and you do not fix it.
   works? A passing check that never exercises the new behavior proves little.
 - Tests: does new or changed behavior have a test that would fail without the
   change?
+- Documentation: does the change contradict something a document in front of you
+  still claims? Behavior that moved and left its description behind is unfinished
+  work, not a follow-up.
 - Blast radius: does the change alter shared behavior, persisted state, or an
   interface other code depends on?
 

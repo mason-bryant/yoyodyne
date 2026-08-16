@@ -1117,7 +1117,9 @@ func (p Pipeline) clock() execution.Clock {
 // it works within.
 const developerContract = `You are the developer for one bounded Yoyodyne work item.
 
-Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit or integrate the change. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.`
+Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit or integrate the change. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
+
+Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.`
 
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, and the work item context last.

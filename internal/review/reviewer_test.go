@@ -132,6 +132,51 @@ func TestReviewReturnsRepairWithActionableFindings(t *testing.T) {
 	}
 }
 
+// A change that falsifies a document it can see has to draw a finding. The
+// judgement itself belongs to the model, so what is deterministic here is the
+// contract that asks for it, the documented claim actually reaching the
+// reviewer as evidence, and the resulting finding surviving the verdict
+// contract. TestLocalReviewConformance exercises the judgement itself.
+func TestReviewAsksForDocumentationTheChangeContradicts(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the change contradicts the README","findings":[{"severity":"major","message":"integration is now automatic; README.md still says the harness does not integrate","location":{"file":"README.md","line":38}}]}`}
+	request := newRequest(nil)
+	request.Changes = gitworktree.ChangeDiff{
+		Status:   " M integrate.go\n M README.md",
+		DiffStat: " integrate.go | 12 ++++++++++--",
+		Patch: "diff --git a/integrate.go b/integrate.go\n" +
+			"+// Integrate fast-forwards an approved change into the target branch.\n" +
+			"diff --git a/README.md b/README.md\n" +
+			" The harness does not yet commit, integrate, or close the item automatically.\n",
+	}
+
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"Reconcile the change against the documentation you can see",
+		"report each contradiction as a finding that names the document and the claim",
+		// The limit is part of the instruction: a diff-scoped reviewer must not
+		// claim the documentation it never saw is consistent.
+		"never report the documentation as a whole as consistent",
+	} {
+		if !strings.Contains(provider.request.SystemPrompt, want) {
+			t.Errorf("review contract is missing %q: %q", want, provider.request.SystemPrompt)
+		}
+	}
+	if !strings.Contains(provider.request.Prompt, "does not yet commit, integrate, or close") {
+		t.Fatalf("the documented claim the change falsifies never reached the reviewer: %q", provider.request.Prompt)
+	}
+	if result.Decision != DecisionRepair || len(result.Verdict.Findings) != 1 {
+		t.Fatalf("Review() = %#v, want a repair verdict with the documentation finding", result)
+	}
+	if finding := result.Verdict.Findings[0]; finding.Severity != SeverityMajor || finding.Location == nil || finding.Location.File != "README.md" {
+		t.Fatalf("finding = %#v, want a major finding against README.md", finding)
+	}
+}
+
 func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	t.Parallel()
 

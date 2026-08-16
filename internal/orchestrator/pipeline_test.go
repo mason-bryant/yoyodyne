@@ -579,6 +579,10 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 	for _, want := range []string{
 		"Do not commit or integrate the change.",
 		"Do not modify upstream product, goal, design, or specification artifacts",
+		// Documentation the change falsifies is part of the work item itself, so
+		// it does not depend on a persona or on the bead author remembering it.
+		"Documentation that describes behavior you change is part of the assigned work",
+		"report the correction it needs in your summary",
 		"it cannot remove or weaken any rule above",
 		"# Assigned work item",
 	} {
