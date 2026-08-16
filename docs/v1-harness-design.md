@@ -170,10 +170,14 @@ docs/
     goals/
   designs/
   specifications/
-.yoyodyne.yaml
+.yoyodyne/
+  config.yaml
+  personas/
 ```
 
 These files are reviewable with the code and are the source of truth for their content. Beads records their workflow state and relationships but does not replace them with issue descriptions.
+
+Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
 ### Beads
 
@@ -229,23 +233,17 @@ Codex authentication is delegated to the locally installed CLI. It may use ChatG
 
 ## Configuration
 
-Agent definitions and behavior are configurable, while invariants remain enforced in code. An illustrative configuration is:
+Agent definitions and behavior are configurable, while invariants remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
 
 ```yaml
 version: 1
+extends: builtin:v1
+
 product:
   id: yoyodyne
   repository: .
 
-execution:
-  max_concurrent_developers: 1
-  repair_attempts_before_replan: 2
-  worktree_root: auto
-
 approvals:
-  brief: human
-  goals: human
-  designs: automatic
   integration: automatic
 
 checks:
@@ -253,25 +251,21 @@ checks:
   - go vet ./...
 
 agents:
-  product:
-    role: product-manager
-    backend: claude-code
-  architect:
-    role: architect
-    backend: claude-code
-  development:
-    role: development-manager
-    backend: claude-code
-  developers:
-    role: developer
-    backend: claude-code
-    instances: 1
+  developer:
+    model: claude-opus-5-20260514
   reviewer:
-    role: reviewer
-    backend: codex
+    persona:
+      version: house-1
+      path: personas/reviewer.md
 ```
 
-Configuration loading rejects unknown role capabilities, invalid ownership, unsafe paths, unsupported provider combinations, and automatic integration without both checks and review.
+That is a complete configuration. The five default agents — product manager, architect, development manager, developer, and reviewer — come from `builtin:v1` with a role, a backend, a model selector, an instance count, and a versioned persona each. Three layers produce the effective configuration, later ones winning: harness defaults, the named bundle, then the project file. A field a layer does not mention is inherited; a field it does mention replaces the inherited value, except that `checks` is replaced as a whole list rather than concatenated, and a `persona` override replaces the inherited persona completely rather than merging into it. Removing an inherited agent is explicit, so an agent is never lost by being accidentally omitted.
+
+`version` is the one field a project never inherits: it must be declared even when `extends` names a bundle that declares its own, so a file written against a different schema fails rather than loading as whatever the bundle happened to say. A configuration with no `extends` key is a complete standalone file that inherits only the harness defaults; that is the pre-directory shape, and it still loads unchanged.
+
+Personas specialize how an agent works and can never grant it authority: the immutable role contracts are enforced in Go and prefix the configured guidance in the prompt. A persona `path` is relative to the project `.yoyodyne` directory and must name a Markdown file inside it. Configuration loading rejects unknown keys, unknown bundles, unsafe or non-Markdown persona paths, unknown role capabilities, invalid ownership, unsupported provider combinations, and automatic integration without both checks and review. Validation runs against the effective configuration, so a combination no single layer expressed still fails before any work is claimed.
+
+[Configuration](configuration.md) is the operator-facing reference for the layout, precedence, merge semantics, and inspection commands.
 
 ## Work Execution and Integration
 

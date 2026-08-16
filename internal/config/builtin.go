@@ -3,7 +3,6 @@ package config
 import (
 	"bytes"
 	"embed"
-	"errors"
 	"fmt"
 	"io/fs"
 	"strings"
@@ -69,26 +68,4 @@ func loadBuiltinBundle(name string) (bundle, error) {
 		document: document,
 		personas: builtinPersonaLoader{files: files, bundle: trimmed},
 	}, nil
-}
-
-// Builtin returns the built-in bundle as an effective configuration fragment.
-// It is not a runnable configuration on its own — it deliberately carries no
-// product identity — so it is validated only for what a bundle owns.
-func Builtin(name string) (Config, error) {
-	loaded, err := loadBuiltinBundle(name)
-	if err != nil {
-		return Config{}, err
-	}
-	resolved, err := resolveLayers([]layer{{
-		origin:   loaded.name,
-		document: loaded.document,
-		personas: loaded.personas,
-	}})
-	if err != nil {
-		return Config{}, err
-	}
-	if len(resolved.Config.Agents) == 0 {
-		return Config{}, errors.New("bundle " + loaded.name + " declares no agents")
-	}
-	return resolved.Config, nil
 }

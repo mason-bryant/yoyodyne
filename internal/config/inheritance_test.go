@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -283,6 +284,38 @@ func TestPersonaSymlinkEscapeFailsClosed(t *testing.T) {
 	_, err := LoadResolved(filepath.Join(project, DirectoryName, FileName))
 	if err == nil || !strings.Contains(err.Error(), "resolves outside") {
 		t.Fatalf("LoadResolved() error = %v, want a symlink escape failure", err)
+	}
+}
+
+// A project states its own schema version even when the bundle it extends
+// declares one. Inheriting the version would let a file written against a
+// different schema load as whatever the bundle happened to say.
+func TestProjectConfigurationMustDeclareItsOwnVersion(t *testing.T) {
+	t.Parallel()
+
+	withoutVersion := strings.TrimPrefix(minimalProjectConfig, "version: 1\n")
+	if strings.Contains(withoutVersion, "version:") {
+		t.Fatalf("test setup left a version key in %q", withoutVersion)
+	}
+
+	_, err := loadProjectError(t, withoutVersion, nil)
+	var validationErr ValidationError
+	if !errors.As(err, &validationErr) || !strings.Contains(err.Error(), "version must be 1 and is required") {
+		t.Fatalf("LoadResolved() error = %v, want a missing-version validation failure", err)
+	}
+
+	// A standalone configuration has no bundle to inherit from, and the stream
+	// path is held to the same rule as a file.
+	_, err = DecodeResolved(strings.NewReader(strings.TrimPrefix(validBootstrapConfig, "version: 1\n")))
+	if err == nil || !strings.Contains(err.Error(), "version must be 1 and is required") {
+		t.Fatalf("DecodeResolved() error = %v, want a missing-version validation failure", err)
+	}
+
+	// A version the harness does not implement still fails, as its own problem
+	// rather than as a missing key.
+	_, err = loadProjectError(t, strings.Replace(minimalProjectConfig, "version: 1", "version: 2", 1), nil)
+	if err == nil || !strings.Contains(err.Error(), "version must be 1") || strings.Contains(err.Error(), "is required") {
+		t.Fatalf("LoadResolved() error = %v, want an unsupported-version failure", err)
 	}
 }
 

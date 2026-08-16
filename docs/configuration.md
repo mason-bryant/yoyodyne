@@ -75,6 +75,12 @@ A configuration with no `extends` key is a complete standalone file: it inherits
 nothing but the harness defaults, and must declare everything it needs. This is
 the pre-directory shape, and it still loads unchanged.
 
+`version` is the one field a project never inherits. It must be declared even
+when `extends` names a bundle that declares its own, because a version taken
+from the bundle would let a file written against a different schema load as
+whatever the bundle happened to say — which is what the version exists to
+prevent.
+
 ## Merge and removal semantics
 
 - A field a layer does not mention is **inherited** from the layer beneath it.
@@ -114,6 +120,7 @@ the pre-directory shape, and it still loads unchanged.
 
 These are all errors, reported before any work is claimed:
 
+- a missing `version`, or a `version` this executable does not implement;
 - an unknown key anywhere in the file, including a misspelled agent field;
 - an unknown bundle in `extends`;
 - a `disabled: true` entry that also configures fields, or that names an agent no

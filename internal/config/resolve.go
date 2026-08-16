@@ -112,6 +112,16 @@ func DecodeResolved(reader io.Reader) (Resolved, error) {
 }
 
 func resolveDocument(document configDocument, origin string, personas personaLoader) (Resolved, error) {
+	// The project layer states its own schema version even when the bundle it
+	// extends declares one. An inherited version would let a file written
+	// against a different schema load as whatever the bundle happened to say,
+	// which is the one thing the version is supposed to prevent.
+	if document.Version == nil {
+		return Resolved{}, ValidationError{Problems: []string{
+			fmt.Sprintf("version must be %d and is required in the project configuration; it is not inherited from an extended bundle", CurrentVersion),
+		}}
+	}
+
 	layers := make([]layer, 0, 2)
 	if document.Extends != nil {
 		inherited, err := loadBuiltinBundle(*document.Extends)
