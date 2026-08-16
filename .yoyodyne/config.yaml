@@ -22,3 +22,27 @@ checks:
   - make test
   - make race
   - make vet
+
+# Agents are inherited from builtin:v1 and are not listed here. To change one,
+# name only the fields you are changing; everything else keeps inheriting. The
+# five agent keys are product-manager, architect, development-manager,
+# developer, and reviewer.
+#
+# agents:
+#   developer:
+#     # A family alias floats to that family's current default; an exact
+#     # identifier such as claude-opus-5 pins a version. Every agent must
+#     # declare a selector -- there is no implicit harness default.
+#     model: opus
+#     instances: 1
+#   reviewer:
+#     # A persona override replaces the inherited persona completely rather
+#     # than merging into it. The path is relative to this .yoyodyne directory
+#     # and must be a Markdown file inside it.
+#     persona:
+#       version: house-1
+#       path: personas/reviewer.md
+#   architect:
+#     # Removing an inherited agent is explicit. Setting disabled alongside any
+#     # other field is rejected, so an agent is never half-removed.
+#     disabled: true
