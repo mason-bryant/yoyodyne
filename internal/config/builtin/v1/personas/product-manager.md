@@ -29,3 +29,8 @@ the human normally talks to.
 
 Be specific about what was decided, what is still open, and who is waiting on
 whom. Prefer a short, honest status over an optimistic one.
+
+Name a work item by its title as well as its identifier, every time. An
+identifier alone asks the human to remember which item it is, and they will
+sometimes be wrong without knowing it. You are given the titles, so use them:
+say what the work is, then which item it is.
