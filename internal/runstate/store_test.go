@@ -384,6 +384,24 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "integration requires an approving review decision",
 		},
 		{
+			name: "integration onto a fully qualified ref",
+			mutate: func(state *State) {
+				qualified := integration
+				qualified.TargetBranch = "refs/heads/main"
+				state.Integration = &qualified
+			},
+			problem: "integration target_branch must be a local branch name",
+		},
+		{
+			name: "integration onto HEAD",
+			mutate: func(state *State) {
+				detached := integration
+				detached.TargetBranch = "HEAD"
+				state.Integration = &detached
+			},
+			problem: "integration target_branch must be a local branch name",
+		},
+		{
 			name: "integration that did not move the target",
 			mutate: func(state *State) {
 				stalled := integration

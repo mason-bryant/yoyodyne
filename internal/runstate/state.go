@@ -110,7 +110,23 @@ type State struct {
 var (
 	runIDPattern  = regexp.MustCompile(`^run-[a-f0-9]{32}$`)
 	commitPattern = regexp.MustCompile(`^[a-f0-9]{40}([a-f0-9]{24})?$`)
+	branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 )
+
+// validLocalBranch mirrors the integration target rule the worktree manager
+// enforces: a plain local branch name, never HEAD and never a fully qualified
+// ref. Durable evidence is re-read by a reconciler that acts on it, so it is
+// held to the same shape here rather than only at the point it was produced.
+func validLocalBranch(branch string) bool {
+	branch = strings.TrimSpace(branch)
+	if !branchPattern.MatchString(branch) {
+		return false
+	}
+	if strings.Contains(branch, "..") || strings.Contains(branch, "//") || strings.HasSuffix(branch, "/") {
+		return false
+	}
+	return branch != "HEAD" && !strings.HasPrefix(branch, "refs/")
+}
 
 func NewRunID() (string, error) {
 	bytes := make([]byte, 16)
@@ -231,6 +247,8 @@ func (i Integration) Validate() error {
 	var problems []error
 	if strings.TrimSpace(i.TargetBranch) == "" {
 		problems = append(problems, errors.New("integration target_branch is required"))
+	} else if !validLocalBranch(i.TargetBranch) {
+		problems = append(problems, errors.New("integration target_branch must be a local branch name"))
 	}
 	for _, commit := range []struct {
 		field string
