@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 )
 
 const defaultTimeout = 30 * time.Second
+
+// MaxPriority is the lowest Beads priority, and 0 is the highest. It is exported
+// so a caller can refuse a priority it was handed rather than discovering the
+// problem as a bd failure.
+const MaxPriority = 4
 
 type WorkItem struct {
 	ID                 string
@@ -51,6 +57,24 @@ type NewWorkItem struct {
 	// description is edited.
 	Notes  string
 	Parent string
+}
+
+// WorkItemChange is a bounded edit to an item that already exists. Each field is
+// applied only when it is set, so an edit says exactly what it changes and
+// leaves everything it does not name alone.
+type WorkItemChange struct {
+	Title       string
+	Description string
+	// AppendNotes adds to the item's notes rather than replacing them, so an
+	// edit never erases the provenance an earlier one recorded.
+	AppendNotes string
+	// Priority is a pointer because zero is the highest Beads priority rather
+	// than an absent one.
+	Priority *int
+	// Parent is a pointer because reparenting and detaching are different
+	// requests: a nil parent leaves the item where it is, and an empty one
+	// removes the parent bd currently records.
+	Parent *string
 }
 
 type Client struct {
@@ -136,6 +160,55 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	return created, nil
 }
 
+// Update applies a bounded edit to an item that already exists. Like Create it
+// changes the tracker, so the caller is responsible for having the authority to
+// ask; unlike Create it names the fields it touches, which is what lets an edit
+// be validated before it is run and checked against what bd reports afterwards.
+func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if err := change.validate(); err != nil {
+		return WorkItem{}, err
+	}
+	args := []string{"update", id}
+	if title := strings.TrimSpace(change.Title); title != "" {
+		args = append(args, "--title="+title)
+	}
+	if description := strings.TrimSpace(change.Description); description != "" {
+		args = append(args, "--description="+description)
+	}
+	if notes := strings.TrimSpace(change.AppendNotes); notes != "" {
+		args = append(args, "--append-notes="+notes)
+	}
+	if change.Priority != nil {
+		args = append(args, "--priority="+strconv.Itoa(*change.Priority))
+	}
+	if change.Parent != nil {
+		args = append(args, "--parent="+strings.TrimSpace(*change.Parent))
+	}
+	args = append(args, "--json")
+	data, err := c.run(ctx, args...)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	// What bd echoes back is verified against what was asked for, so an edit that
+	// did not take effect is a failure rather than a reported success. The parent
+	// is the exception, and knowingly so: bd's update response does not carry it,
+	// so a reparenting rests on bd's own report of success and is not read back.
+	if title := strings.TrimSpace(change.Title); title != "" && item.Title != title {
+		return WorkItem{}, fmt.Errorf("work item %s title is %q after being updated, want %q", item.ID, item.Title, title)
+	}
+	if change.Priority != nil && item.Priority != *change.Priority {
+		return WorkItem{}, fmt.Errorf("work item %s priority is %d after being updated, want %d", item.ID, item.Priority, *change.Priority)
+	}
+	return item, nil
+}
+
 func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
 		return WorkItem{}, err
@@ -187,13 +260,25 @@ func (c Client) Block(ctx context.Context, id, reason string) (WorkItem, error) 
 }
 
 func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
+	return c.changeBlocker(ctx, "add", "added", id, blockerID)
+}
+
+// RemoveBlocker unlinks a dependency the tracker records. It verifies what bd
+// reports for the same reason adding does: a link that is still there after
+// being removed would leave work looking blocked by something nobody thinks
+// blocks it.
+func (c Client) RemoveBlocker(ctx context.Context, id, blockerID string) error {
+	return c.changeBlocker(ctx, "remove", "removed", id, blockerID)
+}
+
+func (c Client) changeBlocker(ctx context.Context, command, applied, id, blockerID string) error {
 	if err := validateIssueID(id); err != nil {
 		return err
 	}
 	if err := validateIssueID(blockerID); err != nil {
 		return fmt.Errorf("invalid blocker: %w", err)
 	}
-	data, err := c.run(ctx, "dep", "add", id, blockerID, "--json")
+	data, err := c.run(ctx, "dep", command, id, blockerID, "--json")
 	if err != nil {
 		return err
 	}
@@ -201,7 +286,7 @@ func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
 	if err := decodeJSON(data, &response); err != nil {
 		return fmt.Errorf("decode bd dependency response: %w", err)
 	}
-	if response.Status != "added" || response.IssueID != id || response.DependsOnID != blockerID {
+	if response.Status != applied || response.IssueID != id || response.DependsOnID != blockerID {
 		return fmt.Errorf("unexpected bd dependency response: status=%q issue=%q blocker=%q", response.Status, response.IssueID, response.DependsOnID)
 	}
 	return nil
@@ -377,6 +462,35 @@ func (n NewWorkItem) validate() error {
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))
+	}
+	return nil
+}
+
+func (c WorkItemChange) validate() error {
+	var problems []error
+	if strings.TrimSpace(c.Title) == "" &&
+		strings.TrimSpace(c.Description) == "" &&
+		strings.TrimSpace(c.AppendNotes) == "" &&
+		c.Priority == nil && c.Parent == nil {
+		problems = append(problems, errors.New("an update must change something"))
+	}
+	if strings.ContainsAny(c.Title, "\r\n") {
+		problems = append(problems, errors.New("title cannot span lines"))
+	}
+	if c.Priority != nil && (*c.Priority < 0 || *c.Priority > MaxPriority) {
+		problems = append(problems, fmt.Errorf("priority %d is outside 0..%d", *c.Priority, MaxPriority))
+	}
+	if c.Parent != nil {
+		// An empty parent detaches the item, which is a request bd accepts; any
+		// other value has to name an item that could exist.
+		if parent := strings.TrimSpace(*c.Parent); parent != "" {
+			if err := validateIssueID(parent); err != nil {
+				problems = append(problems, fmt.Errorf("invalid parent: %w", err))
+			}
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid work item update: %w", errors.Join(problems...))
 	}
 	return nil
 }

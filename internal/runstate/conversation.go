@@ -46,13 +46,24 @@ type Conversation struct {
 	// ProviderModel is the selector the conversation requested and
 	// ProviderResolvedModel is what the provider reported serving it, because a
 	// floating family alias makes the resolved identifier the only real record.
-	ProviderModel         string    `json:"provider_model,omitempty"`
-	ProviderResolvedModel string    `json:"provider_resolved_model,omitempty"`
-	Turns                 int       `json:"turns"`
+	ProviderModel         string `json:"provider_model,omitempty"`
+	ProviderResolvedModel string `json:"provider_resolved_model,omitempty"`
+	Turns                 int    `json:"turns"`
+	// PendingTrackerResults is what an agent did to the work tracker and has not
+	// been told the result of yet, already rendered as the text its next turn is
+	// given. It is durable for the same reason the provider session is: the agent
+	// acted, the process that watched it act may be gone, and an agent that never
+	// learns what its own actions did is one that will describe them wrongly.
+	PendingTrackerResults string    `json:"pending_tracker_results,omitempty"`
 	LastSequence          uint64    `json:"last_sequence"`
 	StartedAt             time.Time `json:"started_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
 }
+
+// MaxPendingTrackerResultBytes bounds the results a conversation may carry
+// forward. The record has to stay reloadable, so what waits inside it is bounded
+// well below the state file's own limit rather than growing with the tracker.
+const MaxPendingTrackerResultBytes = 64 << 10
 
 var conversationIDPattern = regexp.MustCompile(`^chat-[a-f0-9]{32}$`)
 
@@ -91,6 +102,10 @@ func (c Conversation) Validate() error {
 	// turn without one would leave the conversation unauditable.
 	if c.Turns > 0 && c.ProviderModel == "" {
 		problems = append(problems, errors.New("a recorded turn requires the requested model selector"))
+	}
+	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
+		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",
+			len(c.PendingTrackerResults), MaxPendingTrackerResultBytes))
 	}
 	if c.StartedAt.IsZero() || c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("started_at and updated_at are required"))

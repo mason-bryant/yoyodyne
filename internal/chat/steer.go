@@ -2,9 +2,9 @@ package chat
 
 // The operator steers development from inside the conversation. Everything here
 // runs on the operator's own instruction and never on the product manager's:
-// the product manager has no tools, cannot reach the Work behind these methods,
-// and learns what happened the same way it learns anything else, as evidence
-// carried into its next turn.
+// whatever authority it has over what the queue says, it cannot reach the Work
+// behind these methods, and it learns what happened the same way it learns
+// anything else, as evidence carried into its next turn.
 
 import (
 	"context"

@@ -29,6 +29,7 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	conversation.ProviderModel = "opus"
 	conversation.ProviderResolvedModel = "claude-opus-5-20260514"
 	conversation.Turns = 1
+	conversation.PendingTrackerResults = "- t1.1: closed yoyodyne-2\n"
 	conversation.LastSequence = 4
 	conversation.UpdatedAt = conversation.StartedAt.Add(time.Minute)
 	if err := store.Save(conversation); err != nil {
@@ -158,6 +159,14 @@ func TestConversationValidateRejectsIncoherentRecords(t *testing.T) {
 			name:   "backwards clock",
 			mutate: func(c *Conversation) { c.UpdatedAt = c.StartedAt.Add(-time.Second) },
 			want:   "updated_at cannot be before started_at",
+		},
+		{
+			// What waits inside the record has to keep the record loadable, so an
+			// unbounded account of pending results is refused where it is written
+			// rather than discovered when the next process cannot read it.
+			name:   "unbounded pending results",
+			mutate: func(c *Conversation) { c.PendingTrackerResults = strings.Repeat("x", MaxPendingTrackerResultBytes+1) },
+			want:   "pending tracker results are",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

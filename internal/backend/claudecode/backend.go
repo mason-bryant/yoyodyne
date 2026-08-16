@@ -23,19 +23,22 @@ const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable"
 // separately confined by Claude Code's OS-level sandbox settings below.
 var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 
-// readOnlyPermissionMode is the only Claude Code mode that leaves an advisory
-// role unable to apply an edit it proposes.
+// readOnlyPermissionMode is the only Claude Code mode that leaves a toolless
+// role unable to apply an edit itself.
 const readOnlyPermissionMode = "plan"
 
 // readOnlyTools is intentionally empty. A reviewer receives a bounded context,
 // patch, and check results, and a product manager receives bounded repository
 // and tracker evidence; disabling tools prevents injected evidence from reading
 // outside that evidence and exfiltrating unrelated local files, and is what
-// makes "this role writes nothing" enforced rather than asked for.
+// makes "this role runs nothing" enforced rather than asked for. A product
+// manager does change the work tracker, and none of that happens here: the
+// harness carries out validated actions on its behalf, so the authority never
+// takes the form of a tool this process could be talked into using.
 var readOnlyTools = []string{}
 
-// readOnlyRole reports whether a role reasons over supplied evidence rather
-// than changing anything. Such a role gets no tools and cannot be given them.
+// readOnlyRole reports whether a role reasons over supplied evidence rather than
+// reaching outside it. Such a role gets no tools and cannot be given them.
 func readOnlyRole(role domain.AgentRole) bool {
 	return role == domain.RoleReviewer || role == domain.RoleProductManager
 }

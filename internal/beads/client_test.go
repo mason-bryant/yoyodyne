@@ -82,6 +82,100 @@ func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
 	}
 }
 
+func TestClientAppliesOnlyTheEditItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	priority := 0
+	parent := "yoyodyne-ifd.12"
+	detached := ""
+	runner := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-1","title":"Readable conversations","status":"open","priority":2,"issue_type":"task"}]`,
+		`[{"id":"yoyodyne-1","title":"Implement feature","status":"open","priority":0,"issue_type":"task"}]`,
+		workItemJSON("open", ""),
+		`{"issue_id":"yoyodyne-1","depends_on_id":"yoyodyne-blocker","status":"removed"}`,
+	}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{
+		Title:       "Readable conversations",
+		Description: "Say who is speaking.",
+		AppendNotes: "Renamed by the product manager.",
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{Priority: &priority, Parent: &parent}); err != nil {
+		t.Fatalf("Update() priority error = %v", err)
+	}
+	// An empty parent detaches the item, which is a different request from
+	// saying nothing about the parent at all.
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{Parent: &detached}); err != nil {
+		t.Fatalf("Update() detach error = %v", err)
+	}
+	if err := client.RemoveBlocker(context.Background(), "yoyodyne-1", "yoyodyne-blocker"); err != nil {
+		t.Fatalf("RemoveBlocker() error = %v", err)
+	}
+
+	wantArgs := [][]string{
+		{"update", "yoyodyne-1", "--title=Readable conversations", "--description=Say who is speaking.", "--append-notes=Renamed by the product manager.", "--json"},
+		{"update", "yoyodyne-1", "--priority=0", "--parent=yoyodyne-ifd.12", "--json"},
+		{"update", "yoyodyne-1", "--parent=", "--json"},
+		{"dep", "remove", "yoyodyne-1", "yoyodyne-blocker", "--json"},
+	}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// An edit bd did not actually apply must not read as applied.
+	unapplied := &fakeRunner{responses: []string{`[{"id":"yoyodyne-1","title":"Something else","status":"open","priority":2,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unapplied}).Update(context.Background(), "yoyodyne-1", WorkItemChange{Title: "Readable conversations"}); err == nil ||
+		!strings.Contains(err.Error(), "want \"Readable conversations\"") {
+		t.Fatalf("Update() unapplied title error = %v", err)
+	}
+	unmoved := &fakeRunner{responses: []string{`[{"id":"yoyodyne-1","title":"t","status":"open","priority":3,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unmoved}).Update(context.Background(), "yoyodyne-1", WorkItemChange{Priority: &priority}); err == nil ||
+		!strings.Contains(err.Error(), "want 0") {
+		t.Fatalf("Update() unapplied priority error = %v", err)
+	}
+	// A dependency the tracker did not report removing is still a dependency.
+	unremoved := &fakeRunner{responses: []string{`{"issue_id":"yoyodyne-1","depends_on_id":"yoyodyne-blocker","status":"added"}`}}
+	if err := (Client{Runner: unremoved}).RemoveBlocker(context.Background(), "yoyodyne-1", "yoyodyne-blocker"); err == nil ||
+		!strings.Contains(err.Error(), "unexpected bd dependency response") {
+		t.Fatalf("RemoveBlocker() unapplied error = %v", err)
+	}
+}
+
+func TestClientRefusesAnEditItCannotApply(t *testing.T) {
+	t.Parallel()
+
+	tooLow, tooHigh := -1, MaxPriority+1
+	badParent := "../etc"
+	for _, test := range []struct {
+		name   string
+		id     string
+		change WorkItemChange
+		want   string
+	}{
+		{name: "invented id", id: "../etc", change: WorkItemChange{Title: "t"}, want: "invalid Beads issue id"},
+		{name: "nothing to change", id: "yoyodyne-1", want: "must change something"},
+		{name: "priority below the scale", id: "yoyodyne-1", change: WorkItemChange{Priority: &tooLow}, want: "outside 0.."},
+		{name: "priority above the scale", id: "yoyodyne-1", change: WorkItemChange{Priority: &tooHigh}, want: "outside 0.."},
+		{name: "invented parent", id: "yoyodyne-1", change: WorkItemChange{Parent: &badParent}, want: "invalid parent"},
+		{name: "title spanning lines", id: "yoyodyne-1", change: WorkItemChange{Title: "t\n--force"}, want: "cannot span lines"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			if _, err := (Client{Runner: runner}).Update(context.Background(), test.id, test.change); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Update() error = %v, want it to contain %q", err, test.want)
+			}
+			if len(runner.args) != 0 {
+				t.Fatalf("a refused edit still ran bd %#v", runner.args)
+			}
+		})
+	}
+}
+
 func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	t.Parallel()
 

@@ -36,7 +36,17 @@ type chatOutput struct {
 	// has nobody to approve anything, so they are reported for a person to
 	// decide on in a conversation rather than acted on here.
 	Proposals []chat.PendingProposal `json:"proposals,omitempty"`
-	Error     string                 `json:"error,omitempty"`
+	// Actions are the tracker changes the product manager made while answering.
+	// Unlike proposals they already happened, so they are reported rather than
+	// offered.
+	Actions []chat.TrackerOutcome `json:"actions,omitempty"`
+	// ResultsCarriedOver reports that the reply stopped where it did because the
+	// product manager ran out of rounds of tracker actions, with results it has
+	// not seen. They are recorded with the conversation and reach it when the
+	// conversation is next spoken to, which for a one-shot message is a later
+	// invocation.
+	ResultsCarriedOver bool   `json:"results_carried_over,omitempty"`
+	Error              string `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -74,9 +84,16 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		}
 		if *jsonOutput {
 			evidence := reply.Evidence
-			return writeJSON(stdout, stderr, chatOutput{Evidence: &evidence, Reply: reply.Text, Proposals: reply.Proposals})
+			return writeJSON(stdout, stderr, chatOutput{
+				Evidence:           &evidence,
+				Reply:              reply.Text,
+				Proposals:          reply.Proposals,
+				Actions:            reply.Actions,
+				ResultsCarriedOver: reply.ResultsCarriedOver,
+			})
 		}
 		fmt.Fprintln(stdout, reply.Text)
+		printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
 		printChatProposals(stdout, reply.Proposals)
 		printChatEvidence(stdout, reply.Evidence)
 		return 0
@@ -210,6 +227,10 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 		output.Evidence = &evidence
 		output.Reply = reply.Text
 		output.Proposals = reply.Proposals
+		// A turn that failed may still have changed the tracker before it did, so
+		// what it changed is reported with the failure rather than lost behind it.
+		output.Actions = reply.Actions
+		output.ResultsCarriedOver = reply.ResultsCarriedOver
 	}
 	if jsonOutput {
 		if code := writeJSON(stdout, stderr, output); code != 0 {
@@ -220,6 +241,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 	if output.Reply != "" {
 		fmt.Fprintln(stdout, output.Reply)
 	}
+	printChatActions(stdout, output.Actions, output.ResultsCarriedOver)
 	printChatProposals(stdout, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
@@ -234,11 +256,34 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 		state = fmt.Sprintf("resumed conversation after %d turn(s)", evidence.Turns)
 	}
 	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
-	fmt.Fprintln(writer, "The product manager is advisory here: it changes nothing and approves nothing.")
-	fmt.Fprintln(writer, "It may propose work items; each one is created only if you approve it.")
+	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, update, reparent,")
+	fmt.Fprintln(writer, "reprioritize, link, unlink, and close items, and every change it makes is")
+	fmt.Fprintln(writer, "reported to you here. It has no files, commands, or network, and it proposes")
+	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
+	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it.")
 	fmt.Fprintln(writer, "You steer the work yourself: /status, /work, /stop, /redirect. /help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
 	fmt.Fprintln(writer)
+}
+
+// printChatActions reports what the product manager changed in the tracker while
+// it answered. It is printed for a one-shot message as well as a conversation:
+// the changes are already made, and a caller who is not told about them is
+// reading a queue that moved without them.
+func printChatActions(writer io.Writer, actions []chat.TrackerOutcome, resultsCarriedOver bool) {
+	if len(actions) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\nThe product manager acted on the tracker (%d action(s)):\n", len(actions))
+	for _, action := range actions {
+		fmt.Fprint(writer, action.Render())
+	}
+	// A reply that ran out of rounds stopped for a reason nobody can see in the
+	// text, so it is said here rather than left to look like a finished thought.
+	if resultsCarriedOver {
+		fmt.Fprintln(writer, "It ran out of rounds of actions; what the last ones returned is recorded with")
+		fmt.Fprintln(writer, "the conversation and reaches it the next time you say something to it.")
+	}
 }
 
 // printChatProposals reports what a one-shot message proposed. There is nobody

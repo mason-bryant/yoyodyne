@@ -28,6 +28,12 @@ const (
 	EventProposalApproved EventType = "proposal.approved"
 	EventProposalRejected EventType = "proposal.rejected"
 	EventProposalCreated  EventType = "proposal.created"
+	// A tracker action the product manager takes is recorded as what was asked
+	// for and what came of it, separately, so an action that failed is never
+	// readable as one that was carried out.
+	EventTrackerActionRequested EventType = "tracker.action.requested"
+	EventTrackerActionApplied   EventType = "tracker.action.applied"
+	EventTrackerActionFailed    EventType = "tracker.action.failed"
 	// Work a conversation steers is recorded in that conversation's own log, so
 	// what the operator asked the harness to do is evidence beside what was said
 	// to arrive at it. The run these describe keeps its own separate log.

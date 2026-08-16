@@ -24,10 +24,10 @@ const defaultStopGrace = 2 * time.Minute
 
 // Work is the harness's own hand in a conversation: what an operator sees and
 // steers development with without leaving it. Every method here runs because
-// the operator asked for it in their own words. The product manager cannot
-// reach any of it, exactly as it cannot reach the Tracker, so starting,
-// redirecting, and stopping work stay the operator's decisions and the harness's
-// actions.
+// the operator asked for it in their own words. The product manager cannot reach
+// any of it: it manages what the queue says, through the Tracker, and running,
+// redirecting, and stopping the work itself stays the operator's decision and
+// the harness's action.
 type Work interface {
 	// Survey reports development as the harness sees it now: the runs it has in
 	// flight and the tracker's own view of what is blocked, claimed, available,

@@ -100,7 +100,7 @@ func (e *ProposalError) Unwrap() error { return e.Err }
 // amount of prose describing work is a proposal, and a block the contract does
 // not accept is an error rather than a silently dropped suggestion.
 func extractProposals(reply string) (string, []Proposal, error) {
-	prose, payload, found, err := splitProposalBlock(reply)
+	prose, payload, found, err := splitFencedBlock(reply, proposalFence, "proposal")
 	if err != nil {
 		return "", nil, err
 	}
@@ -114,41 +114,44 @@ func extractProposals(reply string) (string, []Proposal, error) {
 	return prose, proposals, nil
 }
 
-// splitProposalBlock returns the reply's prose and the payload of its one
-// proposal block. A second block is refused: a reply an operator reads has one
-// list of proposals in it, not a visible list and another one further down.
-func splitProposalBlock(reply string) (prose string, payload string, found bool, err error) {
-	opensAt := indexProposalFence(reply)
+// splitFencedBlock returns the reply's prose and the payload of its one block of
+// the named kind. A second block of the same kind is refused: a reply an
+// operator reads carries one list of that kind in it, not a visible list and
+// another one further down. The kind is named in every failure, because a reply
+// may carry a block of more than one kind and the operator has to be told which
+// one could not be read.
+func splitFencedBlock(reply, fence, kind string) (prose string, payload string, found bool, err error) {
+	opensAt := indexFence(reply, fence)
 	if opensAt < 0 {
 		return "", "", false, nil
 	}
-	rest := reply[opensAt+len(proposalFence):]
+	rest := reply[opensAt+len(fence):]
 	if line := rest[:lineEnd(rest)]; strings.TrimSpace(line) != "" {
-		return "", "", false, fmt.Errorf("proposal block opens with trailing text %q", strings.TrimSpace(line))
+		return "", "", false, fmt.Errorf("%s block opens with trailing text %q", kind, strings.TrimSpace(line))
 	}
 	rest = rest[lineEnd(rest):]
 	closesAt := strings.Index(rest, "\n```")
 	if closesAt < 0 {
-		return "", "", false, errors.New("proposal block is not closed")
+		return "", "", false, fmt.Errorf("%s block is not closed", kind)
 	}
 	// Whatever shares the closing fence's line belongs to the fence; prose
 	// resumes on the line after it.
 	after := rest[closesAt+len("\n```"):]
 	after = after[lineEnd(after):]
-	if indexProposalFence(after) >= 0 {
-		return "", "", false, errors.New("a reply carries at most one proposal block")
+	if indexFence(after, fence) >= 0 {
+		return "", "", false, fmt.Errorf("a reply carries at most one %s block", kind)
 	}
 	prose = strings.TrimSpace(reply[:opensAt] + "\n" + after)
 	return prose, rest[:closesAt], true, nil
 }
 
-// indexProposalFence finds a fence that opens its own line, so a fence quoted
-// inside prose is text rather than a block boundary.
-func indexProposalFence(text string) int {
-	if strings.HasPrefix(text, proposalFence) {
+// indexFence finds a fence that opens its own line, so a fence quoted inside
+// prose is text rather than a block boundary.
+func indexFence(text, fence string) int {
+	if strings.HasPrefix(text, fence) {
 		return 0
 	}
-	if at := strings.Index(text, "\n"+proposalFence); at >= 0 {
+	if at := strings.Index(text, "\n"+fence); at >= 0 {
 		return at + 1
 	}
 	return -1
