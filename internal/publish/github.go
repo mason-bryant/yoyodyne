@@ -129,9 +129,14 @@ func (e AutoMergeUnavailable) Error() string {
 
 // MergeRefused reports a forge that declined to merge a pull request. It is a
 // distinct error because a refusal is an answer about the repository's rules —
-// a required check that has not run, a review the base branch demands, a head
-// commit that moved — rather than a harness failure, and an operator has to be
-// told which requirement was unmet.
+// a request that conflicts with the base branch, a merge method the repository
+// forbids, a head commit that moved — rather than a harness failure, and an
+// operator has to be told which requirement was unmet.
+//
+// A required check that has not finished is deliberately not one of these. The
+// harness asks the forge to merge when the requirements are met rather than
+// now, so a pending check is what that queued merge waits for; only a request
+// the forge will not merge whenever it is asked reaches here.
 type MergeRefused struct {
 	Number int
 	Method MergeMethod
@@ -313,18 +318,28 @@ func (g GitHub) Merge(ctx context.Context, request MergeRequest) (MergeResult, e
 	if autoMergeUnavailable(reason) {
 		return MergeResult{}, AutoMergeUnavailable{Number: request.Number, Reason: reason}
 	}
-	if !nothingLeftToWaitFor(reason) {
+	// The forge declined to queue. Either it has nothing left to wait for, or the
+	// request cannot merge at all, and the two are told apart twice over: by what
+	// the forge said, and by the merge state it reports for the request. The
+	// second answer is what keeps a repository with no required checks — the case
+	// that worked before queuing existed — publishing if the forge ever rewords
+	// the first. The state is read once here and reported on the refusal, so a
+	// refusal nothing recognized still names the state it was refused in.
+	status := g.mergeState(ctx, request.Number)
+	if !nothingLeftToWaitFor(reason) && !readyToMergeNow(status) {
 		return MergeResult{}, MergeRefused{
 			Number: request.Number,
 			Method: request.Method,
-			Status: g.mergeState(ctx, request.Number),
+			Status: status,
 			Reason: reason,
 		}
 	}
-	// The forge has nothing left to wait for, and says so by refusing to queue a
-	// merge it would perform immediately. Merging now is then what the queued
-	// request asked for rather than a way around it: every requirement the base
-	// branch names is already satisfied, and nothing is overridden to get there.
+	// The forge has nothing left to wait for, so it refused to queue a merge it
+	// would perform immediately. Merging now is then what the queued request
+	// asked for rather than a way around it: every requirement the base branch
+	// names is already satisfied, and nothing is overridden to get there. A forge
+	// that turns out to disagree refuses this merge too, and that refusal is what
+	// gets reported.
 	merged, err := g.exec(ctx, arguments...)
 	if err != nil {
 		return MergeResult{}, fmt.Errorf("merge pull request %d: %w", request.Number, err)
@@ -357,11 +372,25 @@ func autoMergeUnavailable(reason string) bool {
 // repository with no required checks answers this way to every queued merge, so
 // treating it as a refusal would leave the unprotected case — the one that
 // worked before queuing existed — unable to publish at all.
+//
+// It reads the forge's words, which can be reworded, so it is never the only
+// thing asked: readyToMergeNow answers the same question from the merge state
+// the forge reports for the request, and either answer is enough.
 func nothingLeftToWaitFor(reason string) bool {
 	normalized := strings.ToLower(reason)
 	return strings.Contains(normalized, "clean status") ||
 		strings.Contains(normalized, "not in the correct state") ||
 		strings.Contains(normalized, "does not need auto-merge")
+}
+
+// readyToMergeNow reports a merge state with nothing outstanding on it. It is
+// the forge's own vocabulary rather than its prose, so it survives a reworded
+// message, and it is only ever consulted after the forge has already declined
+// to queue a merge: a request that is clean has nothing for a queue to wait
+// for. A state that could not be read answers no, which leaves the decision to
+// what the forge said.
+func readyToMergeNow(status string) bool {
+	return strings.EqualFold(strings.TrimSpace(status), "CLEAN")
 }
 
 // normalizeAutoMerge folds the spellings the forge uses for the setting into

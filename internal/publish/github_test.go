@@ -228,6 +228,58 @@ func TestGitHubMergeMergesWhenTheForgeHasNothingLeftToWaitFor(t *testing.T) {
 	}
 }
 
+// The words a forge refuses a queued merge in can be reworded, and a repository
+// with no required checks would then stop publishing entirely — it is refused on
+// every run. So the same question is asked of the merge state the forge reports,
+// which is its own vocabulary: a clean request has nothing for a queue to wait
+// for, whatever the message says.
+func TestGitHubMergeMergesACleanRequestItDoesNotRecognizeTheRefusalOf(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge", execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   "GraphQL: some wording nobody has seen before (enablePullRequestAutoMerge)",
+	})
+	runner.replyAfter("pr merge", 1, execution.ProcessResult{Status: execution.ProcessSucceeded})
+	runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"CLEAN"}`})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	result, err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: "0123456789abcdef0123456789abcdef01234567", Method: MergeCommit})
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	if result.Queued {
+		t.Errorf("Merge() = %#v, want a merge the forge performed rather than queued", result)
+	}
+	merges := runner.matching("pr merge")
+	if len(merges) != 2 || contains(merges[1], "--auto") || contains(merges[1], "--admin") {
+		t.Fatalf("pr merge calls = %v, want an ordinary merge after the queue was refused", merges)
+	}
+
+	// A request that is not clean is still a refusal, and it names the state it
+	// was refused in even when nothing recognized the message.
+	blocked := &scriptedRunner{}
+	blocked.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	blocked.reply("pr merge", execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   "GraphQL: some wording nobody has seen before (enablePullRequestAutoMerge)",
+	})
+	blocked.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"DIRTY"}`})
+	_, err = (GitHub{Runner: blocked, Dir: t.TempDir()}).Merge(context.Background(),
+		MergeRequest{Number: 7, HeadCommit: "0123456789abcdef0123456789abcdef01234567", Method: MergeCommit})
+	var refused MergeRefused
+	if !errors.As(err, &refused) || refused.Status != "DIRTY" {
+		t.Fatalf("Merge() error = %v, want a refusal naming the state it was refused in", err)
+	}
+	if calls := blocked.matching("pr merge"); len(calls) != 1 {
+		t.Errorf("pr merge calls = %v, want the refused request not to be merged anyway", calls)
+	}
+}
+
 // A protected branch declining the merge is the repository's rules being
 // applied, not the harness failing, so the refusal has to name the requirement
 // that was unmet rather than read as a generic error.
