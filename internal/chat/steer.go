@@ -71,7 +71,7 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		if err := s.StartWork(ctx, argument); err != nil {
 			return false, err
 		}
-		fmt.Fprintf(out, "started work on %s. It runs while you keep talking; /status says how it is going and /wait waits for it.\n\n", argument)
+		fmt.Fprintf(out, "started work on %s. It runs while you keep talking; /status says how it is going, /wait waits for it, and on a terminal it reports itself the moment it finishes.\n\n", argument)
 		return false, nil
 	case "/wait":
 		finished, err := s.WaitForWork(ctx)
@@ -104,10 +104,23 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 	}
 }
 
+// workDone is the run this conversation is waiting on, or nothing. It is what
+// a prompt waits beside, so on a terminal the operator hears about a run when
+// it ends rather than when they next say something.
+func (s *Session) workDone() <-chan struct{} {
+	if s.active == nil {
+		return nil
+	}
+	return s.active.done
+}
+
 // reportFinishedWork prints the run this conversation started once it has
-// ended. It is drained where the operator is looking rather than printed from
-// the goroutine that ran it, so an outcome never lands in the middle of the
-// line they are typing.
+// ended. It is still drained by the goroutine the operator is talking to rather
+// than printed from the one that ran it, because everything a run's outcome
+// touches — the pending notices, the conversation's record — belongs to this
+// one. What has changed is when it is drained: the composing line has a region
+// of its own now, so a finished run is written above whatever is being typed as
+// soon as it finishes, instead of waiting for the operator to press a key.
 func (s *Session) reportFinishedWork(out io.Writer) {
 	finished, err := s.CollectWork()
 	if finished == nil {

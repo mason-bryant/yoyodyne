@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"reflect"
 	"strconv"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	backendapi "yoyodyne/internal/backend"
 	"yoyodyne/internal/beads"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/runstate"
@@ -292,7 +294,7 @@ func TestConverseTakesTurnsUntilTheOperatorEndsIt(t *testing.T) {
 	session := openTestSession(t, testOptions(t, provider))
 	var out strings.Builder
 	input := strings.NewReader("What is the brief?\n\nAnything else?\n/exit\nnever asked\n")
-	if err := session.Converse(context.Background(), input, &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 	if len(provider.requests) != 2 {
@@ -577,7 +579,7 @@ func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
 	// The operator approves the first, declines the second with a reason, and
 	// ends the input before deciding the third.
 	input := strings.NewReader("what next?\ny\nnot this quarter\n")
-	if err := session.Converse(context.Background(), input, &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -624,7 +626,7 @@ func TestConverseSurvivesAProposalItCannotRead(t *testing.T) {
 	session := openTestSession(t, options)
 
 	var out strings.Builder
-	if err := session.Converse(context.Background(), strings.NewReader("what next?\nsay that again\ny\n"), &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what next?\nsay that again\ny\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -977,7 +979,7 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 	session := openTestSession(t, options)
 
 	var out strings.Builder
-	if err := session.Converse(context.Background(), strings.NewReader("drop the ifd.4 dependency\nnow close it\n/exit\n"), &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("drop the ifd.4 dependency\nnow close it\n/exit\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 	transcript := out.String()
@@ -1119,6 +1121,13 @@ func newTestStore(t *testing.T, root string) *runstate.ConversationStore {
 		t.Fatalf("NewConversationStore() error = %v", err)
 	}
 	return store
+}
+
+// testConsole is the conversation as an ordinary stream of text, which is what
+// anything that is not a terminal gets. Nothing here writes cursor control, so
+// a transcript a test reads is exactly what a redirected one holds.
+func testConsole(in io.Reader, out io.Writer) console.Console {
+	return console.Open(console.Options{In: in, Out: out, Env: func(string) string { return "" }})
 }
 
 func openTestSession(t *testing.T, options Options) *Session {

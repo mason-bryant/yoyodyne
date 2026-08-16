@@ -9,7 +9,6 @@
 package chat
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"yoyodyne/internal/backend"
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/config"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/runstate"
@@ -599,44 +599,55 @@ func (s *Session) emit(eventType execution.EventType, payload any) error {
 	return s.record()
 }
 
+// operatorPrompt is what the operator composes their turn under, and
+// decisionPrompt is what they decide one proposal under. Both name what is
+// being asked for in the prompt itself, because on a terminal the composing
+// region is drawn from the prompt and the line together: a line that has
+// scrolled past still says what it was answering.
+const (
+	operatorPrompt = "you> "
+	decisionPrompt = "create %s? [y or yes creates it; anything else declines, and is kept as the reason] "
+)
+
 // Converse runs the interactive loop: one line in, one answer out, until the
 // operator ends it or the input does. A line that begins with a slash is an
 // operator command the harness carries out; everything else is said to the
 // product manager.
-func (s *Session) Converse(ctx context.Context, in io.Reader, out io.Writer) error {
-	if in == nil || out == nil {
-		return errors.New("conversation input and output are required")
+//
+// It is held over a console rather than a pair of raw streams, because the line
+// being composed and everything the harness writes need to be told apart: on a
+// terminal the console keeps the operator's typing in a region of its own that
+// output is written above, and anywhere else it is the same conversation as an
+// ordinary stream of text.
+func (s *Session) Converse(ctx context.Context, screen console.Console) error {
+	if screen == nil {
+		return errors.New("a console is required to converse")
 	}
-	err := s.converse(ctx, in, out)
+	err := s.converse(ctx, screen)
 	// A run this conversation started cannot outlive the process that owns it,
 	// so ending the conversation stops it deliberately rather than leaving an
 	// interruption for somebody to discover later.
-	s.finishActiveRun(ctx, out)
+	s.finishActiveRun(ctx, screen)
 	return err
 }
 
-func (s *Session) converse(ctx context.Context, in io.Reader, out io.Writer) error {
-	scanner := bufio.NewScanner(in)
-	scanner.Buffer(make([]byte, 4096), MaxOperatorMessageBytes)
+func (s *Session) converse(ctx context.Context, screen console.Console) error {
+	// Everything below writes to the console as an ordinary writer: on a terminal
+	// that puts it above the composing region, and anywhere else it is the stream
+	// it always was.
+	var out io.Writer = screen
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// A run that finished while the operator was reading is reported before
-		// they are asked for the next line, so the prompt never sits above an
-		// outcome nobody has been told about.
-		s.reportFinishedWork(out)
-		if _, err := fmt.Fprint(out, "you> "); err != nil {
-			return err
-		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("read operator message: %w", err)
-			}
-			fmt.Fprintln(out)
+		line, err := s.ask(ctx, screen, operatorPrompt)
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
-		message := strings.TrimSpace(scanner.Text())
+		if err != nil {
+			return fmt.Errorf("read operator message: %w", err)
+		}
+		message := strings.TrimSpace(line)
 		if message == "" {
 			continue
 		}
@@ -679,9 +690,29 @@ func (s *Session) converse(ctx context.Context, in io.Reader, out io.Writer) err
 		if err != nil {
 			return err
 		}
-		if err := s.decide(ctx, reply.Proposals, scanner, out); err != nil {
+		if err := s.decide(ctx, reply.Proposals, screen); err != nil {
 			return err
 		}
+	}
+}
+
+// ask puts one question to the operator and waits for their answer. A run that
+// finishes while they are typing is reported the moment it does, rather than
+// waiting for them to press a key: what they have typed so far is kept, the
+// outcome is written above it, and they carry on from where they were. Where
+// the console is an ordinary stream there is no such moment, so the run is
+// reported before the next question instead.
+func (s *Session) ask(ctx context.Context, screen console.Console, prompt string) (string, error) {
+	for {
+		// A run that finished while the operator was reading is reported before
+		// they are asked for the next line, so the prompt never sits above an
+		// outcome nobody has been told about.
+		s.reportFinishedWork(screen)
+		answer, err := screen.Prompt(ctx, prompt, s.workDone())
+		if errors.Is(err, console.ErrInterrupted) {
+			continue
+		}
+		return answer, err
 	}
 }
 
@@ -704,22 +735,27 @@ func (s *Session) reportTrackerActions(out io.Writer, reply Reply) {
 // Nothing is created until they say so, a proposal they turn down is recorded
 // as rejected, and input that ends mid-decision leaves the rest undecided:
 // silence is never approval.
-func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scanner *bufio.Scanner, out io.Writer) error {
+func (s *Session) decide(ctx context.Context, proposals []PendingProposal, screen console.Console) error {
 	if len(proposals) == 0 {
 		return nil
 	}
+	// Everything below writes to the console as an ordinary writer: on a terminal
+	// that puts it above the composing region, and anywhere else it is the stream
+	// it always was.
+	var out io.Writer = screen
 	fmt.Fprintf(out, "The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))
 	for _, proposal := range proposals {
 		fmt.Fprint(out, proposal.Render())
-		fmt.Fprintf(out, "\ncreate %s? [y or yes creates it; anything else declines, and is kept as the reason] ", proposal.ID)
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("read approval decision: %w", err)
-			}
-			fmt.Fprintln(out, "\ninput ended before you decided; nothing was created.")
+		fmt.Fprintln(out)
+		line, err := s.ask(ctx, screen, fmt.Sprintf(decisionPrompt, proposal.ID))
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(out, "input ended before you decided; nothing was created.")
 			return nil
 		}
-		answer := strings.TrimSpace(scanner.Text())
+		if err != nil {
+			return fmt.Errorf("read approval decision: %w", err)
+		}
+		answer := strings.TrimSpace(line)
 		if !isApproval(answer) {
 			if err := s.Reject(proposal.ID, answer); err != nil {
 				return err

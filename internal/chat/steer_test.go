@@ -3,12 +3,15 @@ package chat
 import (
 	"context"
 	"fmt"
+	"io"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	backendapi "yoyodyne/internal/backend"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/execution"
 )
 
@@ -53,7 +56,7 @@ func TestAnOperatorTakesIntentThroughToIntegratedWorkInOneConversation(t *testin
 		"anything else outstanding?",
 		"/exit",
 	}, "\n") + "\n")
-	if err := session.Converse(context.Background(), input, &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -130,7 +133,7 @@ func TestStatusShowsWhatIsInFlightBlockedAndDone(t *testing.T) {
 	session := openTestSession(t, options)
 
 	var out strings.Builder
-	if err := session.Converse(context.Background(), strings.NewReader("/status\n/exit\n"), &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/status\n/exit\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -166,7 +169,7 @@ func TestStoppingWorkCancelsTheRunAndSettlesWhatItLeft(t *testing.T) {
 
 	var out strings.Builder
 	input := strings.NewReader("/work yoyodyne-1\n/stop we are doing something else first\n/exit\n")
-	if err := session.Converse(context.Background(), input, &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -228,7 +231,7 @@ func TestRedirectingStopsTheRunItRedirectsAndRecordsTheDirection(t *testing.T) {
 
 		var out strings.Builder
 		input := strings.NewReader("/work yoyodyne-1\n/redirect yoyodyne-1 keep the CLI surface unchanged\n/exit\n")
-		if err := session.Converse(context.Background(), input, &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 
@@ -297,7 +300,7 @@ func TestRedirectingStopsTheRunItRedirectsAndRecordsTheDirection(t *testing.T) {
 		session := openTestSession(t, options)
 
 		var out strings.Builder
-		if err := session.Converse(context.Background(), strings.NewReader("/redirect yoyodyne-2 prefer the smaller change\n/exit\n"), &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/redirect yoyodyne-2 prefer the smaller change\n/exit\n"), &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 
@@ -322,7 +325,7 @@ func TestRedirectingStopsTheRunItRedirectsAndRecordsTheDirection(t *testing.T) {
 		session := openTestSession(t, options)
 
 		var out strings.Builder
-		if err := session.Converse(context.Background(), strings.NewReader("/redirect yoyodyne-2\n/exit\n"), &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/redirect yoyodyne-2\n/exit\n"), &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 		if len(work.takenNotes()) != 0 {
@@ -343,7 +346,7 @@ func TestOneConversationRunsOneItemAtATime(t *testing.T) {
 	session := openTestSession(t, options)
 
 	var out strings.Builder
-	if err := session.Converse(context.Background(), strings.NewReader("/work yoyodyne-1\n/work yoyodyne-2\n/exit\n"), &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/work yoyodyne-1\n/work yoyodyne-2\n/exit\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -355,6 +358,99 @@ func TestOneConversationRunsOneItemAtATime(t *testing.T) {
 	}
 }
 
+// TestAFinishedRunReportsItselfWithoutWaitingForAKey is the deferral this work
+// item removes. A finished run used to be reported only when the operator next
+// pressed enter, because there was no safe moment to write unprompted; now that
+// the composing line has a region of its own, the prompt gives the screen up
+// the moment the run ends and the outcome is written above whatever is being
+// typed.
+func TestAFinishedRunReportsItselfWithoutWaitingForAKey(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	work := &fakeWork{gate: gate, report: RunReport{
+		RunID:        "run-0123456789abcdef0123456789abcdef",
+		Status:       "succeeded",
+		Branch:       "yoyodyne/yoyodyne-1/abcd",
+		Integrated:   true,
+		TargetBranch: "main",
+		Commit:       "0f1e2d3c",
+	}}
+	options := testOptions(t, &fakeBackend{})
+	options.Work = work
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// The operator starts the run, and then simply waits at the prompt. The run
+	// finishes while they are sitting there, which is what takes the prompt back.
+	screen := &scriptedConsole{out: &out, steps: []scriptedStep{
+		{line: "/work yoyodyne-1"},
+		{
+			await: func(interrupt <-chan struct{}) {
+				close(gate)
+				<-interrupt
+			},
+		},
+		{line: "/exit"},
+	}}
+	if err := session.Converse(context.Background(), screen); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	if !strings.Contains(transcript, "yoyodyne-1 was integrated into main") {
+		t.Fatalf("the finished run was not reported: %q", transcript)
+	}
+	// Only the prompt offered while the run was in flight waited on it: the
+	// first came before there was a run, and the last came after it had been
+	// collected, because it was collected when it interrupted rather than at the
+	// next key.
+	if watched := screen.watched(); !reflect.DeepEqual(watched, []bool{false, true, false}) {
+		t.Fatalf("prompts waiting on a run = %#v, want only the second", watched)
+	}
+}
+
+// scriptedConsole is a console a test drives one prompt at a time. It reports
+// an interrupted prompt exactly as a terminal's does, so what a conversation
+// makes of a run that finishes mid-line is testable without a terminal.
+type scriptedConsole struct {
+	out   io.Writer
+	steps []scriptedStep
+	// waiting records, for each prompt in order, whether it was offered with a
+	// run still to wait for.
+	waiting []bool
+}
+
+// scriptedStep is one prompt: either a line the operator types, or something
+// that happens while they are composing and takes the prompt back.
+type scriptedStep struct {
+	line  string
+	await func(interrupt <-chan struct{})
+}
+
+func (c *scriptedConsole) Write(text []byte) (int, error) { return c.out.Write(text) }
+
+func (c *scriptedConsole) Prompt(_ context.Context, prompt string, interrupt <-chan struct{}) (string, error) {
+	c.waiting = append(c.waiting, interrupt != nil)
+	fmt.Fprint(c.out, prompt)
+	if len(c.steps) == 0 {
+		fmt.Fprintln(c.out)
+		return "", io.EOF
+	}
+	step := c.steps[0]
+	c.steps = c.steps[1:]
+	if step.await != nil {
+		step.await(interrupt)
+		return "", console.ErrInterrupted
+	}
+	fmt.Fprintln(c.out, step.line)
+	return step.line, nil
+}
+
+func (c *scriptedConsole) Close() error { return nil }
+
+func (c *scriptedConsole) watched() []bool { return c.waiting }
+
 func TestEndingTheConversationStopsTheRunItOwns(t *testing.T) {
 	t.Parallel()
 
@@ -365,7 +461,7 @@ func TestEndingTheConversationStopsTheRunItOwns(t *testing.T) {
 
 	var out strings.Builder
 	// The input simply ends, which is how most conversations end.
-	if err := session.Converse(context.Background(), strings.NewReader("/work yoyodyne-1\n"), &out); err != nil {
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/work yoyodyne-1\n"), &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
 
@@ -400,7 +496,7 @@ func TestOnlyTheOperatorSteersWork(t *testing.T) {
 		session := openTestSession(t, options)
 
 		var out strings.Builder
-		if err := session.Converse(context.Background(), strings.NewReader("what should we do?\n/exit\n"), &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("what should we do?\n/exit\n"), &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 		if started := work.startedRuns(); len(started) != 0 {
@@ -419,7 +515,7 @@ func TestOnlyTheOperatorSteersWork(t *testing.T) {
 		session := openTestSession(t, options)
 
 		var out strings.Builder
-		if err := session.Converse(context.Background(), strings.NewReader("/work yoyodyne-1\n/status\n/exit\n"), &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/work yoyodyne-1\n/status\n/exit\n"), &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 		if count := strings.Count(out.String(), "no harness is wired to this conversation"); count != 2 {
@@ -436,7 +532,7 @@ func TestOnlyTheOperatorSteersWork(t *testing.T) {
 		session := openTestSession(t, options)
 
 		var out strings.Builder
-		if err := session.Converse(context.Background(), strings.NewReader("/integrate everything\n/exit\n"), &out); err != nil {
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/integrate everything\n/exit\n"), &out)); err != nil {
 			t.Fatalf("Converse() error = %v", err)
 		}
 		if len(provider.requests) != 0 {

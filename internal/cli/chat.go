@@ -12,6 +12,7 @@ import (
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/chat"
 	"yoyodyne/internal/config"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/contextbundle"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
@@ -99,8 +100,19 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 0
 	}
 
-	printChatHeader(stdout, session.Evidence())
-	converseErr := session.Converse(ctx, stdin, stdout)
+	// The conversation is held over a console rather than the raw streams: on a
+	// terminal that gives the operator's typing a region output never writes
+	// into, and anywhere else it is the same conversation as an ordinary stream
+	// of text. Either way what is recorded is identical.
+	screen := console.Open(console.Options{In: stdin, Out: stdout})
+	defer screen.Close()
+	printChatHeader(screen, session.Evidence())
+	converseErr := session.Converse(ctx, screen)
+	// The terminal is handed back before the closing report, so the evidence
+	// below is written to a terminal in the state the operator's shell left it.
+	if err := screen.Close(); err != nil {
+		fmt.Fprintf(stderr, "restore the terminal: %v\n", err)
+	}
 	printUndecidedProposals(stdout, session.Proposals())
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
