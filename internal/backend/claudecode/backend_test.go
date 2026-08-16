@@ -145,6 +145,52 @@ func TestRunPassesTheRequestedModelAndReportsWhatServedIt(t *testing.T) {
 	}
 }
 
+func TestRunKeepsTheDecidedResultWhenTheProviderKeepsWriting(t *testing.T) {
+	t.Parallel()
+
+	// The provider legitimately writes after its terminal result. The outcome is
+	// already decided, so the trailing events are recorded as evidence and must
+	// not rewrite the result, session, model, usage, or cost.
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":0.25,"usage":{"input_tokens":10},"terminal_reason":"end_turn"}`,
+		`{"type":"rate_limit_event","session_id":"session-2","subtype":"upgrade"}`,
+		`{"type":"assistant","session_id":"session-2","message":{"content":[{"type":"text","text":"trailing chatter"}]}}`,
+		`{"type":"system","subtype":"init","session_id":"session-2","model":"late-model"}`,
+	}, "\n") + "\n"
+	var events []execution.Event
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement the task",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.IsError || result.FinalText != "done" || result.StopReason != "end_turn" {
+		t.Fatalf("Run() result = %#v", result)
+	}
+	if result.SessionID != "session-1" || result.ResolvedModel != "claude-test" || result.CostUSD != 0.25 || string(result.Usage) != `{"input_tokens":10}` {
+		t.Fatalf("trailing events rewrote the terminal envelope: %#v", result)
+	}
+	// The trailing events stay in the stream so a late notice such as a usage
+	// limit is still diagnosable, and the sequence checkpoint covers them.
+	if len(events) != 5 || result.LastEvent != 5 {
+		t.Fatalf("events = %d, last event = %d, want 5 events recorded", len(events), result.LastEvent)
+	}
+	if !strings.Contains(string(events[2].Payload), "rate_limit_event") {
+		t.Fatalf("post-result event payload = %s", events[2].Payload)
+	}
+	if !strings.Contains(string(events[3].Payload), "trailing chatter") {
+		t.Fatalf("post-result message payload = %s", events[3].Payload)
+	}
+}
+
 func TestRunClassifiesProviderError(t *testing.T) {
 	t.Parallel()
 
@@ -247,7 +293,7 @@ func TestRunRejectsMalformedOrIncompleteStream(t *testing.T) {
 		{name: "malformed", stream: "{\n", want: "decode stream event"},
 		{name: "missing type", stream: "{}\n", want: "type is required"},
 		{name: "no result", stream: `{"type":"system","subtype":"init","session_id":"session-1"}` + "\n", want: "without a result"},
-		{name: "event after result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","usage":{}}` + "\n" + `{"type":"assistant","message":{"content":[{"type":"text","text":"overwrite"}]}}` + "\n", want: "after terminal result"},
+		{name: "second result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","usage":{}}` + "\n", want: "second provider terminal result"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

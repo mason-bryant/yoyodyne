@@ -66,9 +66,6 @@ func (p *streamParser) ParseLine(line string) error {
 	if strings.TrimSpace(line) == "" {
 		return nil
 	}
-	if p.sawResult {
-		return errors.New("provider event received after terminal result")
-	}
 	var envelope streamEnvelope
 	if err := json.Unmarshal([]byte(line), &envelope); err != nil {
 		return fmt.Errorf("decode stream event: %w", err)
@@ -79,7 +76,14 @@ func (p *streamParser) ParseLine(line string) error {
 	if err := p.redactEnvelope(&envelope); err != nil {
 		return err
 	}
-	if envelope.SessionID != "" {
+	// A terminal result decides the run's outcome, but the provider keeps
+	// writing after it. Trailing events are recorded so their payload stays
+	// diagnosable; they must not disturb the decided result, and the guarded
+	// invariant is that a second terminal result cannot replace the first.
+	if p.sawResult && envelope.Type == "result" {
+		return errors.New("second provider terminal result received after terminal result")
+	}
+	if !p.sawResult && envelope.SessionID != "" {
 		p.result.SessionID = envelope.SessionID
 	}
 
@@ -111,7 +115,7 @@ func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 		// The init event is where the provider names the model it resolved the
 		// requested selector to. It is recorded as first-class result evidence
 		// rather than left buried in the event payload.
-		if envelope.Model != "" {
+		if !p.sawResult && envelope.Model != "" {
 			p.result.ResolvedModel = envelope.Model
 		}
 		return p.emit(execution.EventRunStarted, map[string]any{
@@ -155,7 +159,9 @@ func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) err
 		switch block.Type {
 		case "text":
 			if messageType == "assistant" {
-				p.result.FinalText = block.Text
+				if !p.sawResult {
+					p.result.FinalText = block.Text
+				}
 				if err := p.emit(execution.EventAgentMessage, map[string]any{"text": truncate(block.Text)}); err != nil {
 					return err
 				}
