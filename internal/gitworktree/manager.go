@@ -14,13 +14,23 @@ import (
 	"yoyodyne/internal/execution"
 )
 
-const defaultTimeout = 30 * time.Second
+const (
+	defaultTimeout = 30 * time.Second
+	// defaultRemote is the remote publishing pushes to when nothing names
+	// another.
+	defaultRemote = "origin"
+	// pushTimeout is longer than the local Git timeout because a push talks to
+	// another machine. It is still bounded: a hung network must not hold a run
+	// open indefinitely.
+	pushTimeout = 5 * time.Minute
+)
 
 type Manager struct {
 	runner                execution.ProcessRunner
 	gitBinary             string
 	repositoryRoot        string
 	worktreeRoot          string
+	remote                string
 	allowedPrimaryChanges map[string]struct{}
 	timeout               time.Duration
 }
@@ -30,6 +40,9 @@ type Options struct {
 	GitBinary      string
 	RepositoryRoot string
 	WorktreeRoot   string
+	// Remote names the Git remote publishing pushes to. It defaults to origin,
+	// and a repository that has no remote by that name is never pushed to.
+	Remote string
 	// AllowedPrimaryChanges lists repository-relative control-plane files that
 	// may be updated after preflight without becoming part of the worktree base.
 	AllowedPrimaryChanges []string
@@ -56,6 +69,13 @@ type Worktree struct {
 	BaseCommit string `json:"base_commit"`
 	// TargetBranch is the immutable integration target recorded at creation.
 	TargetBranch string `json:"target_branch,omitempty"`
+	// HarnessCommit is the last commit the harness itself made on this branch,
+	// empty until it makes one. It is what permits the worktree's HEAD to have
+	// moved at all: publishing needs a commit before it can push, and naming the
+	// permitted commit in advance is what keeps "Git commits are owned by the
+	// harness" a fact about recorded hashes rather than about what a commit looks
+	// like. A caller carries it forward from the publication that produced it.
+	HarnessCommit string `json:"harness_commit,omitempty"`
 }
 
 type Inspection struct {
@@ -185,6 +205,7 @@ var (
 	workItemPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 	refPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 	commitPattern   = regexp.MustCompile(`^[a-f0-9]{40}([a-f0-9]{24})?$`)
+	remotePattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 )
 
 func New(options Options) (*Manager, error) {
@@ -217,6 +238,13 @@ func New(options Options) (*Manager, error) {
 	if binary == "" {
 		binary = "git"
 	}
+	remote := options.Remote
+	if remote == "" {
+		remote = defaultRemote
+	}
+	if !remotePattern.MatchString(remote) {
+		return nil, fmt.Errorf("remote %q must be a plain Git remote name", remote)
+	}
 	timeout := options.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
@@ -234,6 +262,7 @@ func New(options Options) (*Manager, error) {
 		gitBinary:             binary,
 		repositoryRoot:        repositoryRoot,
 		worktreeRoot:          worktreeRoot,
+		remote:                remote,
 		allowedPrimaryChanges: allowedPrimaryChanges,
 		timeout:               timeout,
 	}, nil
@@ -386,7 +415,7 @@ func (m *Manager) unexpectedPrimaryChanges(ctx context.Context) ([]string, error
 }
 
 func (m *Manager) SummarizeChanges(ctx context.Context, worktree Worktree) (ChangeSummary, error) {
-	path, err := m.verifyOwnedBase(ctx, worktree)
+	path, _, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
 		return ChangeSummary{}, err
 	}
@@ -402,7 +431,7 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	if err != nil {
 		return ChangeDiff{}, err
 	}
-	path, err := m.verifyOwnedBase(ctx, worktree)
+	path, _, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
 		return ChangeDiff{}, err
 	}
@@ -454,41 +483,112 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	return changes, nil
 }
 
-// verifyOwnedBase confirms the worktree is the one the harness created and that
-// its HEAD is still the recorded base, so every reported change is uncommitted
-// developer work rather than history the agent rewrote.
-func (m *Manager) verifyOwnedBase(ctx context.Context, worktree Worktree) (string, error) {
+// verifyOwnedHead confirms the worktree is the one the harness created and that
+// its HEAD is exactly where the harness left it: the recorded base commit, or
+// the one commit the harness itself made and recorded. It reports the path and
+// that HEAD.
+//
+// Publishing is why this is not simply "HEAD never moved". A branch cannot be
+// pushed before it carries a commit, so a published run has a harness commit on
+// it well before integration. What makes that safe is that the permitted commit
+// is named in advance by durable run state rather than recognized by how it
+// looks: an agent with a shell in the worktree can imitate the harness identity,
+// but it cannot make its commit be the hash the harness already wrote down.
+func (m *Manager) verifyOwnedHead(ctx context.Context, worktree Worktree) (string, string, error) {
 	path, err := m.validateOwnedPath(worktree)
 	if err != nil {
-		return "", err
+		return "", "", err
+	}
+	if worktree.HarnessCommit != "" && !commitPattern.MatchString(worktree.HarnessCommit) {
+		return "", "", errors.New("recorded harness commit is invalid")
 	}
 	registered, branch, err := m.registeredWorktree(ctx, path)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if !registered || branch != worktree.Branch {
-		return "", errors.New("worktree is not registered with the expected branch")
+		return "", "", errors.New("worktree is not registered with the expected branch")
 	}
 	head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if head.Status != execution.ProcessSucceeded {
-		return "", fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+		return "", "", fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
 	}
-	if strings.TrimSpace(head.Stdout) != worktree.BaseCommit {
-		return "", errors.New("developer changed worktree HEAD; Git commits are owned by the harness")
+	commit := strings.TrimSpace(head.Stdout)
+	// Only one HEAD is permitted: the commit the harness recorded when it made
+	// it, or the base when it has made none. A run that has published nothing
+	// therefore permits no movement at all, which is the pre-publishing rule
+	// unchanged.
+	expected := worktree.BaseCommit
+	if worktree.HarnessCommit != "" {
+		expected = worktree.HarnessCommit
 	}
-	return path, nil
+	if commit != expected {
+		return "", "", fmt.Errorf("worktree HEAD is %s, want the commit the harness recorded (%s); Git commits are owned by the harness", commit, expected)
+	}
+	if commit == worktree.BaseCommit {
+		return path, commit, nil
+	}
+	if err := m.verifyHarnessHistory(ctx, path, worktree.BaseCommit, commit); err != nil {
+		return "", "", err
+	}
+	return path, commit, nil
 }
 
+// verifyHarnessHistory is the secondary assertion on a HEAD that already
+// matched the commit durable state named: the commit descends from the recorded
+// base, and it carries the harness identity. Neither check is what keeps an
+// agent's commit out — the recorded hash does that — but a recorded commit that
+// fails either one means the repository is not what the harness recorded, which
+// is worth refusing rather than promoting.
+func (m *Manager) verifyHarnessHistory(ctx context.Context, path, baseCommit, headCommit string) error {
+	ancestor, err := m.run(ctx, "-C", path, "merge-base", "--is-ancestor", baseCommit, headCommit)
+	if err != nil {
+		return err
+	}
+	if ancestor.Status != execution.ProcessSucceeded {
+		return errors.New("recorded harness commit does not descend from the worktree base; Git commits are owned by the harness")
+	}
+	identities, err := m.run(ctx, "-C", path, "log", "--format=%ae %ce", baseCommit+".."+headCommit)
+	if err != nil {
+		return err
+	}
+	if identities.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("inspect worktree commit identities failed with exit code %d: %s", identities.ExitCode, strings.TrimSpace(identities.Stderr))
+	}
+	expected := harnessCommitAuthorEmail + " " + harnessCommitAuthorEmail
+	for _, line := range strings.Split(strings.TrimSuffix(identities.Stdout, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		if line != expected {
+			return errors.New("recorded harness commit does not carry the harness identity; Git commits are owned by the harness")
+		}
+	}
+	return nil
+}
+
+// summarize describes the change against the worktree's recorded base commit.
+// Every part of it is base-relative, including the file list: publishing
+// commits each developer attempt, so a summary built from the working tree's
+// uncommitted status would describe a published change as no change at all,
+// printed beside a diff that plainly shows one. What a reviewer is handed has
+// to be the change, not the part of it that happens not to be committed yet.
 func (m *Manager) summarize(ctx context.Context, path string, worktree Worktree) (ChangeSummary, error) {
-	status, err := m.run(ctx, "-C", path, "status", "--short", "--untracked-files=all")
+	names, err := m.run(ctx, "-C", path, "diff", "--name-status", "--no-ext-diff", worktree.BaseCommit, "--")
 	if err != nil {
 		return ChangeSummary{}, err
 	}
-	if status.Status != execution.ProcessSucceeded {
-		return ChangeSummary{}, fmt.Errorf("summarize worktree status failed with exit code %d: %s", status.ExitCode, strings.TrimSpace(status.Stderr))
+	if names.Status != execution.ProcessSucceeded {
+		return ChangeSummary{}, fmt.Errorf("summarize worktree status failed with exit code %d: %s", names.ExitCode, strings.TrimSpace(names.Stderr))
+	}
+	// Untracked files are not part of a diff against the base until something
+	// adds them, so they are listed alongside it in the shape Git reports them.
+	untracked, err := m.untrackedFiles(ctx, path)
+	if err != nil {
+		return ChangeSummary{}, err
 	}
 	diffStat, err := m.run(ctx, "-C", path, "diff", "--stat", "--no-ext-diff", worktree.BaseCommit, "--")
 	if err != nil {
@@ -498,9 +598,36 @@ func (m *Manager) summarize(ctx context.Context, path string, worktree Worktree)
 		return ChangeSummary{}, fmt.Errorf("summarize worktree diff failed with exit code %d: %s", diffStat.ExitCode, strings.TrimSpace(diffStat.Stderr))
 	}
 	return ChangeSummary{
-		Status:   strings.TrimSpace(status.Stdout),
+		Status:   renderChangedNames(names.Stdout, untracked),
 		DiffStat: strings.TrimSpace(diffStat.Stdout),
 	}, nil
+}
+
+// renderChangedNames turns Git's tab-separated name-status output and the
+// untracked file list into one short-status-shaped listing, so a reader sees
+// the same `<code> <path>` lines whether or not the change has been committed.
+func renderChangedNames(nameStatus string, untracked []string) string {
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSuffix(nameStatus, "\n"), "\n") {
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		switch len(fields) {
+		case 0, 1:
+			lines = append(lines, line)
+		case 2:
+			lines = append(lines, fields[0]+" "+fields[1])
+		default:
+			// A rename or copy names both paths, and which file became which is
+			// exactly what a reviewer needs from a line like this.
+			lines = append(lines, fields[0]+" "+fields[1]+" -> "+strings.Join(fields[2:], " "))
+		}
+	}
+	for _, file := range untracked {
+		lines = append(lines, "?? "+file)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // untrackedFiles lists ignored-file-free untracked paths in a stable order.
@@ -711,11 +838,16 @@ func (m *Manager) contains(ctx context.Context, commit, branch string) (bool, er
 }
 
 // Integrate promotes an already checked and approved worktree into its
-// recorded target branch. The harness owns every Git write here: it stages and
-// commits the developer's work itself, revalidates the target, and advances it
-// with a fast-forward-only update. Nothing is forced, reset, or removed. When
-// any step refuses, the worktree and its harness commit stay exactly as they
+// recorded target branch. The harness owns every Git write here: it commits
+// whatever the developer left uncommitted, revalidates the target, and advances
+// it with a fast-forward-only update. Nothing is forced, reset, or removed. When
+// any step refuses, the worktree and its harness commits stay exactly as they
 // are so the failure can be reconciled rather than reconstructed.
+//
+// A published run arrives here with its work already in harness commits on the
+// run branch, because a branch cannot be pushed before it has one. That changes
+// nothing about the promotion: the source commit is the branch tip either way,
+// and the target is still only ever fast-forwarded onto it.
 func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message string) (Integration, error) {
 	target := worktree.TargetBranch
 	if err := validateTargetBranch(target); err != nil {
@@ -729,9 +861,10 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 		message = defaultCommitMessage(worktree)
 	}
 
-	// Ownership, registration, the expected branch, and an untouched developer
-	// HEAD are all revalidated here rather than trusted from run state.
-	path, err := m.verifyOwnedBase(ctx, worktree)
+	// Ownership, registration, the expected branch, and a HEAD carrying only
+	// harness commits are all revalidated here rather than trusted from run
+	// state.
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
 		return Integration{}, err
 	}
@@ -739,7 +872,7 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 	if err != nil {
 		return Integration{}, err
 	}
-	if !dirty {
+	if !dirty && head == worktree.BaseCommit {
 		return Integration{}, ErrNoChanges
 	}
 	if err := m.ValidateReady(ctx); err != nil {
@@ -757,9 +890,12 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 		return Integration{}, err
 	}
 
-	sourceCommit, err := m.commitWorktree(ctx, path, message)
-	if err != nil {
-		return Integration{}, err
+	sourceCommit := head
+	if dirty {
+		sourceCommit, err = m.commitWorktree(ctx, path, message)
+		if err != nil {
+			return Integration{}, err
+		}
 	}
 	if sourceCommit == worktree.BaseCommit {
 		return Integration{}, ErrNoChanges
@@ -1253,11 +1389,30 @@ func (m *Manager) run(ctx context.Context, args ...string) (execution.ProcessRes
 }
 
 func (m *Manager) runWithEnvironment(ctx context.Context, environment []string, args ...string) (execution.ProcessResult, error) {
+	return m.runBounded(ctx, environment, m.timeout, args...)
+}
+
+// runRemote runs a Git command that talks to the remote. It is bounded by its
+// own longer timeout, because a network round trip is not a local ref update
+// and holding both to the same deadline would either starve the push or let a
+// local command hang.
+func (m *Manager) runRemote(ctx context.Context, args ...string) (execution.ProcessResult, error) {
+	return m.runBounded(ctx, nil, m.remoteTimeout(), args...)
+}
+
+func (m *Manager) remoteTimeout() time.Duration {
+	if m.timeout > pushTimeout {
+		return m.timeout
+	}
+	return pushTimeout
+}
+
+func (m *Manager) runBounded(ctx context.Context, environment []string, timeout time.Duration, args ...string) (execution.ProcessResult, error) {
 	result, err := m.runner.Run(ctx, execution.Command{
 		Name:    m.gitBinary,
 		Args:    args,
 		Env:     environment,
-		Timeout: m.timeout,
+		Timeout: timeout,
 	}, nil)
 	if err != nil {
 		return execution.ProcessResult{}, fmt.Errorf("run Git command: %w", err)

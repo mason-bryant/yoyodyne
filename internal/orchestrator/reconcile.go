@@ -372,12 +372,13 @@ func preservedArtifacts(observation gitworktree.Observation) bool {
 // revalidates ownership of these fields before acting on them.
 func worktreeOf(state runstate.State) gitworktree.Worktree {
 	return gitworktree.Worktree{
-		RunID:        state.RunID,
-		WorkItemID:   state.WorkItemID,
-		Path:         state.WorktreePath,
-		Branch:       state.Branch,
-		BaseCommit:   state.BaseCommit,
-		TargetBranch: state.TargetBranch,
+		RunID:         state.RunID,
+		WorkItemID:    state.WorkItemID,
+		Path:          state.WorktreePath,
+		Branch:        state.Branch,
+		BaseCommit:    state.BaseCommit,
+		TargetBranch:  state.TargetBranch,
+		HarnessCommit: state.HarnessCommit,
 	}
 }
 

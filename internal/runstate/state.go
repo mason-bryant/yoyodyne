@@ -14,12 +14,13 @@ import (
 	"yoyodyne/internal/domain"
 )
 
-// StateSchemaVersion stays 1 because the repair loop only added optional keys.
-// A state file written before it still decodes, which is the bar every schema
-// change has to clear: `review_findings` keeps the meaning and the integer type
-// it was written with, and the structured findings the loop needs live under
-// their own key beside it, as does the failing check that triggers the same
-// loop.
+// StateSchemaVersion stays 1 because every addition since has been an optional
+// key. A state file written before them still decodes, which is the bar every
+// schema change has to clear: `review_findings` keeps the meaning and the
+// integer type it was written with, the structured findings the repair loop
+// needs live under their own key beside it, as does the failing check that
+// triggers the same loop, and the published pull request is absent entirely
+// from a run that never published one.
 const StateSchemaVersion = 1
 
 type Status string
@@ -122,6 +123,42 @@ func (f Finding) Validate() error {
 	return errors.Join(problems...)
 }
 
+// PullRequest is the durable record of the pull request a run published its
+// work through: which remote carries the branch, which commit was last pushed
+// to it, and what the forge says about the request itself. It is recorded from
+// the developer phase onward, so a run that stops anywhere after that still
+// names the published work rather than leaving it to be rediscovered by hand.
+type PullRequest struct {
+	Remote     string `json:"remote"`
+	Branch     string `json:"branch"`
+	Number     int    `json:"number"`
+	URL        string `json:"url"`
+	HeadCommit string `json:"head_commit"`
+	State      string `json:"state,omitempty"`
+	Merged     bool   `json:"merged,omitempty"`
+}
+
+// Validate rejects a published record that cannot describe a real pull request.
+func (p PullRequest) Validate() error {
+	var problems []error
+	if strings.TrimSpace(p.Remote) == "" {
+		problems = append(problems, errors.New("pull_request remote is required"))
+	}
+	if !validLocalBranch(p.Branch) {
+		problems = append(problems, errors.New("pull_request branch must be a local branch name"))
+	}
+	if p.Number <= 0 {
+		problems = append(problems, errors.New("pull_request number must be positive"))
+	}
+	if strings.TrimSpace(p.URL) == "" {
+		problems = append(problems, errors.New("pull_request url is required"))
+	}
+	if !commitPattern.MatchString(p.HeadCommit) {
+		problems = append(problems, errors.New("pull_request head_commit is invalid"))
+	}
+	return errors.Join(problems...)
+}
+
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
 type Integration struct {
@@ -155,6 +192,13 @@ type State struct {
 	WorktreePath          string     `json:"worktree_path,omitempty"`
 	Branch                string     `json:"branch,omitempty"`
 	BaseCommit            string     `json:"base_commit,omitempty"`
+	// HarnessCommit is the last commit the harness itself made in this run's
+	// worktree, which publishing needs before it can push a branch. It is durable
+	// because it is what permits the worktree's HEAD to have moved: a resumed run
+	// that could not name the commit it made would either refuse its own work or
+	// have to accept whatever it finds, and the second is how an agent's commit
+	// gets promoted.
+	HarnessCommit string `json:"harness_commit,omitempty"`
 	// WorktreeRemoved and BranchRemoved record the two cleanup steps
 	// separately, because they cannot be performed atomically. Recording them
 	// apart is what lets an interrupted cleanup be resumed and what keeps a
@@ -213,7 +257,16 @@ type State struct {
 	// part-way through a wait cannot buy the run a fresh budget.
 	UsageLimitPausedSeconds int64        `json:"usage_limit_paused_seconds,omitempty"`
 	Integration             *Integration `json:"integration,omitempty"`
-	Failure                 string       `json:"failure,omitempty"`
+	// PullRequest records the published pull request when the project opted in
+	// to publishing and the repository had a remote to publish to. It is absent
+	// for a purely local run, which is what a project gets by default.
+	PullRequest *PullRequest `json:"pull_request,omitempty"`
+	// PublishFailure explains why publishing a promotion did not finish. The
+	// local target branch is the authoritative one, so a promotion that could not
+	// be pushed is an outstanding publication rather than a failed run — the same
+	// kind of fact as an outstanding cleanup.
+	PublishFailure string `json:"publish_failure,omitempty"`
+	Failure        string `json:"failure,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it
 	// is set, so it is reconciliation input rather than a run failure. It says
@@ -301,6 +354,19 @@ func (s State) Validate() error {
 	if s.BaseCommit != "" && !commitPattern.MatchString(s.BaseCommit) {
 		problems = append(problems, errors.New("base_commit is invalid"))
 	}
+	if s.HarnessCommit != "" {
+		if !commitPattern.MatchString(s.HarnessCommit) {
+			problems = append(problems, errors.New("harness_commit is invalid"))
+		}
+		// The commit was made in this run's worktree, so a record of one without
+		// the worktree that produced it permits a HEAD nothing accounted for.
+		if s.WorktreePath == "" {
+			problems = append(problems, errors.New("harness_commit requires the worktree that produced it"))
+		}
+		if s.HarnessCommit == s.BaseCommit {
+			problems = append(problems, errors.New("harness_commit cannot be the base commit, which proves no commit was made"))
+		}
+	}
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))
 	}
@@ -379,6 +445,22 @@ func (s State) Validate() error {
 		problems = append(problems, s.validateIndependentInvocations()...)
 		if err := s.Integration.Validate(); err != nil {
 			problems = append(problems, err)
+		}
+	}
+	if s.PullRequest != nil {
+		if err := s.PullRequest.Validate(); err != nil {
+			problems = append(problems, err)
+		}
+		// The pull request publishes this run's branch, so a record naming a
+		// different one describes a publication this run never made.
+		if s.Branch != "" && s.PullRequest.Branch != s.Branch {
+			problems = append(problems, fmt.Errorf("pull_request branch %q does not match the run branch %q", s.PullRequest.Branch, s.Branch))
+		}
+		// A merged pull request is merged by the arrival of the integrated commit
+		// on the remote target, so it cannot be true before the promotion that
+		// produced that commit is recorded.
+		if s.PullRequest.Merged && s.Integration == nil {
+			problems = append(problems, errors.New("a merged pull request requires recorded integration"))
 		}
 	}
 	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil {

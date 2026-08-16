@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +41,11 @@ type Execution struct {
 	MaxConcurrentDevelopers    int    `yaml:"max_concurrent_developers" json:"max_concurrent_developers"`
 	RepairAttemptsBeforeReplan int    `yaml:"repair_attempts_before_replan" json:"repair_attempts_before_replan"`
 	WorktreeRoot               string `yaml:"worktree_root" json:"worktree_root"`
+	// Remote names the Git remote publishing pushes to and opens pull requests
+	// against. It is only consulted when `approvals.publishing` is automatic, and
+	// a repository that has no remote by this name publishes nothing rather than
+	// failing.
+	Remote string `yaml:"remote" json:"remote"`
 	// UsageLimitMaxPause bounds how long a run may wait for an exhausted
 	// provider usage limit to reset. A reset further away than this is treated
 	// as no usable reset time at all: the run stops and records a blocker
@@ -56,6 +62,10 @@ type Execution struct {
 }
 
 const (
+	// defaultRemote is the remote publishing uses when nothing names another. A
+	// repository with no remote by this name is not an error: it simply publishes
+	// nothing and behaves exactly as a local-only project does.
+	defaultRemote = "origin"
 	// defaultUsageLimitMaxPause covers the provider's five-hour limit with slack
 	// and stops short of its seven-day one. A run that would have to sleep for
 	// days is not a run that should be sleeping: it stops and records a blocker,
@@ -74,6 +84,13 @@ type Approvals struct {
 	Goals       domain.ApprovalMode `yaml:"goals" json:"goals"`
 	Designs     domain.ApprovalMode `yaml:"designs" json:"designs"`
 	Integration domain.ApprovalMode `yaml:"integration" json:"integration"`
+	// Publishing decides whether the harness pushes a run's branch and opens the
+	// pull request its reviewer's verdict merges. It sits beside integration
+	// because publishing has the wider blast radius of the two: integration moves
+	// a local branch, publishing puts the work somewhere other people see it.
+	// `human` leaves pushing and pull requests to the operator, which is what a
+	// project gets until it opts in.
+	Publishing domain.ApprovalMode `yaml:"publishing" json:"publishing"`
 }
 
 type AgentConfig struct {
@@ -138,6 +155,9 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")
 	}
+	if err := validateRemoteName(c.Execution.Remote); err != nil {
+		problems = append(problems, err.Error())
+	}
 	// Zero is a deliberate choice — never wait, block on every exhausted limit —
 	// so only a negative bound, which describes no wait anybody could take, is
 	// refused.
@@ -156,6 +176,7 @@ func (c Config) Validate() error {
 		{name: "goals", mode: c.Approvals.Goals},
 		{name: "designs", mode: c.Approvals.Designs},
 		{name: "integration", mode: c.Approvals.Integration},
+		{name: "publishing", mode: c.Approvals.Publishing},
 	}
 	for _, approval := range approvalValues {
 		if !approval.mode.Valid() {
@@ -253,6 +274,22 @@ func (p Persona) problems(agentName string) []string {
 		problems = append(problems, fmt.Sprintf("agent %q persona %q is %d bytes, limit is %d", agentName, p.Path, len(p.Text), MaxPersonaBytes))
 	}
 	return problems
+}
+
+// remoteNamePattern keeps a configured remote a plain remote name. The harness
+// puts it on a `git push` command line, so anything that could read as an
+// option, a path, or a refspec is refused rather than passed along.
+var remoteNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+func validateRemoteName(remote string) error {
+	trimmed := strings.TrimSpace(remote)
+	if trimmed == "" {
+		return errors.New("remote is required")
+	}
+	if !remoteNamePattern.MatchString(trimmed) {
+		return fmt.Errorf("remote %q must be a plain Git remote name", remote)
+	}
+	return nil
 }
 
 // MaxModelSelectorBytes bounds a configured selector so it stays a model name

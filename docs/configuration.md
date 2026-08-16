@@ -73,9 +73,14 @@ Three layers produce the effective configuration, later ones winning:
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
    them: `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
-   (`auto`), `execution.usage_limit_max_pause` and
-   `execution.usage_limit_in_process_pause` (`6h` each), and an agent's
-   `instances` (1).
+   (`auto`), `execution.remote` (`origin`),
+   `execution.usage_limit_max_pause` and
+   `execution.usage_limit_in_process_pause` (`6h` each),
+   `approvals.publishing` (`human`), and an agent's `instances` (1).
+   `approvals.publishing` is the only approval with a harness default, because
+   it was added after configurations existed: a file written before it keeps the
+   behavior it was written for — the harness publishes nothing — rather than
+   failing to load for not mentioning a key that did not exist yet.
 2. **The built-in bundle**, named by `extends`. Today the only bundle is
    `builtin:v1`. It supplies `execution`, `approvals`, and the five default
    agents. It deliberately supplies no `product` and no `checks`, because those
@@ -138,6 +143,108 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+## Publishing through pull requests
+
+By default Yoyodyne is entirely local: it creates a branch and a worktree, runs
+the work, and fast-forwards your target branch. Nothing is pushed, and a
+repository with no remote never notices publishing exists.
+
+A project opts in the way it opts in to automatic integration. **Both settings
+matter**: publishing opens the pull request, and integration is what merges it.
+
+```yaml
+approvals:
+  publishing: automatic
+  integration: automatic   # required for the harness to merge what it opened
+
+execution:
+  remote: origin   # the default; name another remote if yours is not origin
+```
+
+With both on, a run works like this:
+
+1. **The developer phase publishes.** When a developer attempt finishes, the
+   harness commits its work under its own identity, pushes the run branch, and
+   opens a pull request against the target branch. Each repair attempt pushes
+   onto the same branch and updates the same pull request, so one change never
+   ends up with two places to be reviewed. This happens *before* the checks run:
+   a pull request is where work is reviewed, and work that does not pass yet is
+   exactly what a reviewer should be able to see.
+2. **The reviewer's verdict merges it.** An approving verdict authorizes the
+   merge and the harness performs it. Nothing about the gate changes — the same
+   passing checks, the same independent-reviewer evidence, and the same
+   fast-forward rule that gate integration also gate the merge.
+3. **The merge is confirmed, then the branch is cleaned up** on both sides,
+   locally and on the remote, on the same compare-and-swap evidence. The
+   confirmation waits briefly and boundedly, because a forge notices its commits
+   reaching the base shortly after the push rather than during it.
+
+`gh` is invoked by the harness and never by a developer or reviewer: no role is
+given a credential, a tool, or a request to push or merge. For the reviewer that
+is a hard boundary — it runs with no tools at all, so the role whose verdict
+authorizes a merge has no way to perform one, and cannot be talked into merging
+something the checks would have refused.
+
+For the developer it is not. A developer has a shell in its worktree and runs
+under your account, so it could in principle reach a `gh` you have
+authenticated; what stands in the way is its backend's sandbox and the harness
+contract in its prompt, not a boundary the harness enforces. What does hold is
+that your local target branch is authoritative: work an agent pushed by itself
+is not integrated by having been pushed, and a pull request merged behind the
+harness's back moves the remote away from the local branch, which the harness's
+own push then refuses rather than force-resolves.
+
+### Publishing without automatic integration
+
+`approvals.publishing: automatic` with `approvals.integration: human` is
+supported and does exactly half of the above: the harness pushes and opens the
+pull request, and then stops. **It merges nothing.** You get an open pull
+request, a run branch that stays on the remote, and a preserved worktree; you
+merge, and the harness never touches any of the three afterwards.
+
+That is deliberate rather than a gap. Merging is a promotion, promotion is what
+`approvals.integration` governs, and a harness that merged under a `human`
+integration policy would be taking the decision that setting reserves for you.
+
+| `publishing` | `integration` | What you get |
+| --- | --- | --- |
+| `human` | `human` | Local branch and worktree, preserved for you. |
+| `human` | `automatic` | Local fast-forward into the target branch, artifacts removed. Nothing pushed. |
+| `automatic` | `automatic` | Pull request opened, merged on approval, branch removed locally and on the remote. |
+| `automatic` | `human` | Pull request opened and left for you. Nothing merged, nothing cleaned up. |
+
+### Which branch is authoritative
+
+**The local target branch.** Your work is where that branch says it is.
+
+Merging is not a second promotion performed on the remote. The harness
+fast-forwards the local target exactly as it always has, then pushes that same
+commit to the remote target branch; the pull request is merged by the arrival of
+its own commits on its base. One commit, one fast-forward, one answer. The
+remote is the publication of the authoritative branch rather than a second copy
+that could disagree with it.
+
+If a promotion cannot be published — the forge is unreachable, or the remote
+target moved — the run still succeeds and closes its item, and reports an
+*outstanding publication*. The change is integrated where it counts; only its
+publication is unfinished, and it is reconciled by hand. Nothing is ever
+force-pushed to resolve it.
+
+### What publishing needs
+
+- A remote by the configured name. **Without one the run is purely local**,
+  reports `publishing skipped`, and behaves exactly as it did before publishing
+  existed. That is a property of the repository, not an error.
+- The GitHub CLI, installed and authenticated (`gh auth login`). If a project
+  asked to publish and `gh` is missing or logged out, the run **fails before it
+  claims anything** — a harness that quietly stopped publishing would look the
+  same as one with nothing to publish.
+- Permission to push the target branch. Because merging is a push, a protected
+  branch that refuses direct pushes will reject it and the run reports an
+  outstanding publication. Merging through the forge instead would mean
+  accepting a merge commit the harness did not create, which is what the
+  fast-forward rule exists to prevent.
 
 ## Waiting out a provider usage limit
 
@@ -235,6 +342,8 @@ These are all errors, reported before any work is claimed:
 - a persona override missing `version` or `path`;
 - a usage-limit pause bound that is not a duration, or that is negative — `0`
   is accepted, because "never wait" is a choice somebody can mean;
+- an `execution.remote` that is empty or is not a plain remote name, since it
+  reaches a `git push` command line;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a role and backend combination the backend does not support, such as an

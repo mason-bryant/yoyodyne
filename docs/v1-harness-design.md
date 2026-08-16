@@ -18,6 +18,7 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 - Let configurable agent roles collaborate without allowing downstream agents to silently redefine upstream intent.
 - Make user directives durable, discoverable, and enforceable regardless of which agent received them.
 - Isolate implementation tasks in harness-managed Git worktrees and integrate successful work automatically.
+- Publish that work as pull requests the harness opens and merges on the roles' behalf, for projects that enable it, without letting any agent push or merge.
 - Use Beads as the durable workflow, dependency, blocker, directive, and handoff store.
 - Use repository Markdown as the human-readable source of truth for the brief, goals, designs, and specifications.
 - Support Claude Code as the default backend and Codex as an optional developer/reviewer backend.
@@ -91,7 +92,7 @@ The harness validates references and reports orphaned goals, designs, and work. 
 | Development plans and task decomposition | Development manager | Report dependencies, blockers, and side effects |
 | Assigned code change | Developer | Modify code within the assigned worktree and task scope |
 | Review verdict | Reviewer | Request repairs or approve against the design and checks |
-| Workflow state, worktrees, checks, and integration | Harness | Agents may request actions but cannot bypass policy |
+| Workflow state, worktrees, checks, integration, and publishing | Harness | Agents may request actions but cannot bypass policy |
 
 Ownership is an authorization boundary, not merely a prompt convention. A developer discovering a design problem creates a proposal or question for the architect; it does not edit the design and continue as if the change were approved.
 
@@ -164,6 +165,8 @@ By default, the human explicitly approves the initial brief and goals after disc
 
 The shipped bundle nevertheless defaults `approvals.integration` to `human`. That is deliberate and is not a retreat from the autonomy goal: a project opts in to automatic integration explicitly, and the harness then refuses that setting unless deterministic checks and an independent reviewer actually exist. Autonomy is something a project turns on once it has the gates to justify it, rather than something inherited silently by any repository that adds a configuration file.
 
+`approvals.publishing` defaults to `human` for the same reason and a stronger one: pushing a branch and opening a pull request is visible outside the machine the harness runs on, so it is opted in to rather than inherited. It is a separate approval from integration because it has a wider blast radius, not because it adds a human gate of its own: a project that enables both publishes, merges, and cleans up without further human action. The two approvals compose rather than imply one another, and [the Git model](#git-model) sets out what each combination produces and what stays authoritative.
+
 ## Persistence Boundaries
 
 ### Repository Markdown
@@ -200,7 +203,7 @@ The harness uses the `bd` CLI through a narrow adapter in v1. Domain code must n
 
 ### Runtime state
 
-Provider event streams, process metadata, locks, caches, and temporary run state live outside the product repository under an operating-system-appropriate state directory. Durable outcomes are summarized into Beads. Worktrees also live outside the primary checkout by default. Secrets and provider credentials remain managed by the provider CLIs and are never copied into Beads or project Markdown.
+Provider event streams, process metadata, locks, caches, and temporary run state live outside the product repository under an operating-system-appropriate state directory. Durable outcomes are summarized into Beads. Worktrees also live outside the primary checkout by default. Secrets and provider credentials remain managed by the provider CLIs — including the forge CLI publishing uses — and are never copied into Beads, into project Markdown, or into an agent's prompt or context bundle. That is a statement about what the harness puts in front of an agent; it is not a claim that the credentials are unreachable from a process the harness started. See [what the Git model enforces](#what-is-enforced-and-what-is-not).
 
 All durable records include `ProductID` and, where applicable, `RepositoryID`, even though v1 configures exactly one of each.
 
@@ -284,15 +287,71 @@ For each ready development item, the harness:
 2. Reserves the item and creates a uniquely named branch and worktree outside the primary checkout.
 3. Builds the developer's bounded context and starts the selected backend.
 4. Streams normalized events and persists enough state to diagnose or recover an interrupted run.
-5. Runs configured deterministic checks in the worktree.
-6. Runs an independent reviewer with the work item, design, directives, diff, and check results.
-7. On repair, returns findings to the same developer for up to two attempts by default.
-8. After the retry limit, returns control to the development manager to replan or reassign.
-9. On success, revalidates the target branch, integrates automatically, records the outcome, and cleans up the worktree.
+5. Publishes the attempt when the project enabled publishing: commits it, pushes the run branch, and opens or updates its pull request.
+6. Runs configured deterministic checks in the worktree.
+7. Runs an independent reviewer with the work item, design, directives, diff, and check results.
+8. On repair, returns findings to the same developer for up to two attempts by default.
+9. After the retry limit, returns control to the development manager to replan or reassign.
+10. On success, revalidates the target branch, integrates automatically, publishes the promotion, records the outcome, and cleans up the worktree.
 
 The harness performs Git lifecycle operations directly; agents do not create, assign, merge, or remove their own worktrees. Before any cleanup, the harness resolves and validates the exact recorded path and refuses broad or unresolved targets.
 
 If integration encounters drift or conflicts, the change is not force-merged. The development manager receives a new reconciliation decision with the current target state. Failed or interrupted worktrees remain discoverable until safely resumed or explicitly retired.
+
+## Git Model
+
+Every Git write the harness makes is its own. An agent is asked to edit files and nothing else: no role is given a credential, a tool, or a request that would have it commit, push, or merge, and the harness routes none of those through one. Roles decide, the harness performs.
+
+### What is enforced, and what is not
+
+The distinction matters, because "the harness never asks an agent to do this" and "an agent cannot do this" are different claims and only some of them hold.
+
+**Enforced in code.** A run's worktree may only be at the HEAD durable state recorded: the base commit it was created at, or the exact commit the harness itself made. Anything else fails the ownership check that review, integration, and publishing all go through, and the run stops there. That check is a comparison against a recorded hash rather than a judgement about what a commit looks like — a developer has a shell in its worktree and the harness's commit identity is a constant in this repository, so an imitated commit is easy to produce and worth nothing, because it is not the hash run state already named. The rest of the gate is enforced the same way: promotion requires passing checks, an approving verdict, two demonstrably independent provider invocations, and a fast-forward from the recorded base.
+
+**Enforced for the reviewer specifically.** The reviewer runs with no tools at all — an empty tool list and a read-only permission mode — so the role whose verdict authorizes the merge has no way to perform one. That is what makes "the reviewer decides, the harness merges" a boundary rather than an arrangement.
+
+**Not enforced for the developer.** There is no equivalent for pushing or merging from the developer's side. A developer has a shell in its worktree, its process runs under the operator's account, and the forge CLI keeps its credentials there, so an agent that went looking could reach them; what stands in the way is the sandbox its backend applies and the harness contract in its prompt, not a boundary this design guarantees. Treat "no agent pushes" as a statement about what the harness does, not as an invariant it enforces.
+
+What limits the damage is that the authoritative branch is the local one. Work an agent pushed by itself is not integrated by having been pushed, and a pull request an agent merged behind the harness's back moves the remote target away from the local one — which the harness's own push then refuses rather than force-resolves, reporting an outstanding publication for a person to look at. Closing the gap properly needs the backend boundary to scrub or withhold forge credentials for the developer role, which is deferred rather than done.
+
+### Local branches
+
+One run means one worktree outside the primary checkout and one branch created for it, from exactly the branch the work will be promoted into. That target is fixed before any work starts and recorded, so a resumed run promotes into the branch it was written against rather than whatever happens to be checked out later. Promotion is a fast-forward and nothing else: the target must still be at the recorded base commit, and the update is a compare-and-swap onto exactly the commit the harness made. Nothing is forced, rebased, or reset.
+
+### Remotes and pull requests
+
+Publishing is off by default, and a project turns it on under `approvals.publishing` the way it turns on automatic integration. It is a separate opt-in because it has the wider blast radius of the two: integration moves a branch on the operator's machine, while publishing puts the work somewhere other people see. `execution.remote` names the remote, defaulting to `origin`.
+
+A repository with no such remote publishes nothing and behaves exactly as a purely local project does. That is a property of the repository rather than a misconfiguration, so it is reported on the run and never fails it. A project that asked to publish but has no forge CLI, or an unauthenticated one, is a configuration failure instead, refused before any item is claimed — a harness that quietly stopped publishing would be indistinguishable from one that had nothing to publish.
+
+When publishing is enabled:
+
+- **The developer phase publishes.** A branch cannot be pushed before it carries a commit, so when a developer attempt finishes, the harness commits its work under the harness identity, pushes the run branch, and opens a pull request against the recorded target branch. Every repair attempt publishes onto the same branch and updates the same pull request; a second request for one branch would give one change two places to be reviewed. Publishing happens before the checks run, because a pull request is where work is reviewed and work that does not pass yet is exactly what a reviewer should be able to see.
+- **The reviewer's verdict merges it.** The approving verdict authorizes the merge, and the harness performs it. Nothing about the gate changes: the same passing checks, the same independence evidence for the two provider invocations, and the same fast-forward rule that gate integration today gate the merge. A reviewer that could merge is a reviewer that can be talked into merging; a reviewer whose verdict the harness acts on cannot get past any of them. The harness then confirms with the forge that the pull request actually merged, waiting briefly and boundedly for it: a forge notices its commits reaching the base shortly after the push rather than during it, so asking once would report a successful publication as unfinished.
+- **The pull request body is harness evidence.** It names the run, the branch, and the base, and says how the change will be merged. Model output is not republished through it, so an agent cannot use a pull request as a channel for text nobody reviewed.
+
+### How the two approvals compose
+
+Publishing and integration are independent opt-ins, and the merge belongs to integration. What a project gets is therefore the pair, not `approvals.publishing` alone:
+
+| `publishing` | `integration` | What a run does |
+|---|---|---|
+| `human` | `human` | Purely local. A branch and worktree are preserved for the operator to integrate. |
+| `human` | `automatic` | Purely local. The approved change is fast-forwarded into the target branch and the artifacts are removed. Nothing is pushed. |
+| `automatic` | `automatic` | The developer phase pushes and opens the pull request; the approving verdict merges it; the run branch is removed locally and on the remote. |
+| `automatic` | `human` | The developer phase pushes and opens the pull request, and the run stops there. The harness merges nothing. |
+
+The last row is the one worth stating plainly, because it is the combination whose name suggests otherwise. A project that publishes but integrates by hand gets an open pull request, a run branch that survives on the remote, and a preserved worktree — the operator merges, and the harness never touches any of the three afterwards. That is not a gap in publishing: merging is a promotion, promotion is what `approvals.integration` governs, and a harness that merged under a `human` integration policy would be taking exactly the decision that setting reserves for a person.
+
+### Which branch is authoritative
+
+The local target branch is authoritative. A project's work is where that branch says it is.
+
+Merging is not a second, differently shaped promotion on the remote. The harness fast-forwards the local target as it always has, and then pushes exactly that commit to the remote target branch; the pull request is merged by the arrival of its own commits on its base. There is one commit, one fast-forward, and one answer about where the work is. The remote is the publication of the authoritative branch, never a second copy that can disagree with it.
+
+Two consequences follow. A promotion whose publication fails — an unreachable forge, a remote target that moved — is an *outstanding publication* rather than a failed run: the authoritative branch already moved, the item is closed, and what is left is a fact for an operator, in the same way an outstanding worktree cleanup is. And a remote branch that drifted from what the harness published is never forced back; it is reported, because a published branch nobody can explain needs a person. The merged run branch is deleted from the remote on the same compare-and-swap evidence the local branch is.
+
+Because merging is a push to the target branch, a remote that refuses direct pushes to that branch — a protected branch requiring its own review — will reject it, and the run reports an outstanding publication. Supporting a forge-side merge would mean accepting a merge commit the harness did not create, which the fast-forward rule exists to prevent.
 
 ## Recovery and Idempotency
 
@@ -390,6 +449,7 @@ This sequence keeps the first bootstrap small, exercises real subprocess and Git
 - Keep credentials in provider-managed stores and redact environment values and event payloads before persistence.
 - Validate repository and worktree paths before every mutating Git or filesystem action.
 - Never allow an agent response to select an arbitrary cleanup path or bypass checks, review, or directive reconciliation.
+- Never route a push or a merge through an agent. The developer and reviewer phases cause publishing and merging; the harness performs both, and no role is given a credential or a tool for either. Withholding forge credentials from the developer process is the enforcement this still lacks, and is deferred.
 - Record the commands and result summaries used for deterministic verification.
 - Require explicit configuration for commands or paths outside the product repository and managed worktree roots.
 

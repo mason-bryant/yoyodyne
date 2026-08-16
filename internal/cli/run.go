@@ -20,6 +20,7 @@ import (
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
 	"yoyodyne/internal/orchestrator"
+	"yoyodyne/internal/publish"
 	"yoyodyne/internal/review"
 	"yoyodyne/internal/runstate"
 )
@@ -105,6 +106,7 @@ func buildComponents(configPath string) (components, error) {
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
 		WorktreeRoot:          worktreeRoot,
+		Remote:                cfg.Execution.Remote,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
 	})
 	if err != nil {
@@ -160,6 +162,19 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			Backend: claudecode.Backend{Runner: processRunner},
 			Model:   agentModel(cfg, domain.RoleReviewer),
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
+		},
+		// The publisher is the harness's own forge access, wired here so that no
+		// agent is ever asked to invoke it and nothing about it reaches a prompt
+		// or a context bundle. It is only consulted when the project opted in to
+		// publishing.
+		Publisher: publish.GitHub{
+			Runner: processRunner,
+			Dir:    parts.repository,
+			// The forge client speaks about the same remote the push targets,
+			// so a checkout with several remotes publishes to the configured
+			// one rather than to whichever the CLI would infer.
+			Remote:       cfg.Execution.Remote,
+			RedactValues: redactValues,
 		},
 		NewRunID:     runstate.NewRunID,
 		Repository:   parts.repository,
@@ -276,9 +291,11 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		if outcome.Integration != nil {
 			fmt.Fprintf(stderr, "already integrated into %s: %s\n", outcome.Integration.TargetBranch, outcome.Integration.TargetCommit)
 		}
+		reportPullRequest(stderr, outcome)
 	} else {
 		fmt.Fprintf(stdout, "run succeeded: %s\n", outcome.RunID)
 		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		reportPullRequest(stdout, outcome)
 		if outcome.RepairAttempts > 0 {
 			fmt.Fprintf(stdout, "repair attempts: %d\n", outcome.RepairAttempts)
 		}
@@ -315,6 +332,14 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 				}
 			}
 		}
+		if outcome.PublishFailure != "" {
+			// The promotion itself succeeded: the local target branch is the
+			// authoritative one and it already moved. Only the publication of it
+			// is unfinished, so this is reported as outstanding rather than as a
+			// change that did not land.
+			fmt.Fprintf(stderr, "publication incomplete after a successful run: %s\n", outcome.PublishFailure)
+			fmt.Fprintln(stderr, "the change is integrated locally; the pull request still needs to be reconciled by hand")
+		}
 		if outcome.CompletionRecordingFailure != "" {
 			// Cleanup finished here; only writing it down did not. Saying
 			// anything about remaining artifacts would send an operator after
@@ -334,6 +359,22 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		return 1
 	}
 	return 0
+}
+
+// reportPullRequest names the published work. A run that asked to publish and
+// did not is reported too, because "no pull request appeared" is otherwise
+// indistinguishable from a harness that quietly stopped publishing.
+func reportPullRequest(writer io.Writer, outcome orchestrator.Outcome) {
+	if outcome.PullRequest != nil {
+		state := "open"
+		if outcome.PullRequest.Merged {
+			state = "merged"
+		}
+		fmt.Fprintf(writer, "pull request #%d (%s): %s\n", outcome.PullRequest.Number, state, outcome.PullRequest.URL)
+	}
+	if outcome.PublishSkipped != "" {
+		fmt.Fprintf(writer, "publishing skipped: %s\n", outcome.PublishSkipped)
+	}
 }
 
 // nonEmptyValue falls back to a stated placeholder rather than printing a blank

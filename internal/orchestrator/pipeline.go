@@ -19,6 +19,7 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/publish"
 	"yoyodyne/internal/review"
 	"yoyodyne/internal/runstate"
 )
@@ -45,6 +46,23 @@ type WorktreeManager interface {
 	UnifiedChanges(ctx context.Context, worktree gitworktree.Worktree, limits gitworktree.DiffLimits) (gitworktree.ChangeDiff, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
+	// The publishing half. RemoteConfigured is what lets a repository with no
+	// remote degrade to purely local behavior instead of failing, and the other
+	// three are the Git writes publishing needs: the harness performs all of
+	// them, whichever phase asked for them.
+	RemoteConfigured(ctx context.Context) (bool, error)
+	PublishBranch(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Publication, error)
+	PublishIntegration(ctx context.Context, worktree gitworktree.Worktree, integration gitworktree.Integration) error
+	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+}
+
+// PullRequests is the forge access publishing needs. The pipeline decides when
+// a pull request must exist and when its work has been authorized for merging;
+// it never decides forge semantics itself.
+type PullRequests interface {
+	Availability(ctx context.Context) (publish.Availability, error)
+	Ensure(ctx context.Context, request publish.Request) (publish.PullRequest, error)
+	State(ctx context.Context, head string) (publish.PullRequest, error)
 }
 
 // ChangeReviewer runs one independent review of a developer's change. The
@@ -78,7 +96,10 @@ type Pipeline struct {
 	// Reviewer is required only when integration is automatic, because nothing
 	// is ever integrated without an independent verdict.
 	Reviewer ChangeReviewer
-	Clock    execution.Clock
+	// Publisher is required only when publishing is automatic, because a project
+	// that has not opted in never opens a pull request.
+	Publisher PullRequests
+	Clock     execution.Clock
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
 	// by a cancelled context rather than holding the process past a shutdown.
@@ -130,7 +151,16 @@ type Outcome struct {
 	UsageLimitResetsAt *time.Time               `json:"usage_limit_resets_at,omitempty"`
 	UsageLimitKind     string                   `json:"usage_limit_kind,omitempty"`
 	Integration        *gitworktree.Integration `json:"integration,omitempty"`
-	WorkItemClosed     bool                     `json:"work_item_closed"`
+	// PullRequest is the published pull request, present only on a run that
+	// published one. PublishSkipped says why a run that asked to publish did not,
+	// which is a repository with no configured remote and nothing else.
+	PullRequest    *runstate.PullRequest `json:"pull_request,omitempty"`
+	PublishSkipped string                `json:"publish_skipped,omitempty"`
+	// PublishFailure reports a promotion that could not be published. The local
+	// target branch is the authoritative one and it already moved, so this is an
+	// outstanding publication rather than a failed run.
+	PublishFailure string `json:"publish_failure,omitempty"`
+	WorkItemClosed bool   `json:"work_item_closed"`
 	// WorktreeRemoved and BranchRemoved report each artifact separately, because
 	// cleanup removes them in two steps and a partial result must not describe
 	// a deleted artifact as remaining or a surviving one as gone.
@@ -186,6 +216,13 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 			return Outcome{}, err
 		}
 	}
+	// Whether this run publishes is settled before anything is claimed, so a
+	// project that asked for pull requests and cannot open one fails here rather
+	// than after a developer has already produced work.
+	publishing, skipped, err := p.resolvePublishing(ctx)
+	if err != nil {
+		return Outcome{}, err
+	}
 	availability, err := p.Backend.CheckAvailability(ctx)
 	if err != nil {
 		return Outcome{}, err
@@ -219,7 +256,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if !pausedForUsageLimit(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
-		return p.resumeRun(ctx, inFlight, item)
+		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
 	case errors.Is(err, runstate.ErrNoRunInFlight):
 	default:
 		var existing runstate.ExistingWorkItemError
@@ -239,10 +276,12 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	}
 	// An automatic run is written against exactly the branch it will be promoted
 	// into, so the integration target is fixed before any work starts and never
-	// inferred afterwards.
+	// inferred afterwards. A published run fixes the same branch for the same
+	// reason: it is the base its pull request is opened against, and a pull
+	// request whose base could still change is not describing one change.
 	baseRef := "HEAD"
 	targetBranch := ""
-	if p.automatic() {
+	if p.automatic() || publishing {
 		targetBranch, err = p.Worktrees.CurrentBranch(ctx)
 		if err != nil {
 			return Outcome{}, fmt.Errorf("resolve integration target: %w", err)
@@ -275,10 +314,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	}
 	defer reservation.Release()
 	run := &activeRun{
-		pipeline: p,
-		state:    state,
-		outcome:  Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending},
-		item:     item,
+		pipeline:   p,
+		state:      state,
+		outcome:    Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending, PublishSkipped: skipped},
+		item:       item,
+		publishing: publishing,
 	}
 
 	item, err = p.Tracker.Claim(ctx, workItemID)
@@ -330,7 +370,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 // durable state, so the resumed run continues the same change at the attempt it
 // had reached instead of starting a second one against a fresh budget. Its
 // caller holds the run's lease for the whole of it.
-func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item beads.WorkItem) (Outcome, error) {
+func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item beads.WorkItem, publishing bool, skipped string) (Outcome, error) {
 	if err := validateClaimedItem(item, state.WorkItemID); err != nil {
 		return Outcome{}, fmt.Errorf("validate resumed work item: %w", err)
 	}
@@ -345,21 +385,23 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
 	}
 	run := &activeRun{
-		pipeline: p,
-		state:    state,
-		item:     item,
-		context:  bundle.Text,
-		claimed:  true,
+		pipeline:   p,
+		state:      state,
+		item:       item,
+		context:    bundle.Text,
+		claimed:    true,
+		publishing: publishing,
 		// The worktree is reconstructed from what was recorded when it was
 		// created, never from what the repository looks like now. The manager
 		// revalidates ownership of every field before it acts on them.
 		worktree: gitworktree.Worktree{
-			RunID:        state.RunID,
-			WorkItemID:   state.WorkItemID,
-			Path:         state.WorktreePath,
-			Branch:       state.Branch,
-			BaseCommit:   state.BaseCommit,
-			TargetBranch: state.TargetBranch,
+			RunID:         state.RunID,
+			WorkItemID:    state.WorkItemID,
+			Path:          state.WorktreePath,
+			Branch:        state.Branch,
+			BaseCommit:    state.BaseCommit,
+			TargetBranch:  state.TargetBranch,
+			HarnessCommit: state.HarnessCommit,
 		},
 		outcome: Outcome{
 			RunID:                 state.RunID,
@@ -374,6 +416,13 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			ProviderResolvedModel: state.ProviderResolvedModel,
 			RepairAttempts:        state.RepairAttempts,
 			UsageLimitKind:        state.UsageLimitKind,
+			// A resumed run keeps the pull request the interrupted process
+			// published, so the attempt it is owed updates that request rather than
+			// opening a second one for the same branch. It reports a skipped
+			// publication for the same reason a fresh run does: a repository with no
+			// remote must say so on every pass, not only the first.
+			PullRequest:    state.PullRequest,
+			PublishSkipped: skipped,
 		},
 	}
 	// A recorded deadline is honored before anything else happens, so a restart
@@ -431,6 +480,10 @@ type activeRun struct {
 	// claimed records that the tracker holds this item, which is what makes a
 	// failure worth reporting back to it.
 	claimed bool
+	// publishing records that this run publishes: the configuration asked for it
+	// and the repository has a remote to publish to. It is decided once, before
+	// the item is claimed, so no step has to re-derive it.
+	publishing bool
 }
 
 // verifyReviewAndFinish is the gated half of a run: the deterministic checks,
@@ -592,7 +645,14 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
 		limit, refused := refusedForUsageLimit(providerResult, err)
 		if !refused {
-			return a.recordDevelopment(ctx, providerResult, err)
+			if err := a.recordDevelopment(ctx, providerResult, err); err != nil {
+				return err
+			}
+			// The attempt that just finished is what publishes. Doing it here
+			// covers every developer invocation a run makes — the first and each
+			// repair — so the pull request always shows the change the checks and
+			// the reviewer are about to judge.
+			return a.publishAttempt(ctx)
 		}
 		// The refused attempt may still have established a session. Continuing in
 		// it is what lets the reissued attempt resume in context rather than
@@ -916,6 +976,10 @@ func (a *activeRun) integrate(ctx context.Context) error {
 		TargetCommit:         integration.TargetCommit,
 		PreviousTargetCommit: integration.PreviousTargetCommit,
 	}
+	// The approving verdict authorized this promotion, so it also authorized the
+	// merge of the pull request that carried it. Publishing cannot fail the run:
+	// the local target branch has already moved and it is the authoritative one.
+	a.publishIntegration(ctx)
 	a.state.Phase = runstate.PhaseCompleting
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
@@ -1099,6 +1163,15 @@ func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
 	a.outcome.WorktreePath = worktree.Path
 	a.outcome.Branch = worktree.Branch
 	a.outcome.BaseCommit = worktree.BaseCommit
+}
+
+// recordHarnessCommit names the commit the harness just made in the worktree.
+// Every later inspection of that worktree accepts this exact commit and no
+// other, so it is held in the durable state a resumed run rebuilds from as well
+// as in the worktree this process is holding.
+func (a *activeRun) recordHarnessCommit(commit string) {
+	a.worktree.HarnessCommit = commit
+	a.state.HarnessCommit = commit
 }
 
 // reportCompletionRecordingFailure covers a run whose artifacts were all
@@ -1445,7 +1518,7 @@ func (p Pipeline) clock() execution.Clock {
 // it works within.
 const developerContract = `You are the developer for one bounded Yoyodyne work item.
 
-Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit or integrate the change. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
+Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.`
 
@@ -1756,7 +1829,7 @@ func renderReviewNotes(outcome Outcome) []string {
 			"Previous target commit: "+outcome.Integration.PreviousTargetCommit,
 		)
 	}
-	return lines
+	return append(lines, renderPublishNotes(outcome)...)
 }
 
 // renderModel reports a requested selector alongside what the provider
