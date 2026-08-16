@@ -55,6 +55,33 @@ func TestClientWorkItemLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientBlocksAnItemAndVerifiesTheStatusItApplied(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{responses: []string{workItemJSON("blocked", "unresolved review findings")}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Block(context.Background(), "yoyodyne-1", "unresolved review findings")
+	if err != nil {
+		t.Fatalf("Block() error = %v", err)
+	}
+	if item.Status != "blocked" || item.Notes != "unresolved review findings" {
+		t.Fatalf("Block() = %#v", item)
+	}
+	wantArgs := [][]string{{"update", "yoyodyne-1", "--status=blocked", "--append-notes=unresolved review findings", "--json"}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// A blocker that was not actually applied must not read as recorded.
+	unapplied := &fakeRunner{responses: []string{workItemJSON("in_progress", "unresolved review findings")}}
+	if _, err := (Client{Runner: unapplied}).Block(context.Background(), "yoyodyne-1", "findings"); err == nil || !strings.Contains(err.Error(), "want blocked") {
+		t.Fatalf("Block() unapplied error = %v", err)
+	}
+	if _, err := (Client{Runner: &fakeRunner{}}).Block(context.Background(), "yoyodyne-1", " "); err == nil {
+		t.Fatal("Block() empty reason error = nil")
+	}
+}
+
 func TestClientRejectsInvalidIDsAndEmptyUpdates(t *testing.T) {
 	t.Parallel()
 

@@ -14,6 +14,11 @@ import (
 	"yoyodyne/internal/domain"
 )
 
+// StateSchemaVersion stays 1 because the repair loop only added optional keys.
+// A state file written before it still decodes, which is the bar every schema
+// change has to clear: `review_findings` keeps the meaning and the integer type
+// it was written with, and the structured findings the loop needs live under
+// their own key beside it.
 const StateSchemaVersion = 1
 
 type Status string
@@ -42,12 +47,51 @@ const (
 	PhaseComplete    Phase = "complete"
 )
 
-// Review decisions are duplicated here rather than imported so the durable
-// schema stays independent of the review implementation that produces them.
+// Review decisions and finding severities are duplicated here rather than
+// imported so the durable schema stays independent of the review implementation
+// that produces them.
 const (
 	ReviewApprove = "approve"
 	ReviewRepair  = "repair"
 )
+
+const (
+	SeverityBlocker = "blocker"
+	SeverityMajor   = "major"
+	SeverityMinor   = "minor"
+)
+
+// Finding is one durable reviewer finding. Findings are recorded rather than
+// only counted because they are the developer's input for the next repair
+// attempt: a run interrupted between attempts has to hand back exactly what the
+// reviewer asked for, and a run that spends its attempts has to name what is
+// still unresolved.
+type Finding struct {
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
+	File     string `json:"file,omitempty"`
+	Line     int    `json:"line,omitempty"`
+}
+
+// Validate reports every contract violation in the finding at once.
+func (f Finding) Validate() error {
+	var problems []error
+	switch f.Severity {
+	case SeverityBlocker, SeverityMajor, SeverityMinor:
+	default:
+		problems = append(problems, fmt.Errorf("severity %q must be %q, %q, or %q", f.Severity, SeverityBlocker, SeverityMajor, SeverityMinor))
+	}
+	if strings.TrimSpace(f.Message) == "" {
+		problems = append(problems, errors.New("message is required"))
+	}
+	if f.Line < 0 {
+		problems = append(problems, fmt.Errorf("line %d cannot be negative", f.Line))
+	}
+	if f.Line > 0 && strings.TrimSpace(f.File) == "" {
+		problems = append(problems, errors.New("line requires a file"))
+	}
+	return errors.Join(problems...)
+}
 
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
@@ -86,16 +130,31 @@ type State struct {
 	// separately, because they cannot be performed atomically. Recording them
 	// apart is what lets an interrupted cleanup be resumed and what keeps a
 	// preserved-artifact claim truthful.
-	WorktreeRemoved     bool         `json:"worktree_removed,omitempty"`
-	BranchRemoved       bool         `json:"branch_removed,omitempty"`
-	ReviewSessionID     string       `json:"review_session_id,omitempty"`
-	ReviewModel         string       `json:"review_model,omitempty"`
-	ReviewResolvedModel string       `json:"review_resolved_model,omitempty"`
-	ReviewDecision      string       `json:"review_decision,omitempty"`
-	ReviewSummary       string       `json:"review_summary,omitempty"`
-	ReviewFindings      int          `json:"review_findings,omitempty"`
-	Integration         *Integration `json:"integration,omitempty"`
-	Failure             string       `json:"failure,omitempty"`
+	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
+	BranchRemoved   bool `json:"branch_removed,omitempty"`
+	// TargetBranch is the integration target fixed when the worktree was
+	// created. It is durable so a resumed run promotes the work into the branch
+	// it was written against rather than whatever happens to be checked out
+	// when the run is picked up again.
+	TargetBranch        string `json:"target_branch,omitempty"`
+	ReviewSessionID     string `json:"review_session_id,omitempty"`
+	ReviewModel         string `json:"review_model,omitempty"`
+	ReviewResolvedModel string `json:"review_resolved_model,omitempty"`
+	ReviewDecision      string `json:"review_decision,omitempty"`
+	ReviewSummary       string `json:"review_summary,omitempty"`
+	ReviewFindings      int    `json:"review_findings,omitempty"`
+	// ReviewFindingDetails carries the findings themselves. It is a separate key
+	// from the ReviewFindings count, which predates it and still means what it
+	// always did, so a state file written before the repair loop existed keeps
+	// decoding unchanged.
+	ReviewFindingDetails []Finding `json:"review_finding_details,omitempty"`
+	// RepairAttempts counts the repair attempts already handed back to the
+	// developer. It is recorded before each attempt starts, so an interrupted
+	// run resumes at the attempt it reached and a restart cannot buy the run a
+	// fresh budget.
+	RepairAttempts int          `json:"repair_attempts,omitempty"`
+	Integration    *Integration `json:"integration,omitempty"`
+	Failure        string       `json:"failure,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it
 	// is set, so it is reconciliation input rather than a run failure. It says
@@ -192,6 +251,24 @@ func (s State) Validate() error {
 	if s.ReviewFindings < 0 {
 		problems = append(problems, errors.New("review_findings cannot be negative"))
 	}
+	for index, finding := range s.ReviewFindingDetails {
+		if err := finding.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("review_finding_details[%d]: %w", index, err))
+		}
+	}
+	// The count predates the findings themselves and a file written before them
+	// carries only the count, so the two are held to agreeing only once both are
+	// present. Disagreement there would mean the recorded evidence and the
+	// developer's next input describe different reviews.
+	if len(s.ReviewFindingDetails) > 0 && s.ReviewFindings != len(s.ReviewFindingDetails) {
+		problems = append(problems, fmt.Errorf("review_findings is %d but %d review_finding_details are recorded", s.ReviewFindings, len(s.ReviewFindingDetails)))
+	}
+	if s.RepairAttempts < 0 {
+		problems = append(problems, errors.New("repair_attempts cannot be negative"))
+	}
+	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {
+		problems = append(problems, errors.New("target_branch must be a local branch name"))
+	}
 	if s.Integration != nil {
 		// Recorded integration is a claim that approved work was promoted, so it
 		// is only coherent with the approval, the worktree that produced it, and
@@ -201,6 +278,12 @@ func (s State) Validate() error {
 		}
 		if s.BaseCommit == "" {
 			problems = append(problems, errors.New("integration requires the integrated worktree"))
+		}
+		// The target is fixed before the work starts, so an integration into a
+		// different branch describes a promotion this run was never set up to
+		// make.
+		if s.TargetBranch != "" && s.Integration.TargetBranch != s.TargetBranch {
+			problems = append(problems, fmt.Errorf("integration target_branch %q does not match the recorded target_branch %q", s.Integration.TargetBranch, s.TargetBranch))
 		}
 		// Integration is only produced by the integrating step, so evidence of it
 		// alongside an earlier phase describes a run history that cannot have

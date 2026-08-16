@@ -82,6 +82,31 @@ func (c Client) RecordOutcome(ctx context.Context, id, notes string) (WorkItem, 
 	return decodeSingleWorkItem(data)
 }
 
+// Block records a durable blocker on a work item the harness could not finish,
+// carrying the reason into the item's notes. The applied status is verified
+// rather than assumed: a blocker that was not actually stored would leave the
+// item looking like work still in progress.
+func (c Client) Block(ctx context.Context, id, reason string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if strings.TrimSpace(reason) == "" {
+		return WorkItem{}, errors.New("blocker reason is required")
+	}
+	data, err := c.run(ctx, "update", id, "--status=blocked", "--append-notes="+reason, "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Status != "blocked" {
+		return WorkItem{}, fmt.Errorf("work item %s status is %q after being blocked, want blocked", item.ID, item.Status)
+	}
+	return item, nil
+}
+
 func (c Client) AddBlocker(ctx context.Context, id, blockerID string) error {
 	if err := validateIssueID(id); err != nil {
 		return err

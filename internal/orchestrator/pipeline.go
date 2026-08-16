@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -30,6 +31,9 @@ type WorkTracker interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
 	Claim(ctx context.Context, id string) (beads.WorkItem, error)
 	RecordOutcome(ctx context.Context, id, notes string) (beads.WorkItem, error)
+	// Block records a durable blocker. The harness uses it when a run stops on
+	// something no further attempt of its own can resolve.
+	Block(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
@@ -50,7 +54,13 @@ type ChangeReviewer interface {
 }
 
 type StateStore interface {
-	Reserve(ctx context.Context, state runstate.State, maxConcurrent int) error
+	// Reserve creates a fresh run and returns the lease that makes this process
+	// its only owner; Adopt takes the same lease over the run already in flight
+	// for an item, reporting runstate.ErrNoRunInFlight when there is none. Every
+	// entry point into an in-flight run goes through one of them, so resuming a
+	// run is exactly as exclusive as starting one.
+	Reserve(ctx context.Context, state runstate.State, maxConcurrent int) (*runstate.Lease, error)
+	Adopt(ctx context.Context, workItemID string) (runstate.State, *runstate.Lease, error)
 	Save(state runstate.State) error
 	AppendEvent(event execution.Event) error
 }
@@ -98,8 +108,13 @@ type Outcome struct {
 	ReviewDecision        review.Decision           `json:"review_decision,omitempty"`
 	ReviewSummary         string                    `json:"review_summary,omitempty"`
 	ReviewFindings        []review.Finding          `json:"review_findings,omitempty"`
-	Integration           *gitworktree.Integration  `json:"integration,omitempty"`
-	WorkItemClosed        bool                      `json:"work_item_closed"`
+	// RepairAttempts counts the times this run returned reviewer findings to the
+	// developer, and Blocked reports that the budget for those attempts was
+	// spent and the unresolved findings were recorded on the work item.
+	RepairAttempts int                      `json:"repair_attempts,omitempty"`
+	Blocked        bool                     `json:"blocked,omitempty"`
+	Integration    *gitworktree.Integration `json:"integration,omitempty"`
+	WorkItemClosed bool                     `json:"work_item_closed"`
 	// WorktreeRemoved and BranchRemoved report each artifact separately, because
 	// cleanup removes them in two steps and a partial result must not describe
 	// a deleted artifact as remaining or a surviving one as gone.
@@ -131,7 +146,7 @@ func (e ExistingRunError) Error() string {
 	return fmt.Sprintf("work item %s already has incomplete run %s in status %s", e.State.WorkItemID, e.State.RunID, e.State.Status)
 }
 
-func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, returnedErr error) {
+func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err := p.validate(); err != nil {
 		return Outcome{}, err
 	}
@@ -150,8 +165,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	if len(p.Config.Checks) == 0 {
 		return Outcome{}, errors.New("run pipeline requires at least one configured check")
 	}
-	automatic := p.Config.Approvals.Integration == domain.ApprovalAutomatic
-	if automatic {
+	if p.automatic() {
 		if err := p.validateReviewPolicy(); err != nil {
 			return Outcome{}, err
 		}
@@ -171,6 +185,29 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
 	}
+	// An incomplete run for this item is either a repair loop an interrupted
+	// process left behind or a duplicate that must be refused. Adopting it takes
+	// the same exclusive lease a fresh reservation takes, so entering a run this
+	// process did not start can never put two developers on one item; a run
+	// another process is still holding is reported as existing rather than
+	// picked up. Only the repair loop is continued, because it is the one
+	// interrupted run whose remaining work is fully described by durable state.
+	inFlight, lease, err := p.Store.Adopt(ctx, workItemID)
+	switch {
+	case err == nil:
+		defer lease.Release()
+		if !p.automatic() || !resumableRepair(inFlight) {
+			return Outcome{}, ExistingRunError{State: inFlight}
+		}
+		return p.resumeRepair(ctx, inFlight, item)
+	case errors.Is(err, runstate.ErrNoRunInFlight):
+	default:
+		var existing runstate.ExistingWorkItemError
+		if errors.As(err, &existing) {
+			return Outcome{}, ExistingRunError{State: existing.State}
+		}
+		return Outcome{}, fmt.Errorf("adopt run in flight: %w", err)
+	}
 	if err := validateReadyItem(item, workItemID); err != nil {
 		return Outcome{}, err
 	}
@@ -185,7 +222,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	// inferred afterwards.
 	baseRef := "HEAD"
 	targetBranch := ""
-	if automatic {
+	if p.automatic() {
 		targetBranch, err = p.Worktrees.CurrentBranch(ctx)
 		if err != nil {
 			return Outcome{}, fmt.Errorf("resolve integration target: %w", err)
@@ -208,55 +245,36 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		StartedAt:     now,
 		UpdatedAt:     now,
 	}
-	if err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers); err != nil {
+	reservation, err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers)
+	if err != nil {
 		var existing runstate.ExistingWorkItemError
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
 		return Outcome{}, fmt.Errorf("reserve developer run: %w", err)
 	}
-	outcome = Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending}
-	claimed := false
-	fail := func(cause error, status runstate.Status) (Outcome, error) {
-		message := cause.Error()
-		completedAt := p.clock().Now()
-		state.Status = status
-		state.UpdatedAt = completedAt
-		state.CompletedAt = &completedAt
-		state.Failure = message
-		if saveErr := p.Store.Save(state); saveErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
-		}
-		outcome.Status = status
-		outcome.Phase = state.Phase
-		outcome.Failure = message
-		outcome.Branch = state.Branch
-		outcome.WorktreePath = state.WorktreePath
-		outcome.BaseCommit = state.BaseCommit
-		outcome.ProviderSessionID = state.ProviderSessionID
-		if claimed {
-			recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			_, recordErr := p.Tracker.RecordOutcome(recordCtx, workItemID, renderFailureNotes(outcome))
-			cancel()
-			if recordErr != nil {
-				cause = errors.Join(cause, fmt.Errorf("record failed run outcome: %w", recordErr))
-			}
-		}
-		return outcome, cause
+	defer reservation.Release()
+	run := &activeRun{
+		pipeline: p,
+		state:    state,
+		outcome:  Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending},
+		item:     item,
 	}
 
 	item, err = p.Tracker.Claim(ctx, workItemID)
 	if err != nil {
-		return fail(fmt.Errorf("claim work item: %w", err), runstate.StatusFailed)
+		return run.fail(fmt.Errorf("claim work item: %w", err), runstate.StatusFailed)
 	}
-	claimed = true
+	run.claimed = true
+	run.item = item
 	if err := validateClaimedItem(item, workItemID); err != nil {
-		return fail(fmt.Errorf("validate claimed work item: %w", err), runstate.StatusFailed)
+		return run.fail(fmt.Errorf("validate claimed work item: %w", err), runstate.StatusFailed)
 	}
 	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item})
 	if err != nil {
-		return fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
+		return run.fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
 	}
+	run.context = bundle.Text
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{
 		RunID:        runID,
 		WorkItemID:   workItemID,
@@ -265,150 +283,324 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	})
 	if err != nil {
 		if worktree.Path != "" {
-			state.WorktreePath = worktree.Path
-			state.Branch = worktree.Branch
-			state.BaseCommit = worktree.BaseCommit
-			outcome.WorktreePath = worktree.Path
-			outcome.Branch = worktree.Branch
-			outcome.BaseCommit = worktree.BaseCommit
+			run.recordWorktree(worktree)
 		}
-		return fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
+		return run.fail(fmt.Errorf("create isolated worktree: %w", err), runstate.StatusFailed)
 	}
-	state.WorktreePath = worktree.Path
-	state.Branch = worktree.Branch
-	state.BaseCommit = worktree.BaseCommit
-	state.Status = runstate.StatusRunning
-	state.Phase = runstate.PhaseDeveloping
-	state.UpdatedAt = p.clock().Now()
-	if err := p.Store.Save(state); err != nil {
-		return fail(fmt.Errorf("save running state: %w", err), runstate.StatusFailed)
+	run.recordWorktree(worktree)
+	run.state.Status = runstate.StatusRunning
+	run.state.Phase = runstate.PhaseDeveloping
+	run.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(run.state); err != nil {
+		return run.fail(fmt.Errorf("save running state: %w", err), runstate.StatusFailed)
 	}
-	outcome.Branch = worktree.Branch
-	outcome.WorktreePath = worktree.Path
-	outcome.BaseCommit = worktree.BaseCommit
-	outcome.Status = runstate.StatusRunning
-	outcome.Phase = state.Phase
+	run.outcome.Status = runstate.StatusRunning
+	run.outcome.Phase = run.state.Phase
 
-	eventSink := func(event execution.Event) error {
-		if err := p.Store.AppendEvent(event); err != nil {
-			return err
-		}
-		state.LastSequence = event.Sequence
-		state.UpdatedAt = event.Timestamp
-		return p.Store.Save(state)
+	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, bundle.Text), ""); err != nil {
+		return run.fail(err, failureStatus(ctx, err))
 	}
-	state.ProviderModel = developer.Model
-	outcome.ProviderModel = developer.Model
-	providerResult, err := p.Backend.Run(ctx, backend.RunRequest{
-		RunID:            runID,
-		Role:             domain.RoleDeveloper,
-		WorkingDirectory: worktree.Path,
-		Prompt:           developerPrompt(developer.Persona.Text, bundle.Text),
-		Model:            developer.Model,
-		PermissionMode:   "acceptEdits",
-		LastSequence:     state.LastSequence,
-		RedactValues:     p.RedactValues,
-		EventSink:        eventSink,
-	})
-	if err != nil {
-		cause := fmt.Errorf("developer backend failed: %w", err)
-		summaryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		changeSummary, summaryErr := p.Worktrees.SummarizeChanges(summaryCtx, worktree)
-		cancel()
-		if summaryErr != nil {
-			cause = errors.Join(cause, fmt.Errorf("summarize changes after developer backend failure: %w", summaryErr))
-		} else {
-			outcome.Changes = changeSummary
-		}
-		return fail(cause, statusForContext(ctx))
+	if err := run.verify(ctx); err != nil {
+		return run.fail(err, failureStatus(ctx, err))
 	}
-	state.ProviderSessionID = providerResult.SessionID
-	state.ProviderResolvedModel = providerResult.ResolvedModel
-	state.LastSequence = providerResult.LastEvent
-	state.UpdatedAt = p.clock().Now()
-	outcome.ProviderSessionID = providerResult.SessionID
-	outcome.ProviderResolvedModel = providerResult.ResolvedModel
-	outcome.Summary = providerResult.FinalText
-	if err := p.Store.Save(state); err != nil {
-		return fail(fmt.Errorf("save developer outcome state: %w", err), runstate.StatusFailed)
-	}
-	changeSummary, err := p.Worktrees.SummarizeChanges(ctx, worktree)
-	if err != nil {
-		return fail(fmt.Errorf("summarize developer changes: %w", err), statusForContext(ctx))
-	}
-	outcome.Changes = changeSummary
-	if providerResult.IsError {
-		return fail(fmt.Errorf("developer reported failure: %s", nonEmpty(providerResult.StopReason, providerResult.FinalText)), statusForProcess(providerResult.Process.Status))
-	}
+	return run.reviewAndFinish(ctx)
+}
 
-	state.Phase = runstate.PhaseChecking
-	checkResults, lastSequence, err := p.Checks.Run(ctx, runID, worktree.Path, p.Config.Checks, state.LastSequence, eventSink)
-	outcome.Checks = checkResults
-	state.LastSequence = lastSequence
+// resumeRepair picks up a run an interrupted process left inside its repair
+// loop. The worktree, branch, developer session, attempt count, and outstanding
+// findings all come from durable state, so the resumed run continues the same
+// change at the attempt it had reached instead of starting a second one against
+// a fresh budget. Its caller holds the run's lease for the whole of it.
+func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item beads.WorkItem) (Outcome, error) {
+	if err := validateClaimedItem(item, state.WorkItemID); err != nil {
+		return Outcome{}, fmt.Errorf("validate resumed work item: %w", err)
+	}
+	bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item})
 	if err != nil {
-		return fail(fmt.Errorf("verification infrastructure failed: %w", err), statusForContext(ctx))
+		return Outcome{}, fmt.Errorf("assemble resumed work item context: %w", err)
 	}
-	// Review and integration are only reachable through passing checks: a failed
-	// check ends the run here, before any reviewer is asked and before anything
-	// can be promoted.
-	for _, check := range checkResults {
-		if !check.Passed {
-			return fail(fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode), statusForProcess(check.Process.Status))
-		}
+	// Refusing here costs the run nothing: it stays exactly as the interrupted
+	// process left it, still resumable, rather than spending an attempt on work
+	// that could not be integrated afterwards anyway.
+	if err := p.Worktrees.ValidateReady(ctx); err != nil {
+		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
 	}
-
-	if automatic {
-		reviewed, err := p.review(ctx, &state, &outcome, worktree, bundle.Text, checkResults, eventSink)
+	run := &activeRun{
+		pipeline: p,
+		state:    state,
+		item:     item,
+		context:  bundle.Text,
+		claimed:  true,
+		// The worktree is reconstructed from what was recorded when it was
+		// created, never from what the repository looks like now. The manager
+		// revalidates ownership of every field before it acts on them.
+		worktree: gitworktree.Worktree{
+			RunID:        state.RunID,
+			WorkItemID:   state.WorkItemID,
+			Path:         state.WorktreePath,
+			Branch:       state.Branch,
+			BaseCommit:   state.BaseCommit,
+			TargetBranch: state.TargetBranch,
+		},
+		outcome: Outcome{
+			RunID:                 state.RunID,
+			WorkItemID:            state.WorkItemID,
+			Status:                runstate.StatusRunning,
+			Phase:                 state.Phase,
+			Branch:                state.Branch,
+			WorktreePath:          state.WorktreePath,
+			BaseCommit:            state.BaseCommit,
+			ProviderSessionID:     state.ProviderSessionID,
+			ProviderModel:         state.ProviderModel,
+			ProviderResolvedModel: state.ProviderResolvedModel,
+			RepairAttempts:        state.RepairAttempts,
+		},
+	}
+	// A repair attempt that was in flight when the process stopped was already
+	// counted against the budget, so it is re-run rather than re-counted, with
+	// the same session and the same findings it was given.
+	if state.Phase == runstate.PhaseDeveloping {
+		prompt, err := repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, p.Config.Execution.RepairAttemptsBeforeReplan)
 		if err != nil {
-			return fail(err, statusForContext(ctx))
+			return run.fail(err, runstate.StatusFailed)
 		}
-		if reviewed != review.DecisionApprove {
-			// A repair verdict stops the run before integration. The worktree,
-			// branch, and findings are preserved for the repair attempt that a
-			// later Milestone 1 item adds.
-			return fail(fmt.Errorf("independent review requires repair: %s", outcome.ReviewSummary), runstate.StatusFailed)
+		if err := run.develop(ctx, prompt, state.ProviderSessionID); err != nil {
+			return run.fail(err, failureStatus(ctx, err))
+		}
+	}
+	if err := run.verify(ctx); err != nil {
+		return run.fail(err, failureStatus(ctx, err))
+	}
+	return run.reviewAndFinish(ctx)
+}
+
+// activeRun is one work item's run in progress: the durable state, the reported
+// outcome, and the worktree and context every attempt shares. A fresh run and a
+// resumed one both build one and then take the same steps, so a repair attempt
+// behaves identically whichever process started it.
+type activeRun struct {
+	pipeline Pipeline
+	state    runstate.State
+	outcome  Outcome
+	item     beads.WorkItem
+	worktree gitworktree.Worktree
+	context  string
+	// claimed records that the tracker holds this item, which is what makes a
+	// failure worth reporting back to it.
+	claimed bool
+}
+
+// reviewAndFinish is the reviewed half of a run: an independent review, the
+// bounded repair loop behind it, and then integration and cleanup of a change
+// an attempt actually got approved.
+func (a *activeRun) reviewAndFinish(ctx context.Context) (Outcome, error) {
+	if a.pipeline.automatic() {
+		if err := a.repairLoop(ctx); err != nil {
+			return a.fail(err, failureStatus(ctx, err))
 		}
 		// An approval only authorizes integration when it demonstrably came from
 		// a second invocation. Missing or reused provider identity means the
 		// independence the policy relies on was never established.
-		if err := validateIndependentInvocations(outcome); err != nil {
-			return fail(err, runstate.StatusFailed)
+		if err := validateIndependentInvocations(a.outcome); err != nil {
+			return a.fail(err, runstate.StatusFailed)
 		}
-
-		state.Phase = runstate.PhaseIntegrating
-		state.UpdatedAt = p.clock().Now()
-		if err := p.Store.Save(state); err != nil {
-			return fail(fmt.Errorf("save integrating run state: %w", err), runstate.StatusFailed)
-		}
-		integration, err := p.Worktrees.Integrate(ctx, worktree, integrationMessage(item, outcome))
-		if err != nil {
-			return fail(fmt.Errorf("integrate approved change: %w", err), statusForContext(ctx))
-		}
-		outcome.Integration = &integration
-		state.Integration = &runstate.Integration{
-			TargetBranch:         integration.TargetBranch,
-			SourceCommit:         integration.SourceCommit,
-			TargetCommit:         integration.TargetCommit,
-			PreviousTargetCommit: integration.PreviousTargetCommit,
-		}
-		state.Phase = runstate.PhaseCompleting
-		state.UpdatedAt = p.clock().Now()
-		if err := p.Store.Save(state); err != nil {
-			return fail(fmt.Errorf("save integrated run state: %w", err), runstate.StatusFailed)
+		if err := a.integrate(ctx); err != nil {
+			return a.fail(err, failureStatus(ctx, err))
 		}
 	}
+	return a.finish(ctx)
+}
 
+// repairLoop returns the reviewer's findings to the same developer until an
+// attempt is approved or the configured repair budget is spent. Every attempt
+// re-runs the deterministic checks and obtains its own independent review, so an
+// approval always belongs to the change that was actually judged and nothing an
+// earlier attempt was granted carries forward.
+func (a *activeRun) repairLoop(ctx context.Context) error {
+	limit := a.pipeline.Config.Execution.RepairAttemptsBeforeReplan
+	for {
+		decision, err := a.reviewChange(ctx)
+		if err != nil {
+			return err
+		}
+		if decision == review.DecisionApprove {
+			return nil
+		}
+		if a.state.RepairAttempts >= limit {
+			return a.blockOnUnresolvedFindings(ctx, limit)
+		}
+		if err := a.startRepairAttempt(); err != nil {
+			return err
+		}
+		prompt, err := repairPrompt(a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts, limit)
+		if err != nil {
+			return err
+		}
+		// The same developer continues in the same worktree, resuming its
+		// session so the attempt keeps the context it already built.
+		if err := a.develop(ctx, prompt, a.state.ProviderSessionID); err != nil {
+			return err
+		}
+		if err := a.verify(ctx); err != nil {
+			return err
+		}
+	}
+}
+
+// startRepairAttempt records the attempt before the developer is invoked. An
+// attempt that is interrupted still counts, so a restart resumes at the attempt
+// the run reached rather than buying it another one.
+func (a *activeRun) startRepairAttempt() error {
+	a.state.RepairAttempts++
+	a.state.Phase = runstate.PhaseDeveloping
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	a.outcome.RepairAttempts = a.state.RepairAttempts
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save repair attempt %d: %w", a.state.RepairAttempts, err)
+	}
+	return nil
+}
+
+// blockOnUnresolvedFindings ends a run whose repair budget is spent. The design
+// hands control back to a development manager at this point; that role does not
+// exist yet, so the unresolved findings are recorded as a durable blocker on the
+// work item rather than disappearing along with the failed run.
+func (a *activeRun) blockOnUnresolvedFindings(ctx context.Context, limit int) error {
+	cause := fmt.Errorf("independent review requires repair after %d of %d permitted attempt(s): %s",
+		a.state.RepairAttempts, limit, a.outcome.ReviewSummary)
+	// The blocker is what a human or a later manager acts on, so it is recorded
+	// on its own deadline rather than on a context this run may have exhausted.
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderBlockerNotes(a.outcome, limit)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
+}
+
+// develop runs one developer attempt in the run's worktree and records what the
+// provider reported. A repair attempt passes the recorded session so the
+// developer continues the change it already made instead of re-deriving it.
+func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
+	p := a.pipeline
+	developer := p.developer()
+	a.state.ProviderModel = developer.Model
+	a.outcome.ProviderModel = developer.Model
+	providerResult, err := p.Backend.Run(ctx, backend.RunRequest{
+		RunID:            a.state.RunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: a.worktree.Path,
+		Prompt:           prompt,
+		SessionID:        sessionID,
+		Model:            developer.Model,
+		PermissionMode:   "acceptEdits",
+		LastSequence:     a.state.LastSequence,
+		RedactValues:     p.RedactValues,
+		EventSink:        a.sink,
+	})
+	if err != nil {
+		cause := fmt.Errorf("developer backend failed: %w", err)
+		summaryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		changeSummary, summaryErr := p.Worktrees.SummarizeChanges(summaryCtx, a.worktree)
+		cancel()
+		if summaryErr != nil {
+			cause = errors.Join(cause, fmt.Errorf("summarize changes after developer backend failure: %w", summaryErr))
+		} else {
+			a.outcome.Changes = changeSummary
+		}
+		return cause
+	}
+	a.state.ProviderSessionID = providerResult.SessionID
+	a.state.ProviderResolvedModel = providerResult.ResolvedModel
+	a.state.LastSequence = providerResult.LastEvent
+	a.state.UpdatedAt = p.clock().Now()
+	a.outcome.ProviderSessionID = providerResult.SessionID
+	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
+	a.outcome.Summary = providerResult.FinalText
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save developer outcome state: %w", err)
+	}
+	changeSummary, err := p.Worktrees.SummarizeChanges(ctx, a.worktree)
+	if err != nil {
+		return fmt.Errorf("summarize developer changes: %w", err)
+	}
+	a.outcome.Changes = changeSummary
+	if providerResult.IsError {
+		return phaseError{
+			status: statusForProcess(providerResult.Process.Status),
+			cause:  fmt.Errorf("developer reported failure: %s", nonEmpty(providerResult.StopReason, providerResult.FinalText)),
+		}
+	}
+	return nil
+}
+
+// verify runs the configured deterministic checks over the worktree as it
+// stands. Every attempt runs them again: no attempt inherits an earlier
+// attempt's verification, and review and integration are only reachable through
+// checks that passed on the change being judged.
+func (a *activeRun) verify(ctx context.Context) error {
+	p := a.pipeline
+	a.state.Phase = runstate.PhaseChecking
+	checkResults, lastSequence, err := p.Checks.Run(ctx, a.state.RunID, a.worktree.Path, p.Config.Checks, a.state.LastSequence, a.sink)
+	a.outcome.Checks = checkResults
+	a.state.LastSequence = lastSequence
+	if err != nil {
+		return fmt.Errorf("verification infrastructure failed: %w", err)
+	}
+	for _, check := range checkResults {
+		if !check.Passed {
+			return phaseError{
+				status: statusForProcess(check.Process.Status),
+				cause:  fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode),
+			}
+		}
+	}
+	return nil
+}
+
+// integrate promotes an approved change and records the promotion.
+func (a *activeRun) integrate(ctx context.Context) error {
+	p := a.pipeline
+	a.state.Phase = runstate.PhaseIntegrating
+	a.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save integrating run state: %w", err)
+	}
+	integration, err := p.Worktrees.Integrate(ctx, a.worktree, integrationMessage(a.item, a.outcome))
+	if err != nil {
+		return fmt.Errorf("integrate approved change: %w", err)
+	}
+	a.outcome.Integration = &integration
+	a.state.Integration = &runstate.Integration{
+		TargetBranch:         integration.TargetBranch,
+		SourceCommit:         integration.SourceCommit,
+		TargetCommit:         integration.TargetCommit,
+		PreviousTargetCommit: integration.PreviousTargetCommit,
+	}
+	a.state.Phase = runstate.PhaseCompleting
+	a.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save integrated run state: %w", err)
+	}
+	return nil
+}
+
+// finish records the outcome, closes an integrated item, makes the run durably
+// terminal, and only then removes what the run created.
+func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
+	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
 	// after integration when it is automatic, and after passing checks when a
 	// human still owns the promotion.
-	if _, err := p.Tracker.RecordOutcome(ctx, workItemID, renderOutcomeNotes(outcome)); err != nil {
-		return fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
+	if _, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome)); err != nil {
+		return a.fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
 	}
-	if outcome.Integration != nil {
-		if _, err := p.Tracker.Complete(ctx, workItemID, completionReason(outcome)); err != nil {
-			return fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
+	if a.outcome.Integration != nil {
+		if _, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome)); err != nil {
+			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 		}
-		outcome.WorkItemClosed = true
+		a.outcome.WorkItemClosed = true
 	}
 
 	// The run becomes durably terminal before anything is destroyed. Cleanup is
@@ -419,20 +611,20 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	// a lost run. A reconciler re-runs cleanup, which refuses anything that is
 	// not the recorded, registered, already-integrated worktree.
 	completedAt := p.clock().Now()
-	state.Status = runstate.StatusSucceeded
-	state.Phase = runstate.PhaseCleaningUp
-	state.UpdatedAt = completedAt
-	state.CompletedAt = &completedAt
-	if outcome.Integration == nil {
-		state.Phase = runstate.PhaseComplete
+	a.state.Status = runstate.StatusSucceeded
+	a.state.Phase = runstate.PhaseCleaningUp
+	a.state.UpdatedAt = completedAt
+	a.state.CompletedAt = &completedAt
+	if a.outcome.Integration == nil {
+		a.state.Phase = runstate.PhaseComplete
 	}
-	if err := p.Store.Save(state); err != nil {
-		return fail(fmt.Errorf("save successful run state: %w", err), runstate.StatusFailed)
+	if err := p.Store.Save(a.state); err != nil {
+		return a.fail(fmt.Errorf("save successful run state: %w", err), runstate.StatusFailed)
 	}
-	outcome.Status = runstate.StatusSucceeded
-	outcome.Phase = state.Phase
-	if outcome.Integration == nil {
-		return outcome, nil
+	a.outcome.Status = runstate.StatusSucceeded
+	a.outcome.Phase = a.state.Phase
+	if a.outcome.Integration == nil {
+		return a.outcome, nil
 	}
 
 	// Only artifacts proven to be integrated are removed, and only after the
@@ -440,35 +632,90 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 	// each artifact separately, so a partial removal is recorded as what it is
 	// rather than collapsed into a single failed flag.
 	cleanup, cleanupErr := p.Worktrees.CleanupIntegrated(ctx, gitworktree.CleanupRequest{
-		Worktree:     worktree,
-		TargetBranch: outcome.Integration.TargetBranch,
-		SourceCommit: outcome.Integration.SourceCommit,
+		Worktree:     a.worktree,
+		TargetBranch: a.outcome.Integration.TargetBranch,
+		SourceCommit: a.outcome.Integration.SourceCommit,
 	})
-	outcome.WorktreeRemoved = cleanup.WorktreeRemoved
-	outcome.BranchRemoved = cleanup.BranchRemoved
-	state.WorktreeRemoved = cleanup.WorktreeRemoved
-	state.BranchRemoved = cleanup.BranchRemoved
+	a.outcome.WorktreeRemoved = cleanup.WorktreeRemoved
+	a.outcome.BranchRemoved = cleanup.BranchRemoved
+	a.state.WorktreeRemoved = cleanup.WorktreeRemoved
+	a.state.BranchRemoved = cleanup.BranchRemoved
 	if cleanupErr != nil {
 		// A failure here leaves the run succeeded and reports the outstanding
 		// cleanup: the change is integrated and the item is closed. Whatever was
 		// removed before the failure is still recorded as removed.
-		return p.reportOutstandingCleanup(state, outcome, fmt.Errorf("clean up integrated run artifacts: %w", cleanupErr))
+		return p.reportOutstandingCleanup(a.state, a.outcome, fmt.Errorf("clean up integrated run artifacts: %w", cleanupErr))
 	}
 	// Cleanup finished, so the run is complete whatever happens to the record of
 	// it. The reported phase follows that fact rather than the write below.
-	state.Phase = runstate.PhaseComplete
-	state.UpdatedAt = p.clock().Now()
-	outcome.Phase = state.Phase
-	if err := p.Store.Save(state); err != nil {
+	a.state.Phase = runstate.PhaseComplete
+	a.state.UpdatedAt = p.clock().Now()
+	a.outcome.Phase = a.state.Phase
+	if err := p.Store.Save(a.state); err != nil {
 		// An interrupted write that recovers must leave a clean terminal record,
 		// not a cleanup warning about artifacts that are already gone.
-		state.UpdatedAt = p.clock().Now()
-		if retryErr := p.Store.Save(state); retryErr != nil {
-			return p.reportCompletionRecordingFailure(outcome,
+		a.state.UpdatedAt = p.clock().Now()
+		if retryErr := p.Store.Save(a.state); retryErr != nil {
+			return p.reportCompletionRecordingFailure(a.outcome,
 				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
 		}
 	}
-	return outcome, nil
+	return a.outcome, nil
+}
+
+// fail records a terminal run failure everywhere it has to be visible: the
+// durable state, the reported outcome, and the work item when the run holds it.
+func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
+	p := a.pipeline
+	message := cause.Error()
+	completedAt := p.clock().Now()
+	a.state.Status = status
+	a.state.UpdatedAt = completedAt
+	a.state.CompletedAt = &completedAt
+	a.state.Failure = message
+	if saveErr := p.Store.Save(a.state); saveErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("save failed run state: %w", saveErr))
+	}
+	a.outcome.Status = status
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Failure = message
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if a.claimed {
+		recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, recordErr := p.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderFailureNotes(a.outcome))
+		cancel()
+		if recordErr != nil {
+			cause = errors.Join(cause, fmt.Errorf("record failed run outcome: %w", recordErr))
+		}
+	}
+	return a.outcome, cause
+}
+
+// sink persists one normalized event and the progress it represents.
+func (a *activeRun) sink(event execution.Event) error {
+	if err := a.pipeline.Store.AppendEvent(event); err != nil {
+		return err
+	}
+	a.state.LastSequence = event.Sequence
+	a.state.UpdatedAt = event.Timestamp
+	return a.pipeline.Store.Save(a.state)
+}
+
+// recordWorktree records the created worktree, including the integration target
+// fixed with it, so a later process promotes the work into the branch it was
+// written against rather than one it has to infer.
+func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
+	a.worktree = worktree
+	a.state.WorktreePath = worktree.Path
+	a.state.Branch = worktree.Branch
+	a.state.BaseCommit = worktree.BaseCommit
+	a.state.TargetBranch = worktree.TargetBranch
+	a.outcome.WorktreePath = worktree.Path
+	a.outcome.Branch = worktree.Branch
+	a.outcome.BaseCommit = worktree.BaseCommit
 }
 
 // reportCompletionRecordingFailure covers a run whose artifacts were all
@@ -505,57 +752,56 @@ func (p Pipeline) reportOutstandingCleanup(state runstate.State, outcome Outcome
 	return outcome, nil
 }
 
-// review runs the configured independent reviewer and records exactly what it
-// decided, including when it fails or answers with something the verdict
+// reviewChange runs the configured independent reviewer and records exactly
+// what it decided, including when it fails or answers with something the verdict
 // contract rejects. Every recorded outcome is written into the run state before
 // the caller acts on it, so a stopped run still explains why it stopped.
-func (p Pipeline) review(
-	ctx context.Context,
-	state *runstate.State,
-	outcome *Outcome,
-	worktree gitworktree.Worktree,
-	workContext string,
-	checkResults []checks.Result,
-	eventSink func(execution.Event) error,
-) (review.Decision, error) {
-	state.Phase = runstate.PhaseReviewing
-	state.UpdatedAt = p.clock().Now()
-	if err := p.Store.Save(*state); err != nil {
+func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
+	p := a.pipeline
+	a.state.Phase = runstate.PhaseReviewing
+	// Nothing an earlier attempt was told carries into this one. Clearing the
+	// evidence before the reviewer runs is what makes a recorded verdict always
+	// belong to the change that is about to be judged, so an earlier approval
+	// can never authorize a later attempt.
+	a.clearReviewEvidence()
+	a.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(a.state); err != nil {
 		return "", fmt.Errorf("save reviewing run state: %w", err)
 	}
-	changes, err := p.Worktrees.UnifiedChanges(ctx, worktree, gitworktree.DiffLimits{})
+	changes, err := p.Worktrees.UnifiedChanges(ctx, a.worktree, gitworktree.DiffLimits{})
 	if err != nil {
 		return "", fmt.Errorf("assemble reviewed change: %w", err)
 	}
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
-		RunID:        state.RunID,
-		WorkItemID:   state.WorkItemID,
-		Context:      workContext,
-		WorktreePath: worktree.Path,
+		RunID:        a.state.RunID,
+		WorkItemID:   a.state.WorkItemID,
+		Context:      a.context,
+		WorktreePath: a.worktree.Path,
 		Changes:      changes,
-		Checks:       checkResults,
+		Checks:       a.outcome.Checks,
 		RedactValues: p.RedactValues,
-		LastSequence: state.LastSequence,
-		EventSink:    eventSink,
+		LastSequence: a.state.LastSequence,
+		EventSink:    a.sink,
 	})
-	if result.LastSequence > state.LastSequence {
-		state.LastSequence = result.LastSequence
+	if result.LastSequence > a.state.LastSequence {
+		a.state.LastSequence = result.LastSequence
 	}
-	state.ReviewSessionID = result.SessionID
-	state.ReviewModel = result.RequestedModel
-	state.ReviewResolvedModel = result.ResolvedModel
-	outcome.ReviewSessionID = result.SessionID
-	outcome.ReviewModel = result.RequestedModel
-	outcome.ReviewResolvedModel = result.ResolvedModel
+	a.state.ReviewSessionID = result.SessionID
+	a.state.ReviewModel = result.RequestedModel
+	a.state.ReviewResolvedModel = result.ResolvedModel
+	a.outcome.ReviewSessionID = result.SessionID
+	a.outcome.ReviewModel = result.RequestedModel
+	a.outcome.ReviewResolvedModel = result.ResolvedModel
 	if result.Verdict.Summary != "" {
-		state.ReviewSummary = result.Verdict.Summary
-		state.ReviewFindings = len(result.Verdict.Findings)
-		outcome.ReviewSummary = result.Verdict.Summary
-		outcome.ReviewFindings = result.Verdict.Findings
+		a.state.ReviewSummary = result.Verdict.Summary
+		a.state.ReviewFindings = len(result.Verdict.Findings)
+		a.state.ReviewFindingDetails = durableFindings(result.Verdict.Findings)
+		a.outcome.ReviewSummary = result.Verdict.Summary
+		a.outcome.ReviewFindings = result.Verdict.Findings
 	}
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
-		state.ReviewDecision = string(result.Decision)
-		outcome.ReviewDecision = result.Decision
+		a.state.ReviewDecision = string(result.Decision)
+		a.outcome.ReviewDecision = result.Decision
 	}
 	if reviewErr != nil {
 		return "", fmt.Errorf("independent review failed: %w", reviewErr)
@@ -568,6 +814,91 @@ func (p Pipeline) review(
 		return "", fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
 	}
 	return result.Decision, nil
+}
+
+func (a *activeRun) clearReviewEvidence() {
+	a.state.ReviewSessionID = ""
+	a.state.ReviewModel = ""
+	a.state.ReviewResolvedModel = ""
+	a.state.ReviewDecision = ""
+	a.state.ReviewSummary = ""
+	a.state.ReviewFindings = 0
+	a.state.ReviewFindingDetails = nil
+	a.outcome.ReviewSessionID = ""
+	a.outcome.ReviewModel = ""
+	a.outcome.ReviewResolvedModel = ""
+	a.outcome.ReviewDecision = ""
+	a.outcome.ReviewSummary = ""
+	a.outcome.ReviewFindings = nil
+}
+
+// durableFindings converts a reviewer's findings into the durable schema. They
+// are what the next repair attempt is built from and what a recorded blocker
+// names, so they have to survive the process that received them.
+func durableFindings(findings []review.Finding) []runstate.Finding {
+	if len(findings) == 0 {
+		return nil
+	}
+	durable := make([]runstate.Finding, 0, len(findings))
+	for _, finding := range findings {
+		recorded := runstate.Finding{Severity: string(finding.Severity), Message: finding.Message}
+		if finding.Location != nil {
+			recorded.File = finding.Location.File
+			recorded.Line = finding.Location.Line
+		}
+		durable = append(durable, recorded)
+	}
+	return durable
+}
+
+// resumableRepair reports whether an incomplete run stopped inside its repair
+// loop, which is the only interrupted run this pipeline picks up. It needs the
+// worktree every attempt shares, the developer session the next attempt
+// continues, a recorded attempt count, and, when an attempt was in flight, the
+// findings that attempt was given. Anything else is left to reconciliation
+// rather than reconstructed from guesswork.
+func resumableRepair(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.RepairAttempts == 0 {
+		return false
+	}
+	if state.WorktreePath == "" || state.Branch == "" || state.BaseCommit == "" || state.TargetBranch == "" {
+		return false
+	}
+	if state.ProviderSessionID == "" {
+		return false
+	}
+	switch state.Phase {
+	case runstate.PhaseDeveloping:
+		return len(state.ReviewFindingDetails) > 0
+	case runstate.PhaseChecking, runstate.PhaseReviewing:
+		return true
+	default:
+		return false
+	}
+}
+
+// phaseError carries the run status a failed step must be recorded with, so a
+// cancelled or timed-out step reports what actually happened to it rather than
+// whatever the surrounding context looks like afterwards.
+type phaseError struct {
+	status runstate.Status
+	cause  error
+}
+
+func (e phaseError) Error() string { return e.cause.Error() }
+
+func (e phaseError) Unwrap() error { return e.cause }
+
+func failureStatus(ctx context.Context, err error) runstate.Status {
+	var phase phaseError
+	if errors.As(err, &phase) {
+		return phase.status
+	}
+	return statusForContext(ctx)
+}
+
+func (p Pipeline) automatic() bool {
+	return p.Config.Approvals.Integration == domain.ApprovalAutomatic
 }
 
 // validateIndependentInvocations refuses to integrate work whose developer and
@@ -718,6 +1049,45 @@ func developerPrompt(persona, bundle string) string {
 	return prompt.String()
 }
 
+// repairPrompt hands one attempt's findings back to the developer that produced
+// the change. The findings are rendered as the structured value the reviewer
+// produced rather than restated as prose, so nothing is lost or reinterpreted
+// between the reviewer and the developer that must act on it. The harness
+// contract is repeated because it bounds the attempt whether or not the provider
+// actually restored the session it was asked to resume.
+func repairPrompt(summary string, findings []runstate.Finding, attempt, limit int) (string, error) {
+	encoded, err := json.MarshalIndent(findings, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("encode review findings for repair attempt %d: %w", attempt, err)
+	}
+	var prompt strings.Builder
+	prompt.WriteString(developerContract)
+	prompt.WriteString("\n\n# Independent review: repair required\n\n")
+	fmt.Fprintf(&prompt, "An independent reviewer examined your change and did not approve it. This is repair attempt %d of %d. Continue the change already in your worktree instead of starting over, and resolve every finding below.\n\n", attempt, limit)
+	if trimmed := strings.TrimSpace(summary); trimmed != "" {
+		prompt.WriteString("Reviewer summary: " + trimmed + "\n\n")
+	}
+	prompt.WriteString("Findings:\n\n")
+	prompt.Write(encoded)
+	prompt.WriteString("\n\nFix each finding, re-run the relevant checks, and finish with a concise summary of what you changed. If a finding is wrong, say why in your summary rather than leaving it unaddressed.")
+	return prompt.String(), nil
+}
+
+// renderBlockerNotes describes a run that spent its repair budget. It names the
+// findings that are still unresolved and the artifacts that were kept, because
+// this note is what a human or a later development manager replans from.
+func renderBlockerNotes(outcome Outcome, limit int) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its independent reviewer still required repair after every permitted attempt.",
+		fmt.Sprintf("Repair attempts: %d of %d permitted", outcome.RepairAttempts, limit),
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"The branch and worktree are preserved; the unresolved findings below need a replan or a reassignment.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
 func renderOutcomeNotes(outcome Outcome) string {
 	headline := "Yoyodyne bootstrap run succeeded."
 	if outcome.Integration != nil {
@@ -736,6 +1106,9 @@ func renderOutcomeNotes(outcome Outcome) string {
 		"Branch: " + outcome.Branch,
 		worktree,
 		"Base commit: " + outcome.BaseCommit,
+	}
+	if outcome.RepairAttempts > 0 {
+		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))
 	}
 	if outcome.ProviderSessionID != "" {
 		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
@@ -763,6 +1136,9 @@ func renderFailureNotes(outcome Outcome) string {
 	case outcome.Integration != nil:
 		headline = "Yoyodyne run failed after the change was already integrated; the integrated commit, branch, and worktree are preserved for reconciliation."
 	}
+	if outcome.Blocked {
+		headline = "Yoyodyne blocked this item after its repair attempts were spent; the branch and worktree are preserved."
+	}
 	lines := []string{
 		headline,
 		"Run: " + outcome.RunID,
@@ -770,6 +1146,9 @@ func renderFailureNotes(outcome Outcome) string {
 	}
 	if outcome.Phase != "" {
 		lines = append(lines, "Phase: "+string(outcome.Phase))
+	}
+	if outcome.RepairAttempts > 0 {
+		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))
 	}
 	if outcome.Branch != "" {
 		lines = append(lines, "Branch: "+outcome.Branch)

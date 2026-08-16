@@ -175,6 +175,14 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		if outcome.RunID != "" {
 			fmt.Fprintf(stderr, "run: %s\n", outcome.RunID)
 		}
+		if outcome.RepairAttempts > 0 {
+			fmt.Fprintf(stderr, "repair attempts: %d\n", outcome.RepairAttempts)
+		}
+		// A blocked item is not waiting on this process: the unresolved findings
+		// are recorded where the work is tracked and need a replan.
+		if outcome.Blocked {
+			fmt.Fprintf(stderr, "blocker recorded on %s: the reviewer's findings are unresolved\n", outcome.WorkItemID)
+		}
 		// An artifact recorded as removed is never described as preserved.
 		if outcome.Branch != "" && !outcome.BranchRemoved {
 			fmt.Fprintf(stderr, "preserved branch: %s\n", outcome.Branch)
@@ -194,6 +202,9 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 	} else {
 		fmt.Fprintf(stdout, "run succeeded: %s\n", outcome.RunID)
 		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		if outcome.RepairAttempts > 0 {
+			fmt.Fprintf(stdout, "repair attempts: %d\n", outcome.RepairAttempts)
+		}
 		if outcome.Integration == nil {
 			fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
 		} else {

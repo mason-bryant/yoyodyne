@@ -103,7 +103,10 @@ func TestStoreReserveEnforcesCapacityAtomicallyAcrossInstances(t *testing.T) {
 		reservation := reservation
 		go func() {
 			<-start
-			errorsByCall <- reservation.store.Reserve(ctx, reservation.state, 1)
+			lease, err := reservation.store.Reserve(ctx, reservation.state, 1)
+			// The winner keeps its lease for the length of the run; releasing
+			// it here is what lets the rest of the test act on the reservation.
+			errorsByCall <- errors.Join(err, lease.Release())
 		}()
 	}
 	close(start)
@@ -376,6 +379,56 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "review_decision is invalid",
 		},
 		{
+			name: "finding with no severity the developer can act on",
+			mutate: func(state *State) {
+				state.ReviewFindings = 1
+				state.ReviewFindingDetails = []Finding{{Message: "fix it"}}
+			},
+			problem: `review_finding_details[0]: severity "" must be`,
+		},
+		{
+			name: "finding with nothing to act on",
+			mutate: func(state *State) {
+				state.ReviewFindings = 1
+				state.ReviewFindingDetails = []Finding{{Severity: SeverityBlocker}}
+			},
+			problem: "review_finding_details[0]: message is required",
+		},
+		{
+			name: "finding anchored to a line in no file",
+			mutate: func(state *State) {
+				state.ReviewFindings = 1
+				state.ReviewFindingDetails = []Finding{{Severity: SeverityMajor, Message: "fix it", Line: 4}}
+			},
+			problem: "review_finding_details[0]: line requires a file",
+		},
+		{
+			name: "a count that contradicts the findings it counts",
+			mutate: func(state *State) {
+				state.ReviewFindings = 3
+				state.ReviewFindingDetails = []Finding{{Severity: SeverityMinor, Message: "fix it"}}
+			},
+			problem: "review_findings is 3 but 1 review_finding_details are recorded",
+		},
+		{
+			name:    "negative repair attempts",
+			mutate:  func(state *State) { state.RepairAttempts = -1 },
+			problem: "repair_attempts cannot be negative",
+		},
+		{
+			name:    "integration target that is not a local branch",
+			mutate:  func(state *State) { state.TargetBranch = "refs/heads/main" },
+			problem: "target_branch must be a local branch name",
+		},
+		{
+			name: "integration into a branch the run was not written against",
+			mutate: func(state *State) {
+				state.TargetBranch = "release"
+				state.Integration = &integration
+			},
+			problem: `integration target_branch "main" does not match the recorded target_branch "release"`,
+		},
+		{
 			name: "integration without an approval",
 			mutate: func(state *State) {
 				state.ReviewDecision = ReviewRepair
@@ -534,6 +587,12 @@ func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
 	state.ReviewDecision = ReviewApprove
 	state.ReviewSummary = "matches the acceptance criteria"
 	state.ReviewFindings = 2
+	state.ReviewFindingDetails = []Finding{
+		{Severity: SeverityMinor, Message: "the comment above this is stale", File: "internal/run.go", Line: 12},
+		{Severity: SeverityMinor, Message: "this name reads as a verb"},
+	}
+	state.RepairAttempts = 1
+	state.TargetBranch = "main"
 	state.Integration = &Integration{
 		TargetBranch:         "main",
 		SourceCommit:         strings.Repeat("b", 40),
@@ -550,6 +609,140 @@ func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
 	}
 	if !reflect.DeepEqual(loaded, state) {
 		t.Fatalf("Load() = %#v, want %#v", loaded, state)
+	}
+}
+
+// TestStoreLoadsStateWrittenBeforeTheRepairLoopExisted holds the schema to the
+// only bar that matters: a file the previous release actually wrote still
+// loads. The document below is the shape found in a real run state directory,
+// including `review_findings` as the integer count it has always been, and the
+// scans that run before every run have to survive it.
+func TestStoreLoadsStateWrittenBeforeTheRepairLoopExisted(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	runID := "run-22ce30530a5cd7ac66414f2095dcede1"
+	existing := `{
+  "schema_version": 1,
+  "run_id": "` + runID + `",
+  "product_id": "yoyodyne",
+  "repository_id": "yoyodyne",
+  "work_item_id": "yoyodyne-ifd.2.5",
+  "backend": "claude-code",
+  "provider_session_id": "developer-session",
+  "provider_model": "opus",
+  "provider_resolved_model": "claude-opus-5",
+  "status": "succeeded",
+  "phase": "complete",
+  "last_sequence": 128,
+  "started_at": "2026-08-15T22:47:57.459654Z",
+  "updated_at": "2026-08-15T22:50:45.953777Z",
+  "completed_at": "2026-08-15T22:50:45.836592Z",
+  "worktree_path": "/state/worktrees/yoyodyne-ifd-2-5-22ce3053",
+  "branch": "yoyodyne/yoyodyne-ifd-2-5/22ce3053",
+  "base_commit": "d5cac8a79bda4dd90146b1d4283812469c55bf03",
+  "worktree_removed": true,
+  "branch_removed": true,
+  "review_session_id": "reviewer-session",
+  "review_model": "opus",
+  "review_resolved_model": "claude-opus-5",
+  "review_decision": "approve",
+  "review_summary": "matches the acceptance criteria",
+  "review_findings": 2,
+  "integration": {
+    "target_branch": "main",
+    "source_commit": "34533d24ab1cdaa677219d7d582332e2c55ace2d",
+    "target_commit": "34533d24ab1cdaa677219d7d582332e2c55ace2d",
+    "previous_target_commit": "d5cac8a79bda4dd90146b1d4283812469c55bf03"
+  }
+}
+`
+	if err := os.WriteFile(filepath.Join(store.Root(), runID+".json"), []byte(existing), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	loaded, err := store.Load(runID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ReviewFindings != 2 || len(loaded.ReviewFindingDetails) != 0 {
+		t.Fatalf("Load() review evidence = %d counted, %#v recorded", loaded.ReviewFindings, loaded.ReviewFindingDetails)
+	}
+	// Every run scans this directory before it does anything, so a file it
+	// cannot read would stop every later run rather than only its own.
+	if _, err := store.Incomplete(); err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	lease, err := store.Reserve(ctx, testState(t, StatusPending), 1)
+	if err != nil {
+		t.Fatalf("Reserve() error = %v", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	if _, _, err := store.Adopt(ctx, "yoyodyne-ifd.2.5"); !errors.Is(err, ErrNoRunInFlight) {
+		t.Fatalf("Adopt() of a completed run error = %v, want ErrNoRunInFlight", err)
+	}
+}
+
+// TestStoreAdoptGivesOneHolderTheRunInFlight proves the resume path is as
+// exclusive as the reservation path: a second caller is refused while the first
+// still holds the run, and gets it once the holder lets go.
+func TestStoreAdoptGivesOneHolderTheRunInFlight(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() first error = %v", err)
+	}
+	second, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() second error = %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	state := testState(t, StatusPending)
+	reservation, err := first.Reserve(ctx, state, 1)
+	if err != nil {
+		t.Fatalf("Reserve() error = %v", err)
+	}
+
+	// The reserving process still holds its run, so nothing else may enter it.
+	var existing ExistingWorkItemError
+	if _, _, err := second.Adopt(ctx, state.WorkItemID); !errors.As(err, &existing) {
+		t.Fatalf("Adopt() of a held run error = %v, want ExistingWorkItemError", err)
+	}
+	if existing.State.RunID != state.RunID {
+		t.Fatalf("Adopt() reported run %q, want %q", existing.State.RunID, state.RunID)
+	}
+	if err := reservation.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+
+	// Once the holder is gone the run is adoptable, and adopting it holds it in
+	// exactly the same way.
+	adopted, lease, err := second.Adopt(ctx, state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Adopt() error = %v", err)
+	}
+	if adopted.RunID != state.RunID {
+		t.Fatalf("Adopt() = %q, want %q", adopted.RunID, state.RunID)
+	}
+	if _, _, err := first.Adopt(ctx, state.WorkItemID); !errors.As(err, &existing) {
+		t.Fatalf("Adopt() of an adopted run error = %v, want ExistingWorkItemError", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	// Releasing twice is a no-op so a caller can defer it unconditionally.
+	if err := lease.Release(); err != nil {
+		t.Fatalf("second Release() error = %v", err)
 	}
 }
 

@@ -37,6 +37,34 @@ func (e ExistingWorkItemError) Error() string {
 	return fmt.Sprintf("work item %s already has incomplete run %s", e.State.WorkItemID, e.State.RunID)
 }
 
+// ErrNoRunInFlight reports that a work item has no incomplete run to adopt, so
+// the caller may reserve a fresh one.
+var ErrNoRunInFlight = errors.New("work item has no run in flight")
+
+// Lease is exclusive ownership of one in-flight run, held for as long as a
+// process acts on it. Only one holder exists at a time, so a run resumed by a
+// second process is as singular as one a first process reserved. It is an
+// advisory file lock, which the operating system releases if its holder exits
+// unexpectedly: an interrupted run stays adoptable rather than becoming
+// permanently owned by a process that no longer exists.
+type Lease struct {
+	file *os.File
+}
+
+// Release drops the lease. Releasing twice is a no-op, so a caller can defer it
+// unconditionally.
+func (l *Lease) Release() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	file := l.file
+	l.file = nil
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("release run lease: %w", err)
+	}
+	return nil
+}
+
 type CapacityError struct {
 	Limit  int
 	Active int
@@ -63,48 +91,136 @@ func (s *Store) Root() string {
 	return s.root
 }
 
-// Reserve atomically checks duplicate work and global developer capacity and
-// creates the pending run state. The advisory lock serializes this short
+// Reserve atomically checks duplicate work and global developer capacity,
+// creates the pending run state, and returns the lease that makes this process
+// the run's only owner. The advisory reservation lock serializes this short
 // check/create critical section across Yoyodyne processes and is released by
 // the operating system if a process exits unexpectedly.
-func (s *Store) Reserve(ctx context.Context, state State, maxConcurrent int) error {
+func (s *Store) Reserve(ctx context.Context, state State, maxConcurrent int) (*Lease, error) {
 	if maxConcurrent < 1 {
-		return errors.New("max concurrent developers must be greater than zero")
+		return nil, errors.New("max concurrent developers must be greater than zero")
 	}
 	if state.Status != StatusPending {
-		return fmt.Errorf("reserved run state must be pending, got %q", state.Status)
+		return nil, fmt.Errorf("reserved run state must be pending, got %q", state.Status)
 	}
 	if err := s.validateState(state); err != nil {
-		return err
+		return nil, err
 	}
-	if err := os.MkdirAll(s.root, 0o700); err != nil {
-		return fmt.Errorf("create run state directory: %w", err)
-	}
-	lock, err := os.OpenFile(filepath.Join(s.root, ".reservation.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	release, err := s.lockReservations(ctx)
 	if err != nil {
-		return fmt.Errorf("open run reservation lock: %w", err)
+		return nil, err
 	}
-	defer lock.Close()
-	if err := lockStateFile(ctx, lock); err != nil {
-		return fmt.Errorf("lock run reservations: %w", err)
-	}
+	defer release()
 
 	active, err := s.Incomplete()
 	if err != nil {
-		return fmt.Errorf("discover incomplete runs while reserving: %w", err)
+		return nil, fmt.Errorf("discover incomplete runs while reserving: %w", err)
 	}
 	for _, existing := range active {
 		if existing.WorkItemID == state.WorkItemID {
-			return ExistingWorkItemError{State: existing}
+			return nil, ExistingWorkItemError{State: existing}
 		}
 	}
 	if len(active) >= maxConcurrent {
-		return CapacityError{Limit: maxConcurrent, Active: len(active)}
+		return nil, CapacityError{Limit: maxConcurrent, Active: len(active)}
+	}
+	// The lease is taken before the state exists, so no run is ever recorded as
+	// in flight without an owner holding it.
+	lease, held, err := s.takeLease(state.RunID)
+	if err != nil {
+		return nil, err
+	}
+	if !held {
+		return nil, fmt.Errorf("run %s is already held by another process", state.RunID)
 	}
 	if err := s.Create(state); err != nil {
-		return fmt.Errorf("create reserved run state: %w", err)
+		return nil, errors.Join(fmt.Errorf("create reserved run state: %w", err), lease.Release())
 	}
-	return nil
+	return lease, nil
+}
+
+// Adopt takes exclusive ownership of the run already in flight for a work item,
+// which is how a second process enters a run it did not start. It is the resume
+// counterpart of Reserve and refuses the same thing Reserve refuses: two
+// processes acting on one item at once. A run whose lease is already held
+// belongs to a live holder and is reported as an existing run rather than
+// picked up.
+func (s *Store) Adopt(ctx context.Context, workItemID string) (State, *Lease, error) {
+	if strings.TrimSpace(workItemID) == "" {
+		return State{}, nil, errors.New("work item id is required")
+	}
+	release, err := s.lockReservations(ctx)
+	if err != nil {
+		return State{}, nil, err
+	}
+	defer release()
+
+	active, err := s.Incomplete()
+	if err != nil {
+		return State{}, nil, fmt.Errorf("discover incomplete runs while adopting: %w", err)
+	}
+	for _, existing := range active {
+		if existing.WorkItemID != workItemID {
+			continue
+		}
+		lease, held, err := s.takeLease(existing.RunID)
+		if err != nil {
+			return State{}, nil, err
+		}
+		if !held {
+			return State{}, nil, ExistingWorkItemError{State: existing}
+		}
+		// The state is re-read under the lease, because only now is this
+		// process the one entitled to act on what it reads.
+		state, err := s.Load(existing.RunID)
+		if err != nil {
+			return State{}, nil, errors.Join(err, lease.Release())
+		}
+		return state, lease, nil
+	}
+	return State{}, nil, ErrNoRunInFlight
+}
+
+// lockReservations serializes the reservation and adoption critical sections
+// against every other Yoyodyne process.
+func (s *Store) lockReservations(ctx context.Context) (func(), error) {
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return nil, fmt.Errorf("create run state directory: %w", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(s.root, ".reservation.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open run reservation lock: %w", err)
+	}
+	if err := lockStateFile(ctx, lock); err != nil {
+		lock.Close()
+		return nil, fmt.Errorf("lock run reservations: %w", err)
+	}
+	return func() { lock.Close() }, nil
+}
+
+// takeLease tries to become the owner of one run without waiting. The lease
+// file outlives the run: it is the name the lock is taken on, and removing it
+// while another process holds it would let a third take a lock on a file
+// nobody else can see.
+func (s *Store) takeLease(runID string) (*Lease, bool, error) {
+	path, err := s.leasePath(runID)
+	if err != nil {
+		return nil, false, err
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, false, fmt.Errorf("open run lease: %w", err)
+	}
+	held, err := tryLockStateFile(file)
+	if err != nil {
+		file.Close()
+		return nil, false, fmt.Errorf("lock run %s: %w", runID, err)
+	}
+	if !held {
+		file.Close()
+		return nil, false, nil
+	}
+	return &Lease{file: file}, true, nil
 }
 
 func (s *Store) Create(state State) error {
@@ -348,6 +464,13 @@ func (s *Store) eventPath(runID string) (string, error) {
 		return "", errors.New("run id is invalid")
 	}
 	return filepath.Join(s.root, runID+".events.jsonl"), nil
+}
+
+func (s *Store) leasePath(runID string) (string, error) {
+	if !runIDPattern.MatchString(runID) {
+		return "", errors.New("run id is invalid")
+	}
+	return filepath.Join(s.root, runID+".lease"), nil
 }
 
 func writeJSONFile(file *os.File, value any) error {

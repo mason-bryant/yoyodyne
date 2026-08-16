@@ -26,6 +26,7 @@ import (
 const (
 	pipelineRunID  = "run-0123456789abcdef0123456789abcdef"
 	approveVerdict = `{"decision":"approve","summary":"the change matches the acceptance criteria"}`
+	repairVerdict  = `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`
 	// Every configured agent declares a selector, and the run records both it
 	// and the model the provider reported serving.
 	testDeveloperModel = "opus"
@@ -644,7 +645,7 @@ func TestPipelineNeverIntegratesWithoutAnApprovingVerdict(t *testing.T) {
 	}{
 		{
 			name:     "repair",
-			verdict:  `{"decision":"repair","summary":"the change misses the acceptance criteria","findings":[{"severity":"blocker","message":"add the missing file","location":{"file":"feature.txt","line":1}}]}`,
+			verdict:  repairVerdict,
 			want:     "independent review requires repair",
 			decision: runstate.ReviewRepair,
 		},
@@ -698,11 +699,377 @@ func TestPipelineNeverIntegratesWithoutAnApprovingVerdict(t *testing.T) {
 				t.Fatalf("durable review evidence = %#v", state)
 			}
 			if test.decision == runstate.ReviewRepair {
-				if state.ReviewFindings != 1 || !strings.Contains(tracker.notes, "Finding [blocker] (feature.txt:1): add the missing file") {
+				if state.ReviewFindings != 1 || len(state.ReviewFindingDetails) != 1 || !strings.Contains(tracker.notes, "Finding [blocker] (feature.txt:1): add the missing file") {
 					t.Fatalf("repair findings were not preserved: state = %#v, notes = %q", state, tracker.notes)
 				}
 			}
 		})
+	}
+}
+
+func TestPipelineReturnsFindingsToTheSameDeveloperUntilOneAttemptIsApproved(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// The first attempt leaves the reviewer something to object to; the
+		// repair attempt fixes it in the same worktree.
+		content := "incomplete\n"
+		if attempts > 1 {
+			content = "implemented\n"
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte(content), 0o600)
+	}, repairVerdict, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("repaired work was not integrated: %#v, closed = %t, blocked = %t", outcome.Integration, tracker.closed, tracker.blocked)
+	}
+	if outcome.RepairAttempts != 1 || outcome.ReviewDecision != review.DecisionApprove {
+		t.Fatalf("Run() outcome = %#v", outcome)
+	}
+
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want 2", len(developerRequests))
+	}
+	// The repair attempt resumes the developer's own session, in the branch and
+	// worktree the first attempt used.
+	repair := developerRequests[1]
+	if repair.SessionID != provider.developerSession {
+		t.Fatalf("repair attempt session = %q, want %q", repair.SessionID, provider.developerSession)
+	}
+	if repair.WorkingDirectory != developerRequests[0].WorkingDirectory || repair.WorkingDirectory != outcome.WorktreePath {
+		t.Fatalf("repair attempt ran in %q, want %q", repair.WorkingDirectory, outcome.WorktreePath)
+	}
+	// The findings reach the developer as the structured verdict the reviewer
+	// produced, not as a restatement of it.
+	for _, want := range []string{"repair attempt 1 of 2", `"severity": "blocker"`, `"message": "add the missing file"`, `"file": "feature.txt"`} {
+		if !strings.Contains(repair.Prompt, want) {
+			t.Fatalf("repair prompt is missing %q:\n%s", want, repair.Prompt)
+		}
+	}
+	// Every attempt is verified and reviewed again; nothing is inherited.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+		t.Fatalf("reviews = %d, want 2", reviews)
+	}
+	events, err := store.LoadEvents(outcome.RunID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	if completed := countEvents(events, execution.EventCommandCompleted); completed != 2 {
+		t.Fatalf("completed check commands = %d, want 2", completed)
+	}
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != outcome.Integration.TargetCommit {
+		t.Fatalf("main = %q, want the integrated commit %q", head, outcome.Integration.TargetCommit)
+	}
+	// What was integrated is the repaired change, not the one the reviewer
+	// rejected.
+	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
+		t.Fatalf("integrated feature.txt = %q, want the repaired content", integrated)
+	}
+	// The evidence that authorized integration belongs to the approving
+	// attempt: its own approval, from a reviewer session distinct from the
+	// developer's, with the rejected attempt's findings gone rather than
+	// carried forward.
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.ReviewDecision != runstate.ReviewApprove || len(state.ReviewFindingDetails) != 0 || state.ReviewFindings != 0 {
+		t.Fatalf("integrated run kept the rejected attempt's review evidence: %#v", state)
+	}
+	if state.ReviewSessionID == "" || state.ReviewSessionID == state.ProviderSessionID {
+		t.Fatalf("integrated run has no independent reviewer session: developer = %q, reviewer = %q", state.ProviderSessionID, state.ReviewSessionID)
+	}
+}
+
+func TestPipelineBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name             string
+		limit            int
+		wantDeveloperRun int
+	}{
+		{name: "two permitted attempts", limit: 2, wantDeveloperRun: 3},
+		// A project that permits no repair returns the findings to nobody: the
+		// first repair verdict is already the end of the budget.
+		{name: "no permitted attempts", limit: 0, wantDeveloperRun: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			provider := roleBackend(func(request backend.RunRequest) error {
+				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+			}, repairVerdict)
+			pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+			pipeline.Config.Execution.RepairAttemptsBeforeReplan = test.limit
+			before := gitLine(t, repository, "rev-parse", "refs/heads/main")
+
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			wantFailure := fmt.Sprintf("independent review requires repair after %d of %d permitted attempt(s)", test.limit, test.limit)
+			if err == nil || !strings.Contains(err.Error(), wantFailure) {
+				t.Fatalf("Run() error = %v, want %q", err, wantFailure)
+			}
+			if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != test.wantDeveloperRun {
+				t.Fatalf("developer invocations = %d, want %d", runs, test.wantDeveloperRun)
+			}
+			if outcome.Integration != nil || tracker.closed {
+				t.Fatalf("unapproved change was integrated: %#v, closed = %t", outcome.Integration, tracker.closed)
+			}
+			if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != before {
+				t.Fatalf("main moved without an approval: %q, want %q", head, before)
+			}
+
+			// The findings the developer never resolved are recorded where the
+			// work is tracked, rather than ending with the failed run.
+			if !tracker.blocked || !outcome.Blocked {
+				t.Fatalf("spent repair budget did not block the item: tracker = %t, outcome = %t", tracker.blocked, outcome.Blocked)
+			}
+			for _, want := range []string{
+				fmt.Sprintf("Repair attempts: %d of %d permitted", test.limit, test.limit),
+				"Finding [blocker] (feature.txt:1): add the missing file",
+				outcome.WorktreePath,
+				outcome.Branch,
+			} {
+				if !strings.Contains(tracker.blockReason, want) {
+					t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+				}
+			}
+			// The work is preserved for whoever replans it.
+			if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
+				t.Fatalf("blocked worktree was not preserved: %v", err)
+			}
+			state, err := store.Load(outcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if state.Status != runstate.StatusFailed || state.RepairAttempts != test.limit || len(state.ReviewFindingDetails) != 1 {
+				t.Fatalf("state = %#v", state)
+			}
+		})
+	}
+}
+
+func TestPipelineResumesTheRepairLoopAtTheRecordedAttempt(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		// allowSaves chooses the step the first process dies on: none lets the
+		// second attempt be refused as it is recorded, one lets it be recorded
+		// and then loses the developer that was about to run.
+		allowSaves int
+		// wantRecorded is the attempt count that survives on disk, wantPhase
+		// the phase it survives in, and wantResumedDeveloperRuns how many
+		// developer invocations the resumed run is entitled to make.
+		wantRecorded             int
+		wantPhase                runstate.Phase
+		verdict                  string
+		wantResumedDeveloperRuns int
+	}{
+		{
+			name: "resumed attempt is approved", allowSaves: 0,
+			wantRecorded: 1, wantPhase: runstate.PhaseReviewing,
+			verdict: approveVerdict, wantResumedDeveloperRuns: 0,
+		},
+		{
+			name: "resumed attempt exhausts the budget it inherited", allowSaves: 0,
+			wantRecorded: 1, wantPhase: runstate.PhaseReviewing,
+			verdict: repairVerdict, wantResumedDeveloperRuns: 1,
+		},
+		// Dying once the attempt is recorded leaves the developer never
+		// invoked, so the resumed run has to rebuild the repair prompt from the
+		// durable findings and issue it to the recorded session.
+		{
+			name: "resumed attempt was recorded but never issued", allowSaves: 1,
+			wantRecorded: 2, wantPhase: runstate.PhaseDeveloping,
+			verdict: approveVerdict, wantResumedDeveloperRuns: 1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			repository, worktreeRoot, store := restartableFixture(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			write := func(request backend.RunRequest) error {
+				return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+			}
+
+			// The first process is interrupted on its second repair attempt:
+			// nothing after that point reaches durable state.
+			interrupted := &interruptedStore{StateStore: store, atAttempt: 2, allowSaves: test.allowSaves}
+			first := roleBackend(write, repairVerdict)
+			firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{"exit 0"}), first)
+			firstOutcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+			if err == nil || !interrupted.stopped {
+				t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
+			}
+			interruptedState, err := store.Load(firstOutcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() interrupted state error = %v", err)
+			}
+			if interruptedState.Status.Terminal() || interruptedState.RepairAttempts != test.wantRecorded || interruptedState.Phase != test.wantPhase {
+				t.Fatalf("interrupted state = %#v, want %d attempt(s) in phase %q", interruptedState, test.wantRecorded, test.wantPhase)
+			}
+
+			// A second process over the same durable state picks the run up
+			// rather than starting a second developer on the same item.
+			second := roleBackend(write, test.verdict)
+			resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+			outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+			if outcome.RunID != firstOutcome.RunID || outcome.WorktreePath != firstOutcome.WorktreePath || outcome.Branch != firstOutcome.Branch {
+				t.Fatalf("resumed run = %#v, want the interrupted run %s in %s", outcome, firstOutcome.RunID, firstOutcome.WorktreePath)
+			}
+			if claims := countCalls(tracker.calls, "claim"); claims != 1 {
+				t.Fatalf("claims = %d, want the item claimed once", claims)
+			}
+
+			// The inherited attempt count is what bounds the resumed run: the
+			// remainder of the original budget, never a fresh one.
+			developerRequests := second.requestsForRole(domain.RoleDeveloper)
+			if len(developerRequests) != test.wantResumedDeveloperRuns {
+				t.Fatalf("resumed developer invocations = %d, want %d", len(developerRequests), test.wantResumedDeveloperRuns)
+			}
+			for _, reissued := range developerRequests {
+				// Whatever attempt the resumed run makes, it continues the
+				// recorded session with the findings from durable state rather
+				// than starting the change over.
+				if reissued.SessionID != second.developerSession {
+					t.Fatalf("resumed attempt session = %q, want %q", reissued.SessionID, second.developerSession)
+				}
+				if !strings.Contains(reissued.Prompt, `"message": "add the missing file"`) {
+					t.Fatalf("resumed repair prompt lost the durable findings:\n%s", reissued.Prompt)
+				}
+			}
+
+			if test.verdict == approveVerdict {
+				if err != nil {
+					t.Fatalf("resumed Run() error = %v", err)
+				}
+				if outcome.Integration == nil || !tracker.closed || outcome.RepairAttempts != test.wantRecorded {
+					t.Fatalf("resumed run did not integrate at the recorded attempt: %#v", outcome)
+				}
+				return
+			}
+
+			if err == nil || !strings.Contains(err.Error(), "after 2 of 2 permitted attempt(s)") {
+				t.Fatalf("resumed Run() error = %v", err)
+			}
+			if !tracker.blocked || outcome.RepairAttempts != 2 {
+				t.Fatalf("resumed run did not block at the inherited limit: blocked = %t, outcome = %#v", tracker.blocked, outcome)
+			}
+		})
+	}
+}
+
+// A run in flight has exactly one owner. Entering it from a second invocation
+// has to be refused for the same reason a duplicate fresh run is: two
+// developers in one worktree would both count attempts from the same base and
+// together spend more than the configured budget.
+func TestPipelineRefusesToActOnARunAnotherInvocationHolds(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	second := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	secondPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+
+	var concurrent error
+	attempts := 0
+	first := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// On the repair attempt the durable state is exactly what a resuming
+		// process looks for, so this is the moment a second invocation would
+		// otherwise join the run.
+		if attempts == 2 {
+			held, err := store.Load(pipelineRunID)
+			if err != nil {
+				t.Errorf("Load() held run error = %v", err)
+			}
+			// Without this the refusal below would prove nothing: it has to be
+			// the holder that stops the second invocation, not a state the
+			// resume path would have declined anyway.
+			if !resumableRepair(held) {
+				t.Errorf("held run is not resumable, so nothing would resume it: %#v", held)
+			}
+			_, concurrent = secondPipeline.Run(context.Background(), tracker.item.ID)
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, repairVerdict, approveVerdict)
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
+
+	outcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("developer attempts = %d, want the repair attempt to have run", attempts)
+	}
+	var existing ExistingRunError
+	if !errors.As(concurrent, &existing) {
+		t.Fatalf("concurrent Run() error = %T %v, want ExistingRunError", concurrent, concurrent)
+	}
+	if existing.State.RunID != outcome.RunID {
+		t.Fatalf("concurrent Run() refused run %q, want %q", existing.State.RunID, outcome.RunID)
+	}
+	// The refused invocation touched nothing: no developer, no reviewer, and no
+	// extra attempt against the budget.
+	if len(second.requests) != 0 {
+		t.Fatalf("refused invocation ran %d provider request(s)", len(second.requests))
+	}
+	if outcome.RepairAttempts != 1 {
+		t.Fatalf("repair attempts = %d, want the one attempt the holder made", outcome.RepairAttempts)
+	}
+}
+
+func TestPipelineRefusesToResumeARunThatIsNotInsideItsRepairLoop(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+
+	// A first developer attempt that was interrupted has no repair attempt to
+	// resume and no findings to hand anyone. Reconciling it is not this
+	// pipeline's job, so it is refused rather than re-run.
+	now := time.Now().UTC()
+	if err := store.Create(runstate.State{
+		SchemaVersion:     runstate.StateSchemaVersion,
+		RunID:             pipelineRunID,
+		ProductID:         "yoyodyne",
+		RepositoryID:      "yoyodyne",
+		WorkItemID:        tracker.item.ID,
+		Backend:           domain.BackendClaudeCode,
+		Status:            runstate.StatusRunning,
+		Phase:             runstate.PhaseDeveloping,
+		StartedAt:         now,
+		UpdatedAt:         now,
+		WorktreePath:      filepath.Join(worktreeRoot, "yoyodyne-task"),
+		Branch:            "yoyodyne/yoyodyne-task/0123456789ab",
+		BaseCommit:        strings.Repeat("a", 40),
+		TargetBranch:      "main",
+		ProviderSessionID: "developer-session",
+	}); err != nil {
+		t.Fatalf("Create() interrupted state error = %v", err)
+	}
+
+	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	var existing ExistingRunError
+	if !errors.As(err, &existing) {
+		t.Fatalf("Run() error = %T %v, want ExistingRunError", err, err)
+	}
+	if tracker.claimed || len(provider.requests) != 0 {
+		t.Fatalf("refused run acted on the item: claimed = %t, provider requests = %d", tracker.claimed, len(provider.requests))
 	}
 }
 
@@ -1310,9 +1677,12 @@ type fakeTracker struct {
 	notes       string
 	closed      bool
 	closeReason string
+	blocked     bool
+	blockReason string
 	calls       []string
 	onClaim     func() error
 	completeErr error
+	blockErr    error
 }
 
 type partialWorktreeManager struct {
@@ -1366,6 +1736,17 @@ func (f *fakeTracker) RecordOutcome(_ context.Context, _ string, notes string) (
 	return f.item, nil
 }
 
+func (f *fakeTracker) Block(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
+	f.calls = append(f.calls, "block")
+	if f.blockErr != nil {
+		return beads.WorkItem{}, f.blockErr
+	}
+	f.blocked = true
+	f.blockReason = reason
+	f.item.Status = "blocked"
+	return f.item, nil
+}
+
 func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (beads.WorkItem, error) {
 	f.calls = append(f.calls, "complete")
 	if f.completeErr != nil {
@@ -1415,19 +1796,27 @@ func (f *fakeBackend) requestsForRole(role domain.AgentRole) []backend.RunReques
 
 func newPipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend, commands []string) (Pipeline, *runstate.Store) {
 	t.Helper()
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	return newSharedPipeline(t, repository, filepath.Join(t.TempDir(), "worktrees"), store, tracker, provider, commands), store
+}
+
+// newSharedPipeline builds a pipeline over an explicit worktree root and run
+// state store, so two pipelines can be built over the same durable artifacts:
+// that is what a restarted or a concurrent process sees.
+func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store StateStore, tracker *fakeTracker, provider *fakeBackend, commands []string) Pipeline {
+	t.Helper()
 	processRunner := execution.OSProcessRunner{}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
-		WorktreeRoot:          filepath.Join(t.TempDir(), "worktrees"),
+		WorktreeRoot:          worktreeRoot,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
 	})
 	if err != nil {
 		t.Fatalf("gitworktree.New() error = %v", err)
-	}
-	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
-	if err != nil {
-		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
 	cfg := config.Config{
 		Version: config.CurrentVersion,
@@ -1449,14 +1838,17 @@ func newPipeline(t *testing.T, repository string, tracker *fakeTracker, provider
 		Tracker: tracker, Worktrees: worktrees, Store: store, Backend: provider,
 		Checks: checks.Runner{Process: processRunner}, NewRunID: func() (string, error) { return pipelineRunID, nil },
 		Repository: repository, Config: cfg,
-	}, store
+	}
 }
 
 // roleBackend serves the developer and the reviewer from one fake provider, so
 // a test can prove the two invocations are actually distinct rather than
-// assuming it from separate doubles.
-func roleBackend(develop func(backend.RunRequest) error, verdict string) *fakeBackend {
+// assuming it from separate doubles. The reviewer answers with each verdict in
+// turn and repeats the last one, which is what lets a test drive a repair loop
+// to a chosen outcome.
+func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fakeBackend {
 	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	reviews := 0
 	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
 		switch request.Role {
 		case domain.RoleDeveloper:
@@ -1472,6 +1864,11 @@ func roleBackend(develop func(backend.RunRequest) error, verdict string) *fakeBa
 				LastEvent:     request.LastSequence,
 			}, nil
 		case domain.RoleReviewer:
+			verdict := verdicts[len(verdicts)-1]
+			if reviews < len(verdicts) {
+				verdict = verdicts[reviews]
+			}
+			reviews++
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
 				SessionID:     provider.reviewerSession,
@@ -1542,10 +1939,71 @@ func automaticFixture(t *testing.T) (string, *fakeTracker, *fakeBackend, Pipelin
 func newAutomaticPipeline(t *testing.T, repository string, tracker *fakeTracker, provider *fakeBackend, commands []string) (Pipeline, *runstate.Store) {
 	t.Helper()
 	pipeline, store := newPipeline(t, repository, tracker, provider, commands)
+	return automatic(pipeline, provider), store
+}
+
+// automatic turns a pipeline into one that reviews and integrates on its own.
+func automatic(pipeline Pipeline, provider *fakeBackend) Pipeline {
 	pipeline.Config.Approvals.Integration = domain.ApprovalAutomatic
 	pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendClaudeCode, Model: testReviewerModel, Instances: 1}
 	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: testReviewerModel}
-	return pipeline, store
+	return pipeline
+}
+
+// interruptedStore stops accepting writes once a run reaches the given repair
+// attempt, after letting allowSaves of them through. What is left on disk is
+// what an interrupted process leaves behind: a non-terminal run recorded at the
+// last step it managed to write down. Varying allowSaves is what chooses the
+// step the process died on.
+type interruptedStore struct {
+	StateStore
+	atAttempt  int
+	allowSaves int
+	saved      int
+	stopped    bool
+}
+
+func (s *interruptedStore) Save(state runstate.State) error {
+	if state.RepairAttempts >= s.atAttempt {
+		if s.saved >= s.allowSaves {
+			s.stopped = true
+			return errors.New("state store is unavailable")
+		}
+		s.saved++
+	}
+	return s.StateStore.Save(state)
+}
+
+// restartableFixture returns a repository, worktree root, and run state store
+// that outlive any one pipeline, so a second pipeline over them sees exactly
+// what a restarted process would.
+func restartableFixture(t *testing.T) (string, string, *runstate.Store) {
+	t.Helper()
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	return pipelineRepository(t), filepath.Join(t.TempDir(), "worktrees"), store
+}
+
+func countEvents(events []execution.Event, eventType execution.EventType) int {
+	matching := 0
+	for _, event := range events {
+		if event.Type == eventType {
+			matching++
+		}
+	}
+	return matching
+}
+
+func countCalls(calls []string, name string) int {
+	matching := 0
+	for _, call := range calls {
+		if call == name {
+			matching++
+		}
+	}
+	return matching
 }
 
 func hasEvent(events []execution.Event, eventType execution.EventType) bool {
