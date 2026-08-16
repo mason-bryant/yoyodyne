@@ -1,11 +1,15 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"go.yaml.in/yaml/v3"
 
 	"yoyodyne/internal/domain"
 )
@@ -418,5 +422,102 @@ func writeProject(t *testing.T, project, contents string, personas map[string]st
 		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatalf("WriteFile() error = %v", err)
 		}
+	}
+}
+
+// The bundle supplies both usage-limit pause bounds, so a project inherits a
+// harness that waits out a five-hour limit and refuses to sleep through a
+// seven-day one without having to write either number down.
+func TestBuiltinBundleSuppliesUsageLimitPauseBounds(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadProject(t, minimalProjectConfig, nil)
+	if got := resolved.Config.Execution.UsageLimitMaxPause; got != Duration(6*time.Hour) {
+		t.Fatalf("usage_limit_max_pause = %s, want 6h", got)
+	}
+	if got := resolved.Config.Execution.UsageLimitInProcessPause; got != Duration(6*time.Hour) {
+		t.Fatalf("usage_limit_in_process_pause = %s, want 6h", got)
+	}
+	for _, key := range []string{"execution.usage_limit_max_pause", "execution.usage_limit_in_process_pause"} {
+		if origin := resolved.Origins[key]; origin != BuiltinV1 {
+			t.Fatalf("%s origin = %q, want %q", key, origin, BuiltinV1)
+		}
+	}
+}
+
+// A project that cares about the pause overrides only the bound it means, in the
+// duration syntax it reads it in, and keeps everything else it inherited.
+func TestProjectOverridesOneUsageLimitPauseBound(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadProject(t, minimalProjectConfig+`execution:
+  usage_limit_in_process_pause: 15m
+`, nil)
+	if got := resolved.Config.Execution.UsageLimitInProcessPause; got != Duration(15*time.Minute) {
+		t.Fatalf("usage_limit_in_process_pause = %s, want 15m", got)
+	}
+	if got := resolved.Config.Execution.UsageLimitMaxPause; got != Duration(6*time.Hour) {
+		t.Fatalf("usage_limit_max_pause = %s, want the inherited 6h", got)
+	}
+	if origin := resolved.Origins["execution.usage_limit_max_pause"]; origin != BuiltinV1 {
+		t.Fatalf("an untouched bound changed origin to %q", origin)
+	}
+}
+
+// A configured duration is round-tripped in the form it was written in, in both
+// renderings of the effective configuration. `config show` is where an operator
+// finds out how long a run is allowed to wait, and a nanosecond count is not an
+// answer to that question.
+func TestConfiguredDurationsRenderAsDurations(t *testing.T) {
+	t.Parallel()
+
+	cfg := loadProject(t, minimalProjectConfig, nil).Config
+	asYAML, err := yaml.Marshal(cfg.Execution)
+	if err != nil {
+		t.Fatalf("Marshal() yaml error = %v", err)
+	}
+	if !strings.Contains(string(asYAML), "usage_limit_max_pause: 6h0m0s") {
+		t.Fatalf("effective YAML did not render the pause as a duration:\n%s", asYAML)
+	}
+	asJSON, err := json.Marshal(cfg.Execution)
+	if err != nil {
+		t.Fatalf("Marshal() json error = %v", err)
+	}
+	if !strings.Contains(string(asJSON), `"usage_limit_max_pause":"6h0m0s"`) {
+		t.Fatalf("effective JSON did not render the pause as a duration:\n%s", asJSON)
+	}
+}
+
+func TestUsageLimitPauseBoundsFailClosed(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		body    string
+		wantErr string
+	}{
+		{
+			name:    "not a duration",
+			body:    "execution:\n  usage_limit_max_pause: soon\n",
+			wantErr: "parse duration",
+		},
+		{
+			// A zero bound is a deliberate "never wait"; only a negative one
+			// describes a wait nobody could take.
+			name:    "negative",
+			body:    "execution:\n  usage_limit_max_pause: -1h\n",
+			wantErr: "usage_limit_max_pause cannot be negative",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			project := t.TempDir()
+			writeProject(t, project, minimalProjectConfig+testCase.body, nil)
+			_, err := LoadResolved(filepath.Join(project, DirectoryName, FileName))
+			if err == nil || !strings.Contains(err.Error(), testCase.wantErr) {
+				t.Fatalf("LoadResolved() error = %v, want one mentioning %q", err, testCase.wantErr)
+			}
+		})
 	}
 }

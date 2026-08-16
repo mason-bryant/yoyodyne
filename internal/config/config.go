@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"yoyodyne/internal/domain"
@@ -39,7 +40,34 @@ type Execution struct {
 	MaxConcurrentDevelopers    int    `yaml:"max_concurrent_developers" json:"max_concurrent_developers"`
 	RepairAttemptsBeforeReplan int    `yaml:"repair_attempts_before_replan" json:"repair_attempts_before_replan"`
 	WorktreeRoot               string `yaml:"worktree_root" json:"worktree_root"`
+	// UsageLimitMaxPause bounds how long a run may wait for an exhausted
+	// provider usage limit to reset. A reset further away than this is treated
+	// as no usable reset time at all: the run stops and records a blocker
+	// instead of sleeping on it. Zero disables waiting entirely, so every
+	// exhausted limit blocks immediately.
+	UsageLimitMaxPause Duration `yaml:"usage_limit_max_pause" json:"usage_limit_max_pause"`
+	// UsageLimitInProcessPause is how much of that bound a run will spend
+	// sleeping inside this process. A shorter wait is simply waited out; a
+	// longer one exits with the run still in flight and its deadline recorded,
+	// so a later invocation resumes it rather than holding a process open for
+	// hours. It is never larger than UsageLimitMaxPause in effect, because a
+	// pause beyond that bound is refused before either path is chosen.
+	UsageLimitInProcessPause Duration `yaml:"usage_limit_in_process_pause" json:"usage_limit_in_process_pause"`
 }
+
+const (
+	// defaultUsageLimitMaxPause covers the provider's five-hour limit with slack
+	// and stops short of its seven-day one. A run that would have to sleep for
+	// days is not a run that should be sleeping: it stops and records a blocker,
+	// so the capacity problem reaches a person instead of a timer.
+	defaultUsageLimitMaxPause = Duration(6 * time.Hour)
+	// defaultUsageLimitInProcessPause equals the maximum pause, so by default
+	// every wait the harness will take at all is taken in this process and the
+	// run continues on its own — which is what waiting out a usage limit is for.
+	// Lowering it trades that for a run that exits with its deadline recorded
+	// and is resumed by a later invocation.
+	defaultUsageLimitInProcessPause = defaultUsageLimitMaxPause
+)
 
 type Approvals struct {
 	Brief       domain.ApprovalMode `yaml:"brief" json:"brief"`
@@ -109,6 +137,15 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")
+	}
+	// Zero is a deliberate choice — never wait, block on every exhausted limit —
+	// so only a negative bound, which describes no wait anybody could take, is
+	// refused.
+	if c.Execution.UsageLimitMaxPause < 0 {
+		problems = append(problems, "usage_limit_max_pause cannot be negative")
+	}
+	if c.Execution.UsageLimitInProcessPause < 0 {
+		problems = append(problems, "usage_limit_in_process_pause cannot be negative")
 	}
 
 	approvalValues := []struct {

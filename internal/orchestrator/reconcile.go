@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
@@ -142,6 +143,16 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 	if resumableRepair(state) {
 		result := reconciliationOf(state, ActionResumable)
 		result.Detail = fmt.Sprintf("the repair loop can continue from durable state at attempt %d", state.RepairAttempts)
+		return result, nil
+	}
+	// A run waiting out an exhausted provider usage limit is not an interrupted
+	// run at all: it recorded a deadline and is owed the attempt it was refused.
+	// Settling it here would throw away a claimed item and a preserved worktree
+	// over a wait that has not finished yet.
+	if pausedForUsageLimit(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run is paused for an exhausted %s usage limit and can continue once it resets at %s",
+			nonEmpty(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 		return result, nil
 	}
 	// Recorded integration means the work is already promoted, whatever else

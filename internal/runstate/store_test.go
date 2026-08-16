@@ -1076,3 +1076,60 @@ func testState(t *testing.T, status Status) State {
 	}
 	return state
 }
+
+// The pause deadline has to survive the process that wrote it: that is the
+// whole point of recording it before the wait begins.
+func TestStoreRoundTripsAUsageLimitPause(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseDeveloping
+	resetsAt := state.StartedAt.Add(2 * time.Hour).UTC()
+	state.UsageLimitResetsAt = &resetsAt
+	state.UsageLimitKind = "five_hour"
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.UsageLimitResetsAt == nil || !loaded.UsageLimitResetsAt.Equal(resetsAt) || loaded.UsageLimitKind != "five_hour" {
+		t.Fatalf("Load() = %#v, want the recorded pause", loaded)
+	}
+	// A paused run is in flight, so every entry point that looks for work to
+	// resume has to see it.
+	if !loaded.Outstanding() {
+		t.Fatalf("a paused run is not outstanding: %#v", loaded)
+	}
+}
+
+// A pause is an instruction to resume later. Recorded on a terminal run it would
+// promise a continuation nothing will ever make, so it must not be storable.
+func TestStateRejectsAPauseOnARunThatCannotResume(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Now().UTC()
+	terminal := testState(t, StatusFailed)
+	terminal.CompletedAt = &completedAt
+	resetsAt := completedAt.Add(time.Hour)
+	terminal.UsageLimitResetsAt = &resetsAt
+	if err := terminal.Validate(); err == nil || !strings.Contains(err.Error(), "requires a run that is still in flight") {
+		t.Fatalf("Validate() error = %v, want a terminal run to refuse a pause", err)
+	}
+
+	zeroed := testState(t, StatusRunning)
+	zeroed.UsageLimitResetsAt = &time.Time{}
+	if err := zeroed.Validate(); err == nil || !strings.Contains(err.Error(), "cannot be the zero time") {
+		t.Fatalf("Validate() error = %v, want the zero time refused", err)
+	}
+}

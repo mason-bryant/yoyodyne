@@ -73,7 +73,9 @@ Three layers produce the effective configuration, later ones winning:
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
    them: `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
-   (`auto`), and an agent's `instances` (1).
+   (`auto`), `execution.usage_limit_max_pause` and
+   `execution.usage_limit_in_process_pause` (`6h` each), and an agent's
+   `instances` (1).
 2. **The built-in bundle**, named by `extends`. Today the only bundle is
    `builtin:v1`. It supplies `execution`, `approvals`, and the five default
    agents. It deliberately supplies no `product` and no `checks`, because those
@@ -130,6 +132,55 @@ Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
 
+## Waiting out a provider usage limit
+
+When the provider reports that a usage limit is exhausted, the run pauses rather
+than failing: nothing is cleaned up, the Beads item stays claimed, the worktree
+and branch survive, and the developer session is kept so the reissued attempt
+continues the same change. This covers both provider invocations a run makes — a
+developer attempt is reissued, and a review the provider declined is asked for
+again without redeveloping the change or spending a repair attempt. Two settings
+bound that wait, both written in Go's duration syntax (`6h`, `90m`, `45s`):
+
+```yaml
+execution:
+  usage_limit_max_pause: 6h
+  usage_limit_in_process_pause: 6h
+```
+
+`usage_limit_max_pause` is the longest a single run will spend waiting **in
+total**, across every pause it takes. The budget is per run, not per pause,
+because a provider that keeps refusing would otherwise walk a run far past the
+configured maximum one individually-acceptable wait at a time. A reset time that
+does not fit in what the run has left is treated as no usable reset time: the run
+stops and records a blocker naming what it already spent, instead of sleeping on
+it. The `6h` default covers the provider's five-hour limit with slack and
+deliberately stops short of its seven-day one, because a capacity problem that
+would cost days needs a person rather than a timer. Setting it to `0` disables
+waiting entirely, so every exhausted limit blocks immediately.
+
+`usage_limit_in_process_pause` is how much of that bound a run will spend
+sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
+default every wait the harness will take is taken here and the run continues on
+its own once the limit resets. Lowering it — say to `15m` — makes a longer wait
+exit instead, with the run still in flight and its deadline recorded; running
+`yoyodyne run` on the same item after the reset time continues that same run.
+
+Both paths record the deadline in durable run state *before* any waiting begins,
+so a process that dies mid-wait loses nothing and a restart honors the same
+deadline rather than retrying straight back into the limit. Nothing polls and
+nothing retries before the deadline. `yoyodyne reconcile` leaves a paused run
+alone for the same reason it leaves a repair loop alone: it is not an interrupted
+run, it is a run that is owed the attempt it was refused.
+
+A reset time that is absent, unreadable, already in the past, or beyond what the
+run has left of `usage_limit_max_pause` stops the run with a blocker naming what
+refused it. A reset that is not in the future is refused deliberately: a limit
+still declining work while claiming it has already reset is not describing a
+wait, and honoring it would mean reissuing straight back into the same refusal.
+Transient throttling never reaches any of this: the provider CLI retries that
+itself, and the harness does not duplicate the wait.
+
 ## Merge and removal semantics
 
 - A field a layer does not mention is **inherited** from the layer beneath it.
@@ -175,6 +226,8 @@ These are all errors, reported before any work is claimed:
 - a `disabled: true` entry that also configures fields, or that names an agent no
   layer defined;
 - a persona override missing `version` or `path`;
+- a usage-limit pause bound that is not a duration, or that is negative — `0`
+  is accepted, because "never wait" is a choice somebody can mean;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a role and backend combination the backend does not support, such as an

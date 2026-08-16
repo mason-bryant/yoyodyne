@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"yoyodyne/internal/backend"
 	"yoyodyne/internal/execution"
@@ -41,6 +42,80 @@ type streamEnvelope struct {
 	MaxRetries     int             `json:"max_retries"`
 	Error          string          `json:"error"`
 	Output         string          `json:"output"`
+	// RateLimitInfo is the payload of a rate_limit_event, kept whole rather than
+	// reduced to the few fields the harness reads from it. It is the only
+	// evidence anybody has of what the provider says when capacity runs out, and
+	// discarding the parts this version does not act on is what made the
+	// question unanswerable the last time it was asked.
+	RateLimitInfo json.RawMessage `json:"rate_limit_info"`
+}
+
+// rateLimitInfo names the fields of a rate_limit_event the harness acts on. The
+// provider sends more than this — utilization, overage accounting, the reason
+// overage is unavailable — and all of it is preserved in the event stream; only
+// these decide whether a run waits.
+//
+// Provenance of these names. No recorded rate_limit_event was available to read
+// them off: this parser used to route the event to its default branch, so all
+// twenty entries in the local run history had already had their payload
+// discarded, and a hard limit could not be provoked on demand to record a fresh
+// one. They were therefore read out of the shipped provider CLI itself —
+// Claude Code 2.1.224, the emitted-message schema `$1v` and the payload schema
+// it references, `L1v` — which declares:
+//
+//	type:           "rate_limit_event"
+//	rate_limit_info: status ∈ {allowed, allowed_warning, rejected}   (required)
+//	                 resetsAt?: int
+//	                 rateLimitType? ∈ {five_hour, seven_day, seven_day_opus,
+//	                                   seven_day_sonnet,
+//	                                   seven_day_overage_included, overage}
+//	                 utilization?, isUsingOverage?, overageStatus?,
+//	                 overageResetsAt?, overageDisabledReason?, …
+//
+// resetTime reads resetsAt as whole Unix seconds because that CLI compares it as
+// `resetsAt * 1000 <= Date.now()` and renders it as `resetsAt - Date.now()/1000`.
+// exhausted excludes isUsingOverage because that CLI shows a hard limit only
+// when overage is not already serving the request.
+//
+// That is a description of the provider, not a promise from it. Everything here
+// degrades safely if a future version disagrees: an unreadable payload is
+// recorded whole and never read as exhaustion, so the harness stops waiting
+// rather than starts waiting wrongly. The first real exhausted limit this
+// records is the evidence that should replace this comment.
+type rateLimitInfo struct {
+	Status        string `json:"status"`
+	RateLimitType string `json:"rateLimitType"`
+	// ResetsAt stays raw so that a reset time in a shape this version does not
+	// expect cannot sink the decode of the whole payload. An exhausted limit
+	// whose reset time is unreadable is still an exhausted limit, and it has to
+	// reach the caller as one: what the harness refuses is guessing the wait, not
+	// noticing the refusal.
+	ResetsAt       json.RawMessage `json:"resetsAt"`
+	IsUsingOverage bool            `json:"isUsingOverage"`
+}
+
+// rateLimitRejected is the provider's name for a limit that is refusing work.
+// Its other statuses describe a limit that is still serving, and the transient
+// throttles the provider CLI retries by itself arrive separately as the system
+// api_retry subtype, so neither is a reason for the harness to wait.
+const rateLimitRejected = "rejected"
+
+// exhausted reports a limit that actually stops work. A rejected primary limit
+// with overage already in use is still being served, which is the provider's own
+// rule for whether to show the user a hard limit or leave them working.
+func (r rateLimitInfo) exhausted() bool {
+	return r.Status == rateLimitRejected && !r.IsUsingOverage
+}
+
+// resetTime reads the instant the limit resets. The provider sends whole
+// seconds since the Unix epoch; anything else is no reset time at all, and the
+// caller refuses to wait rather than inventing one.
+func (r rateLimitInfo) resetTime() time.Time {
+	var seconds int64
+	if len(r.ResetsAt) == 0 || json.Unmarshal(r.ResetsAt, &seconds) != nil || seconds <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0).UTC()
 }
 
 type message struct {
@@ -94,6 +169,8 @@ func (p *streamParser) ParseLine(line string) error {
 		return p.parseMessage(envelope.Type, envelope.Message)
 	case "result":
 		return p.parseResult(envelope)
+	case "rate_limit_event":
+		return p.parseRateLimit(envelope)
 	default:
 		return p.emit(execution.EventProcessOutput, map[string]any{
 			"provider_type":    envelope.Type,
@@ -141,6 +218,37 @@ func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 			"output":           truncate(envelope.Output),
 		})
 	}
+}
+
+// parseRateLimit records what the provider said about capacity. The whole
+// payload goes into the event stream, not the handful of fields this version
+// reads from it: a limit nobody has seen the shape of cannot be diagnosed from
+// an event that already threw the shape away. Only an exhausted limit becomes a
+// result the run acts on — the same event reports healthy utilization far more
+// often, and reading that as exhaustion would stop runs that have capacity.
+func (p *streamParser) parseRateLimit(envelope streamEnvelope) error {
+	if err := p.emit(execution.EventProcessOutput, map[string]any{
+		"provider_type":   envelope.Type,
+		"rate_limit_info": json.RawMessage(envelope.RateLimitInfo),
+	}); err != nil {
+		return err
+	}
+	var info rateLimitInfo
+	if len(envelope.RateLimitInfo) == 0 || json.Unmarshal(envelope.RateLimitInfo, &info) != nil {
+		// A payload the harness cannot read is already recorded above. It says
+		// nothing about capacity, so it must not be read as exhaustion, and a
+		// malformed report is not a reason to fail the stream either.
+		return nil
+	}
+	if !info.exhausted() {
+		// The provider re-reports as the limit changes, so a later report that
+		// the limit is serving again supersedes an earlier exhausted one rather
+		// than accumulating beside it.
+		p.result.UsageLimit = nil
+		return nil
+	}
+	p.result.UsageLimit = &backend.UsageLimit{Kind: info.RateLimitType, ResetsAt: info.resetTime()}
+	return nil
 }
 
 func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) error {
@@ -210,6 +318,11 @@ func (p *streamParser) redactEnvelope(envelope *streamEnvelope) error {
 		return fmt.Errorf("redact provider usage: %w", err)
 	}
 	envelope.Usage = usage
+	rateLimit, err := p.redactJSONStrings(envelope.RateLimitInfo)
+	if err != nil {
+		return fmt.Errorf("redact provider rate limit: %w", err)
+	}
+	envelope.RateLimitInfo = rateLimit
 	return nil
 }
 

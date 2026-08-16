@@ -77,8 +77,12 @@ type Pipeline struct {
 	Checks    CheckRunner
 	// Reviewer is required only when integration is automatic, because nothing
 	// is ever integrated without an independent verdict.
-	Reviewer     ChangeReviewer
-	Clock        execution.Clock
+	Reviewer ChangeReviewer
+	Clock    execution.Clock
+	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
+	// pause without spending the real time, and so the wait is always cut short
+	// by a cancelled context rather than holding the process past a shutdown.
+	Sleep        func(ctx context.Context, duration time.Duration) error
 	NewRunID     func() (string, error)
 	Repository   string
 	Config       config.Config
@@ -112,10 +116,21 @@ type Outcome struct {
 	// developer, whether it was a failing check or the reviewer's findings; the
 	// two share one budget. Blocked reports that the budget was spent and what
 	// remained unresolved was recorded on the work item.
-	RepairAttempts int                      `json:"repair_attempts,omitempty"`
-	Blocked        bool                     `json:"blocked,omitempty"`
-	Integration    *gitworktree.Integration `json:"integration,omitempty"`
-	WorkItemClosed bool                     `json:"work_item_closed"`
+	RepairAttempts int  `json:"repair_attempts,omitempty"`
+	Blocked        bool `json:"blocked,omitempty"`
+	// Paused reports a run that stopped short of finishing because a provider
+	// usage limit was exhausted, and that is waiting to be continued rather than
+	// having failed. The run is still in flight when it is set: its worktree,
+	// branch, claimed item, and developer session are all preserved, and the
+	// deadline below says when it becomes runnable again.
+	Paused bool `json:"paused,omitempty"`
+	// UsageLimitResetsAt is when the provider said the exhausted limit resets,
+	// and UsageLimitKind is the provider's own name for it. They are reported on
+	// a paused run and on a run that stopped because the reset was unusable.
+	UsageLimitResetsAt *time.Time               `json:"usage_limit_resets_at,omitempty"`
+	UsageLimitKind     string                   `json:"usage_limit_kind,omitempty"`
+	Integration        *gitworktree.Integration `json:"integration,omitempty"`
+	WorkItemClosed     bool                     `json:"work_item_closed"`
 	// WorktreeRemoved and BranchRemoved report each artifact separately, because
 	// cleanup removes them in two steps and a partial result must not describe
 	// a deleted artifact as remaining or a surviving one as gone.
@@ -186,21 +201,25 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
 	}
-	// An incomplete run for this item is either a repair loop an interrupted
-	// process left behind or a duplicate that must be refused. Adopting it takes
-	// the same exclusive lease a fresh reservation takes, so entering a run this
-	// process did not start can never put two developers on one item; a run
-	// another process is still holding is reported as existing rather than
-	// picked up. Only the repair loop is continued, because it is the one
-	// interrupted run whose remaining work is fully described by durable state.
+	// An incomplete run for this item is either a run an interrupted process left
+	// behind, a run waiting out a provider usage limit, or a duplicate that must
+	// be refused. Adopting it takes the same exclusive lease a fresh reservation
+	// takes, so entering a run this process did not start can never put two
+	// developers on one item; a run another process is still holding is reported
+	// as existing rather than picked up. Only runs whose remaining work is fully
+	// described by durable state are continued: the repair loop, and a paused run
+	// that recorded the deadline it is waiting on.
 	inFlight, lease, err := p.Store.Adopt(ctx, workItemID)
 	switch {
 	case err == nil:
 		defer lease.Release()
-		if !p.automatic() || !resumableRepair(inFlight) {
+		// A usage-limit pause is resumable whatever the approval policy, because
+		// nothing about it depends on the repair loop: the run simply has not had
+		// its first attempt served yet.
+		if !pausedForUsageLimit(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
-		return p.resumeRepair(ctx, inFlight, item)
+		return p.resumeRun(ctx, inFlight, item)
 	case errors.Is(err, runstate.ErrNoRunInFlight):
 	default:
 		var existing runstate.ExistingWorkItemError
@@ -299,18 +318,19 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Phase = run.state.Phase
 
 	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, bundle.Text), ""); err != nil {
-		return run.fail(err, failureStatus(ctx, err))
+		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
 }
 
-// resumeRepair picks up a run an interrupted process left inside its repair
-// loop. The worktree, branch, developer session, attempt count, and the failure
-// the interrupted attempt was handed all come from durable state, so the resumed
-// run continues the same change at the attempt it had reached instead of
-// starting a second one against a fresh budget. Its caller holds the run's lease
-// for the whole of it.
-func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item beads.WorkItem) (Outcome, error) {
+// resumeRun picks up a run this process did not finish: one an interrupted
+// process left inside its repair loop, or one that paused because a provider
+// usage limit was exhausted. The worktree, branch, developer session, attempt
+// count, and the failure the interrupted attempt was handed all come from
+// durable state, so the resumed run continues the same change at the attempt it
+// had reached instead of starting a second one against a fresh budget. Its
+// caller holds the run's lease for the whole of it.
+func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item beads.WorkItem) (Outcome, error) {
 	if err := validateClaimedItem(item, state.WorkItemID); err != nil {
 		return Outcome{}, fmt.Errorf("validate resumed work item: %w", err)
 	}
@@ -353,33 +373,48 @@ func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item b
 			ProviderModel:         state.ProviderModel,
 			ProviderResolvedModel: state.ProviderResolvedModel,
 			RepairAttempts:        state.RepairAttempts,
+			UsageLimitKind:        state.UsageLimitKind,
 		},
+	}
+	// A recorded deadline is honored before anything else happens, so a restart
+	// during a pause waits out the rest of it rather than asking the provider
+	// again and being refused by the same limit.
+	if state.UsageLimitResetsAt != nil {
+		if err := run.awaitRecordedUsageLimit(ctx); err != nil {
+			return run.stop(ctx, err)
+		}
 	}
 	// A repair attempt that was in flight when the process stopped was already
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedRepairPrompt(state, p.Config.Execution.RepairAttemptsBeforeReplan)
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, bundle.Text, p.Config.Execution.RepairAttemptsBeforeReplan)
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
 		if err := run.develop(ctx, prompt, state.ProviderSessionID); err != nil {
-			return run.fail(err, failureStatus(ctx, err))
+			return run.stop(ctx, err)
 		}
 	}
 	return run.verifyReviewAndFinish(ctx)
 }
 
-// resumedRepairPrompt rebuilds the prompt an interrupted attempt was given from
-// what survived on disk. Only one kind of repair input is ever recorded at a
-// time, and a failing check is the more recent trigger when both are somehow
+// resumedDeveloperPrompt rebuilds the prompt the interrupted attempt was given
+// from what survived on disk. Only one kind of repair input is ever recorded at
+// a time, and a failing check is the more recent trigger when both are somehow
 // present: the checks are re-run after every attempt, so findings recorded
-// beside a failing check describe a change the gate has already moved past.
-func resumedRepairPrompt(state runstate.State, limit int) (string, error) {
-	if state.CheckFailure != nil {
+// beside a failing check describe a change the gate has already moved past. A
+// run that recorded neither never had a failure returned to it — it paused
+// before or during its first attempt — so what it is owed is that attempt.
+func resumedDeveloperPrompt(state runstate.State, persona, bundle string, limit int) (string, error) {
+	switch {
+	case state.CheckFailure != nil:
 		return checkRepairPrompt(*state.CheckFailure, state.RepairAttempts, limit), nil
+	case len(state.ReviewFindingDetails) > 0:
+		return repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
+	default:
+		return developerPrompt(persona, bundle), nil
 	}
-	return repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
 }
 
 // activeRun is one work item's run in progress: the durable state, the reported
@@ -409,12 +444,12 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 	// run exactly as it always has.
 	if !a.pipeline.automatic() {
 		if err := a.verify(ctx); err != nil {
-			return a.fail(err, failureStatus(ctx, err))
+			return a.stop(ctx, err)
 		}
 		return a.finish(ctx)
 	}
 	if err := a.repairLoop(ctx); err != nil {
-		return a.fail(err, failureStatus(ctx, err))
+		return a.stop(ctx, err)
 	}
 	// An approval only authorizes integration when it demonstrably came from a
 	// second invocation. Missing or reused provider identity means the
@@ -546,12 +581,40 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // develop runs one developer attempt in the run's worktree and records what the
 // provider reported. A repair attempt passes the recorded session so the
 // developer continues the change it already made instead of re-deriving it.
+//
+// A provider that refuses the attempt because a usage limit is exhausted does
+// not end the run. The work was never judged, only declined for want of
+// capacity, so the attempt is waited out and reissued in the same worktree and
+// the same session. Only a wait the harness cannot take — an unusable reset
+// time, or one beyond the configured maximum — stops the run.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
+	for {
+		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
+		limit, refused := refusedForUsageLimit(providerResult, err)
+		if !refused {
+			return a.recordDevelopment(ctx, providerResult, err)
+		}
+		// The refused attempt may still have established a session. Continuing in
+		// it is what lets the reissued attempt resume in context rather than
+		// starting the work over.
+		if providerResult.SessionID != "" {
+			sessionID = providerResult.SessionID
+			a.state.ProviderSessionID = providerResult.SessionID
+			a.outcome.ProviderSessionID = providerResult.SessionID
+		}
+		if err := a.pauseForUsageLimit(ctx, limit); err != nil {
+			return err
+		}
+	}
+}
+
+// attemptDevelopment makes one developer invocation.
+func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID string) (backend.RunResult, error) {
 	p := a.pipeline
 	developer := p.developer()
 	a.state.ProviderModel = developer.Model
 	a.outcome.ProviderModel = developer.Model
-	providerResult, err := p.Backend.Run(ctx, backend.RunRequest{
+	return p.Backend.Run(ctx, backend.RunRequest{
 		RunID:            a.state.RunID,
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: a.worktree.Path,
@@ -563,6 +626,11 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		RedactValues:     p.RedactValues,
 		EventSink:        a.sink,
 	})
+}
+
+// recordDevelopment records what a served developer attempt reported.
+func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backend.RunResult, err error) error {
+	p := a.pipeline
 	if err != nil {
 		cause := fmt.Errorf("developer backend failed: %w", err)
 		summaryCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -597,6 +665,192 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		}
 	}
 	return nil
+}
+
+// refusedForUsageLimit reports an attempt the provider declined for want of
+// capacity. A limit reported alongside work that still finished is evidence
+// rather than a refusal — the provider re-reports its limits whenever they
+// change, and almost every such report arrives on a run with capacity to spare —
+// so only a report accompanying an attempt that produced no usable result
+// pauses the run.
+func refusedForUsageLimit(result backend.RunResult, err error) (backend.UsageLimit, bool) {
+	if result.UsageLimit == nil || (err == nil && !result.IsError) {
+		return backend.UsageLimit{}, false
+	}
+	return *result.UsageLimit, true
+}
+
+// pauseForUsageLimit records an exhausted limit and waits it out. The reset time
+// and the run's remaining pause budget are both checked before anything is
+// written, because a wait the harness will not take must stop the run rather
+// than become a pause nobody can honor.
+func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageLimit) error {
+	p := a.pipeline
+	a.state.UsageLimitKind = limit.Kind
+	a.outcome.UsageLimitKind = limit.Kind
+	maximum := p.Config.Execution.UsageLimitMaxPause
+	spent := a.state.UsageLimitPaused()
+	wait := limit.ResetsAt.Sub(p.clock().Now())
+	// A reset time the harness cannot believe is no reset time at all: waiting
+	// needs a deadline somebody actually stated, in the future, that fits inside
+	// what this run is still allowed to spend waiting. Anything else stops the
+	// run instead of becoming a guessed wait.
+	switch {
+	case limit.ResetsAt.IsZero():
+		return a.blockOnUsageLimit(ctx, "the provider named no reset time for it")
+	case wait <= 0:
+		// A limit still refusing work while naming a reset that has already
+		// passed is not describing a wait. Honoring it would mean reissuing
+		// immediately into the same refusal, over and over, with nothing bounding
+		// the attempts; a clock skew or a window the provider has not rolled yet
+		// is a fact for a person, not something to spin on.
+		return a.blockOnUsageLimit(ctx, fmt.Sprintf("it reports resetting at %s, which is not in the future",
+			limit.ResetsAt.UTC().Format(time.RFC3339)))
+	case wait > maximum.Duration()-spent:
+		// The budget covers the run, not one pause. Checking each wait on its own
+		// would let a provider that keeps refusing walk a run far past the
+		// maximum an operator configured, one acceptable-looking wait at a time.
+		reason := fmt.Sprintf("waiting until %s would take this run past the %s maximum pause",
+			limit.ResetsAt.UTC().Format(time.RFC3339), maximum)
+		if spent > 0 {
+			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
+		}
+		return a.blockOnUsageLimit(ctx, reason)
+	}
+	// The deadline and the budget it spends both become durable before the wait
+	// starts, so a process that dies during the wait loses neither: a restart
+	// honors the same deadline rather than retrying straight back into the same
+	// limit, and cannot buy the run a fresh budget by forgetting what it spent.
+	resetsAt := limit.ResetsAt.UTC()
+	a.state.UsageLimitResetsAt = &resetsAt
+	a.state.UsageLimitPausedSeconds += int64(wait / time.Second)
+	a.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record usage limit pause: %w", err)
+	}
+	return a.awaitRecordedUsageLimit(ctx)
+}
+
+// awaitRecordedUsageLimit waits out the deadline already in durable state. It is
+// the whole of a resumed pause and the tail of a fresh one, so a restart during
+// a wait takes exactly the path the interrupted process was on. The wait is
+// never shortened: nothing retries before the deadline, and nothing polls.
+func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
+	p := a.pipeline
+	deadline := a.state.UsageLimitResetsAt.UTC()
+	a.outcome.UsageLimitKind = a.state.UsageLimitKind
+	a.outcome.UsageLimitResetsAt = &deadline
+	remaining := deadline.Sub(p.clock().Now())
+	switch {
+	case a.state.UsageLimitPaused() > p.Config.Execution.UsageLimitMaxPause.Duration():
+		// A committed wait that no longer fits the bound — because the bound was
+		// lowered, or because a differently configured process wrote it — is
+		// refused here for the same reason it would have been refused on arrival.
+		return a.blockOnUsageLimit(ctx, fmt.Sprintf("this run has committed %s to waiting, which is past the %s maximum pause",
+			a.state.UsageLimitPaused(), p.Config.Execution.UsageLimitMaxPause))
+	case remaining <= 0:
+		// The recorded deadline has passed, so the wait this run committed to is
+		// served and the refused attempt is owed its reissue. A deadline already
+		// behind us is the normal way a paused run is resumed, and is a different
+		// thing from a fresh report naming a reset in the past.
+	case remaining > p.Config.Execution.UsageLimitInProcessPause.Duration():
+		// Longer than this process will stay open for. The deadline is durable,
+		// so the run is left in flight for a later invocation to continue.
+		return usageLimitPause{kind: a.state.UsageLimitKind, resetsAt: deadline}
+	default:
+		if err := p.sleep(ctx, remaining); err != nil {
+			return err
+		}
+	}
+	return a.clearUsageLimitPause()
+}
+
+// clearUsageLimitPause records that the run is no longer waiting, before the
+// attempt it was waiting for is reissued. A deadline left behind would make a
+// running attempt look like a pause to the next process that adopts the run.
+func (a *activeRun) clearUsageLimitPause() error {
+	if a.state.UsageLimitResetsAt == nil {
+		return nil
+	}
+	a.state.UsageLimitResetsAt = nil
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("clear usage limit pause: %w", err)
+	}
+	a.outcome.UsageLimitResetsAt = nil
+	return nil
+}
+
+// blockOnUsageLimit ends a run the provider refused and whose wait the harness
+// will not take: no reset time, or one beyond the configured maximum. Guessing a
+// wait is the one thing that must not happen here, so what stopped the run is
+// recorded on the work item and a person decides what to do about it.
+func (a *activeRun) blockOnUsageLimit(ctx context.Context, reason string) error {
+	kind := nonEmpty(a.state.UsageLimitKind, "provider")
+	cause := fmt.Errorf("the %s usage limit is exhausted and this run cannot wait for it: %s", kind, reason)
+	// The blocker is what a person acts on, so it is recorded on its own deadline
+	// rather than on a context this run may have exhausted.
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderUsageLimitBlockerNotes(a.outcome, reason)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the exhausted usage limit as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
+}
+
+// usageLimitPause reports a run that stopped short of finishing because it is
+// waiting out an exhausted provider usage limit for longer than this process
+// will stay open. It is an error only so that it travels the path a stopped step
+// already travels; it is deliberately not a failure, and the run it leaves
+// behind is still in flight and still resumable.
+type usageLimitPause struct {
+	kind     string
+	resetsAt time.Time
+}
+
+func (e usageLimitPause) Error() string {
+	return fmt.Sprintf("paused until %s for an exhausted %s usage limit",
+		e.resetsAt.Format(time.RFC3339), nonEmpty(e.kind, "provider"))
+}
+
+// pausedForUsageLimit reports a run waiting out an exhausted provider usage
+// limit. The recorded deadline is what makes it a pause rather than an
+// interruption, and the worktree is what makes it resumable: without the change
+// every attempt shares there is nothing to continue. A developer session is
+// deliberately not required, because a limit can refuse the very first attempt
+// before the provider ever established one, and neither is a spent repair
+// attempt, because a run can pause before any failure was returned to it.
+//
+// Both provider-invoking phases can pause. A developer attempt resumes by being
+// reissued; a review resumes by re-verifying and reviewing again, which is what
+// an interrupted review already does.
+func pausedForUsageLimit(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.UsageLimitResetsAt == nil {
+		return false
+	}
+	switch state.Phase {
+	case runstate.PhaseDeveloping, runstate.PhaseReviewing:
+	default:
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
+}
+
+// sleep waits out a pause, cut short by a cancelled context so a shutdown is
+// never held up by a deadline hours away.
+func (p Pipeline) sleep(ctx context.Context, duration time.Duration) error {
+	if p.Sleep != nil {
+		return p.Sleep(ctx, duration)
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // verify runs the configured deterministic checks over the worktree as it
@@ -747,12 +1001,57 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	return a.outcome, nil
 }
 
+// stop turns a stopped step into the outcome the run reports. A usage-limit
+// pause is deliberately not one of the failures: it leaves the run in flight,
+// with its worktree, branch, claimed work item, and developer session all
+// preserved, so a later invocation resumes it once the recorded deadline passes.
+func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
+	var paused usageLimitPause
+	if errors.As(cause, &paused) {
+		return a.pause(paused)
+	}
+	return a.fail(cause, failureStatus(ctx, cause))
+}
+
+// pause reports a run left waiting. Nothing is cleaned up and nothing is made
+// terminal; the deadline written before the wait began is what a later
+// invocation resumes from, so the run survives this process exiting.
+func (a *activeRun) pause(paused usageLimitPause) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	a.outcome.UsageLimitKind = paused.kind
+	resetsAt := paused.resetsAt
+	a.outcome.UsageLimitResetsAt = &resetsAt
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderUsageLimitPauseNotes(a.outcome)); err != nil {
+		// The pause itself is already durable, so a note that could not be
+		// written costs the run nothing: it stays claimed and resumable either
+		// way. It is still reported, because an operator watching the tracker
+		// would otherwise see the item simply stop moving.
+		return a.outcome, fmt.Errorf("record the usage limit pause on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // fail records a terminal run failure everywhere it has to be visible: the
 // durable state, the reported outcome, and the work item when the run holds it.
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	p := a.pipeline
 	message := cause.Error()
 	completedAt := p.clock().Now()
+	// A recorded pause is an instruction to resume later, and this run is ending
+	// now. Clearing the deadline keeps the terminal record coherent; what stopped
+	// the run is still named by the recorded limit kind and by the failure.
+	a.state.UsageLimitResetsAt = nil
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
@@ -836,11 +1135,40 @@ func (p Pipeline) reportOutstandingCleanup(state runstate.State, outcome Outcome
 	return outcome, nil
 }
 
-// reviewChange runs the configured independent reviewer and records exactly
-// what it decided, including when it fails or answers with something the verdict
-// contract rejects. Every recorded outcome is written into the run state before
-// the caller acts on it, so a stopped run still explains why it stopped.
+// reviewChange obtains one independent verdict on the change. A review the
+// provider declined for want of capacity was never made, so it is waited out and
+// asked for again rather than ending the run: the reviewer is a provider
+// invocation like the developer's, and a run stopped there loses just as much
+// work. Nothing an unanswered review leaves behind is carried forward — the
+// retry starts from the same cleared evidence any review starts from.
 func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
+	for {
+		decision, reported, err := a.attemptReview(ctx)
+		limit, refused := refusedReviewForUsageLimit(reported, err)
+		if !refused {
+			return decision, err
+		}
+		if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
+			return "", pauseErr
+		}
+	}
+}
+
+// refusedReviewForUsageLimit reports a review the provider declined for want of
+// capacity. A limit reported by a review that still produced a verdict is
+// evidence rather than a refusal, exactly as it is for a developer attempt.
+func refusedReviewForUsageLimit(limit *backend.UsageLimit, err error) (backend.UsageLimit, bool) {
+	if limit == nil || err == nil {
+		return backend.UsageLimit{}, false
+	}
+	return *limit, true
+}
+
+// attemptReview runs the configured independent reviewer once and records
+// exactly what it decided, including when it fails or answers with something the
+// verdict contract rejects. Every recorded outcome is written into the run state
+// before the caller acts on it, so a stopped run still explains why it stopped.
+func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, *backend.UsageLimit, error) {
 	p := a.pipeline
 	a.state.Phase = runstate.PhaseReviewing
 	// Nothing an earlier attempt was told carries into this one. Clearing the
@@ -850,11 +1178,11 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	a.clearReviewEvidence()
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
-		return "", fmt.Errorf("save reviewing run state: %w", err)
+		return "", nil, fmt.Errorf("save reviewing run state: %w", err)
 	}
 	changes, err := p.Worktrees.UnifiedChanges(ctx, a.worktree, gitworktree.DiffLimits{})
 	if err != nil {
-		return "", fmt.Errorf("assemble reviewed change: %w", err)
+		return "", nil, fmt.Errorf("assemble reviewed change: %w", err)
 	}
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
 		RunID:        a.state.RunID,
@@ -888,16 +1216,16 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 		a.outcome.ReviewDecision = result.Decision
 	}
 	if reviewErr != nil {
-		return "", fmt.Errorf("independent review failed: %w", reviewErr)
+		return "", result.UsageLimit, fmt.Errorf("independent review failed: %w", reviewErr)
 	}
 	// The reviewer reports the selector it actually ran with. Auditing that
 	// against configuration here keeps the recorded evidence a fact rather than
 	// an assumption about how the reviewer was wired.
 	configured := p.reviewer().Model
 	if result.RequestedModel != configured {
-		return "", fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
+		return "", nil, fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
 	}
-	return result.Decision, nil
+	return result.Decision, nil, nil
 }
 
 func (a *activeRun) clearReviewEvidence() {
@@ -1257,6 +1585,57 @@ func renderCheckBlockerNotes(outcome Outcome, failure runstate.CheckFailure, lim
 	if failure.Output != "" {
 		lines = append(lines, "Captured output:\n"+failure.Output)
 	}
+	return strings.Join(lines, "\n")
+}
+
+// renderUsageLimitPauseNotes describes a run that is waiting rather than one
+// that stopped. It says plainly that nothing was abandoned, because an operator
+// reading a claimed item that has gone quiet needs to know the difference
+// between work in progress and work that needs them.
+func renderUsageLimitPauseNotes(outcome Outcome) string {
+	lines := []string{
+		"Yoyodyne paused this run: the provider reported an exhausted usage limit, so the run is waiting for it to reset rather than failing.",
+		"Run: " + outcome.RunID,
+		"Usage limit: " + nonEmpty(outcome.UsageLimitKind, "unnamed"),
+	}
+	if outcome.UsageLimitResetsAt != nil {
+		lines = append(lines, "Resets at: "+outcome.UsageLimitResetsAt.Format(time.RFC3339))
+	}
+	lines = append(lines,
+		"Branch: "+outcome.Branch,
+		"Worktree: "+outcome.WorktreePath,
+	)
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"Running Yoyodyne on this item again after the reset time continues the same run; nothing needs to be restarted.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// renderUsageLimitBlockerNotes describes a run stopped by a limit it could not
+// wait out. It names the reason the wait was refused, because the alternative to
+// a stated deadline is a guessed one, and that is the decision being handed to a
+// person.
+func renderUsageLimitBlockerNotes(outcome Outcome, reason string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: the provider reported an exhausted usage limit that this run could not wait out.",
+		"Reason: " + reason,
+		"Run: " + outcome.RunID,
+		"Usage limit: " + nonEmpty(outcome.UsageLimitKind, "unnamed"),
+	}
+	if outcome.UsageLimitResetsAt != nil {
+		lines = append(lines, "Reported reset: "+outcome.UsageLimitResetsAt.Format(time.RFC3339))
+	}
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch: "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+outcome.WorktreePath)
+	}
+	lines = append(lines, "The branch and worktree are preserved; this needs more provider capacity, a longer configured maximum pause, or a replan.")
 	return strings.Join(lines, "\n")
 }
 

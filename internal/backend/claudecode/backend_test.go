@@ -536,3 +536,189 @@ type fixedClock struct{}
 func (fixedClock) Now() time.Time {
 	return time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
 }
+
+// usageLimitStream is a provider stream that reports a rate limit and then ends
+// the way the CLI ends when the limit refused the work: a non-zero exit with no
+// terminal result of its own.
+func usageLimitStream(rateLimitInfo string) string {
+	return strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":` + rateLimitInfo + `}`,
+		`{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"terminal_reason":"usage_limit","result":"limit reached","usage":{}}`,
+	}, "\n") + "\n"
+}
+
+func runUsageLimitStream(t *testing.T, stream string) (backendapi.RunResult, []execution.Event) {
+	t.Helper()
+	var events []execution.Event
+	result, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: stream}}},
+		Clock:  fixedClock{},
+	}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	return result, events
+}
+
+// The exact payload here is the shape the shipped Claude Code CLI builds: a
+// required status, an optional whole-second resetsAt, and the provider's own
+// name for the limit, alongside overage accounting the harness does not read.
+func TestRunReportsAnExhaustedUsageLimitAndPreservesItsWholePayload(t *testing.T) {
+	t.Parallel()
+
+	result, events := runUsageLimitStream(t, usageLimitStream(
+		`{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour","utilization":1.02,"overageStatus":"rejected","overageDisabledReason":"out_of_credits"}`))
+	if result.UsageLimit == nil {
+		t.Fatalf("Run() reported no usage limit: %#v", result)
+	}
+	if result.UsageLimit.Kind != "five_hour" {
+		t.Fatalf("usage limit kind = %q, want five_hour", result.UsageLimit.Kind)
+	}
+	if want := time.Unix(1755300000, 0).UTC(); !result.UsageLimit.ResetsAt.Equal(want) {
+		t.Fatalf("usage limit resets at %s, want %s", result.UsageLimit.ResetsAt, want)
+	}
+	// Stage one of this feature: the payload survives whole. Reducing it to the
+	// fields this version reads is what made the shape unanswerable before.
+	payload := string(events[1].Payload)
+	for _, fragment := range []string{`"status":"rejected"`, `"resetsAt":1755300000`, `"rateLimitType":"five_hour"`, `"utilization":1.02`, `"overageStatus":"rejected"`, `"overageDisabledReason":"out_of_credits"`} {
+		if !strings.Contains(payload, fragment) {
+			t.Fatalf("rate limit event payload dropped %s: %s", fragment, payload)
+		}
+	}
+}
+
+func TestRunTreatsAServingRateLimitReportAsEvidenceRatherThanExhaustion(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		info string
+	}{
+		// Most reports arrive on a run with capacity to spare. Reading these as
+		// exhaustion would stop runs that are being served.
+		{name: "allowed", info: `{"status":"allowed","resetsAt":1755300000,"rateLimitType":"five_hour","utilization":0.4}`},
+		{name: "warning", info: `{"status":"allowed_warning","resetsAt":1755300000,"rateLimitType":"five_hour","utilization":0.85}`},
+		// A rejected primary limit with overage already in use is still being
+		// served; this is the provider's own rule for a hard limit.
+		{name: "rejected but served from overage", info: `{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour","isUsingOverage":true}`},
+		// A payload the harness cannot read says nothing about capacity, and must
+		// not fail the stream either.
+		{name: "unreadable payload", info: `"not an object"`},
+		{name: "empty payload", info: `{}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, events := runUsageLimitStream(t, usageLimitStream(testCase.info))
+			if result.UsageLimit != nil {
+				t.Fatalf("a serving rate limit report became an exhausted limit: %#v", result.UsageLimit)
+			}
+			// It is still recorded, because the payload is the only evidence of
+			// what the provider said about capacity.
+			if !strings.Contains(string(events[1].Payload), "rate_limit_info") {
+				t.Fatalf("rate limit event payload = %s", events[1].Payload)
+			}
+		})
+	}
+}
+
+// A limit reported without a usable reset time is still an exhausted limit. The
+// harness refuses to guess the wait, not to notice the refusal.
+func TestRunReportsAnExhaustedUsageLimitWithNoUsableResetTime(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		info string
+	}{
+		{name: "absent", info: `{"status":"rejected","rateLimitType":"seven_day"}`},
+		{name: "not a number", info: `{"status":"rejected","rateLimitType":"seven_day","resetsAt":"soon"}`},
+		{name: "not positive", info: `{"status":"rejected","rateLimitType":"seven_day","resetsAt":0}`},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, usageLimitStream(testCase.info))
+			if result.UsageLimit == nil {
+				t.Fatalf("Run() reported no usage limit: %#v", result)
+			}
+			if !result.UsageLimit.ResetsAt.IsZero() {
+				t.Fatalf("usage limit invented a reset time: %s", result.UsageLimit.ResetsAt)
+			}
+		})
+	}
+}
+
+// The provider re-reports as its limits change, so a later report that the limit
+// is serving again supersedes an earlier exhausted one.
+func TestRunLetsALaterRateLimitReportSupersedeAnEarlierOne(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour"}}`,
+		`{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":{"status":"allowed","resetsAt":1755300000,"rateLimitType":"five_hour"}}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","usage":{}}`,
+	}, "\n") + "\n"
+	result, _ := runUsageLimitStream(t, stream)
+	if result.UsageLimit != nil {
+		t.Fatalf("a superseded usage limit survived: %#v", result.UsageLimit)
+	}
+}
+
+// A transient throttle is the provider CLI's own business: it retries those
+// itself and reports them as api_retry. Mistaking one for a hard limit would
+// make the harness duplicate a wait the CLI already took.
+func TestRunDoesNotTreatATransientRetryAsAnExhaustedUsageLimit(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"system","subtype":"api_retry","session_id":"session-1","attempt":2,"max_retries":5,"error":"rate limited, retrying"}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","usage":{}}`,
+	}, "\n") + "\n"
+	result, events := runUsageLimitStream(t, stream)
+	if result.UsageLimit != nil {
+		t.Fatalf("an api_retry became an exhausted usage limit: %#v", result.UsageLimit)
+	}
+	if !strings.Contains(string(events[1].Payload), `"attempt":2`) {
+		t.Fatalf("api_retry event lost its retry accounting: %s", events[1].Payload)
+	}
+}
+
+func TestRunRedactsSecretsInsideARateLimitPayload(t *testing.T) {
+	t.Parallel()
+
+	var events []execution.Event
+	_, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: usageLimitStream(
+			`{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour","overageDisabledReason":"super-secret-value"}`)}}},
+		Clock: fixedClock{},
+	}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		RedactValues:     []string{"super-secret-value"},
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.Contains(string(events[1].Payload), "super-secret-value") {
+		t.Fatalf("rate limit payload leaked a redacted value: %s", events[1].Payload)
+	}
+}

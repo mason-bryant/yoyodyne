@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"yoyodyne/internal/backend/claudecode"
 	"yoyodyne/internal/beads"
@@ -214,6 +215,21 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		if code := writeJSON(stdout, stderr, result); code != 0 {
 			return code
 		}
+	} else if outcome.Paused {
+		// A paused run is neither a success nor a failure: it is in flight and
+		// waiting. Reporting it as either would tell an operator to do something
+		// about a run that only needs to be left alone until its deadline.
+		fmt.Fprintf(stdout, "run paused: %s\n", outcome.RunID)
+		fmt.Fprintf(stdout, "waiting for the %s usage limit to reset\n", nonEmptyValue(outcome.UsageLimitKind, "provider"))
+		if outcome.UsageLimitResetsAt != nil {
+			fmt.Fprintf(stdout, "resets at: %s\n", outcome.UsageLimitResetsAt.Format(time.RFC3339))
+		}
+		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		fmt.Fprintf(stdout, "run yoyodyne on %s again after the reset time to continue this run\n", outcome.WorkItemID)
+		if err != nil {
+			fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
+		}
 	} else if err != nil {
 		fmt.Fprintf(stderr, "run failed: %v\n", err)
 		if outcome.RunID != "" {
@@ -301,6 +317,16 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		return 1
 	}
 	return 0
+}
+
+// nonEmptyValue falls back to a stated placeholder rather than printing a blank
+// where a name belongs: the provider does not always name the limit it refused
+// on, and "the  usage limit" reads as a bug.
+func nonEmptyValue(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func printRunUsage(writer io.Writer) {

@@ -2349,3 +2349,550 @@ func gitLine(t *testing.T, repository string, args ...string) string {
 	t.Helper()
 	return strings.TrimSpace(gitOutput(t, repository, args...))
 }
+
+// baseTime is the instant every usage-limit test starts from, so a recorded
+// deadline can be compared against an exact expectation. It trails the real
+// clock slightly because the check runner timestamps its own events for real,
+// and durable state refuses an update older than the run's start.
+var baseTime = time.Now().UTC().Add(-time.Minute).Truncate(time.Second)
+
+// pausingClock is a clock the test moves by hand, so a pause can be driven to
+// its deadline without spending the time. Sleeping advances it by exactly the
+// span it was asked to wait and records that span, which is what makes "the run
+// waited out the deadline, and never retried before it" checkable rather than
+// assumed.
+type pausingClock struct {
+	now   time.Time
+	slept []time.Duration
+	// onSleep observes durable state at the moment the wait begins, which is how
+	// a test proves the deadline was recorded before the waiting started rather
+	// than after it.
+	onSleep func()
+}
+
+func (c *pausingClock) Now() time.Time { return c.now }
+
+func (c *pausingClock) sleep(_ context.Context, duration time.Duration) error {
+	c.slept = append(c.slept, duration)
+	if c.onSleep != nil {
+		c.onSleep()
+	}
+	c.now = c.now.Add(duration)
+	return nil
+}
+
+// waiting wires a pipeline to a hand-driven clock and the two pause bounds, so
+// a test states exactly how long the harness may wait and how much of that it
+// will spend holding this process open.
+func waiting(pipeline Pipeline, clock *pausingClock, maximum, inProcess time.Duration) Pipeline {
+	pipeline.Clock = clock
+	pipeline.Sleep = clock.sleep
+	pipeline.Config.Execution.UsageLimitMaxPause = config.Duration(maximum)
+	pipeline.Config.Execution.UsageLimitInProcessPause = config.Duration(inProcess)
+	return pipeline
+}
+
+// usageLimitBackend refuses the developer's first refusals invocations for want
+// of capacity and serves the work afterwards. A refusal is shaped like the one
+// the provider actually returns: an errored result that carries the limit and
+// the session the refused attempt had already established.
+func usageLimitBackend(refusals int, limit *backend.UsageLimit, verdicts ...string) *fakeBackend {
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	refused, reviews := 0, 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		switch request.Role {
+		case domain.RoleDeveloper:
+			if refused < refusals {
+				refused++
+				return backend.RunResult{
+					Backend:    domain.BackendClaudeCode,
+					SessionID:  provider.developerSession,
+					IsError:    true,
+					StopReason: "usage_limit",
+					UsageLimit: limit,
+					Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+					LastEvent:  request.LastSequence,
+				}, nil
+			}
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     provider.developerSession,
+				ResolvedModel: developerResolved,
+				FinalText:     "implemented the work item",
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		case domain.RoleReviewer:
+			verdict := verdicts[len(verdicts)-1]
+			if reviews < len(verdicts) {
+				verdict = verdicts[reviews]
+			}
+			reviews++
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     provider.reviewerSession,
+				ResolvedModel: reviewerResolved,
+				FinalText:     verdict,
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		default:
+			return backend.RunResult{}, fmt.Errorf("unexpected role %q", request.Role)
+		}
+	}
+	return provider
+}
+
+// A hard usage limit pauses the run instead of failing it: the deadline is
+// durable before the wait begins, nothing retries before it, and the same
+// developer session then finishes the work in the same worktree.
+func TestRunPausesForAnExhaustedUsageLimitAndResumesWhenItResets(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(30 * time.Minute)
+	provider := usageLimitBackend(1, &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+
+	// The deadline has to be on disk before the wait starts, so a process that
+	// dies mid-wait loses nothing.
+	var pausedState runstate.State
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		pausedState = loaded
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if pausedState.UsageLimitResetsAt == nil || !pausedState.UsageLimitResetsAt.Equal(resetsAt) {
+		t.Fatalf("the deadline was not durable before the wait began: %#v", pausedState.UsageLimitResetsAt)
+	}
+	if pausedState.UsageLimitKind != "five_hour" || pausedState.Status.Terminal() {
+		t.Fatalf("paused state = %#v, want a non-terminal run recording the limit", pausedState)
+	}
+	// The worktree, branch, and developer session all survive the pause, which is
+	// what lets the reissued attempt continue rather than start over.
+	if pausedState.WorktreePath == "" || pausedState.Branch == "" || pausedState.ProviderSessionID != provider.developerSession {
+		t.Fatalf("the pause did not preserve the run's artifacts or session: %#v", pausedState)
+	}
+	if len(clock.slept) != 1 || clock.slept[0] != 30*time.Minute {
+		t.Fatalf("waits = %v, want exactly one wait of the full 30m to the deadline", clock.slept)
+	}
+	// Waiting it out and continuing is the whole point: the run finishes normally.
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the resumed run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	if outcome.Paused {
+		t.Fatalf("a run that finished reported itself paused: %#v", outcome)
+	}
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the refused attempt and its reissue", len(developerRequests))
+	}
+	// The reissued attempt continues the session the refused one established.
+	if developerRequests[1].SessionID != provider.developerSession {
+		t.Fatalf("reissued attempt session = %q, want %q", developerRequests[1].SessionID, provider.developerSession)
+	}
+	// Nothing is left waiting once the run has finished.
+	finished, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if finished.UsageLimitResetsAt != nil {
+		t.Fatalf("a finished run still carries a pause deadline: %s", finished.UsageLimitResetsAt)
+	}
+}
+
+// A wait longer than this process will hold open exits with the run still in
+// flight, and a later invocation picks it up and finishes it. Nothing is cleaned
+// up in between: the item stays claimed and the artifacts stay put.
+func TestRunExitsResumableForALongPauseAndIsContinuedByALaterInvocation(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(2 * time.Hour)
+	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
+
+	first := usageLimitBackend(1, limit, approveVerdict)
+	firstClock := &pausingClock{now: baseTime}
+	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
+		firstClock, 6*time.Hour, time.Minute)
+	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("paused Run() error = %v", err)
+	}
+	if !paused.Paused || paused.Status != runstate.StatusRunning {
+		t.Fatalf("outcome = %#v, want a paused run still in flight", paused)
+	}
+	if paused.UsageLimitResetsAt == nil || !paused.UsageLimitResetsAt.Equal(resetsAt) || paused.UsageLimitKind != "five_hour" {
+		t.Fatalf("paused outcome did not report the deadline it is waiting on: %#v", paused)
+	}
+	if len(firstClock.slept) != 0 {
+		t.Fatalf("waits = %v, want a run that exited rather than holding the process open", firstClock.slept)
+	}
+	// A pause is not a failure and not a stop: nothing is blocked, nothing is
+	// closed, and the claim is kept.
+	if tracker.blocked || tracker.closed || !tracker.claimed {
+		t.Fatalf("the pause disturbed the work item: blocked=%t closed=%t claimed=%t", tracker.blocked, tracker.closed, tracker.claimed)
+	}
+	pausedState, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if pausedState.Status.Terminal() || pausedState.UsageLimitResetsAt == nil {
+		t.Fatalf("paused state = %#v, want a non-terminal run carrying its deadline", pausedState)
+	}
+	if _, err := os.Stat(pausedState.WorktreePath); err != nil {
+		t.Fatalf("the paused run's worktree did not survive: %v", err)
+	}
+
+	// A restart still inside the wait honors the remainder rather than asking the
+	// provider again and being refused by the same limit.
+	duringWait := usageLimitBackend(0, limit, approveVerdict)
+	duringClock := &pausingClock{now: baseTime.Add(30 * time.Minute)}
+	duringPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, duringWait, []string{"exit 0"}), duringWait),
+		duringClock, 6*time.Hour, time.Minute)
+	stillPaused, err := duringPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("restarted Run() during the wait error = %v", err)
+	}
+	if !stillPaused.Paused || stillPaused.RunID != paused.RunID {
+		t.Fatalf("a restart during the wait did not re-enter the same paused run: %#v", stillPaused)
+	}
+	if len(duringWait.requests) != 0 {
+		t.Fatalf("a restart during the wait asked the provider anyway: %#v", duringWait.requests)
+	}
+
+	// Once the deadline has passed the same run is picked up and finished.
+	second := usageLimitBackend(0, limit, approveVerdict)
+	secondClock := &pausingClock{now: resetsAt.Add(time.Minute)}
+	secondPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second),
+		secondClock, 6*time.Hour, time.Minute)
+	outcome, err := secondPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if outcome.RunID != paused.RunID || outcome.WorktreePath != paused.WorktreePath || outcome.Branch != paused.Branch {
+		t.Fatalf("resumed run = %#v, want the paused run %s in %s", outcome, paused.RunID, paused.WorktreePath)
+	}
+	if len(secondClock.slept) != 0 {
+		t.Fatalf("waits = %v, want no wait once the deadline has passed", secondClock.slept)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the resumed run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	if claims := countCalls(tracker.calls, "claim"); claims != 1 {
+		t.Fatalf("claims = %d, want the item claimed once across the pause", claims)
+	}
+	// The run paused before any failure was ever returned to the developer, so
+	// what it is owed on resumption is its original attempt, not a repair.
+	developerRequests := second.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 1 {
+		t.Fatalf("resumed developer invocations = %d, want one", len(developerRequests))
+	}
+	if strings.Contains(developerRequests[0].Prompt, "repair required") {
+		t.Fatalf("the resumed attempt was issued as a repair:\n%s", developerRequests[0].Prompt)
+	}
+	if !strings.Contains(developerRequests[0].Prompt, "You are the developer for one bounded Yoyodyne work item") {
+		t.Fatalf("the resumed attempt lost the harness contract:\n%s", developerRequests[0].Prompt)
+	}
+}
+
+// A reset time the harness cannot believe is no reset time at all. Guessing the
+// wait is the one thing that must not happen, so the run stops and hands what it
+// knows to a person.
+func TestRunStopsWithABlockerWhenAUsageLimitResetIsUnusable(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name       string
+		limit      backend.UsageLimit
+		wantReason string
+	}{
+		{
+			name:       "no reset time",
+			limit:      backend.UsageLimit{Kind: "seven_day"},
+			wantReason: "named no reset time",
+		},
+		{
+			name:       "reset beyond the configured maximum pause",
+			limit:      backend.UsageLimit{Kind: "seven_day", ResetsAt: baseTime.Add(7 * 24 * time.Hour)},
+			wantReason: "would take this run past the 6h0m0s maximum pause",
+		},
+		{
+			// A limit still refusing while naming a reset that has already passed
+			// is not describing a wait. Honoring it would reissue immediately into
+			// the same refusal, with nothing bounding the attempts.
+			name:       "reset that is not in the future",
+			limit:      backend.UsageLimit{Kind: "five_hour", ResetsAt: baseTime.Add(-time.Minute)},
+			wantReason: "which is not in the future",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			limit := testCase.limit
+			provider := usageLimitBackend(1, &limit, approveVerdict)
+			pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+			clock := &pausingClock{now: baseTime}
+			pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			if err == nil {
+				t.Fatalf("Run() error = nil, want the run to stop")
+			}
+			if outcome.Paused {
+				t.Fatalf("a refused wait was reported as a pause: %#v", outcome)
+			}
+			if len(clock.slept) != 0 {
+				t.Fatalf("waits = %v, want a run that refused to wait at all", clock.slept)
+			}
+			if !tracker.blocked || !outcome.Blocked {
+				t.Fatalf("the exhausted limit left no blocker: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+			}
+			if !strings.Contains(tracker.blockReason, testCase.wantReason) {
+				t.Fatalf("blocker did not name why the wait was refused:\n%s", tracker.blockReason)
+			}
+			// A blocked run is terminal, and a terminal run must not still be
+			// promising somebody that it will resume.
+			stopped, err := store.Load(outcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if !stopped.Status.Terminal() || stopped.UsageLimitResetsAt != nil {
+				t.Fatalf("stopped state = %#v, want a terminal run carrying no deadline", stopped)
+			}
+			if stopped.UsageLimitKind != testCase.limit.Kind {
+				t.Fatalf("the record does not name the limit that stopped the run: %q", stopped.UsageLimitKind)
+			}
+			// The change is preserved for whoever picks the item up.
+			if _, statErr := os.Stat(stopped.WorktreePath); statErr != nil {
+				t.Fatalf("the stopped run's worktree did not survive: %v", statErr)
+			}
+		})
+	}
+}
+
+// The provider re-reports its limits whenever they change, so most reports
+// arrive on work that is being served. A limit reported alongside an attempt
+// that still finished is evidence, never a reason to stop and wait.
+func TestRunDoesNotPauseWhenALimitIsReportedButTheAttemptStillFinished(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			ResolvedModel: developerResolved, FinalText: "implemented the work item",
+			UsageLimit: &backend.UsageLimit{Kind: "five_hour", ResetsAt: baseTime.Add(time.Hour)},
+			Process:    execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(clock.slept) != 0 || outcome.Paused {
+		t.Fatalf("a served attempt was paused anyway: waits=%v paused=%t", clock.slept, outcome.Paused)
+	}
+	if outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("the run did not complete normally: %#v", outcome)
+	}
+}
+
+// steppingUsageLimitBackend refuses the developer once per entry in resets,
+// naming each reset in turn, and serves the work afterwards. Every refusal names
+// a reset that is individually inside the maximum pause, which is what a bound
+// applied per wait rather than per run would wave through.
+func steppingUsageLimitBackend(resets []time.Time, verdict string) *fakeBackend {
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	refused := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				ResolvedModel: reviewerResolved, FinalText: verdict,
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		if refused < len(resets) {
+			reset := resets[refused]
+			refused++
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				IsError: true, StopReason: "usage_limit",
+				UsageLimit: &backend.UsageLimit{Kind: "five_hour", ResetsAt: reset},
+				Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:  request.LastSequence,
+			}, nil
+		}
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			ResolvedModel: developerResolved, FinalText: "implemented the work item",
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	return provider
+}
+
+// The maximum pause bounds the run, not one wait. A provider that keeps refusing
+// with a fresh, individually acceptable reset must not be able to walk a run past
+// the bound an operator configured, one wait at a time.
+func TestRunBoundsItsTotalUsageLimitWaitAcrossConsecutivePauses(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	clock := &pausingClock{now: baseTime}
+	// Each reset is two hours after the refusal that names it, so no single wait
+	// comes close to the three-hour maximum but the third would pass it.
+	resets := []time.Time{
+		baseTime.Add(2 * time.Hour),
+		baseTime.Add(4 * time.Hour),
+		baseTime.Add(6 * time.Hour),
+	}
+	provider := steppingUsageLimitBackend(resets, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline = waiting(automatic(pipeline, provider), clock, 3*time.Hour, 3*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatalf("Run() error = nil, want the run stopped by its total pause budget")
+	}
+	// Two waits of two hours each fit; the third would take the run past three
+	// hours in total, so it is refused rather than taken.
+	if len(clock.slept) != 1 || clock.slept[0] != 2*time.Hour {
+		t.Fatalf("waits = %v, want one wait taken before the budget was spent", clock.slept)
+	}
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "already committed 2h0m0s to waiting") {
+		t.Fatalf("the exhausted budget left no blocker naming what was spent:\n%s", tracker.blockReason)
+	}
+	if developerRuns := len(provider.requestsForRole(domain.RoleDeveloper)); developerRuns != 2 {
+		t.Fatalf("developer invocations = %d, want the refusals the budget allowed and no more", developerRuns)
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The committed wait is durable, so a restart cannot buy the run a fresh
+	// budget by forgetting what it already spent.
+	if stopped.UsageLimitPausedSeconds != int64(2*time.Hour/time.Second) {
+		t.Fatalf("recorded pause total = %ds, want the two hours actually committed", stopped.UsageLimitPausedSeconds)
+	}
+}
+
+// The reviewer is a provider invocation like the developer's, and a run stopped
+// there loses just as much work. A limit exhausted during review pauses the run
+// and the review is asked for again once it resets.
+func TestRunPausesWhenTheReviewerHitsAnExhaustedUsageLimit(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(45 * time.Minute)
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	reviews := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleDeveloper {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				ResolvedModel: developerResolved, FinalText: "implemented the work item",
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		reviews++
+		if reviews == 1 {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				IsError: true, StopReason: "usage_limit",
+				UsageLimit: &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt},
+				Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:  request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+
+	var pausedState runstate.State
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		pausedState = loaded
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(clock.slept) != 1 || clock.slept[0] != 45*time.Minute {
+		t.Fatalf("waits = %v, want one wait to the reviewer's reset", clock.slept)
+	}
+	// The pause is recorded in the phase it happened in, which is what makes a
+	// review-time pause resumable as a review rather than as a fresh attempt.
+	if pausedState.Phase != runstate.PhaseReviewing || pausedState.UsageLimitResetsAt == nil {
+		t.Fatalf("paused state = %#v, want a reviewing run carrying its deadline", pausedState)
+	}
+	if !pausedForUsageLimit(pausedState) {
+		t.Fatalf("a review-time pause is not resumable: %#v", pausedState)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the run did not complete after the reviewer's limit reset: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	// The change was developed once; only the review was repeated.
+	if developerRuns := len(provider.requestsForRole(domain.RoleDeveloper)); developerRuns != 1 {
+		t.Fatalf("developer invocations = %d, want the review retried without redeveloping", developerRuns)
+	}
+	if reviews != 2 {
+		t.Fatalf("reviews = %d, want the refused review asked for again", reviews)
+	}
+	if outcome.RepairAttempts != 0 {
+		t.Fatalf("a paused review spent a repair attempt: %#v", outcome)
+	}
+}

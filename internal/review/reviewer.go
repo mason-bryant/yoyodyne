@@ -59,6 +59,11 @@ type Result struct {
 	ResolvedModel  string
 	SessionID      string
 	LastSequence   uint64
+	// UsageLimit is set when the provider reported an exhausted usage limit
+	// during this invocation. A review that was declined for want of capacity was
+	// never made, so the caller can wait and ask again rather than treating the
+	// absent verdict as a reason to end the run.
+	UsageLimit *backend.UsageLimit
 }
 
 // Reviewer runs one independent review of a developer's change. It owns the
@@ -139,18 +144,25 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		EventSink:        backendEventSink,
 	})
 	if err != nil {
-		return Result{RequestedModel: r.Model, LastSequence: lastSequence}, fmt.Errorf("reviewer backend failed: %w", err)
+		return Result{
+			RequestedModel: r.Model,
+			LastSequence:   lastSequence,
+			UsageLimit:     providerResult.UsageLimit,
+		}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
 	sequence = execution.NewSequence(lastSequence)
 
 	// Every outcome from here on carries the same provider identity evidence, so
-	// a rejected review is as auditable as an accepted one.
+	// a rejected review is as auditable as an accepted one. An exhausted usage
+	// limit travels with it, because a review the provider declined has to be
+	// told apart from one it answered badly.
 	evidence := func() Result {
 		return Result{
 			RequestedModel: r.Model,
 			ResolvedModel:  providerResult.ResolvedModel,
 			SessionID:      providerResult.SessionID,
 			LastSequence:   lastSequence,
+			UsageLimit:     providerResult.UsageLimit,
 		}
 	}
 	if providerResult.IsError {

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"yoyodyne/internal/backend"
 	"yoyodyne/internal/beads"
@@ -647,4 +648,64 @@ func (s *haltingStore) Save(state runstate.State) error {
 		return errors.New("state store is unavailable")
 	}
 	return s.StateStore.Save(state)
+}
+
+// A run waiting out a provider usage limit is not an interrupted run: it
+// recorded a deadline and is owed the attempt it was refused. Settling it would
+// throw away a claimed item and a preserved worktree over a wait that has not
+// finished yet.
+func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	resetsAt := baseTime.Add(2 * time.Hour)
+	limit := &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt}
+
+	// Pause the run by refusing its first attempt with a wait too long to hold
+	// this process open.
+	first := usageLimitBackend(1, limit, approveVerdict)
+	firstClock := &pausingClock{now: baseTime}
+	firstPipeline := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first),
+		firstClock, 6*time.Hour, time.Minute)
+	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused {
+		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
+	}
+	before, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionResumable {
+		t.Fatalf("reconciliation = %#v, want the paused run left resumable", results)
+	}
+	if !strings.Contains(results[0].Detail, "paused for an exhausted five_hour usage limit") {
+		t.Fatalf("reconciliation did not report why the run is waiting: %q", results[0].Detail)
+	}
+	after, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if after.Status != before.Status || after.Phase != before.Phase || after.UsageLimitResetsAt == nil {
+		t.Fatalf("reconciliation disturbed a paused run: %#v", after)
+	}
+	if tracker.blocked || tracker.closed {
+		t.Fatalf("reconciliation acted on the item of a paused run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	}
+
+	// The run is still exactly as resumable afterwards: once the deadline passes
+	// the pipeline picks it up and finishes it.
+	second := usageLimitBackend(0, limit, approveVerdict)
+	secondClock := &pausingClock{now: resetsAt.Add(time.Minute)}
+	resumed := waiting(automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second),
+		secondClock, 6*time.Hour, time.Minute)
+	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if outcome.RunID != before.RunID || outcome.Integration == nil {
+		t.Fatalf("resumed run = %#v, want the reconciled run integrated", outcome)
+	}
 }

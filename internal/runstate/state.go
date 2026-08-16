@@ -190,9 +190,30 @@ type State struct {
 	// bounding each trigger separately. It is recorded before each attempt
 	// starts, so an interrupted run resumes at the attempt it reached and a
 	// restart cannot buy the run a fresh budget.
-	RepairAttempts int          `json:"repair_attempts,omitempty"`
-	Integration    *Integration `json:"integration,omitempty"`
-	Failure        string       `json:"failure,omitempty"`
+	RepairAttempts int `json:"repair_attempts,omitempty"`
+	// UsageLimitResetsAt is the deadline a run paused for an exhausted provider
+	// usage limit is waiting on. It is written before the wait begins, so a
+	// process that dies during the wait does not lose the deadline and a restart
+	// honors it instead of retrying straight back into the same limit. It is
+	// cleared once the deadline passes and the attempt is reissued, so a run
+	// carrying one is a run that is still waiting.
+	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
+	// UsageLimitKind is the provider's own name for the limit that paused the
+	// run, kept as evidence for whoever reads the record afterwards. It outlives
+	// the deadline: what stopped the run is worth knowing even once the run has
+	// resumed.
+	UsageLimitKind string `json:"usage_limit_kind,omitempty"`
+	// UsageLimitPausedSeconds is how much waiting this run has committed to
+	// across every pause it has taken. It is what bounds a run against the
+	// configured maximum pause: bounding each wait on its own would let a
+	// provider that refuses repeatedly walk a run past the maximum an operator
+	// configured, one acceptable-looking wait at a time. It is recorded in whole
+	// seconds because the provider states reset times in whole seconds, and it is
+	// added to when a wait is committed rather than as it elapses, so a restart
+	// part-way through a wait cannot buy the run a fresh budget.
+	UsageLimitPausedSeconds int64        `json:"usage_limit_paused_seconds,omitempty"`
+	Integration             *Integration `json:"integration,omitempty"`
+	Failure                 string       `json:"failure,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it
 	// is set, so it is reconciliation input rather than a run failure. It says
@@ -309,6 +330,20 @@ func (s State) Validate() error {
 	if s.RepairAttempts < 0 {
 		problems = append(problems, errors.New("repair_attempts cannot be negative"))
 	}
+	if s.UsageLimitPausedSeconds < 0 {
+		problems = append(problems, errors.New("usage_limit_paused_seconds cannot be negative"))
+	}
+	if s.UsageLimitResetsAt != nil {
+		// A pause is an instruction to resume later, so it is only coherent on a
+		// run that can still be resumed. Recorded on a terminal run it would
+		// promise a continuation that nothing will ever make.
+		if s.UsageLimitResetsAt.IsZero() {
+			problems = append(problems, errors.New("usage_limit_resets_at cannot be the zero time"))
+		}
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
+		}
+	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {
 		problems = append(problems, errors.New("target_branch must be a local branch name"))
 	}
@@ -358,6 +393,13 @@ func (s State) Validate() error {
 		return fmt.Errorf("invalid run state: %w", errors.Join(problems...))
 	}
 	return nil
+}
+
+// UsageLimitPaused reports how long this run has already committed to waiting
+// out provider usage limits, which is what its remaining pause budget is
+// measured against.
+func (s State) UsageLimitPaused() time.Duration {
+	return time.Duration(s.UsageLimitPausedSeconds) * time.Second
 }
 
 // Outstanding reports that a run still owes a step somebody has to take. A run

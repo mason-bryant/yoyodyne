@@ -14,6 +14,15 @@ execution:
   max_concurrent_developers: 1
   repair_attempts_before_replan: 2
   worktree_root: auto
+  # A provider usage limit that is exhausted pauses a run rather than failing
+  # it. The maximum pause covers the five-hour limit and deliberately stops
+  # short of the seven-day one, so a capacity problem that needs a person
+  # reaches one instead of a timer. The in-process bound is equal to it, so
+  # every wait the harness takes is waited out here and the run continues on its
+  # own; lower it to have longer waits exit with the deadline recorded and be
+  # resumed by a later invocation instead.
+  usage_limit_max_pause: 6h
+  usage_limit_in_process_pause: 6h
 
 # Conservative defaults: a project opts in to automatic integration, which the
 # harness then refuses unless deterministic checks and a reviewer agent exist.

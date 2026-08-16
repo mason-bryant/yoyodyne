@@ -171,12 +171,16 @@ func newResolution() *resolution {
 				MaxConcurrentDevelopers:    1,
 				RepairAttemptsBeforeReplan: 2,
 				WorktreeRoot:               "auto",
+				UsageLimitMaxPause:         defaultUsageLimitMaxPause,
+				UsageLimitInProcessPause:   defaultUsageLimitInProcessPause,
 			},
 		},
 		origins: map[string]string{
 			"execution.max_concurrent_developers":     OriginDefault,
 			"execution.repair_attempts_before_replan": OriginDefault,
 			"execution.worktree_root":                 OriginDefault,
+			"execution.usage_limit_max_pause":         OriginDefault,
+			"execution.usage_limit_in_process_pause":  OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -196,6 +200,8 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
 		setValue(r.origins, "execution.repair_attempts_before_replan", execution.RepairAttemptsBeforeReplan, &r.config.Execution.RepairAttemptsBeforeReplan, applied.origin)
 		setValue(r.origins, "execution.worktree_root", execution.WorktreeRoot, &r.config.Execution.WorktreeRoot, applied.origin)
+		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
+		setValue(r.origins, "execution.usage_limit_in_process_pause", execution.UsageLimitInProcessPause, &r.config.Execution.UsageLimitInProcessPause, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
