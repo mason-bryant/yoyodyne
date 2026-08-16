@@ -14,6 +14,10 @@ execution:
   max_concurrent_developers: 1
   repair_attempts_before_replan: 2
   worktree_root: auto
+  # The remote publishing pushes to and opens pull requests against. It is only
+  # consulted when approvals.publishing is automatic; a repository with no
+  # remote by this name publishes nothing and stays purely local.
+  remote: origin
   # A provider usage limit that is exhausted pauses a run rather than failing
   # it. The maximum pause covers the five-hour limit and deliberately stops
   # short of the seven-day one, so a capacity problem that needs a person
@@ -26,11 +30,15 @@ execution:
 
 # Conservative defaults: a project opts in to automatic integration, which the
 # harness then refuses unless deterministic checks and a reviewer agent exist.
+# Publishing is opted in to separately and for the same reason: pushing a branch
+# and opening a pull request is visible outside the machine the harness runs on,
+# so a project says so rather than inheriting it.
 approvals:
   brief: human
   goals: human
   designs: automatic
   integration: human
+  publishing: human
 
 # Every executable agent declares its own model selector; there is no implicit
 # harness default. The "opus" family alias intentionally floats to the backend's

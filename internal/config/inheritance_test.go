@@ -521,3 +521,86 @@ func TestUsageLimitPauseBoundsFailClosed(t *testing.T) {
 		})
 	}
 }
+
+// Publishing is opted in to the way integration is, and a project that says
+// nothing about it publishes nothing. The remote is inherited rather than
+// written down, so opting in is one line.
+func TestPublishingIsOptedIntoBesideIntegration(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Approvals.Publishing != domain.ApprovalHuman {
+		t.Fatalf("inherited publishing = %q, want %q", inherited.Config.Approvals.Publishing, domain.ApprovalHuman)
+	}
+	if inherited.Config.Execution.Remote != "origin" {
+		t.Fatalf("inherited remote = %q, want origin", inherited.Config.Execution.Remote)
+	}
+	if origin := inherited.Origins["approvals.publishing"]; origin != BuiltinV1 {
+		t.Errorf("publishing origin = %q, want %q", origin, BuiltinV1)
+	}
+
+	opted := loadProject(t, minimalProjectConfig+`approvals:
+  publishing: automatic
+execution:
+  remote: upstream
+`, nil)
+	if opted.Config.Approvals.Publishing != domain.ApprovalAutomatic {
+		t.Fatalf("publishing = %q, want %q", opted.Config.Approvals.Publishing, domain.ApprovalAutomatic)
+	}
+	if opted.Config.Execution.Remote != "upstream" {
+		t.Fatalf("remote = %q, want the project override", opted.Config.Execution.Remote)
+	}
+	// A sparse approvals override must not lose the approvals it does not name.
+	if opted.Config.Approvals.Integration != domain.ApprovalHuman {
+		t.Errorf("integration = %q, want the inherited value", opted.Config.Approvals.Integration)
+	}
+}
+
+// A configuration written before publishing existed still loads and still means
+// what it meant: the harness publishes nothing.
+func TestConfigurationWithoutPublishingKeepsItsBehavior(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := DecodeResolved(strings.NewReader(`version: 1
+product:
+  id: example
+  repository: .
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
+`))
+	if err != nil {
+		t.Fatalf("DecodeResolved() error = %v", err)
+	}
+	if resolved.Config.Approvals.Publishing != domain.ApprovalHuman {
+		t.Fatalf("publishing = %q, want %q", resolved.Config.Approvals.Publishing, domain.ApprovalHuman)
+	}
+	if origin := resolved.Origins["approvals.publishing"]; origin != OriginDefault {
+		t.Errorf("publishing origin = %q, want %q", origin, OriginDefault)
+	}
+}
+
+// A remote name reaches a Git command line, so anything that could read as an
+// option is refused before it gets there.
+func TestRemoteMustBeAPlainRemoteName(t *testing.T) {
+	t.Parallel()
+
+	for _, remote := range []string{"--upstream", "", "with space", "/etc/passwd"} {
+		_, err := loadProjectError(t, minimalProjectConfig+"execution:\n  remote: \""+remote+"\"\n", nil)
+		if err == nil || !strings.Contains(err.Error(), "remote") {
+			t.Errorf("LoadResolved() remote %q error = %v", remote, err)
+		}
+	}
+}

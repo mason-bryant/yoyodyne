@@ -171,14 +171,23 @@ func newResolution() *resolution {
 				MaxConcurrentDevelopers:    1,
 				RepairAttemptsBeforeReplan: 2,
 				WorktreeRoot:               "auto",
+				Remote:                     defaultRemote,
 				UsageLimitMaxPause:         defaultUsageLimitMaxPause,
 				UsageLimitInProcessPause:   defaultUsageLimitInProcessPause,
 			},
+			// Publishing is the one approval with a harness default, because it is
+			// the one that was added after configurations existed. A file written
+			// before it keeps the behavior it was written for — the harness
+			// publishes nothing — rather than failing to load for not mentioning a
+			// key that did not exist when it was written.
+			Approvals: Approvals{Publishing: domain.ApprovalHuman},
 		},
 		origins: map[string]string{
+			"approvals.publishing":                    OriginDefault,
 			"execution.max_concurrent_developers":     OriginDefault,
 			"execution.repair_attempts_before_replan": OriginDefault,
 			"execution.worktree_root":                 OriginDefault,
+			"execution.remote":                        OriginDefault,
 			"execution.usage_limit_max_pause":         OriginDefault,
 			"execution.usage_limit_in_process_pause":  OriginDefault,
 		},
@@ -200,6 +209,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
 		setValue(r.origins, "execution.repair_attempts_before_replan", execution.RepairAttemptsBeforeReplan, &r.config.Execution.RepairAttemptsBeforeReplan, applied.origin)
 		setValue(r.origins, "execution.worktree_root", execution.WorktreeRoot, &r.config.Execution.WorktreeRoot, applied.origin)
+		setValue(r.origins, "execution.remote", execution.Remote, &r.config.Execution.Remote, applied.origin)
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
 		setValue(r.origins, "execution.usage_limit_in_process_pause", execution.UsageLimitInProcessPause, &r.config.Execution.UsageLimitInProcessPause, applied.origin)
 	}
@@ -208,6 +218,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "approvals.goals", approvals.Goals, &r.config.Approvals.Goals, applied.origin)
 		setValue(r.origins, "approvals.designs", approvals.Designs, &r.config.Approvals.Designs, applied.origin)
 		setValue(r.origins, "approvals.integration", approvals.Integration, &r.config.Approvals.Integration, applied.origin)
+		setValue(r.origins, "approvals.publishing", approvals.Publishing, &r.config.Approvals.Publishing, applied.origin)
 	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate

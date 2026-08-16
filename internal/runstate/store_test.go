@@ -1133,3 +1133,177 @@ func TestStateRejectsAPauseOnARunThatCannotResume(t *testing.T) {
 		t.Fatalf("Validate() error = %v, want the zero time refused", err)
 	}
 }
+
+// The published pull request is durable evidence like the integration it
+// accompanies: a run that stops after publishing still names the work it put
+// somewhere other people can see.
+func TestStoreRoundTripsThePublishedPullRequest(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseDeveloping
+	state.PullRequest = &PullRequest{
+		Remote:     "origin",
+		Branch:     "yoyodyne/task/01234567",
+		Number:     12,
+		URL:        "https://example.invalid/pull/12",
+		HeadCommit: strings.Repeat("b", 40),
+		State:      "OPEN",
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, state) {
+		t.Fatalf("Load() = %#v, want %#v", loaded, state)
+	}
+}
+
+func TestStateRejectsIncoherentPublishedEvidence(t *testing.T) {
+	t.Parallel()
+
+	published := func(t *testing.T) State {
+		t.Helper()
+		state := testState(t, StatusRunning)
+		state.WorktreePath = "/state/worktree"
+		state.Branch = "yoyodyne/task/01234567"
+		state.BaseCommit = strings.Repeat("a", 40)
+		state.TargetBranch = "main"
+		state.Phase = PhaseDeveloping
+		state.PullRequest = &PullRequest{
+			Remote:     "origin",
+			Branch:     "yoyodyne/task/01234567",
+			Number:     12,
+			URL:        "https://example.invalid/pull/12",
+			HeadCommit: strings.Repeat("b", 40),
+		}
+		return state
+	}
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*State)
+		problem string
+	}{
+		{name: "published and open"},
+		{
+			name:    "no number to address it by",
+			mutate:  func(state *State) { state.PullRequest.Number = 0 },
+			problem: "pull_request number must be positive",
+		},
+		{
+			name:    "nowhere to find it",
+			mutate:  func(state *State) { state.PullRequest.URL = "" },
+			problem: "pull_request url is required",
+		},
+		{
+			name:    "a branch this run never published",
+			mutate:  func(state *State) { state.PullRequest.Branch = "yoyodyne/other/01234567" },
+			problem: "does not match the run branch",
+		},
+		{
+			// A merge is the arrival of the integrated commit on the remote, so it
+			// cannot be true before the promotion that produced that commit is.
+			name:    "merged with nothing integrated",
+			mutate:  func(state *State) { state.PullRequest.Merged = true },
+			problem: "merged pull request requires recorded integration",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := published(t)
+			if test.mutate != nil {
+				test.mutate(&state)
+			}
+			err := state.Validate()
+			if test.problem == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("Validate() error = %v, want one mentioning %q", err, test.problem)
+			}
+		})
+	}
+}
+
+// The commit the harness made is what permits a run's worktree HEAD to have
+// moved, so it has to survive the process that made it: a resumed run that
+// could not name it would either refuse its own published work or have to
+// accept whatever HEAD it finds.
+func TestStateHoldsTheHarnessCommitThatPermitsAMovedHead(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.HarnessCommit = strings.Repeat("b", 40)
+	state.Phase = PhaseDeveloping
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.HarnessCommit != state.HarnessCommit {
+		t.Fatalf("loaded harness commit = %q, want %q", loaded.HarnessCommit, state.HarnessCommit)
+	}
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*State)
+		problem string
+	}{
+		{
+			name:    "not a commit",
+			mutate:  func(state *State) { state.HarnessCommit = "HEAD" },
+			problem: "harness_commit is invalid",
+		},
+		{
+			// The base is in the worktree by construction, so accepting it would
+			// permit a HEAD that proves no harness commit was ever made.
+			name:    "the base commit, which proves nothing",
+			mutate:  func(state *State) { state.HarnessCommit = state.BaseCommit },
+			problem: "harness_commit cannot be the base commit",
+		},
+		{
+			name: "recorded without the worktree that produced it",
+			mutate: func(state *State) {
+				state.WorktreePath = ""
+				state.Branch = ""
+				state.BaseCommit = ""
+			},
+			problem: "harness_commit requires the worktree that produced it",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			broken := state
+			test.mutate(&broken)
+			if err := broken.Validate(); err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("Validate() error = %v, want one mentioning %q", err, test.problem)
+			}
+		})
+	}
+}
