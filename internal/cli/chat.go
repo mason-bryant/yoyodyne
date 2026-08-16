@@ -24,15 +24,20 @@ import (
 // history is not what the operator is deciding about.
 const chatWorkItemStatus = "open"
 
-// chatTrackerTimeout bounds reading tracker state while assembling the product
-// context, so an unresponsive tracker delays a conversation rather than
-// preventing one.
+// chatTrackerTimeout bounds one tracker command taken on a conversation's
+// behalf, whether that is reading the state the product context is assembled
+// from or creating an item the operator approved. An unresponsive tracker
+// delays a conversation rather than hanging it at the prompt.
 const chatTrackerTimeout = 30 * time.Second
 
 type chatOutput struct {
 	Evidence *chat.Evidence `json:"evidence,omitempty"`
 	Reply    string         `json:"reply,omitempty"`
-	Error    string         `json:"error,omitempty"`
+	// Proposals are what the turn proposed and nothing more. A one-shot message
+	// has nobody to approve anything, so they are reported for a person to
+	// decide on in a conversation rather than acted on here.
+	Proposals []chat.PendingProposal `json:"proposals,omitempty"`
+	Error     string                 `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -64,20 +69,23 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if *message != "" {
 		reply, err := session.Send(ctx, *message)
 		if err != nil {
-			evidence := reply.Evidence
-			return reportChatFailure(stdout, stderr, *jsonOutput, &evidence, err)
+			// The answer travels with the failure. A turn that produced one is
+			// worth reading even when what it proposed could not be read.
+			return reportChatFailure(stdout, stderr, *jsonOutput, &reply, err)
 		}
 		if *jsonOutput {
 			evidence := reply.Evidence
-			return writeJSON(stdout, stderr, chatOutput{Evidence: &evidence, Reply: reply.Text})
+			return writeJSON(stdout, stderr, chatOutput{Evidence: &evidence, Reply: reply.Text, Proposals: reply.Proposals})
 		}
 		fmt.Fprintln(stdout, reply.Text)
+		printChatProposals(stdout, reply.Proposals)
 		printChatEvidence(stdout, reply.Evidence)
 		return 0
 	}
 
 	printChatHeader(stdout, session.Evidence())
 	converseErr := session.Converse(ctx, stdin, stdout)
+	printUndecidedProposals(stdout, session.Proposals())
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
 		fmt.Fprintf(stderr, "conversation ended: %v\n", converseErr)
@@ -143,8 +151,11 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, errors.Join(err, lease.Release())
 	}
 	session, err := chat.Open(chat.Options{
-		Backend:      provider,
-		Store:        store,
+		Backend: provider,
+		Store:   store,
+		// The tracker is the harness's own hand, not the product manager's: it
+		// is used only where an operator has approved a proposal.
+		Tracker:      chatTracker(processRunner, repository),
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
 		Provider:     domain.BackendClaudeCode,
@@ -161,13 +172,21 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 	return session, lease, nil
 }
 
+// chatTracker is the work-item client a conversation acts through: it reads the
+// tracker state the product context is built from, and it is what an approved
+// proposal is created with. Both are bounded the same way, so no tracker call a
+// conversation makes can outlast the operator's patience.
+func chatTracker(runner execution.ProcessRunner, repository string) beads.Client {
+	return beads.Client{Runner: runner, Dir: repository, Timeout: chatTrackerTimeout}
+}
+
 // assembleProductContext gathers what the product manager reasons over. A
 // tracker that cannot be read is reported in the context and to the operator
 // rather than silently rendered as a product with no work in flight.
 func assembleProductContext(ctx context.Context, repository string, runner execution.ProcessRunner, stderr io.Writer) (string, error) {
 	trackerCtx, cancel := context.WithTimeout(ctx, chatTrackerTimeout)
 	defer cancel()
-	items, listErr := beads.Client{Runner: runner, Dir: repository}.List(trackerCtx, chatWorkItemStatus)
+	items, listErr := chatTracker(runner, repository).List(trackerCtx, chatWorkItemStatus)
 	unavailable := ""
 	if listErr != nil {
 		unavailable = listErr.Error()
@@ -184,16 +203,29 @@ func assembleProductContext(ctx context.Context, repository string, runner execu
 	return bundle.Text, nil
 }
 
-func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, evidence *chat.Evidence, err error) int {
+// reportChatFailure reports a failed conversation, carrying whatever the turn
+// still produced. A reply is nil when the conversation never opened.
+func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Reply, err error) int {
+	output := chatOutput{Error: err.Error()}
+	if reply != nil {
+		evidence := reply.Evidence
+		output.Evidence = &evidence
+		output.Reply = reply.Text
+		output.Proposals = reply.Proposals
+	}
 	if jsonOutput {
-		if code := writeJSON(stdout, stderr, chatOutput{Evidence: evidence, Error: err.Error()}); code != 0 {
+		if code := writeJSON(stdout, stderr, output); code != 0 {
 			return code
 		}
 		return 1
 	}
+	if output.Reply != "" {
+		fmt.Fprintln(stdout, output.Reply)
+	}
+	printChatProposals(stdout, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
-	if evidence != nil && evidence.ConversationID != "" {
-		fmt.Fprintf(stderr, "conversation: %s\n", evidence.ConversationID)
+	if output.Evidence != nil && output.Evidence.ConversationID != "" {
+		fmt.Fprintf(stderr, "conversation: %s\n", output.Evidence.ConversationID)
 	}
 	return 1
 }
@@ -205,8 +237,34 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 	}
 	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
 	fmt.Fprintln(writer, "The product manager is advisory here: it changes nothing and approves nothing.")
+	fmt.Fprintln(writer, "It may propose work items; each one is created only if you approve it.")
 	fmt.Fprintln(writer, "End with /exit.")
 	fmt.Fprintln(writer)
+}
+
+// printChatProposals reports what a one-shot message proposed. There is nobody
+// to approve it here, so the proposals are printed with what they are: recorded,
+// and not created.
+func printChatProposals(writer io.Writer, proposals []chat.PendingProposal) {
+	if len(proposals) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\nThe product manager proposes %d work item(s). Nothing was created: approve them in `yoyodyne chat`.\n\n", len(proposals))
+	for _, proposal := range proposals {
+		fmt.Fprint(writer, proposal.Render())
+	}
+}
+
+// printUndecidedProposals names what a conversation left open, so a proposal
+// nobody decided on ends as a visible loose end rather than as silence.
+func printUndecidedProposals(writer io.Writer, proposals []chat.PendingProposal) {
+	if len(proposals) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "%d proposal(s) were left undecided and nothing was created for them:\n", len(proposals))
+	for _, proposal := range proposals {
+		fmt.Fprintf(writer, "  [%s] %s\n", proposal.ID, proposal.Proposal.Title)
+	}
 }
 
 func printChatEvidence(writer io.Writer, evidence chat.Evidence) {

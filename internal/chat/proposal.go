@@ -1,0 +1,297 @@
+package chat
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+
+	"yoyodyne/internal/beads"
+)
+
+// MaxProposalBytes bounds the untrusted proposal payload one turn may carry.
+// The reply it arrives in is bounded by the provider; this bounds the part the
+// harness decodes and shows an operator as something to approve.
+const MaxProposalBytes = 32 << 10
+
+// MaxProposalsPerTurn bounds how many work items one reply may propose. An
+// operator decides on every one of them, so a turn that proposes a whole
+// backlog is refused rather than turned into a queue of prompts nobody reads.
+// maxProposalsPerTurnText is the same bound as the contract states it; a test
+// keeps the number the product manager is told equal to the one enforced here.
+const (
+	MaxProposalsPerTurn     = 10
+	maxProposalsPerTurnText = "10"
+)
+
+const (
+	maxProposalTitleBytes = 200
+	maxProposalTextBytes  = 8 << 10
+)
+
+// proposalFence opens the one block a reply may carry proposals in. It is a
+// distinct language tag rather than plain JSON so proposals can never be
+// confused with a JSON example the conversation happens to be discussing.
+const proposalFence = "```yoyodyne-proposal"
+
+// Proposal is one Beads work item the product manager suggests. It carries no
+// authority: it is a recommendation, and nothing exists until the operator
+// approves it.
+type Proposal struct {
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	// Rationale is why this work follows from the conversation. It is required
+	// because an operator approving work needs the reasoning, not only the
+	// wording, and it is what a created item is traced back to.
+	Rationale string `json:"rationale"`
+	// Parent and Dependencies name Beads items that already exist. The product
+	// manager may place proposed work in the tracker's structure; it may not
+	// invent the items it is placed against.
+	Parent       string   `json:"parent,omitempty"`
+	Dependencies []string `json:"dependencies,omitempty"`
+}
+
+// PendingProposal is a recorded proposal awaiting the operator's decision,
+// together with the conversation turn it came from, so an item created from it
+// traces back to the intent that produced it.
+type PendingProposal struct {
+	// ID identifies the proposal within its conversation as turn.position, so
+	// an operator can name one and the record says which turn it came from.
+	ID             string   `json:"id"`
+	ConversationID string   `json:"conversation_id"`
+	Turn           int      `json:"turn"`
+	Proposal       Proposal `json:"proposal"`
+}
+
+// CreatedItem is one work item the harness created from an approved proposal.
+type CreatedItem struct {
+	ProposalID string `json:"proposal_id"`
+	WorkItemID string `json:"work_item_id"`
+	Title      string `json:"title"`
+}
+
+// proposalDocument is the payload shape of the fenced block. The block always
+// carries a list, so proposing one item and proposing three are the same
+// protocol rather than two.
+type proposalDocument struct {
+	Items []Proposal `json:"items"`
+}
+
+// ProposalError reports that a turn carried a proposal block the harness could
+// not read. It is a distinct type because it is not a broken conversation: the
+// turn completed, the answer is real, and the provider session is recorded, so
+// a caller can report the unusable block and carry on talking. What is lost is
+// whatever that block was trying to propose, which is why it is never silently
+// treated as a reply that proposed nothing.
+type ProposalError struct {
+	Err error
+}
+
+func (e *ProposalError) Error() string {
+	return "the product manager proposed work the harness cannot read: " + e.Err.Error()
+}
+
+func (e *ProposalError) Unwrap() error { return e.Err }
+
+// extractProposals splits a reply into the prose the operator reads and the
+// proposals the turn carried. Proposals come only from the fenced block: no
+// amount of prose describing work is a proposal, and a block the contract does
+// not accept is an error rather than a silently dropped suggestion.
+func extractProposals(reply string) (string, []Proposal, error) {
+	prose, payload, found, err := splitProposalBlock(reply)
+	if err != nil {
+		return "", nil, err
+	}
+	if !found {
+		return strings.TrimSpace(reply), nil, nil
+	}
+	proposals, err := decodeProposals(payload)
+	if err != nil {
+		return "", nil, err
+	}
+	return prose, proposals, nil
+}
+
+// splitProposalBlock returns the reply's prose and the payload of its one
+// proposal block. A second block is refused: a reply an operator reads has one
+// list of proposals in it, not a visible list and another one further down.
+func splitProposalBlock(reply string) (prose string, payload string, found bool, err error) {
+	opensAt := indexProposalFence(reply)
+	if opensAt < 0 {
+		return "", "", false, nil
+	}
+	rest := reply[opensAt+len(proposalFence):]
+	if line := rest[:lineEnd(rest)]; strings.TrimSpace(line) != "" {
+		return "", "", false, fmt.Errorf("proposal block opens with trailing text %q", strings.TrimSpace(line))
+	}
+	rest = rest[lineEnd(rest):]
+	closesAt := strings.Index(rest, "\n```")
+	if closesAt < 0 {
+		return "", "", false, errors.New("proposal block is not closed")
+	}
+	// Whatever shares the closing fence's line belongs to the fence; prose
+	// resumes on the line after it.
+	after := rest[closesAt+len("\n```"):]
+	after = after[lineEnd(after):]
+	if indexProposalFence(after) >= 0 {
+		return "", "", false, errors.New("a reply carries at most one proposal block")
+	}
+	prose = strings.TrimSpace(reply[:opensAt] + "\n" + after)
+	return prose, rest[:closesAt], true, nil
+}
+
+// indexProposalFence finds a fence that opens its own line, so a fence quoted
+// inside prose is text rather than a block boundary.
+func indexProposalFence(text string) int {
+	if strings.HasPrefix(text, proposalFence) {
+		return 0
+	}
+	if at := strings.Index(text, "\n"+proposalFence); at >= 0 {
+		return at + 1
+	}
+	return -1
+}
+
+func lineEnd(text string) int {
+	if at := strings.IndexByte(text, '\n'); at >= 0 {
+		return at + 1
+	}
+	return len(text)
+}
+
+// decodeProposals strictly decodes the block payload. Unknown fields, trailing
+// content, and oversized input are rejected rather than tolerated: what the
+// operator is asked to approve has to be exactly what the product manager sent.
+func decodeProposals(payload string) ([]Proposal, error) {
+	trimmed := strings.TrimSpace(payload)
+	if trimmed == "" {
+		return nil, errors.New("decode work item proposals: the proposal block is empty")
+	}
+	if len(trimmed) > MaxProposalBytes {
+		return nil, fmt.Errorf("decode work item proposals: block is %d bytes, limit is %d", len(trimmed), MaxProposalBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader([]byte(trimmed)))
+	decoder.DisallowUnknownFields()
+	var document proposalDocument
+	if err := decoder.Decode(&document); err != nil {
+		return nil, fmt.Errorf("decode work item proposals: %w", err)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return nil, errors.New("decode work item proposals: unexpected trailing content after the proposals")
+	}
+	if len(document.Items) == 0 {
+		return nil, errors.New("decode work item proposals: a proposal block must propose at least one work item")
+	}
+	if len(document.Items) > MaxProposalsPerTurn {
+		return nil, fmt.Errorf("decode work item proposals: %d work items proposed in one reply, limit is %d", len(document.Items), MaxProposalsPerTurn)
+	}
+	var problems []error
+	for i, proposal := range document.Items {
+		if err := proposal.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("items[%d]: %w", i, err))
+		}
+	}
+	if len(problems) > 0 {
+		return nil, fmt.Errorf("invalid work item proposals: %w", errors.Join(problems...))
+	}
+	return document.Items, nil
+}
+
+// Validate reports every contract violation in the proposal at once.
+func (p Proposal) Validate() error {
+	var problems []error
+	switch title := strings.TrimSpace(p.Title); {
+	case title == "":
+		problems = append(problems, errors.New("title is required"))
+	case len(title) > maxProposalTitleBytes:
+		problems = append(problems, fmt.Errorf("title is %d bytes, limit is %d", len(title), maxProposalTitleBytes))
+	case strings.ContainsAny(title, "\r\n"):
+		// A title is one line in what the operator is shown before approving,
+		// so a title that spans lines cannot dress itself up as more than a
+		// title.
+		problems = append(problems, errors.New("title cannot span lines"))
+	}
+	problems = append(problems, validateProposalText("description", p.Description))
+	problems = append(problems, validateProposalText("rationale", p.Rationale))
+	if parent := strings.TrimSpace(p.Parent); parent != "" {
+		if err := beads.ValidateIssueID(parent); err != nil {
+			problems = append(problems, fmt.Errorf("parent: %w", err))
+		}
+	}
+	seen := make(map[string]struct{}, len(p.Dependencies))
+	for i, dependency := range p.Dependencies {
+		trimmed := strings.TrimSpace(dependency)
+		if err := beads.ValidateIssueID(trimmed); err != nil {
+			problems = append(problems, fmt.Errorf("dependencies[%d]: %w", i, err))
+			continue
+		}
+		if _, duplicate := seen[trimmed]; duplicate {
+			problems = append(problems, fmt.Errorf("dependencies[%d]: %s is listed twice", i, trimmed))
+			continue
+		}
+		seen[trimmed] = struct{}{}
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid work item proposal: %w", err)
+	}
+	return nil
+}
+
+func validateProposalText(field, value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fmt.Errorf("%s is required", field)
+	}
+	if len(trimmed) > maxProposalTextBytes {
+		return fmt.Errorf("%s is %d bytes, limit is %d", field, len(trimmed), maxProposalTextBytes)
+	}
+	return nil
+}
+
+// dependencies returns the proposal's dependencies as validated identifiers.
+func (p Proposal) dependencies() []string {
+	trimmed := make([]string, 0, len(p.Dependencies))
+	for _, dependency := range p.Dependencies {
+		trimmed = append(trimmed, strings.TrimSpace(dependency))
+	}
+	return trimmed
+}
+
+// Render describes one proposal for an operator who is about to decide on it.
+// Everything in it came from the provider, so every line is indented under the
+// proposal's own identifier and nothing is printed at the margin where the
+// harness speaks.
+func (p PendingProposal) Render() string {
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "[%s] %s\n", p.ID, strings.TrimSpace(p.Proposal.Title))
+	rendered.WriteString(indent(p.Proposal.Description))
+	rendered.WriteString(indent("why: " + strings.TrimSpace(p.Proposal.Rationale)))
+	if parent := strings.TrimSpace(p.Proposal.Parent); parent != "" {
+		rendered.WriteString(indent("parent: " + parent))
+	}
+	if dependencies := p.Proposal.dependencies(); len(dependencies) > 0 {
+		rendered.WriteString(indent("depends on: " + strings.Join(dependencies, ", ")))
+	}
+	return rendered.String()
+}
+
+// provenanceNotes is what a created item records about where it came from. The
+// conversation, the turn, and the proposal are named so the item traces back to
+// the intent that produced it, and the rationale travels with it because the
+// reasoning is not in the description.
+func (p PendingProposal) provenanceNotes() string {
+	return fmt.Sprintf(
+		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\nRationale: %s",
+		p.ConversationID, p.Turn, p.ID, strings.TrimSpace(p.Proposal.Rationale),
+	)
+}
+
+func indent(text string) string {
+	var indented strings.Builder
+	for _, line := range strings.Split(strings.TrimSpace(text), "\n") {
+		indented.WriteString("    " + strings.TrimSpace(line) + "\n")
+	}
+	return indented.String()
+}

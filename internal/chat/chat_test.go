@@ -3,11 +3,15 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	backendapi "yoyodyne/internal/backend"
+	"yoyodyne/internal/beads"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/runstate"
@@ -326,6 +330,408 @@ func TestOpenRejectsAnUnusableConversation(t *testing.T) {
 	}
 }
 
+func TestSendRecordsProposalsAndCreatesNothing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply("Two follow-ups, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]}`),
+	}}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "What follows from the usage-limit work?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if reply.Text != "Two follow-ups, then." {
+		t.Fatalf("reply text = %q", reply.Text)
+	}
+	if len(reply.Proposals) != 1 {
+		t.Fatalf("reply proposals = %#v", reply.Proposals)
+	}
+	proposal := reply.Proposals[0]
+	// A proposal is identified by the turn it came from, so an item created
+	// later traces back to the intent that produced it.
+	if proposal.ID != "1.1" || proposal.Turn != 1 || proposal.ConversationID != session.Evidence().ConversationID {
+		t.Fatalf("pending proposal = %#v", proposal)
+	}
+	// Proposing is not deciding: the tracker has not been touched.
+	if len(tracker.created) != 0 || len(tracker.links) != 0 {
+		t.Fatalf("a proposal created %#v and linked %#v without approval", tracker.created, tracker.links)
+	}
+	if pending := session.Proposals(); len(pending) != 1 || pending[0].ID != "1.1" {
+		t.Fatalf("awaiting decision = %#v", pending)
+	}
+	// The proposal is durable before the operator is asked about it.
+	if payload := onlyEventPayload(t, root, session, execution.EventProposalRecorded); !strings.Contains(payload, "Pause on a usage limit") {
+		t.Fatalf("recorded proposal event = %s", payload)
+	}
+}
+
+func TestApproveCreatesTheProposedItemWithItsOrigin(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply("One item, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4","yoyodyne-ifd.15"]}`),
+	}}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "What follows?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	created, err := session.Approve(context.Background(), "1.1")
+	if err != nil {
+		t.Fatalf("Approve() error = %v", err)
+	}
+	if created.WorkItemID != "yoyodyne-1" || created.ProposalID != "1.1" {
+		t.Fatalf("created = %#v", created)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("created work items = %#v", tracker.created)
+	}
+	item := tracker.created[0]
+	if item.Title != "Pause on a usage limit" || item.Description != "Wait and resume." || item.Parent != "yoyodyne-ifd.12" {
+		t.Fatalf("created work item = %#v", item)
+	}
+	if item.Type != proposedIssueType {
+		t.Fatalf("created work item type = %q, want %q", item.Type, proposedIssueType)
+	}
+	// The item records the conversation, the turn, and the reasoning it came
+	// from, so it can be traced back to what was said.
+	for _, required := range []string{session.Evidence().ConversationID, "turn 1", "proposal 1.1", "capacity is not failure"} {
+		if !strings.Contains(item.Notes, required) {
+			t.Fatalf("created work item notes = %q, want them to contain %q", item.Notes, required)
+		}
+	}
+	wantLinks := [][2]string{{"yoyodyne-1", "yoyodyne-ifd.4.4"}, {"yoyodyne-1", "yoyodyne-ifd.15"}}
+	if !reflect.DeepEqual(tracker.links, wantLinks) {
+		t.Fatalf("dependency links = %#v, want %#v", tracker.links, wantLinks)
+	}
+
+	// A decided proposal is finished with, and the durable record carries both
+	// the decision and what it produced.
+	if pending := session.Proposals(); len(pending) != 0 {
+		t.Fatalf("approved proposal still awaits a decision: %#v", pending)
+	}
+	if _, err := session.Approve(context.Background(), "1.1"); err == nil || !strings.Contains(err.Error(), "already been decided") {
+		t.Fatalf("second Approve() error = %v", err)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("a decided proposal was created twice: %#v", tracker.created)
+	}
+	if payload := onlyEventPayload(t, root, session, execution.EventProposalCreated); !strings.Contains(payload, "yoyodyne-1") {
+		t.Fatalf("created event = %s", payload)
+	}
+	onlyEventPayload(t, root, session, execution.EventProposalApproved)
+}
+
+func TestRejectRecordsTheRefusalInsteadOfDroppingIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply("A suggestion.", `{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster."}`),
+	}}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+	if _, err := session.Send(context.Background(), "Anything else?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	if err := session.Reject("1.1", "not this quarter"); err != nil {
+		t.Fatalf("Reject() error = %v", err)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("a rejected proposal created %#v", tracker.created)
+	}
+	if pending := session.Proposals(); len(pending) != 0 {
+		t.Fatalf("rejected proposal still awaits a decision: %#v", pending)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventProposalRejected)
+	if !strings.Contains(payload, "not this quarter") || !strings.Contains(payload, "Rewrite the CLI in Rust") {
+		t.Fatalf("rejection event = %s", payload)
+	}
+	if err := session.Reject("1.1", "still no"); err == nil || !strings.Contains(err.Error(), "already been decided") {
+		t.Fatalf("second Reject() error = %v", err)
+	}
+	if err := session.Reject("9.9", "no such thing"); err == nil || !strings.Contains(err.Error(), "awaiting a decision") {
+		t.Fatalf("unknown Reject() error = %v", err)
+	}
+}
+
+func TestNothingIsCreatedWithoutAnApproval(t *testing.T) {
+	t.Parallel()
+
+	proposed := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`
+
+	t.Run("an unapproved proposal is never created", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{}
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: proposalReply("Here it is.", proposed)}}})
+		options.Tracker = tracker
+		session := openTestSession(t, options)
+		if _, err := session.Send(context.Background(), "what next?"); err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		// Only Approve reaches the tracker. Neither the turn nor listing what is
+		// pending can create anything.
+		session.Proposals()
+		if len(tracker.created) != 0 {
+			t.Fatalf("tracker was reached without an approval: %#v", tracker.created)
+		}
+	})
+
+	t.Run("approval without a tracker creates nothing and stays pending", func(t *testing.T) {
+		t.Parallel()
+
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: proposalReply("Here it is.", proposed)}}})
+		options.Tracker = nil
+		session := openTestSession(t, options)
+		if _, err := session.Send(context.Background(), "what next?"); err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if _, err := session.Approve(context.Background(), "1.1"); err == nil || !strings.Contains(err.Error(), "no work tracker is configured") {
+			t.Fatalf("Approve() error = %v", err)
+		}
+		if pending := session.Proposals(); len(pending) != 1 {
+			t.Fatalf("a proposal nobody could create stopped awaiting a decision: %#v", pending)
+		}
+	})
+
+	t.Run("a failed creation leaves the proposal awaiting a decision", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{err: errors.New("bd create failed")}
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: proposalReply("Here it is.", proposed)}}})
+		options.Tracker = tracker
+		session := openTestSession(t, options)
+		if _, err := session.Send(context.Background(), "what next?"); err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if _, err := session.Approve(context.Background(), "1.1"); err == nil || !strings.Contains(err.Error(), "bd create failed") {
+			t.Fatalf("Approve() error = %v", err)
+		}
+		if pending := session.Proposals(); len(pending) != 1 {
+			t.Fatalf("an item that was never created was treated as decided: %#v", pending)
+		}
+	})
+
+	t.Run("a proposal the harness cannot read is reported, not dropped", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{}
+		malformed := "Here it is.\n\n```yoyodyne-proposal\n{\"items\":[{\"title\":\"t\"}]}\n```\n"
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{SessionID: "session-1", FinalText: malformed}}})
+		options.Tracker = tracker
+		session := openTestSession(t, options)
+		reply, err := session.Send(context.Background(), "what next?")
+		if err == nil || !strings.Contains(err.Error(), "description is required") {
+			t.Fatalf("Send() error = %v", err)
+		}
+		// The answer is still the operator's to read, and nothing about an
+		// unreadable proposal turns into one.
+		if !strings.Contains(reply.Text, "Here it is.") || len(reply.Proposals) != 0 {
+			t.Fatalf("reply = %#v", reply)
+		}
+		if len(session.Proposals()) != 0 || len(tracker.created) != 0 {
+			t.Fatalf("an unreadable proposal became %#v and %#v", session.Proposals(), tracker.created)
+		}
+	})
+}
+
+func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply(
+			"Three, and I would keep the third for later.",
+			`{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure."}`,
+			`{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster."}`,
+			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`,
+		),
+	}}})
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// The operator approves the first, declines the second with a reason, and
+	// ends the input before deciding the third.
+	input := strings.NewReader("what next?\ny\nnot this quarter\n")
+	if err := session.Converse(context.Background(), input, &out); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	if len(tracker.created) != 1 || tracker.created[0].Title != "Pause on a usage limit" {
+		t.Fatalf("created work items = %#v", tracker.created)
+	}
+	transcript := out.String()
+	for _, required := range []string{
+		"proposes 3 work item(s)",
+		"create 1.1?",
+		"created yoyodyne-1",
+		"declined 1.2",
+		"input ended before you decided",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	// Silence is not approval: the undecided proposal is still awaiting one.
+	pending := session.Proposals()
+	if len(pending) != 1 || pending[0].ID != "1.3" {
+		t.Fatalf("awaiting decision = %#v", pending)
+	}
+	counted := countEvents(t, root, session)
+	if counted[execution.EventProposalRecorded] != 3 ||
+		counted[execution.EventProposalApproved] != 1 ||
+		counted[execution.EventProposalCreated] != 1 ||
+		counted[execution.EventProposalRejected] != 1 {
+		t.Fatalf("recorded proposal events = %#v", counted)
+	}
+}
+
+func TestConverseSurvivesAProposalItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		// A block with an unknown field: the turn is fine, the proposals in it
+		// are not.
+		{SessionID: "session-1", FinalText: "Here is what I would do.\n\n" + proposalFence + "\n{\"items\":[{\"title\":\"t\",\"description\":\"d\",\"rationale\":\"r\",\"assignee\":\"me\"}]}\n```\n"},
+		{SessionID: "session-1", FinalText: proposalReply("Let me try that again.", `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`)},
+	}})
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), strings.NewReader("what next?\nsay that again\ny\n"), &out); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	// The answer is still the operator's to read, the loss is named, and the
+	// conversation goes on to a turn that proposes something readable.
+	for _, required := range []string{
+		"Here is what I would do.",
+		"cannot read",
+		"unknown field",
+		"Let me try that again.",
+		"created yoyodyne-1",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	if session.Evidence().Turns != 2 {
+		t.Fatalf("turns = %d, want 2: an unreadable block ended the conversation", session.Evidence().Turns)
+	}
+	if len(tracker.created) != 1 || tracker.created[0].Title != "Add a retry budget" {
+		t.Fatalf("created work items = %#v", tracker.created)
+	}
+	// The unreadable block proposed nothing, so nothing from it is awaiting a
+	// decision either.
+	if pending := session.Proposals(); len(pending) != 0 {
+		t.Fatalf("awaiting decision = %#v", pending)
+	}
+}
+
+func TestOnlyAnExplicitYesApproves(t *testing.T) {
+	t.Parallel()
+
+	for _, answer := range []string{"y", "Y", "yes", "YES", " yes "} {
+		if !isApproval(answer) {
+			t.Fatalf("isApproval(%q) = false, want true", answer)
+		}
+	}
+	// Anything else is a decline, including answers that merely lean that way:
+	// an answer nobody can be sure of never creates work.
+	for _, answer := range []string{"", "n", "no", "N", "yeah", "y please", "sure", "not this quarter"} {
+		if isApproval(answer) {
+			t.Fatalf("isApproval(%q) = true, want false", answer)
+		}
+	}
+}
+
+func TestContractStatesTheProposalProtocolItEnforces(t *testing.T) {
+	t.Parallel()
+
+	prompt := SystemPrompt(hostilePersona)
+	for _, required := range []string{
+		proposalFence,
+		"the harness creates only what they approve",
+		"Propose at most " + strconv.Itoa(MaxProposalsPerTurn) + " items",
+		`"rationale"`,
+	} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("system prompt does not state %q", required)
+		}
+	}
+	// The bound the product manager is told is the bound that is enforced.
+	if maxProposalsPerTurnText != strconv.Itoa(MaxProposalsPerTurn) {
+		t.Fatalf("contract states a limit of %s, enforced limit is %d", maxProposalsPerTurnText, MaxProposalsPerTurn)
+	}
+}
+
+// proposalReply renders a provider answer that carries proposals the way the
+// contract asks for them.
+func proposalReply(prose string, items ...string) string {
+	return prose + "\n\n" + proposalFence + "\n{\"items\":[" + strings.Join(items, ",") + "]}\n```\n"
+}
+
+// onlyEventPayload returns the payload of the one event of a type the
+// conversation recorded, failing when there is not exactly one.
+func onlyEventPayload(t *testing.T, root string, session *Session, eventType execution.EventType) string {
+	t.Helper()
+
+	var payloads []string
+	for _, event := range loadTestEvents(t, root, session) {
+		if event.Type == eventType {
+			payloads = append(payloads, string(event.Payload))
+		}
+	}
+	if len(payloads) != 1 {
+		t.Fatalf("%s events = %d, want 1", eventType, len(payloads))
+	}
+	return payloads[0]
+}
+
+func countEvents(t *testing.T, root string, session *Session) map[execution.EventType]int {
+	t.Helper()
+
+	counted := make(map[execution.EventType]int)
+	for _, event := range loadTestEvents(t, root, session) {
+		counted[event.Type]++
+	}
+	return counted
+}
+
+func loadTestEvents(t *testing.T, root string, session *Session) []execution.Event {
+	t.Helper()
+
+	events, err := newTestStore(t, root).LoadEvents(session.Evidence().ConversationID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	return events
+}
+
 func testOptions(t *testing.T, provider Backend) Options {
 	t.Helper()
 
@@ -395,6 +801,35 @@ func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (bac
 	result.Backend = domain.BackendClaudeCode
 	result.LastEvent = sequence
 	return result, nil
+}
+
+// fakeTracker stands in for Beads and records exactly what it was asked to do.
+// It is what makes "nothing is created without an approval" an assertion rather
+// than a claim.
+type fakeTracker struct {
+	created []beads.NewWorkItem
+	links   [][2]string
+	err     error
+}
+
+func (f *fakeTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
+	if f.err != nil {
+		return beads.WorkItem{}, f.err
+	}
+	f.created = append(f.created, item)
+	return beads.WorkItem{
+		ID:     fmt.Sprintf("yoyodyne-%d", len(f.created)),
+		Title:  item.Title,
+		Parent: item.Parent,
+	}, nil
+}
+
+func (f *fakeTracker) AddBlocker(_ context.Context, id, blockerID string) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.links = append(f.links, [2]string{id, blockerID})
+	return nil
 }
 
 type fixedClock struct{}

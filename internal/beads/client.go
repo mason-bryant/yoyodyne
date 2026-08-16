@@ -37,6 +37,22 @@ type Dependency struct {
 	Status string
 }
 
+// NewWorkItem is a work item to create. It is deliberately narrow: the harness
+// creates items on someone's explicit approval, so this carries the item and
+// the provenance that explains it rather than every field bd accepts.
+type NewWorkItem struct {
+	Title       string
+	Description string
+	// Type is the Beads issue type. It is required: an item created with
+	// whatever type bd happened to default to is not the item that was approved.
+	Type string
+	// Notes records where the item came from. Beads keeps it beside the
+	// description rather than inside it, so provenance stays legible as the
+	// description is edited.
+	Notes  string
+	Parent string
+}
+
 type Client struct {
 	Runner  execution.ProcessRunner
 	Binary  string
@@ -45,8 +61,9 @@ type Client struct {
 }
 
 var (
-	issueIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
-	statusPattern  = regexp.MustCompile(`^[a-z][a-z_]*$`)
+	issueIDPattern   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	statusPattern    = regexp.MustCompile(`^[a-z][a-z_]*$`)
+	issueTypePattern = regexp.MustCompile(`^[a-z][a-z_]*$`)
 )
 
 func (c Client) Show(ctx context.Context, id string) (WorkItem, error) {
@@ -76,6 +93,47 @@ func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
 		return nil, err
 	}
 	return decodeWorkItems(data)
+}
+
+// Create records a new work item. Unlike every other call here it brings work
+// into existence, so the caller is responsible for having the authority to ask:
+// this adapter is the mechanism, never the approval.
+func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) {
+	if err := item.validate(); err != nil {
+		return WorkItem{}, err
+	}
+	args := []string{
+		"create",
+		"--title=" + item.Title,
+		"--description=" + item.Description,
+		"--type=" + item.Type,
+	}
+	if notes := strings.TrimSpace(item.Notes); notes != "" {
+		args = append(args, "--notes="+notes)
+	}
+	if parent := strings.TrimSpace(item.Parent); parent != "" {
+		args = append(args, "--parent="+parent)
+	}
+	args = append(args, "--json")
+	data, err := c.run(ctx, args...)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	// Creation answers with the one item it made rather than a list, and the
+	// created identifier is what everything downstream refers to, so an answer
+	// without one is a failure however it was reported.
+	var raw rawWorkItem
+	if err := decodeJSON(data, &raw); err != nil {
+		return WorkItem{}, fmt.Errorf("decode bd created work item: %w", err)
+	}
+	created, err := convertWorkItem(raw)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if created.Title != item.Title {
+		return WorkItem{}, fmt.Errorf("bd created work item %s with title %q, want %q", created.ID, created.Title, item.Title)
+	}
+	return created, nil
 }
 
 func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
@@ -243,39 +301,47 @@ func decodeWorkItems(data []byte) ([]WorkItem, error) {
 	}
 	items := make([]WorkItem, 0, len(rawItems))
 	for _, raw := range rawItems {
-		if err := validateIssueID(raw.ID); err != nil {
-			return nil, fmt.Errorf("bd returned invalid work item: %w", err)
-		}
-		item := WorkItem{
-			ID:                 raw.ID,
-			Title:              raw.Title,
-			Description:        raw.Description,
-			Design:             raw.Design,
-			AcceptanceCriteria: raw.AcceptanceCriteria,
-			Notes:              raw.Notes,
-			Status:             raw.Status,
-			Priority:           raw.Priority,
-			IssueType:          raw.IssueType,
-			Assignee:           raw.Assignee,
-			Parent:             raw.Parent,
-			Dependencies:       make([]Dependency, 0, len(raw.Dependencies)),
-		}
-		for _, dependency := range raw.Dependencies {
-			id := dependency.ID
-			if id == "" {
-				id = dependency.DependsOnID
-			}
-			dependencyType := dependency.DependencyType
-			if dependencyType == "" {
-				dependencyType = dependency.Type
-			}
-			if id != "" {
-				item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
-			}
+		item, err := convertWorkItem(raw)
+		if err != nil {
+			return nil, err
 		}
 		items = append(items, item)
 	}
 	return items, nil
+}
+
+func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
+	if err := validateIssueID(raw.ID); err != nil {
+		return WorkItem{}, fmt.Errorf("bd returned invalid work item: %w", err)
+	}
+	item := WorkItem{
+		ID:                 raw.ID,
+		Title:              raw.Title,
+		Description:        raw.Description,
+		Design:             raw.Design,
+		AcceptanceCriteria: raw.AcceptanceCriteria,
+		Notes:              raw.Notes,
+		Status:             raw.Status,
+		Priority:           raw.Priority,
+		IssueType:          raw.IssueType,
+		Assignee:           raw.Assignee,
+		Parent:             raw.Parent,
+		Dependencies:       make([]Dependency, 0, len(raw.Dependencies)),
+	}
+	for _, dependency := range raw.Dependencies {
+		id := dependency.ID
+		if id == "" {
+			id = dependency.DependsOnID
+		}
+		dependencyType := dependency.DependencyType
+		if dependencyType == "" {
+			dependencyType = dependency.Type
+		}
+		if id != "" {
+			item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
+		}
+	}
+	return item, nil
 }
 
 func decodeJSON(data []byte, target any) error {
@@ -291,6 +357,35 @@ func decodeJSON(data []byte, target any) error {
 		return err
 	}
 	return nil
+}
+
+func (n NewWorkItem) validate() error {
+	var problems []error
+	if strings.TrimSpace(n.Title) == "" {
+		problems = append(problems, errors.New("title is required"))
+	}
+	if strings.TrimSpace(n.Description) == "" {
+		problems = append(problems, errors.New("description is required"))
+	}
+	if !issueTypePattern.MatchString(n.Type) {
+		problems = append(problems, fmt.Errorf("invalid Beads issue type %q", n.Type))
+	}
+	if parent := strings.TrimSpace(n.Parent); parent != "" {
+		if err := validateIssueID(parent); err != nil {
+			problems = append(problems, fmt.Errorf("invalid parent: %w", err))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))
+	}
+	return nil
+}
+
+// ValidateIssueID reports whether a string can name a Beads issue. It is
+// exported so a caller can refuse an identifier it was handed before building a
+// command around it, rather than discovering the problem as a bd failure.
+func ValidateIssueID(id string) error {
+	return validateIssueID(id)
 }
 
 func validateIssueID(id string) error {

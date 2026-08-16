@@ -118,6 +118,83 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	}
 }
 
+func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
+	t.Parallel()
+
+	// Creation answers with the one item it made rather than with a list.
+	created := `{"id":"yoyodyne-9","title":"Pause on a usage limit","description":"Wait and resume.",
+	             "notes":"Proposed in conversation chat-1","status":"open","priority":2,"issue_type":"task"}`
+	runner := &fakeRunner{responses: []string{created}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.Create(context.Background(), NewWorkItem{
+		Title:       "Pause on a usage limit",
+		Description: "Wait and resume.",
+		Type:        "task",
+		Notes:       "Proposed in conversation chat-1",
+		Parent:      "yoyodyne-ifd.12",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if item.ID != "yoyodyne-9" || item.Title != "Pause on a usage limit" {
+		t.Fatalf("Create() = %#v", item)
+	}
+	wantArgs := [][]string{{
+		"create",
+		"--title=Pause on a usage limit",
+		"--description=Wait and resume.",
+		"--type=task",
+		"--notes=Proposed in conversation chat-1",
+		"--parent=yoyodyne-ifd.12",
+		"--json",
+	}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// An item created as something other than what was asked for is a failure:
+	// the caller approved the item it described, not whatever bd produced.
+	mismatched := &fakeRunner{responses: []string{`{"id":"yoyodyne-9","title":"Something else","issue_type":"task"}`}}
+	if _, err := (Client{Runner: mismatched}).Create(context.Background(), NewWorkItem{Title: "Pause", Description: "d", Type: "task"}); err == nil ||
+		!strings.Contains(err.Error(), "want \"Pause\"") {
+		t.Fatalf("Create() mismatched title error = %v", err)
+	}
+	// A creation without an identifier is not a creation anyone can refer to.
+	anonymous := &fakeRunner{responses: []string{`{"title":"Pause"}`}}
+	if _, err := (Client{Runner: anonymous}).Create(context.Background(), NewWorkItem{Title: "Pause", Description: "d", Type: "task"}); err == nil ||
+		!strings.Contains(err.Error(), "invalid Beads issue id") {
+		t.Fatalf("Create() anonymous error = %v", err)
+	}
+}
+
+func TestClientRefusesToCreateAnUnusableWorkItem(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		item NewWorkItem
+		want string
+	}{
+		{name: "no title", item: NewWorkItem{Description: "d", Type: "task"}, want: "title is required"},
+		{name: "no description", item: NewWorkItem{Title: "t", Type: "task"}, want: "description is required"},
+		{name: "no type", item: NewWorkItem{Title: "t", Description: "d"}, want: "invalid Beads issue type"},
+		{name: "smuggled type", item: NewWorkItem{Title: "t", Description: "d", Type: "task --force"}, want: "invalid Beads issue type"},
+		{name: "invented parent", item: NewWorkItem{Title: "t", Description: "d", Type: "task", Parent: "../etc"}, want: "invalid parent"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			if _, err := (Client{Runner: runner}).Create(context.Background(), test.item); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Create() error = %v, want it to contain %q", err, test.want)
+			}
+			if len(runner.args) != 0 {
+				t.Fatalf("a refused item still ran bd %#v", runner.args)
+			}
+		})
+	}
+}
+
 func TestClientRejectsInvalidIDsAndEmptyUpdates(t *testing.T) {
 	t.Parallel()
 

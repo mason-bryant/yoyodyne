@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -9,9 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"yoyodyne/internal/beads"
 	"yoyodyne/internal/chat"
 	"yoyodyne/internal/config"
 	"yoyodyne/internal/domain"
+	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
 	"yoyodyne/internal/orchestrator"
 )
@@ -219,6 +222,107 @@ func TestChatRefusesArgumentsItCannotHonor(t *testing.T) {
 				t.Fatalf("stderr = %q, want it to contain %q", stderr.String(), test.want)
 			}
 		})
+	}
+}
+
+// The tracker a conversation acts through is the one path an approved proposal
+// is created by, so what it would actually run is checked here rather than
+// assumed: the project's repository, the bd binary, and a bound, so an
+// unresponsive tracker cannot hang an operator waiting at the approval prompt.
+func TestChatTrackerRunsBoundedCommandsInTheRepository(t *testing.T) {
+	t.Parallel()
+
+	// It is what chat approves through, which is a compile-time fact worth
+	// stating where the construction lives.
+	var _ chat.Tracker = chatTracker(nil, "")
+
+	runner := &recordingRunner{stdout: `{"id":"yoyodyne-9","title":"Pause on a usage limit","status":"open","issue_type":"task"}`}
+	tracker := chatTracker(runner, "/repo")
+	// The bound is stated here rather than inherited from whatever the adapter
+	// happens to default to, so a change to that default cannot quietly leave
+	// an operator waiting at the approval prompt.
+	if tracker.Timeout != chatTrackerTimeout || tracker.Dir != "/repo" {
+		t.Fatalf("chatTracker() = %#v", tracker)
+	}
+	created, err := tracker.Create(context.Background(), beads.NewWorkItem{
+		Title:       "Pause on a usage limit",
+		Description: "Wait and resume.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if created.ID != "yoyodyne-9" {
+		t.Fatalf("Create() = %#v", created)
+	}
+	runner.stdout = `{"issue_id":"yoyodyne-9","depends_on_id":"yoyodyne-1","status":"added"}`
+	if err := tracker.AddBlocker(context.Background(), created.ID, "yoyodyne-1"); err != nil {
+		t.Fatalf("AddBlocker() error = %v", err)
+	}
+	if len(runner.commands) != 2 {
+		t.Fatalf("commands = %#v", runner.commands)
+	}
+	for _, command := range runner.commands {
+		if command.Name != "bd" {
+			t.Fatalf("command name = %q, want bd", command.Name)
+		}
+		if command.Dir != "/repo" {
+			t.Fatalf("command dir = %q, want the product repository", command.Dir)
+		}
+		if command.Timeout != chatTrackerTimeout {
+			t.Fatalf("command timeout = %s, want %s", command.Timeout, chatTrackerTimeout)
+		}
+	}
+}
+
+// recordingRunner records what a client would run without running it, so a
+// construction that never reaches a real bd is still checked for what it asks.
+type recordingRunner struct {
+	stdout   string
+	commands []execution.Command
+}
+
+func (r *recordingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.commands = append(r.commands, command)
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.stdout}, nil
+}
+
+// A one-shot message has nobody to approve anything, so proposals it produced
+// are reported as proposals and the operator is told where to decide on them.
+func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
+	t.Parallel()
+
+	proposals := []chat.PendingProposal{{
+		ID:             "1.1",
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		Turn:           1,
+		Proposal: chat.Proposal{
+			Title:       "Pause on a usage limit",
+			Description: "Wait and resume.",
+			Rationale:   "Capacity is not failure.",
+		},
+	}}
+	var oneShot bytes.Buffer
+	printChatProposals(&oneShot, proposals)
+	for _, required := range []string{"Nothing was created", "yoyodyne chat", "[1.1] Pause on a usage limit"} {
+		if !strings.Contains(oneShot.String(), required) {
+			t.Fatalf("one-shot output = %q, want it to contain %q", oneShot.String(), required)
+		}
+	}
+
+	// A conversation that ended without a decision says so rather than leaving
+	// the proposal to be assumed either way.
+	var undecided bytes.Buffer
+	printUndecidedProposals(&undecided, proposals)
+	if !strings.Contains(undecided.String(), "undecided") || !strings.Contains(undecided.String(), "[1.1]") {
+		t.Fatalf("undecided output = %q", undecided.String())
+	}
+
+	var quiet bytes.Buffer
+	printChatProposals(&quiet, nil)
+	printUndecidedProposals(&quiet, nil)
+	if quiet.Len() != 0 {
+		t.Fatalf("a turn with no proposals printed %q", quiet.String())
 	}
 }
 
