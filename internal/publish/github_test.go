@@ -634,3 +634,65 @@ func TestGitHubRefusesWhenTheRemoteCannotBeResolved(t *testing.T) {
 		t.Errorf("forge commands ran despite an unresolved remote: %v", calls)
 	}
 }
+
+// TestGitHubMergeMergesWhenChecksAreNotRequired covers the ordinary repository
+// that has CI and no branch protection. Its checks are not required by anything,
+// so the forge reports UNSTABLE rather than CLEAN, and nothing is holding the
+// request back. Treating that as unpublishable would misreport the commonest
+// configuration there is as needing a setting changed.
+func TestGitHubMergeMergesWhenChecksAreNotRequired(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []string{"UNSTABLE", "HAS_HOOKS", "clean"} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &scriptedRunner{}
+			runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+			runner.reply("pr merge", execution.ProcessResult{
+				Status:   execution.ProcessFailed,
+				ExitCode: 1,
+				Stderr:   "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
+			})
+			runner.replyAfter("pr merge", 1, execution.ProcessResult{Status: execution.ProcessSucceeded})
+			runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"` + status + `"}`})
+			forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+			head := "0123456789abcdef0123456789abcdef01234567"
+			result, err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: head, Method: MergeCommit})
+			if err != nil {
+				t.Fatalf("Merge() error = %v, want the request merged rather than reported as unpublishable", err)
+			}
+			if result.Queued {
+				t.Errorf("Merge() = %#v, want a merge rather than a queued request", result)
+			}
+		})
+	}
+}
+
+// TestGitHubMergeStillReportsAnUnavailableSettingWhenSomethingIsWaiting keeps
+// the fallback narrow: a state with something genuinely outstanding must not be
+// merged past just because queuing was refused.
+func TestGitHubMergeStillReportsAnUnavailableSettingWhenSomethingIsWaiting(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge", execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
+	})
+	runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"BLOCKED"}`})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	head := "0123456789abcdef0123456789abcdef01234567"
+	_, err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: head, Method: MergeCommit})
+	var unavailable AutoMergeUnavailable
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("Merge() error = %v, want the unavailable setting reported when something is genuinely waiting", err)
+	}
+	if merges := runner.matching("pr merge"); len(merges) != 1 {
+		t.Errorf("pr merge calls = %v, want no second merge attempt when something is waiting", merges)
+	}
+}

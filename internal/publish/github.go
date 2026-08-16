@@ -415,7 +415,25 @@ func nothingLeftToWaitFor(reason string) bool {
 // for. A state that could not be read answers no, which leaves the decision to
 // what the forge said.
 func readyToMergeNow(status string) bool {
-	return strings.EqualFold(strings.TrimSpace(status), "CLEAN")
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	// Mergeable with every requirement met.
+	case "CLEAN":
+		return true
+	// Mergeable, with checks that are running or failing but that no branch
+	// protection requires. A repository with CI and no protection reports this
+	// rather than CLEAN, and it is the ordinary case: nothing is holding the
+	// request back, so there is nothing for a queue to wait for. Treating it as
+	// outstanding would leave that repository unable to publish at all.
+	case "UNSTABLE":
+		return true
+	// Mergeable, with repository commit hooks that will run on the merge.
+	case "HAS_HOOKS":
+		return true
+	default:
+		// BLOCKED, BEHIND, DIRTY, DRAFT and UNKNOWN all have something to
+		// resolve before a merge, so the forge's own words decide.
+		return false
+	}
 }
 
 // normalizeAutoMerge folds the spellings the forge uses for the setting into
