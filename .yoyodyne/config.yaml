@@ -17,6 +17,12 @@ approvals:
   # conflict-aware fast-forward integration now gate every promotion. The
   # harness refuses automatic integration that is not actually gated.
   integration: automatic
+  # main is protected against direct pushes, so publishing is how work reaches
+  # the remote at all: the developer phase pushes its branch and opens a pull
+  # request, and the reviewer's approving verdict is what merges it. Nothing
+  # here bypasses the gates above -- it changes where the promotion lands, not
+  # what has to be true before it happens.
+  publishing: automatic
 
 # Checks are this project's own: the bundle never supplies them, and they are
 # replaced as a whole list rather than merged, so what is written here is
