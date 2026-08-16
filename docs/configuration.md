@@ -22,7 +22,7 @@ control. Run state, provider event streams, locks, and worktrees live outside th
 repository under an operating-system state directory, so nothing there depends on
 where the project is checked out.
 
-The smallest usable configuration is:
+The smallest configuration that can run work is:
 
 ```yaml
 version: 1
@@ -31,9 +31,18 @@ extends: builtin:v1
 product:
   id: example
   repository: .
+
+checks:
+  - go test ./...
 ```
 
-That is a complete configuration. The five default agents — product manager,
+`product` and `checks` are the two things the bundle never supplies, because
+both describe the project rather than the harness. Omitting `checks` still
+validates — the schema does not require it — but `yoyodyne run` refuses to
+execute a work item with no configured check, so it is part of the smallest
+configuration that is actually usable rather than merely valid.
+
+Nothing else has to be written down. The five default agents — product manager,
 architect, development manager, developer, and reviewer — come from the bundle
 with a role, the Claude Code backend, a model selector, an instance count, and a
 versioned persona each.

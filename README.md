@@ -39,7 +39,7 @@ On success, the JSON result reports the run ID, branch, worktree, base commit, c
 
 ## Configuring a project
 
-Yoyodyne carries its own agent defaults, so a project repository stores only its own settings and any deliberate deviation from them. A complete configuration can be as small as this:
+Yoyodyne carries its own agent defaults, so a project repository stores only its own settings and any deliberate deviation from them. A configuration can be as small as this:
 
 ```yaml
 # .yoyodyne/config.yaml
@@ -49,7 +49,12 @@ extends: builtin:v1
 product:
   id: example
   repository: .
+
+checks:
+  - go test ./...
 ```
+
+The bundle supplies the agents but never `product` or `checks`: both describe the project rather than the harness. A file that omits `checks` still validates, but `yoyodyne run` refuses it, because a run with nothing to verify has no gate to integrate behind.
 
 That inherits five default agents — product manager, architect, development manager, developer, and reviewer — each with a role, the Claude Code backend, a model selector, an instance count, and a persona. An override names only what it changes; everything else keeps inheriting:
 
