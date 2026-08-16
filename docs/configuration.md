@@ -172,13 +172,26 @@ With both on, a run works like this:
    a pull request is where work is reviewed, and work that does not pass yet is
    exactly what a reviewer should be able to see.
 2. **The reviewer's verdict merges it.** An approving verdict authorizes the
-   merge and the harness performs it. Nothing about the gate changes — the same
-   passing checks, the same independent-reviewer evidence, and the same
-   fast-forward rule that gate integration also gate the merge.
-3. **The merge is confirmed, then the branch is cleaned up** on both sides,
+   merge, and the harness asks the forge to perform it — it never pushes your
+   target branch. Nothing about the gate changes: the same passing checks, the
+   same independent-reviewer evidence, and the same fast-forward rule that gate
+   integration also gate the merge, and the remote target is checked again right
+   before the call, so a target that moved in the meantime refuses the merge
+   rather than having the forge reconcile it.
+3. **The merge method is a merge commit.** The harness names it rather than
+   taking your repository's default, because it is the only method that puts the
+   reviewed commit itself on your target branch. A squash replaces it with a
+   commit nobody reviewed, and GitHub's rebase always rewrites what it merges —
+   new committer, new SHA, even when the request needs no rebasing — so both
+   would leave the remote carrying a copy of the work your local branch does not
+   have. The method is recorded on the run and on the work item, along with the
+   commit the merge produced.
+4. **The merge is confirmed, then the branch is cleaned up** on both sides,
    locally and on the remote, on the same compare-and-swap evidence. The
-   confirmation waits briefly and boundedly, because a forge notices its commits
-   reaching the base shortly after the push rather than during it.
+   confirmation waits briefly and boundedly, because a forge's own record of a
+   request can lag the merge it just performed. If the forge refuses, the run
+   reports which requirement was unmet — a missing required check, a review the
+   base branch demands — rather than a generic failure.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that
@@ -193,7 +206,7 @@ contract in its prompt, not a boundary the harness enforces. What does hold is
 that your local target branch is authoritative: work an agent pushed by itself
 is not integrated by having been pushed, and a pull request merged behind the
 harness's back moves the remote away from the local branch, which the harness's
-own push then refuses rather than force-resolves.
+own check of the remote target then refuses rather than force-resolves.
 
 ### Publishing without automatic integration
 
@@ -219,17 +232,31 @@ integration policy would be taking the decision that setting reserves for you.
 **The local target branch.** Your work is where that branch says it is.
 
 Merging is not a second promotion performed on the remote. The harness
-fast-forwards the local target exactly as it always has, then pushes that same
-commit to the remote target branch; the pull request is merged by the arrival of
-its own commits on its base. One commit, one fast-forward, one answer. The
-remote is the publication of the authoritative branch rather than a second copy
-that could disagree with it.
+fast-forwards the local target exactly as it always has, and the forge merges
+the pull request carrying exactly that commit. One promotion, one reviewed
+commit, the same commit on both sides.
 
-If a promotion cannot be published — the forge is unreachable, or the remote
-target moved — the run still succeeds and closes its item, and reports an
-*outstanding publication*. The change is integrated where it counts; only its
-publication is unfinished, and it is reconciled by hand. Nothing is ever
-force-pushed to resolve it.
+The two branches do not end at the same commit, and no forge merge method would
+let them: **the remote target is your local target plus one merge commit per
+published run**, made by the forge and identical in content. The harness does
+not pull that merge commit back onto your local branch, and never rewrites or
+resets it. If you want the two to look the same locally, `git pull` — it is an
+ordinary fast-forward onto the merge commit.
+
+Because the forge performs the merge, the harness checks that relationship
+rather than assuming it. Before the merge, the remote target must contain the
+commit your promotion was made from and carry exactly its content — that is what
+tells a target another run already published into from someone else's work.
+After the merge, it must contain the promoted commit itself and carry exactly
+its content. A forge that rewrote the commit or merged something else is
+reported, not reconciled, and the run branch is left on the remote for whoever
+decides which history is right.
+
+If a promotion cannot be published — the forge is unreachable, the remote target
+moved, or the forge refused the merge — the run still succeeds and closes its
+item, and reports an *outstanding publication*. The change is integrated where
+it counts; only its publication is unfinished, and it is reconciled by hand.
+Nothing is ever force-pushed to resolve it.
 
 ### What publishing needs
 
@@ -240,11 +267,19 @@ force-pushed to resolve it.
   asked to publish and `gh` is missing or logged out, the run **fails before it
   claims anything** — a harness that quietly stopped publishing would look the
   same as one with nothing to publish.
-- Permission to push the target branch. Because merging is a push, a protected
-  branch that refuses direct pushes will reject it and the run reports an
-  outstanding publication. Merging through the forge instead would mean
-  accepting a merge commit the harness did not create, which is what the
-  fast-forward rule exists to prevent.
+- Permission to merge the pull request. The target branch itself is never
+  pushed, so a branch protected against direct pushes — requiring a pull
+  request, a build check, or a review — is merged into normally, provided the
+  account `gh` is authenticated as may merge and the request satisfies whatever
+  the protection requires. Only the run branch is pushed. If the protection is
+  not satisfied, the run reports the unmet requirement as an outstanding
+  publication.
+- **Merge commits allowed** in the repository's settings, since that is the
+  method the harness asks for. A repository that permits only squashing or only
+  rebasing refuses the merge, and the run reports that refusal — it does not
+  fall back to a method that would replace the reviewed commit with a rewritten
+  copy your local branch does not have. A protection rule requiring linear
+  history has the same effect.
 
 ## Waiting out a provider usage limit
 

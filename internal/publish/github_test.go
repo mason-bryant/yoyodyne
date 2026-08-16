@@ -2,6 +2,7 @@ package publish
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
 	"testing"
@@ -77,8 +78,105 @@ func TestGitHubEnsureRefusesAPullRequestThatIsNoLongerOpen(t *testing.T) {
 	}
 }
 
-// State is how the harness confirms that pushing the integrated commit actually
-// merged the pull request, rather than assuming it did.
+// Merging is what publishes a promotion now, so the request has to name the
+// method deliberately and pin the commit that may merge: a head that moved
+// since the harness published it must be refused by the forge rather than
+// merged in place of what the run integrated. The method reaches the CLI as the
+// flag for it, because that is what decides whether the base ends up with the
+// reviewed commit or a rewritten copy of it.
+func TestGitHubMergeNamesTheMethodAndPinsTheHeadCommit(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge", execution.ProcessResult{Status: execution.ProcessSucceeded})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	head := "0123456789abcdef0123456789abcdef01234567"
+	if err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: head, Method: MergeCommit}); err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	merges := runner.matching("pr merge")
+	if len(merges) != 1 {
+		t.Fatalf("merges = %d, want exactly one", len(merges))
+	}
+	for _, expected := range []string{"7", "--merge", "--match-head-commit", head, "--repo", "https://example.invalid/acme/thing"} {
+		if !contains(merges[0], expected) {
+			t.Errorf("pr merge args = %v, missing %q", merges[0], expected)
+		}
+	}
+	for method, flag := range map[MergeMethod]string{MergeRebase: "--rebase", MergeSquash: "--squash"} {
+		if err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: head, Method: method}); err != nil {
+			t.Fatalf("Merge(%s) error = %v", method, err)
+		}
+		asked := runner.matching(flag)
+		if len(asked) != 1 {
+			t.Errorf("merges asking for %s = %d, want exactly one", flag, len(asked))
+		}
+	}
+	// A method the forge does not offer, a missing one, and a head that is not a
+	// commit are all refused before anything runs: the merge method is explicit
+	// or there is no merge.
+	for _, request := range []MergeRequest{
+		{Number: 7, HeadCommit: head},
+		{Number: 7, HeadCommit: head, Method: MergeMethod("fast-forward")},
+		{Number: 7, HeadCommit: "--repo=elsewhere", Method: MergeCommit},
+		{Number: 0, HeadCommit: head, Method: MergeCommit},
+	} {
+		if err := forge.Merge(context.Background(), request); err == nil {
+			t.Errorf("Merge(%#v) error = nil", request)
+		}
+	}
+	if merges := runner.matching("pr merge"); len(merges) != 3 {
+		t.Fatalf("refused requests still asked for a merge: %v", merges)
+	}
+}
+
+// A protected branch declining the merge is the repository's rules being
+// applied, not the harness failing, so the refusal has to name the requirement
+// that was unmet rather than read as a generic error.
+func TestGitHubMergeReportsARefusalAsTheUnmetRequirement(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr merge", execution.ProcessResult{
+		Status:   execution.ProcessFailed,
+		ExitCode: 1,
+		Stderr:   "GraphQL: Required status check \"build\" is expected. (mergePullRequest)",
+	})
+	runner.reply("pr view", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"mergeStateStatus":"BLOCKED"}`})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	err := forge.Merge(context.Background(), MergeRequest{Number: 7, HeadCommit: "0123456789abcdef0123456789abcdef01234567", Method: MergeCommit})
+	var refused MergeRefused
+	if !errors.As(err, &refused) {
+		t.Fatalf("Merge() error = %v, want a MergeRefused", err)
+	}
+	if refused.Number != 7 || refused.Method != MergeCommit || refused.Status != "BLOCKED" {
+		t.Fatalf("refusal = %#v", refused)
+	}
+	for _, want := range []string{"protection rules", "BLOCKED", `Required status check "build" is expected`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("refusal %q does not name %q", err.Error(), want)
+		}
+	}
+
+	// A forge that cannot say why still reports what it printed. Losing the
+	// refusal to a failed follow-up query would be the worst of both.
+	quiet := &scriptedRunner{}
+	quiet.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	quiet.reply("pr merge", execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "Pull request is not mergeable"})
+	quiet.reply("pr view", execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1})
+	err = (GitHub{Runner: quiet, Dir: t.TempDir()}).Merge(context.Background(),
+		MergeRequest{Number: 9, HeadCommit: "0123456789abcdef0123456789abcdef01234567", Method: MergeCommit})
+	if err == nil || !strings.Contains(err.Error(), "Pull request is not mergeable") {
+		t.Fatalf("Merge() unexplained refusal error = %v", err)
+	}
+}
+
+// State is how the harness confirms that the merge it asked the forge for
+// actually happened, rather than assuming it did.
 func TestGitHubStateReportsMergeAndAbsence(t *testing.T) {
 	t.Parallel()
 

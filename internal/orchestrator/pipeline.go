@@ -47,12 +47,16 @@ type WorktreeManager interface {
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	// The publishing half. RemoteConfigured is what lets a repository with no
-	// remote degrade to purely local behavior instead of failing, and the other
-	// three are the Git writes publishing needs: the harness performs all of
-	// them, whichever phase asked for them.
+	// remote degrade to purely local behavior instead of failing; PublishBranch
+	// and DeleteRemoteBranch are the Git writes publishing needs, which the
+	// harness performs whichever phase asked for them. The merge itself is the
+	// forge's, so the two remaining calls only observe it: one says whether the
+	// remote target may still be merged into, the other whether the merge put
+	// the promotion there and at which commit it left the branch.
 	RemoteConfigured(ctx context.Context) (bool, error)
 	PublishBranch(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Publication, error)
-	PublishIntegration(ctx context.Context, worktree gitworktree.Worktree, integration gitworktree.Integration) error
+	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
+	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
 }
 
@@ -62,6 +66,7 @@ type WorktreeManager interface {
 type PullRequests interface {
 	Availability(ctx context.Context) (publish.Availability, error)
 	Ensure(ctx context.Context, request publish.Request) (publish.PullRequest, error)
+	Merge(ctx context.Context, request publish.MergeRequest) error
 	State(ctx context.Context, head string) (publish.PullRequest, error)
 }
 

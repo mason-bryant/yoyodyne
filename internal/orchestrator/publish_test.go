@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -26,7 +27,7 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{}
+	forge := &fakeForge{remote: remote}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		// The branch must already be published by the time the reviewer is asked,
 		// because a pull request nobody can see is not what a reviewer reviews.
@@ -56,11 +57,33 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 	if forge.opened[0].Base != "main" || forge.opened[0].Head != outcome.Branch {
 		t.Fatalf("pull request request = %#v, want the run branch into main", forge.opened[0])
 	}
-	// The merge is the arrival of the integrated commit on the remote target: the
-	// published branch carries exactly what the authoritative local branch does.
-	if published := publishedCommit(t, remote, "main"); published != outcome.Integration.TargetCommit {
-		t.Errorf("remote main = %q, want the integrated commit %q", published, outcome.Integration.TargetCommit)
+	// The forge is what merged, and it was asked for the one method that puts the
+	// promoted commit itself on the remote target, for exactly the commit this
+	// run integrated.
+	if len(forge.merges) != 1 {
+		t.Fatalf("forge merges = %d, want exactly one", len(forge.merges))
 	}
+	if forge.merges[0].Method != publish.MergeCommit || forge.merges[0].Number != outcome.PullRequest.Number {
+		t.Errorf("merge request = %#v, want the published request merged under a merge commit", forge.merges[0])
+	}
+	if forge.merges[0].HeadCommit != outcome.Integration.SourceCommit {
+		t.Errorf("merged head = %q, want the integrated commit %q", forge.merges[0].HeadCommit, outcome.Integration.SourceCommit)
+	}
+	if outcome.PullRequest.MergeMethod != string(publish.MergeCommit) {
+		t.Errorf("recorded merge method = %q, want the method the forge was asked for", outcome.PullRequest.MergeMethod)
+	}
+	// The relationship the merge actually produces: the remote target is the
+	// forge's own merge commit, it contains the promoted commit unrewritten, and
+	// it carries exactly that commit's content. The local branch stays where the
+	// promotion put it and never takes on the forge's commit.
+	remoteTarget := publishedCommit(t, remote, "main")
+	if remoteTarget == outcome.Integration.TargetCommit {
+		t.Errorf("remote main = %q, want the forge's merge commit above the promoted commit", remoteTarget)
+	}
+	if outcome.PullRequest.MergeCommit != remoteTarget {
+		t.Errorf("recorded merge commit = %q, want the remote target %q", outcome.PullRequest.MergeCommit, remoteTarget)
+	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
 	if local := publishedCommit(t, repository, "main"); local != outcome.Integration.TargetCommit {
 		t.Errorf("local main = %q, want the integrated commit %q", local, outcome.Integration.TargetCommit)
 	}
@@ -87,7 +110,7 @@ func TestPipelinePublishesEveryAttemptOntoOnePullRequest(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{}
+	forge := &fakeForge{remote: remote}
 	attempts := 0
 	provider := roleBackend(func(request backend.RunRequest) error {
 		if request.Role != domain.RoleDeveloper {
@@ -114,9 +137,7 @@ func TestPipelinePublishesEveryAttemptOntoOnePullRequest(t *testing.T) {
 	if outcome.PullRequest.HeadCommit != outcome.Integration.SourceCommit {
 		t.Errorf("published head = %q, want the integrated commit %q", outcome.PullRequest.HeadCommit, outcome.Integration.SourceCommit)
 	}
-	if published := publishedCommit(t, remote, "main"); published != outcome.Integration.TargetCommit {
-		t.Errorf("remote main = %q, want the integrated commit %q", published, outcome.Integration.TargetCommit)
-	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
 }
 
 // A repository with no remote is the degradation the design requires: the run
@@ -180,9 +201,9 @@ func TestPipelineRefusesPublishingItCannotPerform(t *testing.T) {
 func TestPipelineReportsAnOutstandingPublicationWithoutFailingThePromotion(t *testing.T) {
 	t.Parallel()
 
-	repository, _ := publishedRepository(t)
+	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{stateErr: errors.New("the forge is unreachable")}
+	forge := &fakeForge{remote: remote, stateErr: errors.New("the forge is unreachable")}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -208,6 +229,318 @@ func TestPipelineReportsAnOutstandingPublicationWithoutFailingThePromotion(t *te
 	if !strings.Contains(tracker.notes, "Publication outstanding") {
 		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.notes)
 	}
+}
+
+// A target branch that refuses direct pushes is the ordinary reason to open
+// pull requests at all, and it is what the harness could not finish a promotion
+// into while it published by pushing that branch. Merging through the forge is
+// what makes the protected case work.
+func TestPipelineMergesIntoATargetThatRefusesDirectPushes(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	protectBranch(t, remote, "main")
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.PublishFailure != "" {
+		t.Fatalf("publish failure = %q, want a protected branch merged into cleanly", outcome.PublishFailure)
+	}
+	if len(forge.merges) != 1 || !outcome.PullRequest.Merged {
+		t.Fatalf("forge merges = %d, pull request = %#v; want the request merged through the forge", len(forge.merges), outcome.PullRequest)
+	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
+	if published := publishedCommit(t, remote, outcome.Branch); published != "" {
+		t.Errorf("merged remote branch survived at %q", published)
+	}
+}
+
+// A forge that declines to merge is answering with the repository's own rules.
+// Reporting that as a generic failure would leave an operator with a promotion
+// that did not publish and no way to learn which requirement was unmet.
+func TestPipelineReportsAForgeRefusalAsTheUnmetRequirement(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote, mergeErr: publish.MergeRefused{
+		Number: 1,
+		Method: publish.MergeRebase,
+		Status: "BLOCKED",
+		Reason: `Required status check "build" is expected`,
+	}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
+		t.Fatalf("outcome = %#v, want the promotion to stand", outcome)
+	}
+	for _, want := range []string{"refused to merge pull request 1", "protection rules", `Required status check "build" is expected`} {
+		if !strings.Contains(outcome.PublishFailure, want) {
+			t.Errorf("publish failure %q does not name %q", outcome.PublishFailure, want)
+		}
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PublishFailure != outcome.PublishFailure {
+		t.Errorf("durable publish failure = %q, want the reported one", state.PublishFailure)
+	}
+	// Nothing merged, so the remote target must not have moved and the branch
+	// carrying the work has to survive for whoever satisfies the requirement.
+	if head := publishedCommit(t, remote, "main"); head != outcome.BaseCommit {
+		t.Errorf("remote main = %q, want the untouched base %q", head, outcome.BaseCommit)
+	}
+	if published := publishedCommit(t, remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the published commit %q", published, outcome.PullRequest.HeadCommit)
+	}
+}
+
+// A forge merging into a target that moved would reconcile that movement
+// itself, which is the conflict nothing in the run ever saw. The drift check
+// the promotion makes locally is therefore made against the remote too, and the
+// merge is never asked for.
+func TestPipelineRefusesToMergeIntoARemoteTargetThatMoved(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	// Someone else's work lands on the target after this run published its
+	// branch, which is the window a merge the harness does not perform opens.
+	forge.onEnsure = func() { driftRemoteTarget(t, remote, "main") }
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want the local promotion to stand", outcome)
+	}
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
+	}
+	for _, want := range []string{"moved away from the content the promotion was written against", "carries content the promotion was not written against"} {
+		if !strings.Contains(outcome.PublishFailure, want) {
+			t.Errorf("publish failure %q does not name %q", outcome.PublishFailure, want)
+		}
+	}
+	if head := publishedCommit(t, remote, "main"); head == outcome.Integration.TargetCommit {
+		t.Error("the drifted remote target was advanced anyway")
+	}
+}
+
+// A forge that replays what it merges — which is what GitHub's rebase and
+// squash methods do — never puts the reviewed commit on the base at all. The
+// harness asks for a merge commit precisely so that cannot happen, and reports
+// it rather than accepting a rewritten copy if it does: the remote would then
+// carry work no local branch has, and which history is right is a person's
+// decision.
+func TestPipelineReportsAMergeThatRewroteThePromotedCommit(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote, replayMerge: true}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want the promotion to stand", outcome)
+	}
+	// The rewritten commit carries the promotion's content, so content alone
+	// would have accepted it. What is checked is that the promoted commit itself
+	// is there.
+	for _, want := range []string{"does not contain the promoted commit", outcome.Integration.TargetCommit} {
+		if !strings.Contains(outcome.PublishFailure, want) {
+			t.Errorf("publish failure %q does not name %q", outcome.PublishFailure, want)
+		}
+	}
+	if outcome.PullRequest.MergeCommit != "" {
+		t.Errorf("recorded merge commit = %q, want none for a merge that did not carry the promotion", outcome.PullRequest.MergeCommit)
+	}
+	// The branch is the evidence for whoever reconciles the two, so it stays.
+	if published := publishedCommit(t, remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the published commit %q left in place", published, outcome.PullRequest.HeadCommit)
+	}
+}
+
+// The remote target a published run leaves behind is the forge's merge commit,
+// which this repository does not have and never will. The run after it must
+// still publish: a drift check that could not tell that state from someone
+// else's work would block every publication after the first, permanently.
+func TestPipelinePublishesTheRunAfterAForgeMerge(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	write := func(name, content string) func(backend.RunRequest) error {
+		return func(request backend.RunRequest) error {
+			return os.WriteFile(filepath.Join(request.WorkingDirectory, name), []byte(content), 0o600)
+		}
+	}
+	first := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-first", Title: "First", Status: "open"}}
+	firstForge := &fakeForge{remote: remote}
+	firstPipeline, _ := newPublishingPipeline(t, repository, first,
+		roleBackend(write("first.txt", "first\n"), approveVerdict), firstForge, []string{"exit 0"})
+	firstOutcome, err := firstPipeline.Run(context.Background(), first.item.ID)
+	if err != nil {
+		t.Fatalf("first Run() error = %v", err)
+	}
+	if firstOutcome.PublishFailure != "" {
+		t.Fatalf("first publish failure = %q", firstOutcome.PublishFailure)
+	}
+
+	second := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-second", Title: "Second", Status: "open"}}
+	secondForge := &fakeForge{remote: remote}
+	secondPipeline, store := newPublishingPipeline(t, repository, second,
+		roleBackend(write("second.txt", "second\n"), approveVerdict), secondForge, []string{"exit 0"})
+	secondRunID := "run-fedcba9876543210fedcba9876543210"
+	secondPipeline.NewRunID = func() (string, error) { return secondRunID, nil }
+
+	outcome, err := secondPipeline.Run(context.Background(), second.item.ID)
+	if err != nil {
+		t.Fatalf("second Run() error = %v", err)
+	}
+	if outcome.PublishFailure != "" {
+		t.Fatalf("second publish failure = %q, want the run after a forge merge to publish too", outcome.PublishFailure)
+	}
+	if len(secondForge.merges) != 1 || !outcome.PullRequest.Merged {
+		t.Fatalf("forge merges = %d, pull request = %#v; want the second run merged as well", len(secondForge.merges), outcome.PullRequest)
+	}
+	// The remote is now two forge merge commits ahead of the local branch and
+	// still carries exactly its content, which is the relationship the harness
+	// maintains rather than an equality it cannot have.
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
+	if published := publishedCommit(t, remote, outcome.Branch); published != "" {
+		t.Errorf("merged remote branch survived at %q", published)
+	}
+	state, err := store.Load(secondRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PullRequest == nil || state.PullRequest.MergeCommit == "" {
+		t.Fatalf("durable pull request = %#v, want the forge's merge commit recorded", state.PullRequest)
+	}
+}
+
+// What a forge merges is the pull request's head, so a promotion that
+// integrated a commit the published branch never received must not be merged:
+// the remote would get a change the authoritative branch does not have. A check
+// that writes into the worktree is how that happens.
+func TestPipelineRefusesToMergeAPullRequestThatIsNotWhatIntegrated(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"printf 'left behind\n' > residue.txt"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || outcome.PullRequest.HeadCommit == outcome.Integration.SourceCommit {
+		t.Fatalf("outcome = %#v, want a promotion of a commit the branch was never published at", outcome)
+	}
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness merged a request that is not what integrated: %#v", forge.merges)
+	}
+	if !strings.Contains(outcome.PublishFailure, "is not what would merge") {
+		t.Fatalf("publish failure = %q, want the mismatch reported", outcome.PublishFailure)
+	}
+	if head := publishedCommit(t, remote, "main"); head != outcome.BaseCommit {
+		t.Errorf("remote main = %q, want the untouched base %q", head, outcome.BaseCommit)
+	}
+}
+
+// assertRemoteCarriesPromotion states the relationship a forge merge produces,
+// which is the one the harness checks: the remote target is not the promoted
+// commit — no merge method leaves it there — but it contains that commit
+// unrewritten and carries exactly its content.
+func assertRemoteCarriesPromotion(t *testing.T, repository, remote, branch, promoted string) {
+	t.Helper()
+	target := publishedCommit(t, remote, branch)
+	if target == "" {
+		t.Fatalf("remote %s does not exist", branch)
+	}
+	// The promoted commit and the remote target both live in the remote here, so
+	// it can answer both questions about them.
+	contained := exec.Command("git", "-C", remote, "merge-base", "--is-ancestor", promoted, target)
+	if err := contained.Run(); err != nil {
+		t.Errorf("remote %s at %q does not contain the promoted commit %q", branch, target, promoted)
+	}
+	remoteTree := strings.TrimSpace(gitOutput(t, remote, "rev-parse", target+"^{tree}"))
+	localTree := strings.TrimSpace(gitOutput(t, repository, "rev-parse", promoted+"^{tree}"))
+	if remoteTree != localTree {
+		t.Errorf("remote %s carries tree %q, want the promoted commit's tree %q", branch, remoteTree, localTree)
+	}
+}
+
+// protectBranch makes a bare remote refuse direct pushes to one branch, the way
+// a repository that requires a pull request before anything reaches its target
+// does. The refusal is proven rather than assumed: a hook that silently allowed
+// the push would make the test resting on it meaningless.
+func protectBranch(t *testing.T, remote, branch string) {
+	t.Helper()
+	script := fmt.Sprintf("#!/bin/sh\nwhile read -r _ _ ref; do\n\tif [ \"$ref\" = \"refs/heads/%s\" ]; then\n\t\techo \"branch %s requires a pull request\" >&2\n\t\texit 1\n\tfi\ndone\nexit 0\n", branch, branch)
+	if err := os.WriteFile(filepath.Join(remote, "hooks", "pre-receive"), []byte(script), 0o700); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	clone := filepath.Join(t.TempDir(), "protected")
+	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
+	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
+	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	runPipelineGit(t, clone, "commit", "--allow-empty", "-m", "a direct push")
+	if err := exec.Command("git", "-C", clone, "push", "origin", "HEAD:refs/heads/"+branch).Run(); err == nil {
+		t.Fatalf("the remote accepted a direct push to %s", branch)
+	}
+}
+
+// driftRemoteTarget moves the remote target branch onto work this repository
+// has never seen, which is what someone else merging looks like from inside a
+// run.
+func driftRemoteTarget(t *testing.T, remote, branch string) {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "elsewhere")
+	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
+	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
+	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	// Real content, not an empty commit: what makes this drift is that the remote
+	// target no longer carries what the promotion was written against.
+	if err := os.WriteFile(filepath.Join(clone, "elsewhere.txt"), []byte("someone else's work\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, clone, "add", ".")
+	runPipelineGit(t, clone, "commit", "-m", "someone else's work")
+	runPipelineGit(t, clone, "push", "origin", "HEAD:refs/heads/"+branch)
 }
 
 // newPublishingPipeline is the automatic pipeline with publishing turned on.
@@ -247,7 +580,8 @@ func publishedCommit(t *testing.T, repository, branch string) string {
 
 // fakeForge is the harness's forge adapter with the CLI taken out. It issues
 // one pull request per branch, which is what lets a test tell an updated
-// request from a second one.
+// request from a second one, and it performs the merge itself the way the forge
+// does: by moving the target branch on the remote, without a push.
 type fakeForge struct {
 	availability publish.Availability
 	// reportAvailability makes the zero availability meaningful, so a test can
@@ -257,9 +591,26 @@ type fakeForge struct {
 	number             int
 	merged             bool
 	stateErr           error
+	// onEnsure runs when the pull request is opened, which is the moment after
+	// the branch is published and before anything is promoted. It is how a test
+	// expresses the world moving underneath a run.
+	onEnsure func()
+	// remote is the bare repository this forge merges into. A forge with none
+	// records the merge and touches nothing, which is what an operator sees when
+	// a forge reports a merge the remote does not show.
+	remote string
+	merges []publish.MergeRequest
+	// mergeErr is what the forge answers instead of merging, which is how a
+	// refusal by a protected branch is expressed.
+	mergeErr error
+	// replayMerge makes the forge rewrite what it merges instead of merging it,
+	// which is what GitHub's rebase and squash methods do: the base ends up with
+	// a fresh commit carrying the same content, and the reviewed commit itself
+	// never arrives.
+	replayMerge bool
 	// openReplies is how many times State reports the pull request still open
-	// before reporting it merged, which is the forge noticing its commits on the
-	// base shortly after the push rather than during it.
+	// before reporting it merged, which is the forge's own record of a request
+	// lagging the merge it just performed.
 	openReplies int
 	stateCalls  int
 }
@@ -273,26 +624,88 @@ func (f *fakeForge) Availability(context.Context) (publish.Availability, error) 
 
 func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.PullRequest, error) {
 	f.opened = append(f.opened, request)
+	if f.onEnsure != nil {
+		f.onEnsure()
+	}
 	if f.number == 0 {
 		f.number = 1
 	}
 	return publish.PullRequest{Number: f.number, URL: fmt.Sprintf("https://example.invalid/pull/%d", f.number), State: "OPEN"}, nil
 }
 
-// State reports merged once the integrated commit has been pushed, which is
-// exactly what a forge does when a pull request's commits arrive on its base —
-// after openReplies further answers of "still open", which is what makes that
-// bookkeeping asynchronous rather than instant.
+// Merge is the forge merging the pull request, which is what moves the remote
+// target branch now. The update is written inside the bare remote rather than
+// pushed into it, so a branch that refuses direct pushes is merged into exactly
+// as a real forge merges into one, and it is a real merge commit: a fresh
+// commit whose first parent is the base, whose second parent is the published
+// head, and whose tree is the head's. Modelling that rather than moving the
+// base ref onto the head is the difference between exercising the harness and
+// exercising an assumption — no forge merge method leaves the base at the
+// commit the harness promoted.
+func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) error {
+	if f.mergeErr != nil {
+		return f.mergeErr
+	}
+	f.merges = append(f.merges, request)
+	if f.remote != "" {
+		if err := f.mergeIntoRemote(f.opened[len(f.opened)-1].Base, request.HeadCommit); err != nil {
+			return err
+		}
+	}
+	f.merged = true
+	return nil
+}
+
+// mergeIntoRemote writes the forge's own merge of a request into the bare
+// remote. A replaying forge — GitHub's rebase and squash methods — is modelled
+// by leaving the published head out of the new commit's parents, so the commit
+// that was reviewed never reaches the base at all.
+func (f *fakeForge) mergeIntoRemote(base, head string) error {
+	tip, err := f.git("rev-parse", "refs/heads/"+base)
+	if err != nil {
+		return err
+	}
+	tree, err := f.git("rev-parse", head+"^{tree}")
+	if err != nil {
+		return err
+	}
+	arguments := []string{
+		"-c", "user.name=Forge",
+		"-c", "user.email=forge@example.invalid",
+		"commit-tree", tree, "-p", tip,
+	}
+	if !f.replayMerge {
+		arguments = append(arguments, "-p", head)
+	}
+	merged, err := f.git(append(arguments, "-m", fmt.Sprintf("Merge pull request #%d", f.number))...)
+	if err != nil {
+		return err
+	}
+	_, err = f.git("update-ref", "refs/heads/"+base, merged, tip)
+	return err
+}
+
+func (f *fakeForge) git(arguments ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", f.remote}, arguments...)...)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git %v in the forge: %v: %s", arguments, err, output)
+	}
+	return strings.TrimSpace(string(output)), nil
+}
+
+// State reports merged once the forge has merged the request — after
+// openReplies further answers of "still open", which is the forge's own record
+// lagging the merge it performed rather than the merge being unfinished.
 func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) {
 	if f.stateErr != nil {
 		return publish.PullRequest{}, f.stateErr
 	}
 	f.stateCalls++
 	url := fmt.Sprintf("https://example.invalid/pull/%d", f.number)
-	if f.stateCalls <= f.openReplies {
+	if !f.merged || f.stateCalls <= f.openReplies {
 		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN"}, nil
 	}
-	f.merged = true
 	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true}, nil
 }
 
@@ -337,16 +750,16 @@ func TestPipelinePublishesWithoutIntegratingWhenAHumanMerges(t *testing.T) {
 	}
 }
 
-// A forge marks a pull request merged when its commits reach the base, which
-// happens shortly after the push rather than during it. Asking once would
-// report a successful publication as outstanding and leave the merged branch on
-// the remote, so the confirmation waits the way the thing it observes behaves.
-func TestPipelineWaitsForTheForgeToNoticeTheMerge(t *testing.T) {
+// A forge's own record of a pull request can lag the merge it just performed.
+// Asking once would report a successful publication as outstanding and leave
+// the merged branch on the remote, so the confirmation waits the way the thing
+// it observes behaves.
+func TestPipelineWaitsForTheForgeToReportItsOwnMerge(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{openReplies: 2}
+	forge := &fakeForge{remote: remote, openReplies: 2}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -383,7 +796,7 @@ func TestPipelineStopsWaitingForAMergeThatNeverArrives(t *testing.T) {
 
 	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{openReplies: 99}
+	forge := &fakeForge{remote: remote, openReplies: 99}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
@@ -457,9 +870,9 @@ func TestResumedRunReportsTheSkippedPublicationToo(t *testing.T) {
 func TestPublishedWorkStillReachesTheReviewer(t *testing.T) {
 	t.Parallel()
 
-	repository, _ := publishedRepository(t)
+	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	forge := &fakeForge{}
+	forge := &fakeForge{remote: remote}
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"),
 			[]byte("the developer's work\n"), 0o600)

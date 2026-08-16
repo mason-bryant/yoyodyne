@@ -1213,8 +1213,8 @@ func TestStateRejectsIncoherentPublishedEvidence(t *testing.T) {
 			problem: "does not match the run branch",
 		},
 		{
-			// A merge is the arrival of the integrated commit on the remote, so it
-			// cannot be true before the promotion that produced that commit is.
+			// The forge is only asked to merge once the promotion it carries has
+			// been made, so a merged request cannot be recorded before it is.
 			name:    "merged with nothing integrated",
 			mutate:  func(state *State) { state.PullRequest.Merged = true },
 			problem: "merged pull request requires recorded integration",

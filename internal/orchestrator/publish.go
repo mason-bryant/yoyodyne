@@ -28,9 +28,13 @@ import (
 // contract rather than something enforced here.
 //
 // Which branch is authoritative is settled the same way. The local target
-// branch is the one that moves; the merge of the pull request is the arrival of
-// that exact fast-forwarded commit on the remote. There is one commit, one
-// promotion, and one answer about where a project's work is.
+// branch is the one that moves, and the forge is then asked to merge the pull
+// request that carries exactly that commit. A merge commit is what the forge
+// makes of it, so the remote target ends up one commit ahead of the local one
+// and identical in content: there is one promotion, one reviewed commit, and
+// one answer about where a project's work is, published under a merge commit
+// the forge owns. A remote that ends up carrying anything else is reported
+// rather than reconciled behind the operator's back.
 
 func (p Pipeline) publishes() bool {
 	return p.Config.Approvals.Publishing == domain.ApprovalAutomatic
@@ -126,24 +130,71 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	return nil
 }
 
-// publishIntegration merges the run's pull request, which the approving verdict
-// has just authorized. The merge is the arrival of the integrated commit on the
-// remote target branch: the harness pushes exactly the fast-forward it already
-// made locally, so the published branch can never carry a commit the
-// authoritative local branch does not, and the pull request is merged by the
-// same commit the promotion produced rather than by a second, differently
-// shaped one.
+// mergeMethod is how the harness asks the forge to merge, and it is a constant
+// rather than a setting because the choice decides what the remote history is.
+// A merge commit is the only method that puts the promoted commit itself on the
+// remote target: a squash replaces it with a commit nobody reviewed, and a
+// rebase rewrites it — GitHub updates committer information and mints new SHAs
+// even for a request that sits directly on its base — leaving the remote
+// carrying a copy of the work that the authoritative branch does not have and
+// can never fast-forward onto.
 //
-// Nothing here can fail the run. The work is integrated and the local target
-// branch — the authoritative one — already moved, so a publication that did not
-// finish is an outstanding fact for an operator, in the same way an outstanding
-// cleanup is.
+// The price is that the two branches do not end at the same commit: the forge
+// adds its merge commit above the promotion, and the local target does not
+// carry it. That is the relationship the harness maintains and checks — the
+// promoted commit is on the remote target, and the remote target carries
+// exactly its content — rather than an equality no forge merge can produce.
+const mergeMethod = publish.MergeCommit
+
+// publishIntegration merges the run's pull request, which the approving verdict
+// has just authorized. The harness asks the forge to merge and treats its answer
+// as the outcome, rather than pushing the integrated commit at the target
+// branch: a repository that requires a pull request before anything reaches its
+// target — the ordinary reason to open pull requests at all — refuses that push,
+// and the pull request would then be closed as a side effect of its commits
+// appearing rather than merged deliberately.
+//
+// The local target branch stays the authoritative one. It has already moved, so
+// everything here checks that the promotion is what reaches the remote: the
+// published branch must carry the commit that was integrated, the remote target
+// must still hold exactly the content that commit was written against, and
+// after the merge it must contain the promoted commit and carry its content.
+// The forge's merge commit sits above that and stays on the remote; the local
+// branch is never rewritten to take it on.
+//
+// Nothing here can fail the run. The work is integrated and the authoritative
+// branch already moved, so a publication that did not finish is an outstanding
+// fact for an operator, in the same way an outstanding cleanup is.
 func (a *activeRun) publishIntegration(ctx context.Context) {
 	if !a.publishing || a.outcome.PullRequest == nil || a.outcome.Integration == nil {
 		return
 	}
-	if err := a.pipeline.Worktrees.PublishIntegration(ctx, a.worktree, *a.outcome.Integration); err != nil {
-		a.recordPublishFailure(fmt.Errorf("push the integrated target branch: %w", err))
+	integration := *a.outcome.Integration
+	published := *a.outcome.PullRequest
+	// What the forge merges is the pull request's head, so a promotion that
+	// integrated some other commit must not be merged: the remote would receive a
+	// change the authoritative branch does not have. It happens when the worktree
+	// was dirty at integration time — something wrote to it after the last
+	// attempt was published — and it is reported rather than republished, because
+	// the checks and the review ran against what was published.
+	if published.HeadCommit != integration.SourceCommit {
+		a.recordPublishFailure(fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
+			published.Number, published.HeadCommit, integration.SourceCommit))
+		return
+	}
+	// A forge asked to merge into a branch that moved would reconcile that
+	// movement itself. The drift check the promotion made locally is therefore
+	// made again here, against the remote, immediately before the merge.
+	if err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration); err != nil {
+		a.recordPublishFailure(fmt.Errorf("check the remote target branch before merging: %w", err))
+		return
+	}
+	if err := a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
+		Number:     published.Number,
+		HeadCommit: published.HeadCommit,
+		Method:     mergeMethod,
+	}); err != nil {
+		a.recordPublishFailure(err)
 		return
 	}
 	merged, err := a.awaitMerge(ctx)
@@ -151,16 +202,25 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 		a.recordPublishFailure(fmt.Errorf("confirm the pull request merged: %w", err))
 		return
 	}
-	published := *a.outcome.PullRequest
 	published.State = merged.State
 	published.Merged = merged.Merged
+	published.MergeMethod = string(mergeMethod)
 	a.state.PullRequest = &published
 	a.outcome.PullRequest = &published
 	if !merged.Merged {
-		a.recordPublishFailure(fmt.Errorf("pull request %d is still %s after the integrated commit was pushed to %s",
-			published.Number, strings.ToLower(nonEmpty(merged.State, "in an unreported state")), a.outcome.Integration.TargetBranch))
+		a.recordPublishFailure(fmt.Errorf("pull request %d is still %s after the forge accepted the merge into %s",
+			published.Number, strings.ToLower(nonEmpty(merged.State, "in an unreported state")), integration.TargetBranch))
 		return
 	}
+	// The forge says it merged; this is what its merge actually did to the
+	// branch. The recorded commit is the forge's merge commit, which is the one
+	// commit the remote target has that the local one does not.
+	remoteTarget, err := a.pipeline.Worktrees.ConfirmRemoteTarget(ctx, integration)
+	if err != nil {
+		a.recordPublishFailure(fmt.Errorf("confirm the merge reached %s: %w", integration.TargetBranch, err))
+		return
+	}
+	published.MergeCommit = remoteTarget
 	// The published branch is debris once its work is on the target, and it is
 	// removed on the same evidence the local branch is: the exact commit that was
 	// published and merged.
@@ -175,17 +235,18 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 }
 
 // mergeConfirmationDelays are the waits between asking the forge whether the
-// pushed commit merged the pull request. A forge notices its commits reaching
-// the base shortly after the push rather than during it, so asking once would
-// report a successful publication as outstanding whenever the harness happened
-// to be quicker. The waits are few and short: this is a race with a remote
-// bookkeeping step, not a state a run should sit on.
+// merge it accepted is reported on the pull request itself. A forge's own
+// record of a request can lag the merge it just performed by a moment, so
+// asking once would report a successful publication as outstanding whenever the
+// harness happened to be quicker. The waits are few and short: this is a race
+// with a remote bookkeeping step, not a state a run should sit on.
 var mergeConfirmationDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
-// awaitMerge asks the forge whether the promotion merged the pull request,
-// retrying while it still reports the request open. A query that fails is
-// returned immediately: that is the forge being unreachable rather than slow to
-// notice, and retrying it would only delay a failure the operator has to see.
+// awaitMerge asks the forge whether the pull request it accepted a merge for
+// now reports as merged, retrying while it still reports the request open. A
+// query that fails is returned immediately: that is the forge being unreachable
+// rather than slow to notice, and retrying it would only delay a failure the
+// operator has to see.
 func (a *activeRun) awaitMerge(ctx context.Context) (publish.PullRequest, error) {
 	merged, err := a.pipeline.Publisher.State(ctx, a.worktree.Branch)
 	for attempt := 0; err == nil && !merged.Merged && attempt < len(mergeConfirmationDelays); attempt++ {
@@ -249,7 +310,7 @@ func pullRequestBody(item beads.WorkItem, outcome Outcome, base string) string {
 		"- Branch: `" + outcome.Branch + "` into `" + base + "`",
 		"- Base commit: `" + outcome.BaseCommit + "`",
 		"",
-		"The harness pushed this branch as part of the developer phase, and merges it itself once the configured checks pass and an independent reviewer approves the change. The reviewing agent has no tools and cannot merge anything; the merge is a fast-forward the harness performs.",
+		fmt.Sprintf("The harness pushed this branch as part of the developer phase, and asks the forge to merge this request with the `%s` method once the configured checks pass and an independent reviewer approves the change. The reviewing agent has no tools and cannot merge anything; the harness makes the merge request itself, after fast-forwarding the local target branch onto this branch's head. The method is deliberate: a merge commit keeps the reviewed commit itself on the base, which a squash or a rebase would replace with a rewritten copy.", mergeMethod),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -263,6 +324,16 @@ func renderPublishNotes(outcome Outcome) []string {
 			fmt.Sprintf("Pull request: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL),
 			"Pull request merged: "+strconv.FormatBool(outcome.PullRequest.Merged),
 		)
+		// The method decides what the remote history looks like, and the merge
+		// commit is the one commit the remote target has that the authoritative
+		// local branch does not. A reader of the item can tell what the remote
+		// history became without going to the forge for it.
+		if outcome.PullRequest.MergeMethod != "" {
+			lines = append(lines, "Merge method: "+outcome.PullRequest.MergeMethod)
+		}
+		if outcome.PullRequest.MergeCommit != "" {
+			lines = append(lines, fmt.Sprintf("Remote target commit: %s (the forge's merge commit above the promoted commit)", outcome.PullRequest.MergeCommit))
+		}
 	}
 	if outcome.PublishSkipped != "" {
 		lines = append(lines, "Publishing skipped: "+outcome.PublishSkipped)

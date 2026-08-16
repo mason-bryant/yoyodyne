@@ -136,6 +136,14 @@ type PullRequest struct {
 	HeadCommit string `json:"head_commit"`
 	State      string `json:"state,omitempty"`
 	Merged     bool   `json:"merged,omitempty"`
+	// MergeMethod is the method the forge was asked to merge by, recorded
+	// because it decides what the remote history looks like: only one of the
+	// methods puts the promoted commit itself on the remote target rather than a
+	// rewritten copy of it. MergeCommit is where that merge left the remote
+	// target branch, which is the forge's own merge commit and therefore a
+	// commit the local target branch does not carry.
+	MergeMethod string `json:"merge_method,omitempty"`
+	MergeCommit string `json:"merge_commit,omitempty"`
 }
 
 // Validate rejects a published record that cannot describe a real pull request.
@@ -456,9 +464,9 @@ func (s State) Validate() error {
 		if s.Branch != "" && s.PullRequest.Branch != s.Branch {
 			problems = append(problems, fmt.Errorf("pull_request branch %q does not match the run branch %q", s.PullRequest.Branch, s.Branch))
 		}
-		// A merged pull request is merged by the arrival of the integrated commit
-		// on the remote target, so it cannot be true before the promotion that
-		// produced that commit is recorded.
+		// The forge is only asked to merge a pull request once the promotion it
+		// carries has been made locally, so a merged request cannot be recorded
+		// before the promotion that authorized it is.
 		if s.PullRequest.Merged && s.Integration == nil {
 			problems = append(problems, errors.New("a merged pull request requires recorded integration"))
 		}

@@ -23,6 +23,17 @@ type Publication struct {
 // target that drifted is.
 var ErrRemotePushRejected = errors.New("remote rejected the push")
 
+// ErrRemoteTargetDrift reports a remote target branch carrying work the
+// promotion was not written against. It is the remote half of ErrTargetDrift:
+// the merge must fail rather than have the forge reconcile a change nobody saw.
+var ErrRemoteTargetDrift = errors.New("remote integration target moved away from the content the promotion was written against")
+
+// ErrRemoteTargetMismatch reports a merge that did not put the promotion on the
+// remote target branch. It is deliberately distinct from drift: drift is a
+// reason not to merge, this is what a merge that already happened turned out to
+// be.
+var ErrRemoteTargetMismatch = errors.New("remote integration target does not carry the promoted commit")
+
 // RemoteConfigured reports whether the repository has the remote publishing
 // would push to. A repository without one is not an error and never becomes a
 // failed run: publishing is skipped and the run behaves exactly as a local-only
@@ -85,22 +96,192 @@ func (m *Manager) PublishBranch(ctx context.Context, worktree Worktree, message 
 	return publication, nil
 }
 
-// PublishIntegration publishes a promotion that already happened locally. The
-// integrated commit is pushed onto the remote target branch, which is what
-// merges the run's pull request: the published branch receives exactly the
-// fast-forward the harness already made, so it can never contain a commit the
-// authoritative local branch does not.
-func (m *Manager) PublishIntegration(ctx context.Context, worktree Worktree, integration Integration) error {
+// VerifyRemoteTarget checks that the remote target branch can still receive the
+// promotion the harness already made locally. The forge is what performs the
+// merge, and a forge asked to merge into a branch that moved would reconcile
+// that movement itself — resolving a conflict nothing in this run ever saw.
+//
+// What the remote target may be is decided by what a forge merge leaves behind.
+// A merged pull request puts the promoted commit on the target and a merge
+// commit above it, so the target of a repository that has published before is a
+// commit this repository does not have and never will: the harness does not
+// carry the forge's merge commits onto the local branch. Such a target is not
+// drift, and telling the two apart is a question about content rather than
+// identity — it must carry exactly what the promotion was written against, and
+// it must contain the commit that was promoted last.
+func (m *Manager) VerifyRemoteTarget(ctx context.Context, integration Integration) error {
 	if err := validateTargetBranch(integration.TargetBranch); err != nil {
 		return err
-	}
-	if worktree.TargetBranch != "" && integration.TargetBranch != worktree.TargetBranch {
-		return fmt.Errorf("published target %q does not match the worktree's recorded target %q", integration.TargetBranch, worktree.TargetBranch)
 	}
 	if !commitPattern.MatchString(integration.TargetCommit) {
 		return fmt.Errorf("integrated target commit %q is invalid", integration.TargetCommit)
 	}
-	return m.pushBranch(ctx, integration.TargetBranch, integration.TargetCommit)
+	if !commitPattern.MatchString(integration.PreviousTargetCommit) {
+		return fmt.Errorf("previous target commit %q is invalid", integration.PreviousTargetCommit)
+	}
+	published, exists, err := m.remoteCommit(ctx, integration.TargetBranch)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s does not exist on %s", ErrRemoteTargetDrift, integration.TargetBranch, m.remote)
+	}
+	// The remote is at or behind the promotion: a repository that has never
+	// published, or one whose earlier publication the forge merged by
+	// fast-forward. Nothing has to be fetched to know that.
+	behind, err := m.descendsFrom(ctx, published, integration.TargetCommit)
+	if err != nil {
+		return err
+	}
+	if behind {
+		return nil
+	}
+	// Anything else has to be looked at, so it is fetched. A forge merge commit
+	// and someone else's work are both commits this repository does not have;
+	// only their content tells them apart.
+	if err := m.fetchRemoteBranch(ctx, integration.TargetBranch, published); err != nil {
+		return fmt.Errorf("%w: %w", ErrRemoteTargetDrift, err)
+	}
+	carries, err := m.descendsFrom(ctx, integration.PreviousTargetCommit, published)
+	if err != nil {
+		return err
+	}
+	if !carries {
+		return fmt.Errorf("%w: %s on %s is at %s, which does not contain the commit this promotion was made from (%s)",
+			ErrRemoteTargetDrift, integration.TargetBranch, m.remote, published, integration.PreviousTargetCommit)
+	}
+	same, err := m.sameContent(ctx, published, integration.PreviousTargetCommit)
+	if err != nil {
+		return err
+	}
+	if !same {
+		return fmt.Errorf("%w: %s on %s is at %s, which carries content the promotion was not written against (%s)",
+			ErrRemoteTargetDrift, integration.TargetBranch, m.remote, published, integration.PreviousTargetCommit)
+	}
+	return nil
+}
+
+// ConfirmRemoteTarget reports where a forge's merge left the remote target
+// branch, and refuses anything that is not the promotion arriving there. The
+// two branches do not end at the same commit — the forge adds a merge commit of
+// its own, which is the price of not pushing the target branch — so what is
+// checked is the relationship that a merge does guarantee: the promoted commit
+// itself is on the remote target, unrewritten, and the branch carries exactly
+// its content and nothing besides.
+//
+// A forge that replayed the commits instead of merging them fails the first
+// half, and one that merged something else along the way fails the second. Both
+// are reported rather than reconciled: which history is right is a person's
+// decision, not a harness's.
+func (m *Manager) ConfirmRemoteTarget(ctx context.Context, integration Integration) (string, error) {
+	if err := validateTargetBranch(integration.TargetBranch); err != nil {
+		return "", err
+	}
+	if !commitPattern.MatchString(integration.TargetCommit) {
+		return "", fmt.Errorf("integrated target commit %q is invalid", integration.TargetCommit)
+	}
+	published, exists, err := m.remoteCommit(ctx, integration.TargetBranch)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		return "", fmt.Errorf("%w: %s does not exist on %s after the merge", ErrRemoteTargetMismatch, integration.TargetBranch, m.remote)
+	}
+	if published != integration.TargetCommit {
+		if err := m.fetchRemoteBranch(ctx, integration.TargetBranch, published); err != nil {
+			return "", fmt.Errorf("%w: %w", ErrRemoteTargetMismatch, err)
+		}
+	}
+	promoted, err := m.descendsFrom(ctx, integration.TargetCommit, published)
+	if err != nil {
+		return "", err
+	}
+	if !promoted {
+		return "", fmt.Errorf("%w: %s on %s is at %s, which does not contain the promoted commit %s",
+			ErrRemoteTargetMismatch, integration.TargetBranch, m.remote, published, integration.TargetCommit)
+	}
+	same, err := m.sameContent(ctx, published, integration.TargetCommit)
+	if err != nil {
+		return "", err
+	}
+	if !same {
+		return "", fmt.Errorf("%w: %s on %s is at %s, which carries content the promoted commit %s does not",
+			ErrRemoteTargetMismatch, integration.TargetBranch, m.remote, published, integration.TargetCommit)
+	}
+	return published, nil
+}
+
+// fetchRemoteBranch brings one remote branch's tip into this repository so it
+// can be inspected, and refuses a branch that moved between being resolved and
+// being fetched: an answer about a commit other than the one that was asked
+// about is worse than no answer.
+func (m *Manager) fetchRemoteBranch(ctx context.Context, branch, commit string) error {
+	result, err := m.runRemote(ctx, "-C", m.repositoryRoot,
+		"-c", "core.hooksPath="+os.DevNull,
+		"fetch", "--no-tags", "--no-write-fetch-head", m.remote, "+refs/heads/"+branch+":refs/"+fetchedRemoteTarget)
+	if err != nil {
+		return err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("fetch %s from %s failed with exit code %d: %s", branch, m.remote, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	fetched, err := m.resolveCommit(ctx, "refs/"+fetchedRemoteTarget)
+	if err != nil {
+		return err
+	}
+	if fetched != commit {
+		return fmt.Errorf("%s on %s is at %s, not the %s that was resolved a moment earlier", branch, m.remote, fetched, commit)
+	}
+	return nil
+}
+
+// fetchedRemoteTarget is the scratch ref a remote target is fetched into. It is
+// deliberately not under refs/heads or refs/remotes: nothing about inspecting
+// the remote may look like a branch this repository keeps.
+const fetchedRemoteTarget = "yoyodyne/fetched-remote-target"
+
+// sameContent reports whether two commits carry an identical tree. It is how a
+// forge merge commit is told from work the harness never saw: the commits
+// differ by construction, the content must not.
+func (m *Manager) sameContent(ctx context.Context, one, other string) (bool, error) {
+	oneTree, err := m.resolveCommit(ctx, one+"^{tree}")
+	if err != nil {
+		return false, err
+	}
+	otherTree, err := m.resolveCommit(ctx, other+"^{tree}")
+	if err != nil {
+		return false, err
+	}
+	return oneTree == otherTree, nil
+}
+
+// descendsFrom reports whether one commit is part of another's history. Like
+// contains, any answer other than a clean yes is a no: a commit this repository
+// has never seen makes the question unanswerable, and an unanswered question
+// must not authorize a merge.
+func (m *Manager) descendsFrom(ctx context.Context, ancestor, descendant string) (bool, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", ancestor, descendant)
+	if err != nil {
+		return false, err
+	}
+	return result.Status == execution.ProcessSucceeded, nil
+}
+
+// resolveCommit resolves any revision this repository has, which is how a
+// fetched remote commit and the trees on either side of a comparison are read.
+func (m *Manager) resolveCommit(ctx context.Context, revision string) (string, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-parse", "--verify", "--quiet", revision)
+	if err != nil {
+		return "", err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("resolve %s failed with exit code %d: %s", revision, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	resolved := strings.TrimSpace(result.Stdout)
+	if !commitPattern.MatchString(resolved) {
+		return "", fmt.Errorf("resolved object %q for %s is invalid", resolved, revision)
+	}
+	return resolved, nil
 }
 
 // DeleteRemoteBranch removes a merged run branch from the remote. It is a

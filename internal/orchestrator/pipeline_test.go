@@ -2014,8 +2014,12 @@ func (partialWorktreeManager) PublishBranch(context.Context, gitworktree.Worktre
 	return gitworktree.Publication{}, errors.New("partial worktree cannot be published")
 }
 
-func (partialWorktreeManager) PublishIntegration(context.Context, gitworktree.Worktree, gitworktree.Integration) error {
-	return errors.New("partial worktree cannot be published")
+func (partialWorktreeManager) VerifyRemoteTarget(context.Context, gitworktree.Integration) error {
+	return errors.New("partial worktree has no remote target")
+}
+
+func (partialWorktreeManager) ConfirmRemoteTarget(context.Context, gitworktree.Integration) (string, error) {
+	return "", errors.New("partial worktree has no remote")
 }
 
 func (partialWorktreeManager) DeleteRemoteBranch(context.Context, gitworktree.Worktree, string) error {

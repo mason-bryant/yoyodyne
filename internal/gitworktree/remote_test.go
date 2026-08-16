@@ -12,10 +12,11 @@ import (
 )
 
 // Publishing is the whole life of a run's branch on a remote: the harness
-// commits and pushes each developer attempt, promotes the work locally, pushes
-// that exact promotion — which is what merges the pull request — and then
-// removes the published branch on the same evidence it removes the local one.
-func TestManagerPublishesEachAttemptAndThenTheIntegrationThatMergesIt(t *testing.T) {
+// commits and pushes each developer attempt, promotes the work locally, checks
+// that the remote target may still be merged into and confirms where the
+// forge's merge left it, and then removes the published branch on the same
+// evidence it removes the local one.
+func TestManagerPublishesEachAttemptAndThenObservesTheMerge(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := newPublishedRepository(t)
@@ -83,11 +84,21 @@ func TestManagerPublishesEachAttemptAndThenTheIntegrationThatMergesIt(t *testing
 		t.Errorf("previous target = %q, want the base %q", integration.PreviousTargetCommit, worktree.BaseCommit)
 	}
 
-	if err := manager.PublishIntegration(context.Background(), worktree, integration); err != nil {
-		t.Fatalf("PublishIntegration() error = %v", err)
+	// The forge is what merges, so what the manager contributes is the check that
+	// it may: the remote target must still carry what the promotion was written
+	// against, or the merge would reconcile work this run never saw.
+	if err := manager.VerifyRemoteTarget(context.Background(), integration); err != nil {
+		t.Fatalf("VerifyRemoteTarget() error = %v", err)
 	}
-	if head := gitLine(t, remote, "rev-parse", "refs/heads/main"); head != integration.TargetCommit {
-		t.Errorf("remote main = %q, want the integrated commit %q", head, integration.TargetCommit)
+	// What a forge merge leaves behind is its own merge commit above the promoted
+	// commit — not the promoted commit itself, which no merge method produces.
+	mergeCommit := mergeInRemote(t, remote, "main", integration.TargetCommit)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	if err != nil {
+		t.Fatalf("ConfirmRemoteTarget() error = %v", err)
+	}
+	if confirmed != mergeCommit || confirmed == integration.TargetCommit {
+		t.Fatalf("ConfirmRemoteTarget() = %q, want the forge's merge commit %q", confirmed, mergeCommit)
 	}
 	if err := manager.DeleteRemoteBranch(context.Background(), worktree, integration.SourceCommit); err != nil {
 		t.Fatalf("DeleteRemoteBranch() error = %v", err)
@@ -265,6 +276,205 @@ func TestManagerDeleteRemoteBranchRefusesAnUnexpectedCommit(t *testing.T) {
 	if published := gitLine(t, remote, "rev-parse", "refs/heads/"+worktree.Branch); published != publication.Commit {
 		t.Errorf("remote branch = %q, want the untouched published commit %q", published, publication.Commit)
 	}
+}
+
+// The remote target a published run leaves behind is the forge's merge commit,
+// which this repository does not have and never will: the harness does not
+// carry the forge's commits onto the local branch. The run after it has to be
+// able to merge anyway, or publication works exactly once.
+func TestManagerVerifyRemoteTargetAcceptsTheForgesOwnMergeCommit(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	first := publishAndIntegrate(t, manager, "yoyodyne-first", "first.txt", "first\n")
+	if err := manager.VerifyRemoteTarget(context.Background(), first); err != nil {
+		t.Fatalf("VerifyRemoteTarget() first error = %v", err)
+	}
+	merged := mergeInRemote(t, remote, "main", first.TargetCommit)
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), first); err != nil {
+		t.Fatalf("ConfirmRemoteTarget() first error = %v", err)
+	}
+
+	// The second run promotes onto the local target, which is still the promoted
+	// commit rather than the forge's merge of it.
+	second := publishAndIntegrate(t, manager, "yoyodyne-second", "second.txt", "second\n")
+	if second.PreviousTargetCommit != first.TargetCommit {
+		t.Fatalf("second promotion was made from %q, want the first promotion %q", second.PreviousTargetCommit, first.TargetCommit)
+	}
+	if err := manager.VerifyRemoteTarget(context.Background(), second); err != nil {
+		t.Fatalf("VerifyRemoteTarget() after a forge merge error = %v, want the merge commit %s accepted", err, merged)
+	}
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), mergeInRemoteAnd(t, remote, second)); err != nil {
+		t.Fatalf("ConfirmRemoteTarget() second error = %v", err)
+	}
+}
+
+// A merge that replayed the promoted commit rather than merging it — what
+// GitHub's rebase and squash methods do — leaves the remote carrying the same
+// content under a commit no local branch has. Content alone would accept it, so
+// what is checked is that the promoted commit itself is there.
+func TestManagerConfirmRemoteTargetRefusesARewrittenPromotion(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	integration := publishAndIntegrate(t, manager, "yoyodyne-rewritten", "feature.txt", "published\n")
+
+	// The same tree, on the same base, without the promoted commit as a parent.
+	replayed := replayInRemote(t, remote, "main", integration.TargetCommit)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	if !errors.Is(err, ErrRemoteTargetMismatch) {
+		t.Fatalf("ConfirmRemoteTarget() rewritten = %q, %v; want ErrRemoteTargetMismatch", confirmed, err)
+	}
+	if !strings.Contains(err.Error(), replayed) || !strings.Contains(err.Error(), integration.TargetCommit) {
+		t.Errorf("mismatch error names neither the remote commit %q nor the promoted one %q: %v", replayed, integration.TargetCommit, err)
+	}
+}
+
+// A forge asked to merge into a target that moved would reconcile that movement
+// itself, which is exactly the conflict nothing in the run ever saw. The remote
+// target is therefore checked the way the local one is, and a remote branch
+// carrying history this repository does not have is drift rather than something
+// to fetch and accept.
+func TestManagerVerifyRemoteTargetRefusesARemoteThatMoved(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-remote-drift",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "published\n")
+	publication, err := manager.PublishBranch(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("PublishBranch() error = %v", err)
+	}
+	worktree.HarnessCommit = publication.Commit
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+
+	// Someone merges their own work into the target while this run is between
+	// its promotion and its merge.
+	drifted := pushUnrelatedCommit(t, remote, "main")
+	err = manager.VerifyRemoteTarget(context.Background(), integration)
+	if !errors.Is(err, ErrRemoteTargetDrift) {
+		t.Fatalf("VerifyRemoteTarget() drifted error = %v, want ErrRemoteTargetDrift", err)
+	}
+	if !strings.Contains(err.Error(), drifted) {
+		t.Errorf("drift error does not name the remote commit %q: %v", drifted, err)
+	}
+
+	// A target branch that is not on the remote at all cannot be merged into
+	// either, and saying so is not the same as reporting a missing branch as
+	// present.
+	runGit(t, remote, "update-ref", "-d", "refs/heads/main")
+	if err := manager.VerifyRemoteTarget(context.Background(), integration); !errors.Is(err, ErrRemoteTargetDrift) {
+		t.Fatalf("VerifyRemoteTarget() absent error = %v, want ErrRemoteTargetDrift", err)
+	}
+	// A merge cannot have reached a branch that is not there either, and that is
+	// a mismatch rather than drift: it describes a merge that already happened.
+	if _, err := manager.ConfirmRemoteTarget(context.Background(), integration); !errors.Is(err, ErrRemoteTargetMismatch) {
+		t.Fatalf("ConfirmRemoteTarget() absent error = %v, want ErrRemoteTargetMismatch", err)
+	}
+}
+
+// pushUnrelatedCommit puts work on a remote branch that the harness's
+// repository has never seen, which is what someone else's merge looks like from
+// inside a run.
+func pushUnrelatedCommit(t *testing.T, remote, branch string) string {
+	t.Helper()
+	root := t.TempDir()
+	clone := filepath.Join(root, "elsewhere")
+	runGit(t, root, "clone", remote, clone)
+	runGit(t, clone, "config", "user.name", "Someone Else")
+	runGit(t, clone, "config", "user.email", "someone@example.invalid")
+	writeFile(t, clone, "elsewhere.txt", "someone else's work\n")
+	runGit(t, clone, "add", ".")
+	runGit(t, clone, "commit", "-m", "someone else's work")
+	runGit(t, clone, "push", "origin", "HEAD:refs/heads/"+branch)
+	return gitLine(t, clone, "rev-parse", "HEAD")
+}
+
+// publishAndIntegrate takes one run all the way to a local promotion, which is
+// the state every remote-target question is asked in.
+func publishAndIntegrate(t *testing.T, manager *Manager, workItem, file, content string) Integration {
+	t.Helper()
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   workItem,
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, file, content)
+	publication, err := manager.PublishBranch(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("PublishBranch() error = %v", err)
+	}
+	worktree.HarnessCommit = publication.Commit
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	if _, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	}); err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	return integration
+}
+
+// mergeInRemote writes into the bare remote what a forge merge produces: a
+// merge commit whose first parent is the branch, whose second parent is the
+// promoted commit, and whose tree is the promoted commit's. No merge method
+// leaves the branch at the promoted commit itself, so nothing here pretends one
+// does.
+func mergeInRemote(t *testing.T, remote, branch, promoted string) string {
+	t.Helper()
+	return commitInRemote(t, remote, branch, promoted, true)
+}
+
+func mergeInRemoteAnd(t *testing.T, remote string, integration Integration) Integration {
+	t.Helper()
+	mergeInRemote(t, remote, integration.TargetBranch, integration.TargetCommit)
+	return integration
+}
+
+// replayInRemote is the same merge with the promoted commit left out of its
+// parents, which is what a forge that rebases or squashes leaves behind.
+func replayInRemote(t *testing.T, remote, branch, promoted string) string {
+	t.Helper()
+	return commitInRemote(t, remote, branch, promoted, false)
+}
+
+func commitInRemote(t *testing.T, remote, branch, promoted string, carry bool) string {
+	t.Helper()
+	tip := gitLine(t, remote, "rev-parse", "refs/heads/"+branch)
+	tree := gitLine(t, remote, "rev-parse", promoted+"^{tree}")
+	arguments := []string{
+		"-c", "user.name=Forge",
+		"-c", "user.email=forge@example.invalid",
+		"commit-tree", tree, "-p", tip,
+	}
+	if carry {
+		arguments = append(arguments, "-p", promoted)
+	}
+	commit := gitLine(t, remote, append(arguments, "-m", "Merge pull request")...)
+	runGit(t, remote, "update-ref", "refs/heads/"+branch, commit, tip)
+	return commit
 }
 
 // newPublishedRepository is a repository with a bare remote that already

@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +56,86 @@ type Request struct {
 	Base  string
 	Title string
 	Body  string
+}
+
+// MergeMethod names how the forge brings a pull request onto its base branch.
+// The three produce different remote histories, so a caller states which one it
+// means rather than inheriting whatever the repository happens to default to.
+//
+// Only one of them preserves the commits that were reviewed. A squash replaces
+// them with a single commit the head never had, and GitHub's rebase always
+// updates committer information and mints new SHAs — even for a request that
+// needs no rebasing at all — so both leave the base carrying copies of the work
+// rather than the work itself.
+type MergeMethod string
+
+const (
+	// MergeCommit joins the request onto its base under a merge commit, which
+	// keeps the request's own commits on the base exactly as they were pushed:
+	// the merge commit's second parent is the head commit itself.
+	MergeCommit MergeMethod = "merge"
+	// MergeRebase and MergeSquash both rewrite what they merge, and are named
+	// here because the method is part of what a caller decides rather than
+	// because anything in this repository asks for them.
+	MergeRebase MergeMethod = "rebase"
+	MergeSquash MergeMethod = "squash"
+)
+
+// MergeRequest names the pull request to merge, the commit it must still be at,
+// and the method to merge it by.
+type MergeRequest struct {
+	Number     int
+	HeadCommit string
+	Method     MergeMethod
+}
+
+// MergeRefused reports a forge that declined to merge a pull request. It is a
+// distinct error because a refusal is an answer about the repository's rules —
+// a required check that has not run, a review the base branch demands, a head
+// commit that moved — rather than a harness failure, and an operator has to be
+// told which requirement was unmet.
+type MergeRefused struct {
+	Number int
+	Method MergeMethod
+	// Status is the forge's own merge state for the request, when it could be
+	// read; Reason is what the forge printed when it refused.
+	Status string
+	Reason string
+}
+
+func (e MergeRefused) Error() string {
+	message := fmt.Sprintf("the forge refused to merge pull request %d with the %s method", e.Number, e.Method)
+	if requirement := mergeRequirement(e.Status); requirement != "" {
+		message += ": " + requirement
+	}
+	if e.Reason != "" {
+		message += ": " + e.Reason
+	}
+	return message
+}
+
+// mergeRequirement states in words what the forge's merge state says is unmet,
+// so a refusal reads as the rule it is rather than as a status code. A state
+// this does not recognize is left to the forge's own message, which is reported
+// beside it either way.
+func mergeRequirement(status string) string {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "BLOCKED":
+		return "the base branch's protection rules are not satisfied (BLOCKED)"
+	case "BEHIND":
+		return "the base branch moved ahead of the pull request (BEHIND)"
+	case "DIRTY":
+		return "the pull request conflicts with the base branch (DIRTY)"
+	case "UNSTABLE":
+		return "a required check has not succeeded (UNSTABLE)"
+	case "DRAFT":
+		return "the pull request is still a draft (DRAFT)"
+	case "HAS_HOOKS":
+		return "a repository hook rejected the merge (HAS_HOOKS)"
+	case "UNKNOWN":
+		return "the forge has not finished deciding whether the pull request can merge (UNKNOWN)"
+	}
+	return ""
 }
 
 // GitHub publishes through the `gh` CLI, which holds its own credentials the
@@ -147,9 +229,65 @@ func (g GitHub) Ensure(ctx context.Context, request Request) (PullRequest, error
 	return opened, nil
 }
 
+// Merge asks the forge to merge a pull request, which is what brings a
+// promotion onto the remote target branch. The head commit is passed along so
+// the forge refuses a request that moved since the harness published it: what
+// merges must be the commit the run integrated and nothing else.
+//
+// A refusal comes back as MergeRefused rather than as a generic failure. A
+// protected branch declining the merge because a required check has not run is
+// the repository's rules being applied, not the harness failing, and the answer
+// has to name the requirement.
+func (g GitHub) Merge(ctx context.Context, request MergeRequest) error {
+	if err := request.validate(); err != nil {
+		return err
+	}
+	scope, err := g.repoArgs(ctx)
+	if err != nil {
+		return err
+	}
+	merged, err := g.exec(ctx, append([]string{"pr", "merge", strconv.Itoa(request.Number)}, append(scope,
+		request.Method.flag(),
+		"--match-head-commit", request.HeadCommit)...)...)
+	if err != nil {
+		return fmt.Errorf("merge pull request %d: %w", request.Number, err)
+	}
+	if merged.Status != execution.ProcessSucceeded {
+		return MergeRefused{
+			Number: request.Number,
+			Method: request.Method,
+			Status: g.mergeState(ctx, request.Number),
+			Reason: g.redact(strings.TrimSpace(merged.Stderr)),
+		}
+	}
+	return nil
+}
+
+// mergeState asks the forge what it thinks of a pull request it would not
+// merge. It reports an empty state rather than an error: this runs only to
+// explain a refusal that already happened, and a second failure must not
+// replace the answer the forge already gave.
+func (g GitHub) mergeState(ctx context.Context, number int) string {
+	scope, err := g.repoArgs(ctx)
+	if err != nil {
+		return ""
+	}
+	viewed, err := g.exec(ctx, append([]string{"pr", "view", strconv.Itoa(number)}, append(scope, "--json", "mergeStateStatus")...)...)
+	if err != nil || viewed.Status != execution.ProcessSucceeded {
+		return ""
+	}
+	var reported struct {
+		MergeStateStatus string `json:"mergeStateStatus"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(viewed.Stdout)), &reported); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(reported.MergeStateStatus)
+}
+
 // State reports what the forge currently says about a branch's pull request. It
-// is how the harness confirms that the promotion it pushed actually merged the
-// pull request rather than assuming it did.
+// is how the harness confirms that the merge it asked for actually happened
+// rather than assuming it did.
 func (g GitHub) State(ctx context.Context, head string) (PullRequest, error) {
 	if err := validateArgument("head branch", head); err != nil {
 		return PullRequest{}, err
@@ -296,6 +434,39 @@ func (r Request) validate() error {
 	}
 	return nil
 }
+
+func (r MergeRequest) validate() error {
+	var problems []error
+	if r.Number <= 0 {
+		problems = append(problems, errors.New("pull request number is required"))
+	}
+	if !commitPattern.MatchString(r.HeadCommit) {
+		problems = append(problems, fmt.Errorf("head commit %q is invalid", r.HeadCommit))
+	}
+	if r.Method.flag() == "" {
+		problems = append(problems, fmt.Errorf("merge method %q is not one the forge offers", r.Method))
+	}
+	return errors.Join(problems...)
+}
+
+// flag is the CLI option for a merge method, and the empty string for anything
+// that is not one. The forge requires a method to be named, so an unset one is
+// refused rather than left to a default nobody chose.
+func (m MergeMethod) flag() string {
+	switch m {
+	case MergeRebase:
+		return "--rebase"
+	case MergeCommit:
+		return "--merge"
+	case MergeSquash:
+		return "--squash"
+	}
+	return ""
+}
+
+// commitPattern keeps a commit a commit, for the same reason branch names are
+// validated: it reaches a command line.
+var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
 
 // validateArgument keeps a branch name a branch name. These values reach a
 // command line, so anything that could read as an option is refused rather than
