@@ -94,6 +94,20 @@ Only you reach any of this. The product manager still has no tools, so nothing i
 
 A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyo chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, and the provider session identifier, and the normalized event stream is stored beside it — including what the operator asked the harness to do, which is recorded in the conversation's own log beside the runs' logs.
 
+### What a resumed conversation knows, and when to start a new one
+
+The repository and tracker the product manager reads are gathered once, when a conversation opens, and sent on its first turn only. Every later turn resumes a provider session that already holds them, so re-sending would pay to restate what it was already told. The consequence is worth knowing before it surprises you: **a resumed conversation keeps the snapshot it opened with.** Change a file, and a conversation started beforehand will still describe the old one, confidently, because that is genuinely the evidence it has.
+
+It is not frozen entirely. Every turn carries what you did through the harness since the last reply — the runs you started, stopped, and redirected — so `/work`, `/stop`, and `/redirect` reach a resumed conversation. What does not reach it is anything that changed outside those commands: edits to `README.md` or `docs/`, and work items created or closed by something other than this conversation.
+
+So use `--new` when the ground has moved under the conversation rather than within it:
+
+- after editing the documents the product manager reads, or after another process changed the tracker;
+- when it asserts something about the repository that you know is out of date;
+- when you are starting an unrelated topic and its memory of the last one is not worth carrying.
+
+Resuming is the better default the rest of the time, because the discussion itself is usually the valuable part. `--new` costs a fresh reading of the repository and tracker, and it replaces the recorded conversation: there is one per product, so the previous discussion is not kept alongside it.
+
 ## Configuring a project
 
 Yoyodyne carries its own agent defaults, so a project repository stores only its own settings and any deliberate deviation from them. A configuration can be as small as this:
