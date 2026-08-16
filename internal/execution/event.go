@@ -22,6 +22,12 @@ const (
 	EventFileChanged      EventType = "file.changed"
 	EventReviewStarted    EventType = "review.started"
 	EventReviewCompleted  EventType = "review.completed"
+	// A proposal and the operator's decision on it are separate events, because
+	// what was proposed is evidence whether or not it was ever created.
+	EventProposalRecorded EventType = "proposal.recorded"
+	EventProposalApproved EventType = "proposal.approved"
+	EventProposalRejected EventType = "proposal.rejected"
+	EventProposalCreated  EventType = "proposal.created"
 )
 
 type Event struct {

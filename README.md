@@ -66,6 +66,8 @@ It compares the recorded run against the repository and Beads, and then finishes
 
 The product manager reads the repository's own Markdown — `README.md` and everything under `docs/` — plus the open Beads items, and discusses product intent with you. It is advisory: it has no tools at all, so it creates, changes, and approves nothing. Anything it concludes is a recommendation for you to act on.
 
+It can propose Beads work items from what you discussed, and a proposal is still only a recommendation. Each one is shown to you with its reasoning, and the harness creates the item only after you answer `y` or `yes`; any other answer declines it and is kept as the reason it was declined. Nothing you did not approve is created, a proposal you left undecided is named when the conversation ends, and a created item records the conversation, the turn, and the rationale it came from. A proposal the harness cannot read is reported and the conversation carries on; `--message` has nobody to ask, so it reports what was proposed and creates nothing.
+
 A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyodyne chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, and the provider session identifier, and the normalized event stream is stored beside it.
 
 ## Configuring a project
