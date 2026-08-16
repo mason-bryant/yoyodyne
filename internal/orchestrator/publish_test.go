@@ -563,6 +563,13 @@ func publishing(pipeline Pipeline, forge *fakeForge) Pipeline {
 func publishedRepository(t *testing.T) (string, string) {
 	t.Helper()
 	repository := pipelineRepository(t)
+	return repository, addBareRemote(t, repository)
+}
+
+// addBareRemote gives an existing repository the remote publishing pushes to,
+// carrying its target branch.
+func addBareRemote(t *testing.T, repository string) string {
+	t.Helper()
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	if err := os.MkdirAll(remote, 0o700); err != nil {
 		t.Fatalf("MkdirAll() error = %v", err)
@@ -570,7 +577,7 @@ func publishedRepository(t *testing.T) (string, string) {
 	runPipelineGit(t, remote, "init", "--bare", "-b", "main")
 	runPipelineGit(t, repository, "remote", "add", "origin", remote)
 	runPipelineGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
-	return repository, remote
+	return remote
 }
 
 func publishedCommit(t *testing.T, repository, branch string) string {
@@ -603,6 +610,12 @@ type fakeForge struct {
 	// mergeErr is what the forge answers instead of merging, which is how a
 	// refusal by a protected branch is expressed.
 	mergeErr error
+	// queueMerge makes the forge queue the merge instead of performing it, which
+	// is what a base branch with required checks produces: the request is
+	// accepted, nothing moves yet, and the forge merges minutes later. queued is
+	// the merge it is holding.
+	queueMerge bool
+	queued     bool
 	// replayMerge makes the forge rewrite what it merges instead of merging it,
 	// which is what GitHub's rebase and squash methods do: the base ends up with
 	// a fresh commit carrying the same content, and the reviewed commit itself
@@ -642,18 +655,46 @@ func (f *fakeForge) Ensure(_ context.Context, request publish.Request) (publish.
 // base ref onto the head is the difference between exercising the harness and
 // exercising an assumption — no forge merge method leaves the base at the
 // commit the harness promoted.
-func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) error {
+func (f *fakeForge) Merge(_ context.Context, request publish.MergeRequest) (publish.MergeResult, error) {
 	if f.mergeErr != nil {
-		return f.mergeErr
+		return publish.MergeResult{}, f.mergeErr
 	}
 	f.merges = append(f.merges, request)
+	// A queued merge accepts the request and moves nothing: what the forge does
+	// with it happens after the run that asked for it has finished.
+	if f.queueMerge {
+		f.queued = true
+		return publish.MergeResult{Queued: true}, nil
+	}
 	if f.remote != "" {
 		if err := f.mergeIntoRemote(f.opened[len(f.opened)-1].Base, request.HeadCommit); err != nil {
-			return err
+			return publish.MergeResult{}, err
 		}
 	}
 	f.merged = true
-	return nil
+	return publish.MergeResult{}, nil
+}
+
+// performQueuedMerge is the forge merging a request it queued, which is what
+// happens once the base branch's required checks pass — minutes after the run
+// that asked for it ended.
+func (f *fakeForge) performQueuedMerge(t *testing.T) {
+	t.Helper()
+	if !f.queued {
+		t.Fatal("no merge is queued with the forge")
+	}
+	if err := f.mergeIntoRemote(f.opened[len(f.opened)-1].Base, f.merges[len(f.merges)-1].HeadCommit); err != nil {
+		t.Fatalf("perform the queued merge: %v", err)
+	}
+	f.queued = false
+	f.merged = true
+}
+
+// dropQueuedMerge is the forge giving up on a merge it queued, which is what a
+// required check that failed leaves behind: an open request with nothing
+// waiting to merge it.
+func (f *fakeForge) dropQueuedMerge() {
+	f.queued = false
 }
 
 // mergeIntoRemote writes the forge's own merge of a request into the bare
@@ -704,7 +745,7 @@ func (f *fakeForge) State(context.Context, string) (publish.PullRequest, error) 
 	f.stateCalls++
 	url := fmt.Sprintf("https://example.invalid/pull/%d", f.number)
 	if !f.merged || f.stateCalls <= f.openReplies {
-		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN"}, nil
+		return publish.PullRequest{Number: f.number, URL: url, State: "OPEN", AutoMerge: f.queued}, nil
 	}
 	return publish.PullRequest{Number: f.number, URL: url, State: "MERGED", Merged: true}, nil
 }
@@ -821,6 +862,301 @@ func TestPipelineStopsWaitingForAMergeThatNeverArrives(t *testing.T) {
 	if published := publishedCommit(t, remote, outcome.Branch); published == "" {
 		t.Error("an unconfirmed merge removed the published branch anyway")
 	}
+}
+
+// The case the harness exists to handle: a base branch whose required checks
+// have not finished. The merge is queued with the forge rather than demanded, so
+// the run finishes and reports the request as queued instead of waiting out a
+// confirmation that arrives minutes later — and leaves the published branch on
+// the remote, because that branch is what the forge still has to merge.
+func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote, queueMerge: true}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	waits := 0
+	pipeline.Sleep = func(context.Context, time.Duration) error {
+		waits++
+		return nil
+	}
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
+		t.Fatalf("outcome = %#v, want a succeeded, integrated, closed run", outcome)
+	}
+	// A queued merge is not an outstanding publication: the forge accepted it.
+	if outcome.PublishFailure != "" {
+		t.Fatalf("publish failure = %q, want a queued merge to be a clean outcome", outcome.PublishFailure)
+	}
+	if !outcome.PullRequest.MergeQueued || outcome.PullRequest.Merged {
+		t.Fatalf("pull request = %#v, want the merge queued and not yet performed", outcome.PullRequest)
+	}
+	if outcome.PullRequest.MergeMethod != string(publish.MergeCommit) {
+		t.Errorf("recorded merge method = %q, want the method the forge was asked for", outcome.PullRequest.MergeMethod)
+	}
+	// Nothing is waited for, because nothing can arrive while the run watches.
+	if waits != 0 || forge.stateCalls != 0 {
+		t.Errorf("waits = %d and forge queries = %d, want a run that finished without confirming", waits, forge.stateCalls)
+	}
+	// The forge has not merged yet, so the remote target has not moved and the
+	// branch the queued merge will consume must still be there.
+	if head := publishedCommit(t, remote, "main"); head != outcome.BaseCommit {
+		t.Errorf("remote main = %q, want the untouched base %q", head, outcome.BaseCommit)
+	}
+	if published := publishedCommit(t, remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the published commit %q left for the queued merge", published, outcome.PullRequest.HeadCommit)
+	}
+	// The run is over, but it still owes the answer to that merge, so it stays
+	// outstanding for reconciliation rather than being settled and forgotten.
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PullRequest == nil || !state.PullRequest.MergeQueued {
+		t.Fatalf("durable pull request = %#v, want the queued merge recorded", state.PullRequest)
+	}
+	if !state.Outstanding() {
+		t.Error("a run with a queued merge is not outstanding, so nothing would ever settle it")
+	}
+	if !strings.Contains(tracker.notes, "Merge queued") {
+		t.Errorf("tracker notes do not report the queued merge:\n%s", tracker.notes)
+	}
+}
+
+// A repository whose settings forbid queued merges and whose base branch
+// requires checks cannot be published to at all. The operator has to be told
+// which setting to change, rather than reading a refusal on every run.
+func TestPipelineReportsARepositoryThatCannotQueueAMerge(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote, mergeErr: publish.AutoMergeUnavailable{
+		Number: 1,
+		Status: "BLOCKED",
+		Reason: "GraphQL: Pull request Auto merge is not allowed for this repository (enablePullRequestAutoMerge)",
+	}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want the promotion to stand", outcome)
+	}
+	for _, want := range []string{"cannot queue a merge", "Allow auto-merge", "protection rules"} {
+		if !strings.Contains(outcome.PublishFailure, want) {
+			t.Errorf("publish failure %q does not name %q", outcome.PublishFailure, want)
+		}
+	}
+	if outcome.PullRequest.MergeQueued {
+		t.Errorf("pull request = %#v, want no queued merge recorded for a forge that queued nothing", outcome.PullRequest)
+	}
+}
+
+// The merge the forge queued lands minutes later, with no run watching.
+// Reconciliation is what finds out, and it finishes the publication the run
+// could not: the remote target is confirmed to carry the promotion, the forge's
+// merge commit is recorded, and the branch the merge consumed is deleted.
+func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the queued merge settled as completed", results)
+	}
+	if !strings.Contains(results[0].Detail, "merged pull request 1") {
+		t.Errorf("detail = %q, want the merge named", results[0].Detail)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.PullRequest.MergeQueued || !settled.PullRequest.Merged {
+		t.Fatalf("settled pull request = %#v, want a merge that is no longer queued", settled.PullRequest)
+	}
+	if settled.PublishFailure != "" {
+		t.Fatalf("publish failure = %q, want a publication that finished", settled.PublishFailure)
+	}
+	remoteTarget := publishedCommit(t, fixture.remote, "main")
+	if settled.PullRequest.MergeCommit != remoteTarget {
+		t.Errorf("recorded merge commit = %q, want the remote target %q", settled.PullRequest.MergeCommit, remoteTarget)
+	}
+	assertRemoteCarriesPromotion(t, fixture.repository, fixture.remote, "main", outcome.Integration.TargetCommit)
+	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != "" {
+		t.Errorf("merged remote branch survived at %q", published)
+	}
+	if !strings.Contains(fixture.tracker.notes, "settled the merge this run left queued") {
+		t.Errorf("tracker notes do not report the settled merge:\n%s", fixture.tracker.notes)
+	}
+	// Nothing is left owed, so a second sweep finds nothing at all.
+	if again := fixture.reconcile(t); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
+// A merge the forge is still holding decides nothing. The run stays outstanding
+// and the next sweep asks again, rather than being settled on an answer that has
+// not arrived.
+func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run reported as queued", results)
+	}
+	held, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !held.PullRequest.MergeQueued || held.PublishFailure != "" {
+		t.Fatalf("held pull request = %#v, publish failure = %q; want the queued merge untouched", held.PullRequest, held.PublishFailure)
+	}
+	// The branch the forge still has to merge must not be swept away underneath
+	// it, and the remote target must not have moved.
+	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the published commit %q kept for the queued merge", published, outcome.PullRequest.HeadCommit)
+	}
+	if head := publishedCommit(t, fixture.remote, "main"); head != outcome.BaseCommit {
+		t.Errorf("remote main = %q, want the untouched base %q", head, outcome.BaseCommit)
+	}
+
+	// The forge merges it, and the very next sweep settles the run.
+	fixture.forge.performQueuedMerge(t)
+	if settled := fixture.reconcile(t); len(settled) != 1 || settled[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
+	}
+}
+
+// A queued merge the forge dropped is a requirement that went unmet, and the
+// harness does not merge past one — not by asking again and not with
+// administrator privileges. The publication is reported as outstanding, on the
+// run and on the work item, and left to a person. The change itself is safe: the
+// local target branch it was integrated into is the authoritative one.
+func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	fixture.forge.dropQueuedMerge()
+	merges := len(fixture.forge.merges)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run settled", results)
+	}
+	for _, want := range []string{"dropped the queued merge", "needs a person"} {
+		if !strings.Contains(results[0].Detail, want) {
+			t.Errorf("detail %q does not name %q", results[0].Detail, want)
+		}
+	}
+	// Reconciliation can only ask the forge, so nothing was merged a second time.
+	if len(fixture.forge.merges) != merges {
+		t.Fatalf("reconciliation asked for %d further merge(s)", len(fixture.forge.merges)-merges)
+	}
+	settled, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.PullRequest.MergeQueued || settled.PullRequest.Merged {
+		t.Fatalf("settled pull request = %#v, want a dropped merge recorded as neither queued nor merged", settled.PullRequest)
+	}
+	if !strings.Contains(settled.PublishFailure, "dropped the queued merge") {
+		t.Errorf("durable publish failure = %q, want the dropped merge recorded", settled.PublishFailure)
+	}
+	if !strings.Contains(fixture.tracker.notes, "Publication outstanding") {
+		t.Errorf("tracker notes do not report the outstanding publication:\n%s", fixture.tracker.notes)
+	}
+	// The work is where it belongs, and the evidence a person needs survives.
+	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
+		t.Errorf("local main = %q, want the integrated commit %q", local, outcome.Integration.TargetCommit)
+	}
+	if published := publishedCommit(t, fixture.remote, outcome.Branch); published != outcome.PullRequest.HeadCommit {
+		t.Errorf("remote branch = %q, want the published commit %q left for whoever finishes it", published, outcome.PullRequest.HeadCommit)
+	}
+	// It is settled, so the sweep does not keep reporting it forever.
+	if again := fixture.reconcile(t); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
+// queuedFixture is a publishing run whose forge queues the merge, built over
+// artifacts a second process can also see. Reconciliation is that second
+// process: it settles a queued merge from the repository, the worktree root, and
+// the run state store the run itself used.
+type queuedFixture struct {
+	repository   string
+	remote       string
+	worktreeRoot string
+	store        *runstate.Store
+	tracker      *fakeTracker
+	forge        *fakeForge
+}
+
+func newQueuedFixture(t *testing.T) queuedFixture {
+	t.Helper()
+	repository, worktreeRoot, store := restartableFixture(t)
+	remote := addBareRemote(t, repository)
+	return queuedFixture{
+		repository:   repository,
+		remote:       remote,
+		worktreeRoot: worktreeRoot,
+		store:        store,
+		tracker:      &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}},
+		forge:        &fakeForge{remote: remote, queueMerge: true},
+	}
+}
+
+// run drives a whole run, which ends with its merge queued rather than made.
+func (f queuedFixture) run(t *testing.T) Outcome {
+	t.Helper()
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline := publishing(automatic(newSharedPipeline(t, f.repository, f.worktreeRoot, f.store, f.tracker, provider, []string{"exit 0"}), provider), f.forge)
+	outcome, err := pipeline.Run(context.Background(), f.tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.PullRequest == nil || !outcome.PullRequest.MergeQueued {
+		t.Fatalf("outcome = %#v, want a run that finished with its merge queued", outcome)
+	}
+	return outcome
+}
+
+// reconcile is the later sweep that asks the forge what became of the queued
+// merge and settles the run on the answer.
+func (f queuedFixture) reconcile(t *testing.T) []Reconciliation {
+	t.Helper()
+	results, err := Reconciler{
+		Tracker:   f.tracker,
+		Worktrees: newObserver(t, f.repository, f.worktreeRoot),
+		Store:     f.store,
+		Publisher: f.forge,
+	}.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile() error = %v", err)
+	}
+	return results
 }
 
 // A repository with no remote reports the same thing on every pass. A resumed

@@ -193,12 +193,20 @@ func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
 
 // reconcilerFrom wires reconciliation over parts that are already built. It is
 // deliberately given no backend: settling an interrupted run is never a reason
-// to invoke a provider.
+// to invoke a provider. The forge client it does get can only ask what became
+// of a merge the forge queued, which is the one thing a finished run can still
+// be waiting on.
 func reconcilerFrom(parts components) orchestrator.Reconciler {
 	return orchestrator.Reconciler{
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
+		Publisher: publish.GitHub{
+			Runner:       parts.runner,
+			Dir:          parts.repository,
+			Remote:       parts.config.Execution.Remote,
+			RedactValues: parts.redactValues,
+		},
 	}
 }
 
@@ -367,10 +375,19 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 func reportPullRequest(writer io.Writer, outcome orchestrator.Outcome) {
 	if outcome.PullRequest != nil {
 		state := "open"
-		if outcome.PullRequest.Merged {
+		switch {
+		case outcome.PullRequest.Merged:
 			state = "merged"
+		// A queued merge is not the same fact as an open request nobody has acted
+		// on: the forge has accepted the merge and performs it once the base
+		// branch's requirements are met, after this run is over.
+		case outcome.PullRequest.MergeQueued:
+			state = "merge queued"
 		}
 		fmt.Fprintf(writer, "pull request #%d (%s): %s\n", outcome.PullRequest.Number, state, outcome.PullRequest.URL)
+		if outcome.PullRequest.MergeQueued {
+			fmt.Fprintln(writer, "the forge merges it once the required checks pass; `yoyo reconcile` settles the run when it does")
+		}
 	}
 	if outcome.PublishSkipped != "" {
 		fmt.Fprintf(writer, "publishing skipped: %s\n", outcome.PublishSkipped)

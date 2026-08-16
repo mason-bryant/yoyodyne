@@ -20,7 +20,9 @@ import (
 // integer type it was written with, the structured findings the repair loop
 // needs live under their own key beside it, as does the failing check that
 // triggers the same loop, and the published pull request is absent entirely
-// from a run that never published one.
+// from a run that never published one — as is the queued merge inside it, whose
+// absence means what it meant before queued merges existed: no merge is waiting
+// on the forge.
 const StateSchemaVersion = 1
 
 type Status string
@@ -144,6 +146,12 @@ type PullRequest struct {
 	// commit the local target branch does not carry.
 	MergeMethod string `json:"merge_method,omitempty"`
 	MergeCommit string `json:"merge_commit,omitempty"`
+	// MergeQueued reports a merge the forge accepted but has not performed: it
+	// merges the request itself once the base branch's requirements are met,
+	// which happens long after the run that asked for it has finished. It keeps
+	// the run outstanding until somebody knows which way that went, and is
+	// cleared when reconciliation observes the merge land or be dropped.
+	MergeQueued bool `json:"merge_queued,omitempty"`
 }
 
 // Validate rejects a published record that cannot describe a real pull request.
@@ -493,16 +501,21 @@ func (s State) UsageLimitPaused() time.Duration {
 }
 
 // Outstanding reports that a run still owes a step somebody has to take. A run
-// that never reached a terminal status was interrupted mid-flight. A run that
-// did reach one still owes cleanup while it has recorded integration and has
-// not reached the complete phase, because integration is what schedules the
-// removal of the artifacts that produced it. A terminal run with nothing
-// integrated owes nothing: its artifacts are deliberately preserved.
+// that never reached a terminal status was interrupted mid-flight. A terminal
+// run with nothing integrated owes nothing: its artifacts are deliberately
+// preserved. An integrated one owes cleanup until it reaches the complete
+// phase, because integration is what schedules the removal of the artifacts
+// that produced it, and it owes the answer to a merge the forge queued for as
+// long as that merge is unresolved — the forge performs it minutes after the
+// run itself is over, and what it did with it has to be found out.
 func (s State) Outstanding() bool {
 	if !s.Status.Terminal() {
 		return true
 	}
-	return s.Integration != nil && s.Phase != PhaseComplete
+	if s.Integration == nil {
+		return false
+	}
+	return s.Phase != PhaseComplete || (s.PullRequest != nil && s.PullRequest.MergeQueued)
 }
 
 // validateIndependentInvocations enforces what an integrated change claims: two

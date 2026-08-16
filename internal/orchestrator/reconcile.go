@@ -10,17 +10,31 @@ import (
 
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/publish"
 	"yoyodyne/internal/runstate"
 )
 
 // ReconcileWorktrees is the repository access reconciliation needs: reading
-// what a run's artifacts actually look like now, and finishing the removal an
-// integrated run already earned. It is deliberately narrower than the manager
-// the pipeline uses, because reconciliation must never create a worktree or
-// promote a change.
+// what a run's artifacts actually look like now, finishing the removal an
+// integrated run already earned, and — for a merge the forge performed after
+// the run that asked for it had finished — reading what that merge left on the
+// remote target and removing the branch it consumed. It is deliberately
+// narrower than the manager the pipeline uses, because reconciliation must
+// never create a worktree or promote a change.
 type ReconcileWorktrees interface {
 	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
+	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
+	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+}
+
+// ReconcilePullRequests is the forge access reconciliation needs: what the
+// forge now says about a pull request whose merge it queued. It can only ask,
+// never merge, and that is the point — a queued merge the forge dropped means a
+// requirement went unmet, and satisfying it is a person's work rather than
+// something a sweep should force.
+type ReconcilePullRequests interface {
+	State(ctx context.Context, head string) (publish.PullRequest, error)
 }
 
 // ReconcileStore is the durable run state reconciliation reads and settles.
@@ -46,6 +60,10 @@ type Reconciler struct {
 	Tracker   WorkTracker
 	Worktrees ReconcileWorktrees
 	Store     ReconcileStore
+	// Publisher answers what became of a merge the forge queued. It is required
+	// only to settle a run that has one, which is a run a publishing project
+	// produced; a purely local project never records one.
+	Publisher ReconcilePullRequests
 	Clock     execution.Clock
 }
 
@@ -70,6 +88,11 @@ const (
 	// ActionUnsettled reports a run reconciliation could not decide. It stays
 	// outstanding, so the next sweep takes it up again.
 	ActionUnsettled ReconcileAction = "unsettled"
+	// ActionQueued reports a run whose merge the forge has accepted and not yet
+	// performed. Nothing about it can be decided until the forge merges the
+	// request or drops the queued merge, so the run is left outstanding and the
+	// next sweep asks again.
+	ActionQueued ReconcileAction = "queued"
 )
 
 // Reconciliation is what happened to one run. Failure records that
@@ -155,6 +178,13 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			nonEmpty(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 		return result, nil
 	}
+	// A run whose merge the forge queued is not an interrupted run: it finished,
+	// and what it still owes is the forge's answer about a merge that lands
+	// minutes after the run was over. Asking for that answer is the whole of
+	// reconciliation's part in it.
+	if queuedMerge(state) {
+		return r.settleQueuedMerge(ctx, state)
+	}
 	// Recorded integration means the work is already promoted, whatever else
 	// was interrupted afterwards.
 	if state.Integration != nil {
@@ -176,6 +206,106 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 		return r.recoverIntegration(ctx, state, observation)
 	}
 	return r.abandon(ctx, state, observation)
+}
+
+// queuedMerge reports a run waiting on a merge the forge accepted and has not
+// performed yet. It is the one thing a finished run can still owe, and it is
+// only ever owed by a run that recorded the promotion the merge carries.
+func queuedMerge(state runstate.State) bool {
+	return state.Integration != nil && state.PullRequest != nil && state.PullRequest.MergeQueued
+}
+
+// settleQueuedMerge asks the forge what became of a merge it queued, and
+// settles the run on the answer. There are three answers, and the third is the
+// one worth stating plainly:
+//
+//   - The forge merged. The publication finishes exactly as it would have
+//     inside the run: the remote target is confirmed to carry the promotion, the
+//     merge commit the forge made of it is recorded, and the branch the merge
+//     consumed is deleted.
+//   - The forge is still holding the merge. Nothing is decided, the run stays
+//     outstanding, and a later sweep asks again.
+//   - The forge dropped it: the request is closed, or open with no merge queued
+//     for it any more. Something the base branch requires went unmet, and the
+//     harness does not merge past a requirement — not with administrator
+//     privileges, not by asking again. The publication is recorded as
+//     outstanding and named on the work item, for a person. The change itself is
+//     not at risk: the local target branch it was integrated into is the
+//     authoritative one and moved before any of this.
+func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	published := *state.PullRequest
+	if r.Publisher == nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf(
+			"run %s is waiting on the queued merge of pull request %d, and reconciliation has no forge access to ask about it",
+			state.RunID, published.Number)
+	}
+	observed, err := r.Publisher.State(ctx, published.Branch)
+	if err != nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("ask the forge about the queued merge for run %s: %w", state.RunID, err)
+	}
+	if !observed.Merged && observed.AutoMerge {
+		result := reconciliationOf(state, ActionQueued)
+		result.Detail = fmt.Sprintf("the forge still has the merge of pull request %d into %s queued",
+			published.Number, state.Integration.TargetBranch)
+		return result, nil
+	}
+	published.State = observed.State
+	published.Merged = observed.Merged
+	published.MergeQueued = false
+	state.PullRequest = &published
+
+	var detail string
+	switch {
+	case observed.Merged:
+		detail = fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
+		if failure := r.finishQueuedPublication(ctx, state, &published); failure != nil {
+			state.PublishFailure = failure.Error()
+			detail = failure.Error()
+		}
+	default:
+		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
+			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
+		detail = state.PublishFailure
+	}
+	// The item was closed by the run that integrated the change, so this note is
+	// the only place an operator learns how the publication of it ended. It is
+	// written before the run is settled: a sweep that stopped in between leaves
+	// the merge still queued durably and takes it up again, which repeats a note
+	// rather than losing one.
+	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderQueuedMergeNotes(state, detail)); err != nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the settled merge for run %s: %w", state.RunID, err)
+	}
+	result, err := r.completeIntegrated(ctx, state, false)
+	result.Detail = detail
+	return result, err
+}
+
+// finishQueuedPublication does what the run would have done had the merge
+// happened while it watched: it confirms that the promotion is what reached the
+// remote target, records the merge commit the forge made of it, and deletes the
+// branch the merge consumed. A failure here is an outstanding publication rather
+// than an unsettled run — the merge already happened, and asking again would not
+// change what it produced.
+func (r Reconciler) finishQueuedPublication(ctx context.Context, state runstate.State, published *runstate.PullRequest) error {
+	integration := gitworktree.Integration{
+		Branch:               state.Branch,
+		TargetBranch:         state.Integration.TargetBranch,
+		SourceCommit:         state.Integration.SourceCommit,
+		TargetCommit:         state.Integration.TargetCommit,
+		PreviousTargetCommit: state.Integration.PreviousTargetCommit,
+	}
+	remoteTarget, err := r.Worktrees.ConfirmRemoteTarget(ctx, integration)
+	if err != nil {
+		return fmt.Errorf("confirm the queued merge reached %s: %w", integration.TargetBranch, err)
+	}
+	published.MergeCommit = remoteTarget
+	// The published branch is debris once its work is on the target, and it is
+	// removed on the same evidence the run would have used: the exact commit that
+	// was published and merged.
+	if err := r.Worktrees.DeleteRemoteBranch(ctx, worktreeOf(state), published.HeadCommit); err != nil {
+		return fmt.Errorf("delete the merged remote branch: %w", err)
+	}
+	return nil
 }
 
 // recoverIntegration records the promotion an interrupted process made but
@@ -443,6 +573,30 @@ func renderReconciledIntegrationNotes(state runstate.State, recovered bool) stri
 	}
 	if state.ReviewDecision != "" {
 		lines = append(lines, "Review decision: "+state.ReviewDecision)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// renderQueuedMergeNotes tells the work item what became of a merge that was
+// still queued when its run finished. The item was closed by that run — the
+// change was integrated into the authoritative local branch, which is what
+// closed it — so this note is the only place an operator learns whether the
+// publication of it completed, and what is left if it did not.
+func renderQueuedMergeNotes(state runstate.State, detail string) string {
+	lines := []string{
+		"Yoyodyne settled the merge this run left queued with the forge.",
+		"Outcome: " + detail,
+		"Run: " + state.RunID,
+		fmt.Sprintf("Pull request: #%d %s", state.PullRequest.Number, state.PullRequest.URL),
+		"Pull request merged: " + strconv.FormatBool(state.PullRequest.Merged),
+	}
+	if state.PullRequest.MergeCommit != "" {
+		lines = append(lines, fmt.Sprintf("Remote target commit: %s (the forge's merge commit above the promoted commit)", state.PullRequest.MergeCommit))
+	}
+	if state.PublishFailure != "" {
+		lines = append(lines,
+			"Publication outstanding: "+state.PublishFailure,
+			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.")
 	}
 	return strings.Join(lines, "\n")
 }
