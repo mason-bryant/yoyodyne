@@ -1,0 +1,75 @@
+# Yoyodyne project configuration.
+#
+# Everything not written here is inherited from the built-in bundle shipped
+# inside the executable: the five default agents, their Claude Code backend,
+# model selectors, instance counts, and personas. Run
+# `yoyodyne config show --effective --origins` to see the resolved values and
+# where each one came from.
+version: 1
+extends: builtin:v1
+
+product:
+  id: yoyodyne
+  repository: .
+
+approvals:
+  # Enabled with the closed loop: checks, an independent reviewer verdict, and
+  # conflict-aware fast-forward integration now gate every promotion. The
+  # harness refuses automatic integration that is not actually gated.
+  integration: automatic
+
+# Checks are this project's own: the bundle never supplies them, and they are
+# replaced as a whole list rather than merged, so what is written here is
+# exactly what runs. Each entry is run through `/bin/sh -c` in the worktree,
+# so shell syntax works. A check must be non-interactive and must exit
+# non-zero on failure -- a run stops here and never reaches review or
+# integration. These are Go; the equivalents in other languages:
+#
+#   # TypeScript / Node
+#   checks:
+#     - npm ci
+#     - npx tsc --noEmit
+#     - npm test -- --run
+#     - npx eslint .
+#
+#   # Python
+#   checks:
+#     - python -m pytest -q
+#     - python -m ruff check .
+#     - python -m mypy .
+#
+#   # Java (Maven)
+#   checks:
+#     - mvn --batch-mode --quiet verify
+#
+#   # Java (Gradle)
+#   checks:
+#     - ./gradlew --no-daemon check
+checks:
+  - make test
+  - make race
+  - make vet
+
+# Agents are inherited from builtin:v1 and are not listed here. To change one,
+# name only the fields you are changing; everything else keeps inheriting. The
+# five agent keys are product-manager, architect, development-manager,
+# developer, and reviewer.
+#
+# agents:
+#   developer:
+#     # A family alias floats to that family's current default; an exact
+#     # identifier such as claude-opus-5 pins a version. Every agent must
+#     # declare a selector -- there is no implicit harness default.
+#     model: opus
+#     instances: 1
+#   reviewer:
+#     # A persona override replaces the inherited persona completely rather
+#     # than merging into it. The path is relative to this .yoyodyne directory
+#     # and must be a Markdown file inside it.
+#     persona:
+#       version: house-1
+#       path: personas/reviewer.md
+#   architect:
+#     # Removing an inherited agent is explicit. Setting disabled alongside any
+#     # other field is rejected, so an agent is never half-removed.
+#     disabled: true

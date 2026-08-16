@@ -6,11 +6,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
+
+	"go.yaml.in/yaml/v3"
 
 	"yoyodyne/internal/config"
 )
-
-const defaultConfigPath = ".yoyodyne.yaml"
 
 func Run(args []string, stdout, stderr io.Writer, version string) int {
 	return RunContext(context.Background(), args, stdout, stderr, version)
@@ -63,17 +64,24 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		printConfigUsage(stdout)
 		return 0
 	}
-	if args[0] != "validate" {
+	switch args[0] {
+	case "validate":
+		return runConfigValidate(args[1:], stdout, stderr)
+	case "show":
+		return runConfigShow(args[1:], stdout, stderr)
+	default:
 		fmt.Fprintf(stderr, "unknown config command %q\n\n", args[0])
 		printConfigUsage(stderr)
 		return 2
 	}
+}
 
+func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	path := flags.String("config", defaultConfigPath, "configuration file path")
+	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args[1:]); err != nil {
+	if err := flags.Parse(args); err != nil {
 		return 2
 	}
 	if flags.NArg() != 0 {
@@ -81,12 +89,12 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	cfg, err := config.Load(*path)
+	resolved, err := loadConfiguration(*path)
 	if err != nil {
 		if *jsonOutput {
 			code := writeJSON(stdout, stderr, map[string]any{
 				"status": "invalid",
-				"config": *path,
+				"config": reportedPath(*path, resolved),
 				"error":  err.Error(),
 			})
 			if code != 0 {
@@ -101,13 +109,115 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
 			"status":     "valid",
-			"config":     *path,
-			"product_id": cfg.Product.ID,
-			"agents":     len(cfg.Agents),
+			"config":     resolved.Path,
+			"sources":    resolved.Sources,
+			"product_id": resolved.Config.Product.ID,
+			"agents":     len(resolved.Config.Agents),
 		})
 	}
-	fmt.Fprintf(stdout, "configuration valid: %s\n", *path)
+	fmt.Fprintf(stdout, "configuration valid: %s\n", resolved.Path)
 	return 0
+}
+
+func runConfigShow(args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("config show", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
+	effective := flags.Bool("effective", false, "print the effective configuration after inheritance")
+	origins := flags.Bool("origins", false, "print where every effective value came from")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "config show does not accept positional arguments")
+		return 2
+	}
+	// Showing the effective configuration is the default, because an operator
+	// asking what the configuration is means the values actually in force.
+	showEffective := *effective || !*origins
+
+	resolved, err := loadConfiguration(*path)
+	if err != nil {
+		if *jsonOutput {
+			code := writeJSON(stdout, stderr, map[string]any{
+				"status": "invalid",
+				"config": reportedPath(*path, resolved),
+				"error":  err.Error(),
+			})
+			if code != 0 {
+				return code
+			}
+		} else {
+			fmt.Fprintln(stderr, err)
+		}
+		return 1
+	}
+
+	if *jsonOutput {
+		payload := map[string]any{
+			"config":  resolved.Path,
+			"sources": resolved.Sources,
+		}
+		if showEffective {
+			payload["effective"] = resolved.Config
+		}
+		if *origins {
+			payload["origins"] = resolved.Origins
+		}
+		return writeJSON(stdout, stderr, payload)
+	}
+
+	fmt.Fprintf(stdout, "# configuration: %s\n", resolved.Path)
+	for _, source := range resolved.Sources {
+		fmt.Fprintf(stdout, "# layer: %s\n", source)
+	}
+	if showEffective {
+		encoded, err := yaml.Marshal(resolved.Config)
+		if err != nil {
+			fmt.Fprintf(stderr, "render effective configuration: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "\n%s", encoded)
+	}
+	if *origins {
+		fmt.Fprintln(stdout, "\n# value origins")
+		for _, key := range resolved.OriginKeys() {
+			fmt.Fprintf(stdout, "%s: %s\n", key, resolved.Origins[key])
+		}
+	}
+	return 0
+}
+
+// loadConfiguration resolves an explicit path when one is given and otherwise
+// discovers the nearest project configuration, so Yoyodyne runs from a project
+// root or any directory beneath it.
+func loadConfiguration(explicitPath string) (config.Resolved, error) {
+	path := explicitPath
+	if path == "" {
+		workingDirectory, err := os.Getwd()
+		if err != nil {
+			return config.Resolved{}, fmt.Errorf("resolve working directory: %w", err)
+		}
+		discovered, err := config.Discover(workingDirectory)
+		if err != nil {
+			return config.Resolved{}, err
+		}
+		path = discovered
+	}
+	return config.LoadResolved(path)
+}
+
+// reportedPath names the configuration in a failure report. A discovery failure
+// has no path to report, so the request is described instead of inventing one.
+func reportedPath(explicitPath string, resolved config.Resolved) string {
+	if resolved.Path != "" {
+		return resolved.Path
+	}
+	if explicitPath != "" {
+		return explicitPath
+	}
+	return "(discovered)"
 }
 
 func writeJSON(stdout, stderr io.Writer, value any) int {
@@ -125,15 +235,20 @@ func printUsage(writer io.Writer) {
 
 Commands:
   config validate   validate a Yoyodyne configuration
+  config show       print the effective configuration and value origins
   run               run one Beads work item in an isolated worktree
   version           print version information
   help              show this help`)
 }
 
 func printConfigUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne config validate [options]
+	fmt.Fprintln(writer, `Usage: yoyodyne config <validate|show> [options]
 
 Options:
-  --config <path>   configuration file (default .yoyodyne.yaml)
-  --json            emit machine-readable JSON`)
+  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
+  --json            emit machine-readable JSON
+
+config show options:
+  --effective       print the effective configuration after inheritance (default)
+  --origins         print where every effective value came from`)
 }

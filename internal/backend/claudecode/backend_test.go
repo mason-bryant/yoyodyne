@@ -74,6 +74,11 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if result.IsError || result.FinalText != "done" || result.SessionID != "session-1" || result.LastEvent != 5 {
 		t.Fatalf("Run() result = %#v", result)
 	}
+	// The model the provider resolved the requested selector to is first-class
+	// result evidence, not something a caller has to dig out of an event.
+	if result.ResolvedModel != "claude-test" {
+		t.Fatalf("Run() resolved model = %q, want claude-test", result.ResolvedModel)
+	}
 	wantTypes := []execution.EventType{
 		execution.EventRunStarted,
 		execution.EventAgentMessage,
@@ -103,6 +108,40 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+	}
+}
+
+func TestRunPassesTheRequestedModelAndReportsWhatServedIt(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-opus-5-20260514"}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","model":"ignored-late-model"}`,
+	}, "\n") + "\n"
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+	result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement the task",
+		Model:            "opus",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// A floating alias is requested; the model the run actually started on is
+	// what gets recorded, and a later event cannot rewrite it.
+	if result.ResolvedModel != "claude-opus-5-20260514" {
+		t.Fatalf("Run() resolved model = %q", result.ResolvedModel)
+	}
+	var sawModel bool
+	for index, arg := range runner.commands[0].Args {
+		if arg == "--model" && index+1 < len(runner.commands[0].Args) && runner.commands[0].Args[index+1] == "opus" {
+			sawModel = true
+		}
+	}
+	if !sawModel {
+		t.Fatalf("args did not pass the requested selector: %#v", runner.commands[0].Args)
 	}
 }
 

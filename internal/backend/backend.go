@@ -41,15 +41,19 @@ type RunRequest struct {
 }
 
 type RunResult struct {
-	Backend    domain.Backend
-	SessionID  string
-	FinalText  string
-	IsError    bool
-	CostUSD    float64
-	Usage      []byte
-	Process    execution.ProcessResult
-	LastEvent  uint64
-	StopReason string
+	Backend   domain.Backend
+	SessionID string
+	// ResolvedModel is the model the provider reported actually serving the
+	// invocation. A requested selector may be a floating family alias, so the
+	// resolved identifier is the only durable evidence of what really ran.
+	ResolvedModel string
+	FinalText     string
+	IsError       bool
+	CostUSD       float64
+	Usage         []byte
+	Process       execution.ProcessResult
+	LastEvent     uint64
+	StopReason    string
 }
 
 type Backend interface {

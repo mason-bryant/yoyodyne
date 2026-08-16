@@ -6,7 +6,7 @@ This document records the agreed v1 design and the implementation sequence for r
 
 ## Summary
 
-Yoyodyne is a local, single-operator harness that coordinates configurable AI agent roles to turn a product brief into goals, designs, implementation work, reviewed changes, and an integrated codebase. The human normally talks to a product manager agent, but may inspect or direct any agent. Claude Code is the default execution backend. Codex is a thinner optional backend for developer and reviewer agents.
+Yoyodyne is a local, single-operator harness that coordinates configurable AI agent roles to turn a product brief into goals, designs, implementation work, reviewed changes, and an integrated codebase. It aims to run development nearly autonomously: the human's routine interface is the product manager agent, and directing any other agent is an override rather than part of the loop. Claude Code is the default execution backend. Codex is a thinner optional backend for developer and reviewer agents. The managed project may be written in any language; Yoyodyne's own implementation language is not imposed on it.
 
 V1 supports one product and one Git repository at a time. Its identifiers, configuration, and storage boundaries must allow later support for multiple products, repositories, and remote workers without changing the core domain model.
 
@@ -23,6 +23,8 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 - Support Claude Code as the default backend and Codex as an optional developer/reviewer backend.
 - Reach a useful self-hosting threshold before implementing the entire v1 management hierarchy.
 - Keep roles, policies, and provider selection configurable without making safety invariants optional.
+- Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
+- Support development in any language. Yoyodyne is written in Go, but the projects it manages are not assumed to be: verification is whatever commands the project declares, and no language, build system, or test framework is built into the harness.
 
 ## Non-goals
 
@@ -33,6 +35,8 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 - Direct model API integration when the local coding-agent CLIs provide the required execution interface.
 - A general-purpose chat application independent of software delivery.
 - Replacing Git, Beads, or the coding agents' native tool execution.
+- Native integration with any language's build system, test runner, or package manager. Language support means running the commands a project declares, not understanding its toolchain.
+- Fully unattended operation. The human still approves the brief and goals and answers what the product manager escalates; autonomy is the absence of routine per-change gates, not the absence of a human.
 
 ## Design Invariants
 
@@ -46,6 +50,7 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 8. Agent processes are ephemeral. Logical identities, decisions, assignments, sessions, and outcomes are durable.
 9. The harness owns orchestration state transitions. Model output may recommend a transition but cannot bypass its preconditions.
 10. All provider-specific behavior stays behind a capability-aware backend boundary.
+11. The harness assumes no language, build system, or test framework in the managed project. Verification is the commands the project declares, run in the worktree; the harness decides only whether they passed.
 
 ## Product and Artifact Model
 
@@ -143,7 +148,7 @@ The role list is configurable. The harness depends on declared capabilities and 
 
 ## User Interaction, Directives, and Approval
 
-V1 provides an interactive CLI conversation with the product manager plus one-shot administrative commands for status, inspection, directives, and agent interaction. The user may address any agent. A directive received by a lower-level agent is still globally enforceable within its scope.
+V1 provides an interactive CLI conversation with the product manager plus one-shot administrative commands for status, inspection, directives, and agent interaction. The conversation with the product manager is the intended routine interface: stating intent, approving the brief and goals, and answering escalated questions should be the whole of normal operation. The user may also address any other agent directly, but that is an inspection, recovery, and override path rather than part of the loop. A directive received by a lower-level agent is still globally enforceable within its scope.
 
 A directive record contains at least:
 
@@ -155,7 +160,9 @@ A directive record contains at least:
 
 Operational directives take effect immediately. A directive that changes the brief, a goal, or a design pauses affected downstream work, routes reconciliation to the owning role, marks derived items stale, and resumes only after the canonical chain is consistent. If the directive is ambiguous, the product manager asks the user and work remains paused.
 
-By default, the human explicitly approves the initial brief and goals after discussing them with the product manager. Lower-level approval gates are configurable but disabled by default. This approval policy does not add a routine human merge gate: verified and independently approved code is integrated automatically.
+By default, the human explicitly approves the initial brief and goals after discussing them with the product manager. Lower-level approval gates are configurable but disabled by default. This approval policy does not add a routine human merge gate: once a project enables automatic integration, verified and independently approved code is integrated without further human action, which is what makes near-autonomous operation possible.
+
+The shipped bundle nevertheless defaults `approvals.integration` to `human`. That is deliberate and is not a retreat from the autonomy goal: a project opts in to automatic integration explicitly, and the harness then refuses that setting unless deterministic checks and an independent reviewer actually exist. Autonomy is something a project turns on once it has the gates to justify it, rather than something inherited silently by any repository that adds a configuration file.
 
 ## Persistence Boundaries
 
@@ -170,10 +177,14 @@ docs/
     goals/
   designs/
   specifications/
-.yoyodyne.yaml
+.yoyodyne/
+  config.yaml
+  personas/
 ```
 
 These files are reviewable with the code and are the source of truth for their content. Beads records their workflow state and relationships but does not replace them with issue descriptions.
+
+Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
 ### Beads
 
@@ -229,23 +240,17 @@ Codex authentication is delegated to the locally installed CLI. It may use ChatG
 
 ## Configuration
 
-Agent definitions and behavior are configurable, while invariants remain enforced in code. An illustrative configuration is:
+Agent definitions and behavior are configurable, while invariants remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
 
 ```yaml
 version: 1
+extends: builtin:v1
+
 product:
   id: yoyodyne
   repository: .
 
-execution:
-  max_concurrent_developers: 1
-  repair_attempts_before_replan: 2
-  worktree_root: auto
-
 approvals:
-  brief: human
-  goals: human
-  designs: automatic
   integration: automatic
 
 checks:
@@ -253,25 +258,23 @@ checks:
   - go vet ./...
 
 agents:
-  product:
-    role: product-manager
-    backend: claude-code
-  architect:
-    role: architect
-    backend: claude-code
-  development:
-    role: development-manager
-    backend: claude-code
-  developers:
-    role: developer
-    backend: claude-code
-    instances: 1
+  developer:
+    model: claude-opus-5-20260514
   reviewer:
-    role: reviewer
-    backend: codex
+    persona:
+      version: house-1
+      path: personas/reviewer.md
 ```
 
-Configuration loading rejects unknown role capabilities, invalid ownership, unsafe paths, unsupported provider combinations, and automatic integration without both checks and review.
+That is a complete configuration. The five default agents — product manager, architect, development manager, developer, and reviewer — come from `builtin:v1` with a role, a backend, a model selector, an instance count, and a versioned persona each. Three layers produce the effective configuration, later ones winning: harness defaults, the named bundle, then the project file. A field a layer does not mention is inherited; a field it does mention replaces the inherited value, except that `checks` is replaced as a whole list rather than concatenated, and a `persona` override replaces the inherited persona completely rather than merging into it. Removing an inherited agent is explicit, so an agent is never lost by being accidentally omitted.
+
+The `checks` above are this project's own, and they are the harness's only view of the managed project's toolchain. Each entry is a shell command run in the worktree; the harness decides whether it passed and nothing else. A TypeScript, Python, or Java project declares its own commands in exactly the same place, which is what keeps the harness language-agnostic without needing per-language support.
+
+`version` is the one field a project never inherits: it must be declared even when `extends` names a bundle that declares its own, so a file written against a different schema fails rather than loading as whatever the bundle happened to say. A configuration with no `extends` key is a complete standalone file that inherits only the harness defaults; that is the pre-directory shape, and it still loads unchanged.
+
+Personas specialize how an agent works and can never grant it authority: the immutable role contracts are enforced in Go and prefix the configured guidance in the prompt. A persona `path` is relative to the project `.yoyodyne` directory and must name a Markdown file inside it. Configuration loading rejects unknown keys, unknown bundles, unsafe or non-Markdown persona paths, unknown role capabilities, invalid ownership, unsupported provider combinations, and automatic integration without both checks and review. Validation runs against the effective configuration, so a combination no single layer expressed still fails before any work is claimed.
+
+[Configuration](configuration.md) is the operator-facing reference for the layout, precedence, merge semantics, and inspection commands.
 
 ## Work Execution and Integration
 
@@ -317,6 +320,8 @@ yoyodyne directive ...        record and inspect durable user directives
 yoyodyne agent ...            inspect or address a specific logical agent
 yoyodyne doctor               diagnose configuration and recovery state
 ```
+
+These are not peers. `yoyodyne chat` is the primary interface; `work` schedules what the harness selects on its own. `run <beads-id>` executes one explicitly named item and is an administrative and recovery entry point, not the normal way to drive development — the Milestone 0 harness exposes it as the only verb because the management hierarchy does not exist yet, which is a bootstrap condition rather than the intended user experience.
 
 Commands support machine-readable output so later orchestration, tests, and remote execution do not depend on terminal rendering.
 
@@ -376,6 +381,7 @@ This sequence keeps the first bootstrap small, exercises real subprocess and Git
 - Use temporary Git repositories to test branch/worktree creation, drift, conflicts, integration, cleanup, and restart reconciliation.
 - Keep a small opt-in conformance suite for installed Claude Code and Codex CLIs.
 - Add a self-hosting smoke test that executes a harmless change in a disposable copy or fixture repository.
+- Cover a fixture project that is not Go, so the language-agnostic claim is verified rather than assumed. Since the harness's only contact with a toolchain is running declared commands and reading exit codes, this needs a fixture whose checks are not Go commands, not a second language integration.
 - Treat model quality as nondeterministic; assert protocol and state invariants rather than exact prose.
 
 ## Security and Safety

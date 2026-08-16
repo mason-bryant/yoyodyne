@@ -1,14 +1,16 @@
+// Package config loads Yoyodyne's effective configuration from a versioned
+// built-in bundle shipped inside the executable and a project configuration
+// that overlays it. Projects store only their machine-independent settings and
+// sparse agent overrides; the harness supplies everything else, so Yoyodyne is
+// usable from a repository that has no access to the Yoyodyne source checkout.
 package config
 
 import (
 	"errors"
 	"fmt"
-	"io"
-	"os"
 	"sort"
 	"strings"
-
-	"go.yaml.in/yaml/v3"
+	"unicode"
 
 	"yoyodyne/internal/domain"
 )
@@ -16,7 +18,10 @@ import (
 const CurrentVersion = 1
 
 type Config struct {
-	Version   int                    `yaml:"version" json:"version"`
+	Version int `yaml:"version" json:"version"`
+	// Extends names the built-in bundle this configuration inherits from, and
+	// is empty for a complete standalone configuration.
+	Extends   string                 `yaml:"extends,omitempty" json:"extends,omitempty"`
 	Product   Product                `yaml:"product" json:"product"`
 	Execution Execution              `yaml:"execution" json:"execution"`
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
@@ -44,108 +49,41 @@ type Approvals struct {
 }
 
 type AgentConfig struct {
-	Role      domain.AgentRole `yaml:"role" json:"role"`
-	Backend   domain.Backend   `yaml:"backend" json:"backend"`
-	Instances int              `yaml:"instances,omitempty" json:"instances"`
+	Role    domain.AgentRole `yaml:"role" json:"role"`
+	Backend domain.Backend   `yaml:"backend" json:"backend"`
+	// Model is the required provider model selector for every instance of this
+	// agent. There is no implicit harness default: a family alias such as
+	// "opus" intentionally floats to the backend's current default for that
+	// family, while an exact provider identifier pins a version.
+	Model     string `yaml:"model" json:"model"`
+	Instances int    `yaml:"instances,omitempty" json:"instances"`
+	// Persona is the resolved role guidance handed to this agent's prompt. It
+	// may specialize how an agent works; it can never remove a harness
+	// invariant, which is why the immutable contracts stay in Go.
+	Persona Persona `yaml:"persona,omitempty" json:"persona,omitempty"`
 }
 
-type configDocument struct {
-	Version   int                      `yaml:"version"`
-	Product   Product                  `yaml:"product"`
-	Execution executionDocument        `yaml:"execution"`
-	Approvals Approvals                `yaml:"approvals"`
-	Checks    []string                 `yaml:"checks"`
-	Agents    map[string]agentDocument `yaml:"agents"`
+// MaxPersonaBytes bounds a persona so role guidance stays guidance rather than
+// an unbounded document smuggled into every prompt.
+const MaxPersonaBytes = 32 << 10
+
+// Persona is one resolved persona: the declared revision, the path it was
+// declared with, where the text was actually read from, and the text itself.
+// Text is excluded from serialized diagnostics, which report its size instead,
+// so `config show` stays readable.
+type Persona struct {
+	Version string `yaml:"version,omitempty" json:"version,omitempty"`
+	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
+	Source  string `yaml:"source,omitempty" json:"source,omitempty"`
+	Bytes   int    `yaml:"bytes,omitempty" json:"bytes,omitempty"`
+	Text    string `yaml:"-" json:"-"`
 }
 
-type executionDocument struct {
-	MaxConcurrentDevelopers    *int    `yaml:"max_concurrent_developers"`
-	RepairAttemptsBeforeReplan *int    `yaml:"repair_attempts_before_replan"`
-	WorktreeRoot               *string `yaml:"worktree_root"`
-}
-
-type agentDocument struct {
-	Role      domain.AgentRole `yaml:"role"`
-	Backend   domain.Backend   `yaml:"backend"`
-	Instances *int             `yaml:"instances,omitempty"`
-}
-
-func Load(path string) (Config, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return Config{}, fmt.Errorf("open config %q: %w", path, err)
-	}
-	defer file.Close()
-
-	return Decode(file)
-}
-
-func Decode(reader io.Reader) (Config, error) {
-	decoder := yaml.NewDecoder(reader)
-	decoder.KnownFields(true)
-
-	var document configDocument
-	if err := decoder.Decode(&document); err != nil {
-		return Config{}, fmt.Errorf("decode config: %w", err)
-	}
-
-	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return Config{}, errors.New("decode config: multiple YAML documents are not supported")
-		}
-		return Config{}, fmt.Errorf("decode config: %w", err)
-	}
-
-	cfg := document.resolve()
-	if err := cfg.Validate(); err != nil {
-		return Config{}, err
-	}
-	return cfg, nil
-}
-
-func (d configDocument) resolve() Config {
-	execution := Execution{
-		MaxConcurrentDevelopers:    1,
-		RepairAttemptsBeforeReplan: 2,
-		WorktreeRoot:               "auto",
-	}
-	if d.Execution.MaxConcurrentDevelopers != nil {
-		execution.MaxConcurrentDevelopers = *d.Execution.MaxConcurrentDevelopers
-	}
-	if d.Execution.RepairAttemptsBeforeReplan != nil {
-		execution.RepairAttemptsBeforeReplan = *d.Execution.RepairAttemptsBeforeReplan
-	}
-	if d.Execution.WorktreeRoot != nil {
-		execution.WorktreeRoot = *d.Execution.WorktreeRoot
-	}
-
-	product := d.Product
-	if product.RepositoryID == "" {
-		product.RepositoryID = domain.RepositoryID(product.ID)
-	}
-
-	agents := make(map[string]AgentConfig, len(d.Agents))
-	for name, rawAgent := range d.Agents {
-		instances := 1
-		if rawAgent.Instances != nil {
-			instances = *rawAgent.Instances
-		}
-		agents[name] = AgentConfig{
-			Role:      rawAgent.Role,
-			Backend:   rawAgent.Backend,
-			Instances: instances,
-		}
-	}
-
-	return Config{
-		Version:   d.Version,
-		Product:   product,
-		Execution: execution,
-		Approvals: d.Approvals,
-		Checks:    d.Checks,
-		Agents:    agents,
-	}
+// Defined reports whether an agent declares a persona at all. Agents in legacy
+// complete configurations may declare none, and prompt construction then falls
+// back to the immutable harness contract alone.
+func (p Persona) Defined() bool {
+	return strings.TrimSpace(p.Version) != "" || strings.TrimSpace(p.Path) != "" || strings.TrimSpace(p.Text) != ""
 }
 
 func (c Config) Validate() error {
@@ -213,9 +151,15 @@ func (c Config) Validate() error {
 		} else if !agent.Backend.SupportsRole(agent.Role) {
 			problems = append(problems, fmt.Sprintf("backend %q does not support role %q for agent %q", agent.Backend, agent.Role, name))
 		}
+		// Every executable agent declares its own selector; the harness never
+		// falls back to a provider default nobody chose or recorded.
+		if err := validateModelSelector(agent.Model); err != nil {
+			problems = append(problems, fmt.Sprintf("agent %q %s", name, err))
+		}
 		if agent.Instances < 1 {
 			problems = append(problems, fmt.Sprintf("agent %q instances must be at least 1", name))
 		}
+		problems = append(problems, agent.Persona.problems(name)...)
 		if agent.Role == domain.RoleDeveloper {
 			developers += agent.Instances
 		}
@@ -246,6 +190,54 @@ func (c Config) Validate() error {
 
 	if len(problems) > 0 {
 		return ValidationError{Problems: problems}
+	}
+	return nil
+}
+
+// problems reports what makes a declared persona unusable. A persona that
+// resolved to nothing is a configuration error rather than a silent fallback:
+// an agent whose configured guidance vanished is not the agent that was
+// configured.
+func (p Persona) problems(agentName string) []string {
+	if !p.Defined() {
+		return nil
+	}
+	var problems []string
+	if strings.TrimSpace(p.Version) == "" {
+		problems = append(problems, fmt.Sprintf("agent %q persona version is required", agentName))
+	}
+	if strings.TrimSpace(p.Path) == "" {
+		problems = append(problems, fmt.Sprintf("agent %q persona path is required", agentName))
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		problems = append(problems, fmt.Sprintf("agent %q persona %q is empty", agentName, p.Path))
+	}
+	if len(p.Text) > MaxPersonaBytes {
+		problems = append(problems, fmt.Sprintf("agent %q persona %q is %d bytes, limit is %d", agentName, p.Path, len(p.Text), MaxPersonaBytes))
+	}
+	return problems
+}
+
+// MaxModelSelectorBytes bounds a configured selector so it stays a model name
+// rather than an argument smuggled onto a provider command line.
+const MaxModelSelectorBytes = 128
+
+// ValidateModelSelector reports whether a configured model selector is usable.
+// It deliberately accepts both floating family aliases and pinned identifiers,
+// and rejects only what cannot name a model.
+func ValidateModelSelector(model string) error {
+	return validateModelSelector(model)
+}
+
+func validateModelSelector(model string) error {
+	trimmed := strings.TrimSpace(model)
+	switch {
+	case trimmed == "":
+		return errors.New("model selector is required; there is no implicit harness default")
+	case len(trimmed) > MaxModelSelectorBytes:
+		return fmt.Errorf("model selector is %d bytes, limit is %d", len(trimmed), MaxModelSelectorBytes)
+	case strings.IndexFunc(trimmed, unicode.IsSpace) >= 0 || strings.HasPrefix(trimmed, "-"):
+		return fmt.Errorf("model selector %q must be a single model name", model)
 	}
 	return nil
 }

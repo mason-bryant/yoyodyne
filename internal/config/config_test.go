@@ -27,6 +27,7 @@ agents:
   developers:
     role: developer
     backend: claude-code
+    model: opus
     instances: 1
 `
 
@@ -61,6 +62,7 @@ agents:
   developer:
     role: developer
     backend: claude-code
+    model: opus
 `
 	cfg, err := Decode(strings.NewReader(input))
 	if err != nil {
@@ -171,6 +173,48 @@ agents:
 		if !strings.Contains(err.Error(), expected) {
 			t.Errorf("Decode() error %q does not contain %q", err, expected)
 		}
+	}
+}
+
+func TestValidateRequiresAModelSelectorForEveryAgent(t *testing.T) {
+	t.Parallel()
+
+	// There is no implicit harness default: an agent that names no model is a
+	// run whose evidence could never say what produced it.
+	missing := strings.Replace(validBootstrapConfig, "    model: opus\n", "", 1)
+	if _, err := Decode(strings.NewReader(missing)); err == nil || !strings.Contains(err.Error(), `agent "developers" model selector is required`) {
+		t.Fatalf("Decode() missing model error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name     string
+		selector string
+		problem  string
+	}{
+		{name: "floating family alias", selector: "opus"},
+		{name: "pinned identifier", selector: "claude-opus-5-20260514"},
+		{name: "blank", selector: `"   "`, problem: "model selector is required"},
+		{name: "argument smuggling", selector: `"--dangerously-skip-permissions"`, problem: "must be a single model name"},
+		{name: "multiple words", selector: `"opus sonnet"`, problem: "must be a single model name"},
+		{name: "oversized", selector: strings.Repeat("m", MaxModelSelectorBytes+1), problem: "limit is"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			input := strings.Replace(validBootstrapConfig, "model: opus", "model: "+test.selector, 1)
+			cfg, err := Decode(strings.NewReader(input))
+			if test.problem != "" {
+				if err == nil || !strings.Contains(err.Error(), test.problem) {
+					t.Fatalf("Decode() error = %v, want %q", err, test.problem)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Decode() error = %v", err)
+			}
+			if cfg.Agents["developers"].Model != test.selector {
+				t.Fatalf("developer model = %q, want %q", cfg.Agents["developers"].Model, test.selector)
+			}
+		})
 	}
 }
 

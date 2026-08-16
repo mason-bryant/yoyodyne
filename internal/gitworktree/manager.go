@@ -40,6 +40,11 @@ type CreateRequest struct {
 	RunID      string
 	WorkItemID string
 	BaseRef    string
+	// TargetBranch names the local branch the finished work is meant to be
+	// promoted into. It is recorded on the worktree and never changes
+	// afterwards. When it is empty the worktree can be created and inspected
+	// but never integrated.
+	TargetBranch string
 }
 
 type Worktree struct {
@@ -49,6 +54,8 @@ type Worktree struct {
 	Branch     string `json:"branch"`
 	BaseRef    string `json:"base_ref"`
 	BaseCommit string `json:"base_commit"`
+	// TargetBranch is the immutable integration target recorded at creation.
+	TargetBranch string `json:"target_branch,omitempty"`
 }
 
 type Inspection struct {
@@ -56,6 +63,60 @@ type Inspection struct {
 	Dirty      bool
 	Branch     string
 }
+
+// Integration reports exactly which commits an integration produced, so a
+// caller can record the promoted work and prove the target moved where it
+// expected before removing anything.
+type Integration struct {
+	Branch               string `json:"branch"`
+	TargetBranch         string `json:"target_branch"`
+	SourceCommit         string `json:"source_commit"`
+	TargetCommit         string `json:"target_commit"`
+	PreviousTargetCommit string `json:"previous_target_commit"`
+}
+
+// CleanupRequest names exactly which artifacts may be removed and the evidence
+// that permits removing them. Carrying the source commit rather than only a
+// branch name is what makes cleanup resumable: the proof that the work was
+// integrated survives the branch that carried it.
+type CleanupRequest struct {
+	Worktree     Worktree
+	TargetBranch string
+	SourceCommit string
+}
+
+// Cleanup reports what is absent after a cleanup attempt, whether this attempt
+// removed it or a previous one did. Reporting the two artifacts separately is
+// what lets a caller describe a partial cleanup truthfully.
+type Cleanup struct {
+	WorktreeRemoved bool `json:"worktree_removed"`
+	BranchRemoved   bool `json:"branch_removed"`
+}
+
+// Complete reports whether nothing is left to clean up.
+func (c Cleanup) Complete() bool {
+	return c.WorktreeRemoved && c.BranchRemoved
+}
+
+// Identity of the harness-owned integration commit. It is deliberately not the
+// developer's identity: the harness, not the agent, authors Git history.
+const (
+	harnessCommitAuthorName  = "Yoyodyne Harness"
+	harnessCommitAuthorEmail = "harness@yoyodyne.invalid"
+)
+
+var (
+	// ErrNoChanges reports that there is nothing to integrate. It is a refusal,
+	// not a failure: an empty commit would claim work that does not exist.
+	ErrNoChanges = errors.New("worktree has no changes to integrate")
+	// ErrTargetDrift reports that the target branch moved away from the base the
+	// work was written against, so the change must be reconciled rather than
+	// merged.
+	ErrTargetDrift = errors.New("integration target moved away from the recorded base commit")
+	// ErrNotFastForward reports that the target could not be advanced by a
+	// fast-forward. The harness never resolves this by forcing or resetting.
+	ErrNotFastForward = errors.New("integration target cannot be fast-forwarded")
+)
 
 type ChangeSummary struct {
 	Status   string `json:"status"`
@@ -173,6 +234,18 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if !commitPattern.MatchString(baseCommit) {
 		return Worktree{}, fmt.Errorf("resolved base commit %q is invalid", baseCommit)
 	}
+	// An integratable worktree must start from exactly the branch it will be
+	// promoted into, so the recorded pair is coherent from the moment it is
+	// written and integration can insist on that equality later.
+	if request.TargetBranch != "" {
+		targetCommit, err := m.resolveBranchCommit(ctx, request.TargetBranch)
+		if err != nil {
+			return Worktree{}, fmt.Errorf("resolve integration target: %w", err)
+		}
+		if targetCommit != baseCommit {
+			return Worktree{}, fmt.Errorf("integration target %s is at %s, which is not the base commit %s", request.TargetBranch, targetCommit, baseCommit)
+		}
+	}
 	if err := os.MkdirAll(m.worktreeRoot, 0o700); err != nil {
 		return Worktree{}, fmt.Errorf("create worktree root: %w", err)
 	}
@@ -210,7 +283,15 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if result.Status != execution.ProcessSucceeded {
 		return Worktree{}, fmt.Errorf("create worktree failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	worktree := Worktree{RunID: request.RunID, WorkItemID: request.WorkItemID, Path: path, Branch: branch, BaseRef: request.BaseRef, BaseCommit: baseCommit}
+	worktree := Worktree{
+		RunID:        request.RunID,
+		WorkItemID:   request.WorkItemID,
+		Path:         path,
+		Branch:       branch,
+		BaseRef:      request.BaseRef,
+		BaseCommit:   baseCommit,
+		TargetBranch: request.TargetBranch,
+	}
 	inspection, err := m.Inspect(ctx, worktree)
 	if err != nil {
 		return worktree, fmt.Errorf("verify created worktree: %w", err)
@@ -219,6 +300,27 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		return worktree, errors.New("created worktree is not registered with the expected branch")
 	}
 	return worktree, nil
+}
+
+// CurrentBranch reports the local branch the primary checkout is on, which is
+// the branch finished work is promoted back into. A detached HEAD names no
+// branch, so it is refused rather than guessed at.
+func (m *Manager) CurrentBranch(ctx context.Context) (string, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "symbolic-ref", "--quiet", "--short", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		if result.ExitCode == 1 {
+			return "", errors.New("primary checkout has no current branch; HEAD is detached")
+		}
+		return "", fmt.Errorf("resolve current branch failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	branch := strings.TrimSpace(result.Stdout)
+	if err := validateTargetBranch(branch); err != nil {
+		return "", err
+	}
+	return branch, nil
 }
 
 func (m *Manager) ValidateReady(ctx context.Context) error {
@@ -489,49 +591,419 @@ func (m *Manager) Inspect(ctx context.Context, worktree Worktree) (Inspection, e
 	return inspection, nil
 }
 
-func (m *Manager) CleanupIntegrated(ctx context.Context, worktree Worktree, integratedInto string) error {
-	if err := validateRef(integratedInto); err != nil {
-		return fmt.Errorf("invalid integration target: %w", err)
+// Integrate promotes an already checked and approved worktree into its
+// recorded target branch. The harness owns every Git write here: it stages and
+// commits the developer's work itself, revalidates the target, and advances it
+// with a fast-forward-only update. Nothing is forced, reset, or removed. When
+// any step refuses, the worktree and its harness commit stay exactly as they
+// are so the failure can be reconciled rather than reconstructed.
+func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message string) (Integration, error) {
+	target := worktree.TargetBranch
+	if err := validateTargetBranch(target); err != nil {
+		return Integration{}, err
 	}
-	path, err := m.validateOwnedPath(worktree)
+	if target == worktree.Branch {
+		return Integration{}, errors.New("integration target must differ from the worktree branch")
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = defaultCommitMessage(worktree)
+	}
+
+	// Ownership, registration, the expected branch, and an untouched developer
+	// HEAD are all revalidated here rather than trusted from run state.
+	path, err := m.verifyOwnedBase(ctx, worktree)
+	if err != nil {
+		return Integration{}, err
+	}
+	dirty, err := m.isDirty(ctx, path)
+	if err != nil {
+		return Integration{}, err
+	}
+	if !dirty {
+		return Integration{}, ErrNoChanges
+	}
+	if err := m.ValidateReady(ctx); err != nil {
+		return Integration{}, fmt.Errorf("primary checkout is not ready for integration: %w", err)
+	}
+	previousTarget, err := m.resolveBranchCommit(ctx, target)
+	if err != nil {
+		return Integration{}, err
+	}
+	if previousTarget != worktree.BaseCommit {
+		return Integration{}, fmt.Errorf("%w: %s is at %s, recorded base is %s", ErrTargetDrift, target, previousTarget, worktree.BaseCommit)
+	}
+	inPrimary, err := m.targetCheckout(ctx, target)
+	if err != nil {
+		return Integration{}, err
+	}
+
+	sourceCommit, err := m.commitWorktree(ctx, path, message)
+	if err != nil {
+		return Integration{}, err
+	}
+	if sourceCommit == worktree.BaseCommit {
+		return Integration{}, ErrNoChanges
+	}
+	if err := m.fastForward(ctx, worktree.Branch, target, previousTarget, sourceCommit, inPrimary); err != nil {
+		return Integration{}, err
+	}
+	integrated, err := m.resolveBranchCommit(ctx, target)
+	if err != nil {
+		return Integration{}, err
+	}
+	if integrated != sourceCommit {
+		return Integration{}, fmt.Errorf("%w: %s is at %s after the update, want %s", ErrNotFastForward, target, integrated, sourceCommit)
+	}
+	return Integration{
+		Branch:               worktree.Branch,
+		TargetBranch:         target,
+		SourceCommit:         sourceCommit,
+		TargetCommit:         integrated,
+		PreviousTargetCommit: previousTarget,
+	}, nil
+}
+
+// commitWorktree stages tracked edits, deletions, and untracked files, then
+// records one harness-owned commit. The identity, hooks, and signing are all
+// pinned so the commit does not depend on whatever the developer left in the
+// worktree's Git configuration.
+func (m *Manager) commitWorktree(ctx context.Context, path, message string) (string, error) {
+	staged, err := m.run(ctx, "-C", path, "add", "--all")
+	if err != nil {
+		return "", err
+	}
+	if staged.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("stage worktree changes failed with exit code %d: %s", staged.ExitCode, strings.TrimSpace(staged.Stderr))
+	}
+	pending, err := m.run(ctx, "-C", path, "diff", "--cached", "--quiet")
+	if err != nil {
+		return "", err
+	}
+	switch {
+	case pending.Status == execution.ProcessSucceeded:
+		return "", ErrNoChanges
+	case pending.ExitCode != 1:
+		return "", fmt.Errorf("inspect staged worktree changes failed with exit code %d: %s", pending.ExitCode, strings.TrimSpace(pending.Stderr))
+	}
+	// Command-line config disables every repository hook, including post-commit
+	// and reference-transaction hooks that --no-verify does not bypass. Explicit
+	// environment values take precedence over ambient GIT_* identity variables.
+	committed, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
+		"-c", "core.hooksPath="+os.DevNull,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"commit", "--no-verify", "--no-gpg-sign", "--message", message)
+	if err != nil {
+		return "", err
+	}
+	if committed.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("commit worktree changes failed with exit code %d: %s", committed.ExitCode, strings.TrimSpace(committed.Stderr))
+	}
+	head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if head.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("resolve integrated commit failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+	}
+	commit := strings.TrimSpace(head.Stdout)
+	if !commitPattern.MatchString(commit) {
+		return "", fmt.Errorf("integrated commit %q is invalid", commit)
+	}
+	return commit, nil
+}
+
+// fastForward advances the target branch and refuses anything else. When the
+// primary checkout is on the target, a fast-forward-only merge keeps its
+// working tree consistent with the moved branch; otherwise the ref is advanced
+// with a compare-and-swap so a target that drifted since the earlier check
+// still loses the race instead of being overwritten.
+func (m *Manager) fastForward(ctx context.Context, branch, target, previousTarget, sourceCommit string, inPrimary bool) error {
+	if inPrimary {
+		// Merge the exact commit we just created, not the mutable source branch.
+		// A concurrent ref update must never redirect approved integration work.
+		merged, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+			"-c", "core.hooksPath="+os.DevNull,
+			"merge", "--ff-only", sourceCommit)
+		if err != nil {
+			return err
+		}
+		if merged.Status != execution.ProcessSucceeded {
+			return fmt.Errorf("%w: merge %s from %s into %s failed with exit code %d: %s", ErrNotFastForward, sourceCommit, branch, target, merged.ExitCode, strings.TrimSpace(merged.Stderr))
+		}
+		return nil
+	}
+	updated, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+		"-c", "core.hooksPath="+os.DevNull,
+		"update-ref", "refs/heads/"+target, sourceCommit, previousTarget)
 	if err != nil {
 		return err
 	}
-	inspection, err := m.Inspect(ctx, worktree)
+	if updated.Status != execution.ProcessSucceeded {
+		return fmt.Errorf("%w: update %s to %s failed with exit code %d: %s", ErrNotFastForward, target, sourceCommit, updated.ExitCode, strings.TrimSpace(updated.Stderr))
+	}
+	return nil
+}
+
+// targetCheckout reports whether the target branch is checked out in the
+// primary repository. A target checked out in some other worktree is refused
+// outright: moving it would silently invalidate that checkout's working tree.
+func (m *Manager) targetCheckout(ctx context.Context, target string) (bool, error) {
+	entries, err := m.listWorktrees(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if !inspection.Registered {
-		return errors.New("worktree is not registered")
+	for _, entry := range entries {
+		if entry.branch != target {
+			continue
+		}
+		if samePath(entry.path, m.repositoryRoot) {
+			return true, nil
+		}
+		return false, fmt.Errorf("integration target %s is checked out in another worktree: %s", target, entry.path)
 	}
-	if inspection.Branch != worktree.Branch {
-		return fmt.Errorf("worktree branch %q does not match recorded branch %q", inspection.Branch, worktree.Branch)
+	return false, nil
+}
+
+// samePath compares two checkout paths, tolerating symlinked ancestors. A
+// primary checkout mistaken for a foreign one would be advanced by a bare ref
+// update and left holding a working tree its branch no longer describes.
+func samePath(left, right string) bool {
+	if filepath.Clean(left) == filepath.Clean(right) {
+		return true
 	}
-	if inspection.Dirty {
-		return errors.New("refusing to remove a dirty worktree")
-	}
-	ancestor, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", worktree.Branch, integratedInto)
+	resolvedLeft, err := filepath.EvalSymlinks(left)
 	if err != nil {
-		return err
+		return false
 	}
-	if ancestor.Status != execution.ProcessSucceeded {
-		return fmt.Errorf("branch %s is not integrated into %s", worktree.Branch, integratedInto)
+	resolvedRight, err := filepath.EvalSymlinks(right)
+	if err != nil {
+		return false
+	}
+	return resolvedLeft == resolvedRight
+}
+
+func (m *Manager) resolveBranchCommit(ctx context.Context, branch string) (string, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "rev-parse", "--verify", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("resolve branch %s failed with exit code %d: %s", branch, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	commit := strings.TrimSpace(result.Stdout)
+	if !commitPattern.MatchString(commit) {
+		return "", fmt.Errorf("resolved commit %q for branch %s is invalid", commit, branch)
+	}
+	return commit, nil
+}
+
+func defaultCommitMessage(worktree Worktree) string {
+	return fmt.Sprintf("yoyodyne: integrate %s\n\nRun: %s\nBranch: %s\nBase: %s\n",
+		worktree.WorkItemID, worktree.RunID, worktree.Branch, worktree.BaseCommit)
+}
+
+func harnessCommitEnvironment() []string {
+	return append(os.Environ(),
+		"GIT_AUTHOR_NAME="+harnessCommitAuthorName,
+		"GIT_AUTHOR_EMAIL="+harnessCommitAuthorEmail,
+		"GIT_COMMITTER_NAME="+harnessCommitAuthorName,
+		"GIT_COMMITTER_EMAIL="+harnessCommitAuthorEmail,
+	)
+}
+
+// CleanupIntegrated removes the artifacts of a proven-integrated run: first the
+// worktree, then its branch. Removal is two Git operations that cannot be made
+// atomic, so this is written to be resumable from durable evidence rather than
+// to assume it runs once. It re-derives the current state of both artifacts and
+// finishes whatever remains, including when the worktree is already gone and
+// only the branch is left, and it reports what is actually absent afterwards so
+// a caller never has to infer it from an error.
+//
+// Resumability does not relax ownership. Every attempt still proves the exact
+// recorded source commit reached the recorded target, and it refuses to delete
+// a branch that no longer points at that commit or a directory Git does not
+// manage.
+func (m *Manager) CleanupIntegrated(ctx context.Context, request CleanupRequest) (Cleanup, error) {
+	worktree := request.Worktree
+	if err := validateTargetBranch(request.TargetBranch); err != nil {
+		return Cleanup{}, err
+	}
+	// The request describes an integration that already happened, so it must
+	// agree with what the worktree recorded at creation. Checking the two
+	// independently would let a caller name a branch this worktree was never
+	// aimed at and satisfy the containment proof below against that branch
+	// instead of the real target.
+	if worktree.TargetBranch != "" && request.TargetBranch != worktree.TargetBranch {
+		return Cleanup{}, fmt.Errorf("cleanup target %q does not match the worktree's recorded target %q", request.TargetBranch, worktree.TargetBranch)
+	}
+	if !commitPattern.MatchString(request.SourceCommit) {
+		return Cleanup{}, fmt.Errorf("integrated source commit %q is invalid", request.SourceCommit)
+	}
+	// The base commit is contained in the target by construction, so accepting
+	// it as the integrated commit would make the containment proof vacuous:
+	// it would hold for a worktree that never integrated anything.
+	if request.SourceCommit == worktree.BaseCommit {
+		return Cleanup{}, fmt.Errorf("integrated source commit %s is the worktree's base commit, which proves no integration", request.SourceCommit)
+	}
+	path, err := m.ownedPath(worktree)
+	if err != nil {
+		return Cleanup{}, err
+	}
+	// Nothing is removed until the recorded commit is proven to be in the
+	// recorded target. This holds on a retry even after the branch is gone,
+	// because it asks about the commit rather than the branch that carried it.
+	integrated, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", request.SourceCommit, "refs/heads/"+request.TargetBranch)
+	if err != nil {
+		return Cleanup{}, err
+	}
+	if integrated.Status != execution.ProcessSucceeded {
+		return Cleanup{}, fmt.Errorf("integrated commit %s is not contained in %s", request.SourceCommit, request.TargetBranch)
+	}
+
+	cleanup, err := m.removeIntegratedWorktree(ctx, worktree, path, request.SourceCommit)
+	if err != nil {
+		return cleanup, err
+	}
+	branchRemoved, err := m.deleteIntegratedBranch(ctx, worktree.Branch, request.SourceCommit)
+	cleanup.BranchRemoved = branchRemoved
+	return cleanup, err
+}
+
+// removeIntegratedWorktree brings the worktree to absent from whatever state a
+// previous attempt left it in. Every path acts on the one recorded owned path:
+// a registration whose directory is already gone is removed by name rather than
+// by pruning the repository, so an unrelated stale registration is never
+// touched. A directory Git does not manage is never deleted, because the
+// harness only removes what it registered.
+func (m *Manager) removeIntegratedWorktree(ctx context.Context, worktree Worktree, path, sourceCommit string) (Cleanup, error) {
+	registered, branch, err := m.registeredWorktree(ctx, path)
+	if err != nil {
+		return Cleanup{}, err
+	}
+	info, statErr := os.Lstat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return Cleanup{}, fmt.Errorf("inspect worktree path: %w", statErr)
+	}
+	present := statErr == nil
+	if present && info.Mode()&os.ModeSymlink != 0 {
+		return Cleanup{}, errors.New("worktree path must not be a symlink")
+	}
+
+	if !registered {
+		if present {
+			return Cleanup{}, fmt.Errorf("worktree path %s exists but is not a registered worktree; it must be inspected by hand", path)
+		}
+		return Cleanup{WorktreeRemoved: true}, nil
+	}
+	if branch != worktree.Branch {
+		return Cleanup{}, fmt.Errorf("worktree branch %q does not match recorded branch %q", branch, worktree.Branch)
+	}
+	// A registration whose directory is already gone is an interrupted removal.
+	// There is nothing on disk left to inspect, so the content checks below only
+	// apply while the worktree is still there.
+	if present {
+		// The integrated worktree is left at the harness commit. Anything else is
+		// a different worktree or one that moved on, and is not ours to remove.
+		head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
+		if err != nil {
+			return Cleanup{}, err
+		}
+		if head.Status != execution.ProcessSucceeded {
+			return Cleanup{}, fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+		}
+		if strings.TrimSpace(head.Stdout) != sourceCommit {
+			return Cleanup{}, fmt.Errorf("worktree HEAD is %s, want the integrated commit %s", strings.TrimSpace(head.Stdout), sourceCommit)
+		}
+		dirty, err := m.isDirty(ctx, path)
+		if err != nil {
+			return Cleanup{}, err
+		}
+		if dirty {
+			return Cleanup{}, errors.New("refusing to remove a dirty worktree")
+		}
 	}
 	removed, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "remove", path)
 	if err != nil {
-		return err
+		return Cleanup{}, err
 	}
 	if removed.Status != execution.ProcessSucceeded {
-		return fmt.Errorf("remove worktree failed with exit code %d: %s", removed.ExitCode, strings.TrimSpace(removed.Stderr))
+		return Cleanup{}, fmt.Errorf("remove worktree failed with exit code %d: %s", removed.ExitCode, strings.TrimSpace(removed.Stderr))
 	}
-	deleted, err := m.run(ctx, "-C", m.repositoryRoot, "branch", "-d", worktree.Branch)
+	// Removal is only believed once the exact registration is gone. If the check
+	// itself cannot run, the removal that already succeeded is still reported:
+	// the artifact is gone whether or not this command could confirm it, and
+	// claiming otherwise would send an operator after a worktree that no longer
+	// exists. Only an observation that it survived clears the flag.
+	stillRegistered, _, err := m.registeredWorktree(ctx, path)
 	if err != nil {
-		return err
+		return Cleanup{WorktreeRemoved: true}, fmt.Errorf("verify removal of worktree %s: %w", path, err)
+	}
+	if stillRegistered {
+		return Cleanup{}, fmt.Errorf("worktree %s is still registered after removal", path)
+	}
+	return Cleanup{WorktreeRemoved: true}, nil
+}
+
+// deleteIntegratedBranch deletes the run's branch, tolerating a branch a
+// previous attempt already deleted and refusing one that no longer points at
+// the integrated commit.
+//
+// Deletion is a compare-and-swap on the exact recorded commit rather than
+// `git branch -d`. That keeps it deterministic: `-d` decides mergedness against
+// the current HEAD or a configured upstream, so it can refuse a branch already
+// proven to be contained in the recorded target simply because the target is
+// not the branch that happens to be checked out.
+func (m *Manager) deleteIntegratedBranch(ctx context.Context, branch, sourceCommit string) (bool, error) {
+	existing, err := m.run(ctx, "-C", m.repositoryRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil {
+		return false, err
+	}
+	switch {
+	case existing.ExitCode == 1:
+		return true, nil
+	case existing.Status != execution.ProcessSucceeded:
+		return false, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, existing.ExitCode, strings.TrimSpace(existing.Stderr))
+	}
+	commit, err := m.resolveBranchCommit(ctx, branch)
+	if err != nil {
+		return false, err
+	}
+	if commit != sourceCommit {
+		return false, fmt.Errorf("branch %s is at %s, want the integrated commit %s", branch, commit, sourceCommit)
+	}
+	// A ref update cannot see checkouts, so a branch still checked out anywhere
+	// is refused rather than deleted out from under that working tree.
+	entries, err := m.listWorktrees(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if entry.branch == branch {
+			return false, fmt.Errorf("branch %s is still checked out in %s", branch, entry.path)
+		}
+	}
+	deleted, err := m.runWithEnvironment(ctx, os.Environ(), "-C", m.repositoryRoot,
+		"-c", "core.hooksPath="+os.DevNull,
+		"update-ref", "-d", "refs/heads/"+branch, sourceCommit)
+	if err != nil {
+		return false, err
 	}
 	if deleted.Status != execution.ProcessSucceeded {
-		return fmt.Errorf("delete integrated branch failed with exit code %d: %s", deleted.ExitCode, strings.TrimSpace(deleted.Stderr))
+		return false, fmt.Errorf("delete integrated branch %s at %s failed with exit code %d: %s", branch, sourceCommit, deleted.ExitCode, strings.TrimSpace(deleted.Stderr))
 	}
-	return nil
+	// As with the worktree, a compare-and-swap deletion that already succeeded
+	// stays reported as a deletion even when this confirmation cannot run. Only
+	// observing the branch still there clears the flag.
+	gone, err := m.run(ctx, "-C", m.repositoryRoot, "show-ref", "--verify", "--quiet", "refs/heads/"+branch)
+	if err != nil {
+		return true, fmt.Errorf("verify deletion of branch %s: %w", branch, err)
+	}
+	if gone.ExitCode != 1 {
+		return false, fmt.Errorf("branch %s still exists after deletion", branch)
+	}
+	return true, nil
 }
 
 func (m *Manager) validateRepository(ctx context.Context) error {
@@ -563,47 +1035,57 @@ func (m *Manager) isDirty(ctx context.Context, path string) (bool, error) {
 	return strings.TrimSpace(result.Stdout) != "", nil
 }
 
-func (m *Manager) registeredWorktree(ctx context.Context, path string) (bool, string, error) {
+type worktreeEntry struct {
+	path   string
+	branch string
+}
+
+func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "list", "--porcelain")
 	if err != nil {
-		return false, "", err
+		return nil, err
 	}
 	if result.Status != execution.ProcessSucceeded {
-		return false, "", fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+		return nil, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	var currentPath string
-	var currentBranch string
-	flush := func() (bool, string) {
-		if currentPath == path {
-			return true, currentBranch
+	var entries []worktreeEntry
+	var current worktreeEntry
+	flush := func() {
+		if current.path != "" {
+			entries = append(entries, current)
 		}
-		return false, ""
+		current = worktreeEntry{}
 	}
 	for _, line := range strings.Split(result.Stdout, "\n") {
 		switch {
 		case strings.HasPrefix(line, "worktree "):
-			if found, branch := flush(); found {
-				return true, branch, nil
-			}
-			currentPath = strings.TrimPrefix(line, "worktree ")
-			currentBranch = ""
+			flush()
+			current.path = strings.TrimPrefix(line, "worktree ")
 		case strings.HasPrefix(line, "branch refs/heads/"):
-			currentBranch = strings.TrimPrefix(line, "branch refs/heads/")
-		case line == "":
-			if found, branch := flush(); found {
-				return true, branch, nil
-			}
-			currentPath = ""
-			currentBranch = ""
+			current.branch = strings.TrimPrefix(line, "branch refs/heads/")
 		}
 	}
-	if found, branch := flush(); found {
-		return true, branch, nil
+	flush()
+	return entries, nil
+}
+
+func (m *Manager) registeredWorktree(ctx context.Context, path string) (bool, string, error) {
+	entries, err := m.listWorktrees(ctx)
+	if err != nil {
+		return false, "", err
+	}
+	for _, entry := range entries {
+		if entry.path == path {
+			return true, entry.branch, nil
+		}
 	}
 	return false, "", nil
 }
 
-func (m *Manager) validateOwnedPath(worktree Worktree) (string, error) {
+// ownedPath derives where this run's worktree must live from its recorded
+// identifiers, without requiring the directory to still exist. A resumed
+// cleanup needs ownership proven for a worktree that is already gone.
+func (m *Manager) ownedPath(worktree Worktree) (string, error) {
 	if !runIDPattern.MatchString(worktree.RunID) || !workItemPattern.MatchString(worktree.WorkItemID) {
 		return "", errors.New("worktree ownership identifiers are invalid")
 	}
@@ -622,6 +1104,14 @@ func (m *Manager) validateOwnedPath(worktree Worktree) (string, error) {
 	if filepath.Clean(path) != expectedPath {
 		return "", fmt.Errorf("worktree path %s does not match owned path %s", path, expectedPath)
 	}
+	return expectedPath, nil
+}
+
+func (m *Manager) validateOwnedPath(worktree Worktree) (string, error) {
+	path, err := m.ownedPath(worktree)
+	if err != nil {
+		return "", err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return "", fmt.Errorf("inspect worktree path: %w", err)
@@ -633,16 +1123,21 @@ func (m *Manager) validateOwnedPath(worktree Worktree) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve worktree path symlinks: %w", err)
 	}
-	if resolved != expectedPath {
+	if resolved != path {
 		return "", errors.New("worktree path resolves outside its owned location")
 	}
 	return path, nil
 }
 
 func (m *Manager) run(ctx context.Context, args ...string) (execution.ProcessResult, error) {
+	return m.runWithEnvironment(ctx, nil, args...)
+}
+
+func (m *Manager) runWithEnvironment(ctx context.Context, environment []string, args ...string) (execution.ProcessResult, error) {
 	result, err := m.runner.Run(ctx, execution.Command{
 		Name:    m.gitBinary,
 		Args:    args,
+		Env:     environment,
 		Timeout: m.timeout,
 	}, nil)
 	if err != nil {
@@ -658,7 +1153,31 @@ func validateCreateRequest(request CreateRequest) error {
 	if !workItemPattern.MatchString(request.WorkItemID) {
 		return errors.New("work item id is invalid")
 	}
+	if request.TargetBranch != "" {
+		if err := validateTargetBranch(request.TargetBranch); err != nil {
+			return err
+		}
+		if request.TargetBranch == branchName(request.WorkItemID, request.RunID) {
+			return errors.New("integration target must differ from the worktree branch")
+		}
+	}
 	return validateRef(request.BaseRef)
+}
+
+// validateTargetBranch keeps an integration target a plain local branch name.
+// Fully qualified refs and HEAD are refused so a caller can never aim a
+// fast-forward at something other than refs/heads/<target>.
+func validateTargetBranch(branch string) error {
+	if branch == "" {
+		return errors.New("worktree has no recorded integration target")
+	}
+	if err := validateRef(branch); err != nil {
+		return fmt.Errorf("invalid integration target: %w", err)
+	}
+	if branch == "HEAD" || strings.HasPrefix(branch, "refs/") {
+		return fmt.Errorf("integration target %q must be a local branch name", branch)
+	}
+	return nil
 }
 
 func validateRef(value string) error {

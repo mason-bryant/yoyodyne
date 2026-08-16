@@ -1,0 +1,70 @@
+# Yoyodyne built-in agent bundle, version 1.
+#
+# This bundle ships inside the executable and is read-only. A project inherits
+# it with "extends: builtin:v1" and overlays only the values it needs; nothing
+# here has to be copied into a project configuration to take effect.
+#
+# The bundle deliberately omits "product" and "checks": both are properties of
+# the project being worked on rather than of the harness, so a project supplies
+# them itself. Safety invariants — authority, sandboxing, review verdicts,
+# integration, and cleanup — are enforced in Go and are not configurable here.
+version: 1
+
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+
+# Conservative defaults: a project opts in to automatic integration, which the
+# harness then refuses unless deterministic checks and a reviewer agent exist.
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+
+# Every executable agent declares its own model selector; there is no implicit
+# harness default. The "opus" family alias intentionally floats to the backend's
+# current default for that family, and run evidence records both the requested
+# selector and the model the provider reported serving.
+agents:
+  product-manager:
+    role: product-manager
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/product-manager.md
+  architect:
+    role: architect
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/architect.md
+  development-manager:
+    role: development-manager
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/development-manager.md
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/developer.md
+  reviewer:
+    role: reviewer
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/reviewer.md

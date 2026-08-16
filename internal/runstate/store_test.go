@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -331,6 +332,224 @@ func TestStateRequiresCompleteWorktreeIdentity(t *testing.T) {
 	state.BaseCommit = strings.Repeat("a", 40)
 	if err := state.Validate(); err != nil {
 		t.Fatalf("Validate() complete worktree error = %v", err)
+	}
+}
+
+func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
+	t.Parallel()
+
+	approved := func(t *testing.T) State {
+		t.Helper()
+		state := testState(t, StatusRunning)
+		state.WorktreePath = "/state/worktree"
+		state.Branch = "yoyodyne/task/01234567"
+		state.BaseCommit = strings.Repeat("a", 40)
+		state.Phase = PhaseIntegrating
+		state.ProviderSessionID = "developer-session"
+		state.ProviderModel = "opus"
+		state.ReviewSessionID = "reviewer-session"
+		state.ReviewModel = "opus"
+		state.ReviewDecision = ReviewApprove
+		return state
+	}
+	integration := Integration{
+		TargetBranch:         "main",
+		SourceCommit:         strings.Repeat("b", 40),
+		TargetCommit:         strings.Repeat("b", 40),
+		PreviousTargetCommit: strings.Repeat("a", 40),
+	}
+
+	for _, test := range []struct {
+		name    string
+		mutate  func(*State)
+		problem string
+	}{
+		{name: "approved and integrated", mutate: func(state *State) { state.Integration = &integration }},
+		{
+			name:    "invalid phase",
+			mutate:  func(state *State) { state.Phase = "reticulating" },
+			problem: "phase is invalid",
+		},
+		{
+			name:    "invalid decision",
+			mutate:  func(state *State) { state.ReviewDecision = "maybe" },
+			problem: "review_decision is invalid",
+		},
+		{
+			name: "integration without an approval",
+			mutate: func(state *State) {
+				state.ReviewDecision = ReviewRepair
+				state.Integration = &integration
+			},
+			problem: "integration requires an approving review decision",
+		},
+		{
+			name: "integration recorded before the integrating phase",
+			mutate: func(state *State) {
+				state.Phase = PhaseReviewing
+				state.Integration = &integration
+			},
+			problem: "integration requires the integrating phase or later",
+		},
+		{
+			name: "integration onto a fully qualified ref",
+			mutate: func(state *State) {
+				qualified := integration
+				qualified.TargetBranch = "refs/heads/main"
+				state.Integration = &qualified
+			},
+			problem: "integration target_branch must be a local branch name",
+		},
+		{
+			name: "integration onto HEAD",
+			mutate: func(state *State) {
+				detached := integration
+				detached.TargetBranch = "HEAD"
+				state.Integration = &detached
+			},
+			problem: "integration target_branch must be a local branch name",
+		},
+		{
+			name: "integration that did not move the target",
+			mutate: func(state *State) {
+				stalled := integration
+				stalled.PreviousTargetCommit = stalled.SourceCommit
+				state.Integration = &stalled
+			},
+			problem: "integration did not move the target",
+		},
+		{
+			name: "integration with an invalid commit",
+			mutate: func(state *State) {
+				malformed := integration
+				malformed.TargetCommit = "HEAD"
+				state.Integration = &malformed
+			},
+			problem: "integration target_commit is invalid",
+		},
+		{
+			// Integration is fast-forward only, so any other pair of commits
+			// describes something this harness never does.
+			name: "integration whose target is not the source commit",
+			mutate: func(state *State) {
+				diverged := integration
+				diverged.TargetCommit = strings.Repeat("c", 40)
+				state.Integration = &diverged
+			},
+			problem: "target_commit must equal the fast-forwarded source_commit",
+		},
+		{
+			name: "integration without a developer session",
+			mutate: func(state *State) {
+				state.ProviderSessionID = ""
+				state.Integration = &integration
+			},
+			problem: "requires recorded developer and reviewer session identifiers",
+		},
+		{
+			name: "integration with a reused session",
+			mutate: func(state *State) {
+				state.ReviewSessionID = state.ProviderSessionID
+				state.Integration = &integration
+			},
+			problem: "requires distinct developer and reviewer session identifiers",
+		},
+		{
+			// Two identifiers that differ only in surrounding whitespace are one
+			// session, and must not read as an independent second invocation.
+			name: "integration with a whitespace-variant session",
+			mutate: func(state *State) {
+				state.ReviewSessionID = "  " + state.ProviderSessionID + "\t"
+				state.Integration = &integration
+			},
+			problem: "requires distinct developer and reviewer session identifiers",
+		},
+		{
+			name: "complete phase with cleanup outstanding",
+			mutate: func(state *State) {
+				state.Integration = &integration
+				state.Phase = PhaseComplete
+				state.WorktreeRemoved = true
+			},
+			problem: "complete phase requires both the worktree and branch to be removed",
+		},
+		{
+			name: "integration without a reviewer model selector",
+			mutate: func(state *State) {
+				state.ReviewModel = ""
+				state.Integration = &integration
+			},
+			problem: "requires recorded developer and reviewer model selectors",
+		},
+		{
+			name:    "worktree removal claimed without integration",
+			mutate:  func(state *State) { state.Integration = nil; state.WorktreeRemoved = true },
+			problem: "removed artifacts require recorded integration",
+		},
+		{
+			name:    "branch removal claimed without integration",
+			mutate:  func(state *State) { state.Integration = nil; state.BranchRemoved = true },
+			problem: "removed artifacts require recorded integration",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := approved(t)
+			test.mutate(&state)
+			err := state.Validate()
+			if test.problem == "" {
+				if err != nil {
+					t.Fatalf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.problem) {
+				t.Fatalf("Validate() error = %v, want %q", err, test.problem)
+			}
+		})
+	}
+}
+
+func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.Phase = PhaseCleaningUp
+	// A partial cleanup is the state most worth proving survives a round trip.
+	state.WorktreeRemoved = true
+	state.CleanupFailure = "delete integrated branch failed"
+	state.ProviderSessionID = "developer-session"
+	state.ProviderModel = "opus"
+	state.ProviderResolvedModel = "claude-opus-5"
+	state.ReviewSessionID = "reviewer-session"
+	state.ReviewModel = "opus"
+	state.ReviewResolvedModel = "claude-opus-5"
+	state.ReviewDecision = ReviewApprove
+	state.ReviewSummary = "matches the acceptance criteria"
+	state.ReviewFindings = 2
+	state.Integration = &Integration{
+		TargetBranch:         "main",
+		SourceCommit:         strings.Repeat("b", 40),
+		TargetCommit:         strings.Repeat("b", 40),
+		PreviousTargetCommit: strings.Repeat("a", 40),
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, state) {
+		t.Fatalf("Load() = %#v, want %#v", loaded, state)
 	}
 }
 

@@ -3,10 +3,16 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"yoyodyne/internal/config"
+	"yoyodyne/internal/domain"
+	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/orchestrator"
 )
 
 func TestRunHelp(t *testing.T) {
@@ -132,6 +138,162 @@ func TestRunWorkItemReportsConfigurationFailureAsJSON(t *testing.T) {
 	}
 }
 
+// The repository's own configuration is the one Yoyodyne self-hosts on, so it
+// must validate under the automatic-integration policy it now enables: an
+// independent reviewer agent and at least one deterministic check. It is also
+// the worked example of a portable project configuration, so it inherits its
+// agents from the built-in bundle rather than restating them.
+func TestRepositoryConfigurationEnforcesAutomaticIntegration(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join("..", "..", config.DirectoryName, config.FileName)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"config", "validate", "--config", path}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	resolved, err := config.LoadResolved(path)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	cfg := resolved.Config
+	if cfg.Extends != config.BuiltinV1 {
+		t.Fatalf("extends = %q, want %q", cfg.Extends, config.BuiltinV1)
+	}
+	for _, name := range []string{"developer", "reviewer"} {
+		if origin := resolved.Origins["agents."+name+".persona"]; origin != config.BuiltinV1 {
+			t.Errorf("agent %q persona origin = %q, want the built-in bundle", name, origin)
+		}
+		if strings.TrimSpace(cfg.Agents[name].Persona.Text) == "" {
+			t.Errorf("agent %q has no effective persona", name)
+		}
+	}
+	if cfg.Approvals.Integration != domain.ApprovalAutomatic {
+		t.Fatalf("integration approval = %q, want %q", cfg.Approvals.Integration, domain.ApprovalAutomatic)
+	}
+	reviewers := 0
+	for _, agent := range cfg.Agents {
+		if agent.Role == domain.RoleReviewer {
+			reviewers += agent.Instances
+		}
+	}
+	if reviewers == 0 || len(cfg.Checks) == 0 {
+		t.Fatalf("automatic integration is not gated: reviewers = %d, checks = %d", reviewers, len(cfg.Checks))
+	}
+	// Every executable agent declares its own selector, and the wiring uses the
+	// reviewer's rather than letting the provider choose one.
+	for name, agent := range cfg.Agents {
+		if err := config.ValidateModelSelector(agent.Model); err != nil {
+			t.Fatalf("agent %q model: %v", name, err)
+		}
+	}
+	if got := agentModel(cfg, domain.RoleReviewer); got != cfg.Agents["reviewer"].Model {
+		t.Fatalf("wired reviewer model = %q, want %q", got, cfg.Agents["reviewer"].Model)
+	}
+	if agentModel(cfg, domain.RoleDeveloper) == "" {
+		t.Fatal("developer model selector is not configured")
+	}
+}
+
+func TestReportRunResultIsTruthfulAboutRemovedArtifacts(t *testing.T) {
+	t.Parallel()
+
+	integration := &gitworktree.Integration{TargetBranch: "main", SourceCommit: "abc123", TargetCommit: "abc123"}
+	for _, test := range []struct {
+		name     string
+		outcome  orchestrator.Outcome
+		err      error
+		wantCode int
+		want     []string
+		reject   []string
+	}{
+		{
+			name:     "integrated and cleaned up",
+			outcome:  orchestrator.Outcome{RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration, WorktreeRemoved: true, BranchRemoved: true},
+			wantCode: 0,
+			want:     []string{"worktree removed: /wt", "branch removed: b"},
+			reject:   []string{"NOT removed", "remaining"},
+		},
+		{
+			name:     "cleanup outstanding after a successful run",
+			outcome:  orchestrator.Outcome{RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration, CleanupFailure: "worktree is busy"},
+			wantCode: 0,
+			want:     []string{"worktree NOT removed: /wt", "branch NOT removed: b", "cleanup incomplete", "remaining worktree: /wt", "remaining branch: b"},
+		},
+		{
+			// Partial cleanup: the worktree is gone and only the branch is left.
+			name:     "partial cleanup leaves only the branch",
+			outcome:  orchestrator.Outcome{RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration, WorktreeRemoved: true, CleanupFailure: "branch is busy"},
+			wantCode: 0,
+			want:     []string{"worktree removed: /wt", "branch NOT removed: b", "remaining branch: b"},
+			reject:   []string{"remaining worktree"},
+		},
+		{
+			// Both removals succeeded and only their confirmation failed, so no
+			// artifact may be described as remaining.
+			name: "cleanup verification failed with nothing left",
+			outcome: orchestrator.Outcome{
+				RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration,
+				WorktreeRemoved: true, BranchRemoved: true, CleanupFailure: "verify removal of worktree: runner unavailable",
+			},
+			wantCode: 0,
+			want:     []string{"cleanup could not be confirmed", "nothing is known to remain", "worktree removed: /wt", "branch removed: b"},
+			reject:   []string{"cleanup incomplete", "remaining branch", "remaining worktree", "NOT removed"},
+		},
+		{
+			// Cleanup finished and only writing it down failed: nothing may be
+			// described as incomplete or remaining.
+			name: "completion recording failed after a finished cleanup",
+			outcome: orchestrator.Outcome{
+				RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration,
+				WorktreeRemoved: true, BranchRemoved: true, CompletionRecordingFailure: "state store is unavailable",
+			},
+			wantCode: 0,
+			want:     []string{"completion recording failed", "cleanup completed", "worktree removed: /wt", "branch removed: b"},
+			reject:   []string{"cleanup incomplete", "remaining", "NOT removed"},
+		},
+		{
+			// A failure must never describe deleted artifacts as preserved.
+			name:     "failure after the artifacts were removed",
+			outcome:  orchestrator.Outcome{RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration, WorktreeRemoved: true, BranchRemoved: true},
+			err:      errors.New("something later failed"),
+			wantCode: 1,
+			want:     []string{"worktree was already removed: /wt", "branch was already removed: b"},
+			reject:   []string{"preserved worktree", "preserved branch"},
+		},
+		{
+			// A failure after a partial cleanup preserves only what survives.
+			name:     "failure after a partial cleanup",
+			outcome:  orchestrator.Outcome{RunID: "run-1", Branch: "b", WorktreePath: "/wt", Integration: integration, WorktreeRemoved: true},
+			err:      errors.New("something later failed"),
+			wantCode: 1,
+			want:     []string{"preserved branch: b", "worktree was already removed: /wt"},
+			reject:   []string{"preserved worktree"},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			code := reportRunResult(&stdout, &stderr, false, test.outcome, test.err)
+			if code != test.wantCode {
+				t.Fatalf("reportRunResult() = %d, want %d", code, test.wantCode)
+			}
+			combined := stdout.String() + stderr.String()
+			for _, want := range test.want {
+				if !strings.Contains(combined, want) {
+					t.Errorf("output is missing %q: %s", want, combined)
+				}
+			}
+			for _, reject := range test.reject {
+				if strings.Contains(combined, reject) {
+					t.Errorf("output falsely claims %q: %s", reject, combined)
+				}
+			}
+		})
+	}
+}
+
 func TestResolvePathRelativeToConfiguration(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +308,108 @@ func TestResolvePathRelativeToConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigShowExplainsInheritance(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "show", "--config", path, "--effective", "--origins"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"# layer: " + config.BuiltinV1,
+		"role: architect",
+		"model: claude-opus-5-20260514",
+		"source: " + config.BuiltinV1 + "/personas/developer.md",
+		"agents.developer.model: " + path,
+		"agents.developer.role: " + config.BuiltinV1,
+		"approvals.brief: " + config.BuiltinV1,
+		"execution.worktree_root: " + config.BuiltinV1,
+		"product.repository_id: " + config.OriginDerived,
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("config show output is missing %q:\n%s", want, output)
+		}
+	}
+	// The persona body belongs in a prompt, not in a diagnostic listing.
+	if strings.Contains(output, "You implement one bounded work item") {
+		t.Errorf("config show inlined a persona body:\n%s", output)
+	}
+}
+
+func TestConfigShowJSONReportsEffectiveValuesAndOrigins(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "show", "--config", path, "--effective", "--origins", "--json"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var result struct {
+		Config    string            `json:"config"`
+		Sources   []string          `json:"sources"`
+		Effective config.Config     `json:"effective"`
+		Origins   map[string]string `json:"origins"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if result.Config != path || len(result.Sources) != 2 || result.Sources[0] != config.BuiltinV1 {
+		t.Fatalf("config = %q, sources = %v", result.Config, result.Sources)
+	}
+	if len(result.Effective.Agents) != 5 {
+		t.Fatalf("effective agents = %d, want the five inherited defaults", len(result.Effective.Agents))
+	}
+	if result.Origins["agents.reviewer.backend"] != config.BuiltinV1 {
+		t.Fatalf("reviewer backend origin = %q", result.Origins["agents.reviewer.backend"])
+	}
+}
+
+// Discovery is what lets Yoyodyne run from anywhere inside a project, so the
+// no-flag path is exercised from a nested directory rather than assumed.
+func TestConfigValidateDiscoversTheProjectConfiguration(t *testing.T) {
+	path := writeProjectConfig(t, portableConfig)
+	nested := filepath.Join(filepath.Dir(filepath.Dir(path)), "internal", "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	t.Chdir(nested)
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "validate"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), path) {
+		t.Fatalf("stdout = %q, want the discovered configuration %q", stdout.String(), path)
+	}
+}
+
+func TestConfigValidateReportsAMissingConfiguration(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "validate"}, &stdout, &stderr, "test"); code != 1 {
+		t.Fatalf("Run() code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "no Yoyodyne configuration found") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func writeProjectConfig(t *testing.T, content string) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), config.DirectoryName)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(directory, config.FileName)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), ".yoyodyne.yaml")
@@ -154,6 +418,18 @@ func writeConfig(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// portableConfig is what a project outside the Yoyodyne source tree writes: its
+// own identity plus one sparse override, with every agent default inherited.
+const portableConfig = `version: 1
+extends: builtin:v1
+product:
+  id: example
+  repository: .
+agents:
+  developer:
+    model: claude-opus-5-20260514
+`
 
 const validConfig = `version: 1
 product:
@@ -170,4 +446,5 @@ agents:
   developer:
     role: developer
     backend: claude-code
+    model: opus
 `
