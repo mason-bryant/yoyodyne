@@ -108,9 +108,10 @@ type Outcome struct {
 	ReviewDecision        review.Decision           `json:"review_decision,omitempty"`
 	ReviewSummary         string                    `json:"review_summary,omitempty"`
 	ReviewFindings        []review.Finding          `json:"review_findings,omitempty"`
-	// RepairAttempts counts the times this run returned reviewer findings to the
-	// developer, and Blocked reports that the budget for those attempts was
-	// spent and the unresolved findings were recorded on the work item.
+	// RepairAttempts counts the times this run returned a failure to the
+	// developer, whether it was a failing check or the reviewer's findings; the
+	// two share one budget. Blocked reports that the budget was spent and what
+	// remained unresolved was recorded on the work item.
 	RepairAttempts int                      `json:"repair_attempts,omitempty"`
 	Blocked        bool                     `json:"blocked,omitempty"`
 	Integration    *gitworktree.Integration `json:"integration,omitempty"`
@@ -300,17 +301,15 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, bundle.Text), ""); err != nil {
 		return run.fail(err, failureStatus(ctx, err))
 	}
-	if err := run.verify(ctx); err != nil {
-		return run.fail(err, failureStatus(ctx, err))
-	}
-	return run.reviewAndFinish(ctx)
+	return run.verifyReviewAndFinish(ctx)
 }
 
 // resumeRepair picks up a run an interrupted process left inside its repair
-// loop. The worktree, branch, developer session, attempt count, and outstanding
-// findings all come from durable state, so the resumed run continues the same
-// change at the attempt it had reached instead of starting a second one against
-// a fresh budget. Its caller holds the run's lease for the whole of it.
+// loop. The worktree, branch, developer session, attempt count, and the failure
+// the interrupted attempt was handed all come from durable state, so the resumed
+// run continues the same change at the attempt it had reached instead of
+// starting a second one against a fresh budget. Its caller holds the run's lease
+// for the whole of it.
 func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item beads.WorkItem) (Outcome, error) {
 	if err := validateClaimedItem(item, state.WorkItemID); err != nil {
 		return Outcome{}, fmt.Errorf("validate resumed work item: %w", err)
@@ -358,9 +357,9 @@ func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item b
 	}
 	// A repair attempt that was in flight when the process stopped was already
 	// counted against the budget, so it is re-run rather than re-counted, with
-	// the same session and the same findings it was given.
+	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, p.Config.Execution.RepairAttemptsBeforeReplan)
+		prompt, err := resumedRepairPrompt(state, p.Config.Execution.RepairAttemptsBeforeReplan)
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -368,10 +367,19 @@ func (p Pipeline) resumeRepair(ctx context.Context, state runstate.State, item b
 			return run.fail(err, failureStatus(ctx, err))
 		}
 	}
-	if err := run.verify(ctx); err != nil {
-		return run.fail(err, failureStatus(ctx, err))
+	return run.verifyReviewAndFinish(ctx)
+}
+
+// resumedRepairPrompt rebuilds the prompt an interrupted attempt was given from
+// what survived on disk. Only one kind of repair input is ever recorded at a
+// time, and a failing check is the more recent trigger when both are somehow
+// present: the checks are re-run after every attempt, so findings recorded
+// beside a failing check describe a change the gate has already moved past.
+func resumedRepairPrompt(state runstate.State, limit int) (string, error) {
+	if state.CheckFailure != nil {
+		return checkRepairPrompt(*state.CheckFailure, state.RepairAttempts, limit), nil
 	}
-	return run.reviewAndFinish(ctx)
+	return repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
 }
 
 // activeRun is one work item's run in progress: the durable state, the reported
@@ -390,35 +398,66 @@ type activeRun struct {
 	claimed bool
 }
 
-// reviewAndFinish is the reviewed half of a run: an independent review, the
-// bounded repair loop behind it, and then integration and cleanup of a change
-// an attempt actually got approved.
-func (a *activeRun) reviewAndFinish(ctx context.Context) (Outcome, error) {
-	if a.pipeline.automatic() {
-		if err := a.repairLoop(ctx); err != nil {
+// verifyReviewAndFinish is the gated half of a run: the deterministic checks,
+// the independent review behind them, the bounded repair loop that returns
+// either kind of failure to the developer, and then integration and cleanup of
+// a change an attempt actually got approved.
+func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) {
+	// A run whose integration a human still approves has no repair loop to
+	// return anything to: nothing is promoted without that person, and the
+	// worktree is preserved for them either way, so a failing check ends the
+	// run exactly as it always has.
+	if !a.pipeline.automatic() {
+		if err := a.verify(ctx); err != nil {
 			return a.fail(err, failureStatus(ctx, err))
 		}
-		// An approval only authorizes integration when it demonstrably came from
-		// a second invocation. Missing or reused provider identity means the
-		// independence the policy relies on was never established.
-		if err := validateIndependentInvocations(a.outcome); err != nil {
-			return a.fail(err, runstate.StatusFailed)
-		}
-		if err := a.integrate(ctx); err != nil {
-			return a.fail(err, failureStatus(ctx, err))
-		}
+		return a.finish(ctx)
+	}
+	if err := a.repairLoop(ctx); err != nil {
+		return a.fail(err, failureStatus(ctx, err))
+	}
+	// An approval only authorizes integration when it demonstrably came from a
+	// second invocation. Missing or reused provider identity means the
+	// independence the policy relies on was never established.
+	if err := validateIndependentInvocations(a.outcome); err != nil {
+		return a.fail(err, runstate.StatusFailed)
+	}
+	if err := a.integrate(ctx); err != nil {
+		return a.fail(err, failureStatus(ctx, err))
 	}
 	return a.finish(ctx)
 }
 
-// repairLoop returns the reviewer's findings to the same developer until an
-// attempt is approved or the configured repair budget is spent. Every attempt
-// re-runs the deterministic checks and obtains its own independent review, so an
-// approval always belongs to the change that was actually judged and nothing an
-// earlier attempt was granted carries forward.
+// repairLoop returns each failure to the same developer until an attempt both
+// passes the deterministic checks and is approved, or the configured repair
+// budget is spent. A failing check and a reviewer's findings are the same kind
+// of event here: both are repair input for the developer that produced the
+// change, and both draw on one shared budget. Sharing it is what bounds the
+// total number of developer invocations a run can make, which is what the
+// budget exists to do; separate budgets would let a run alternating between the
+// two spend far more than the operator configured. Every attempt re-runs the
+// checks and obtains its own independent review, so an approval always belongs
+// to a change whose checks passed, and nothing an earlier attempt was granted
+// carries forward.
 func (a *activeRun) repairLoop(ctx context.Context) error {
 	limit := a.pipeline.Config.Execution.RepairAttemptsBeforeReplan
 	for {
+		if err := a.verify(ctx); err != nil {
+			// Verification that could not run at all is not something a developer
+			// can repair, so it ends the run rather than spending an attempt.
+			var failing checkFailure
+			if !errors.As(err, &failing) {
+				return err
+			}
+			a.recordCheckFailure(failing.result)
+			if a.state.RepairAttempts >= limit {
+				return a.blockOnFailingCheck(ctx, limit)
+			}
+			if err := a.repair(ctx, checkRepairPrompt(*a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
+				return err
+			}
+			continue
+		}
 		decision, err := a.reviewChange(ctx)
 		if err != nil {
 			return err
@@ -429,28 +468,23 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		if a.state.RepairAttempts >= limit {
 			return a.blockOnUnresolvedFindings(ctx, limit)
 		}
-		if err := a.startRepairAttempt(); err != nil {
-			return err
-		}
-		prompt, err := repairPrompt(a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts, limit)
+		prompt, err := repairPrompt(a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
 		}
-		// The same developer continues in the same worktree, resuming its
-		// session so the attempt keeps the context it already built.
-		if err := a.develop(ctx, prompt, a.state.ProviderSessionID); err != nil {
-			return err
-		}
-		if err := a.verify(ctx); err != nil {
+		if err := a.repair(ctx, prompt); err != nil {
 			return err
 		}
 	}
 }
 
-// startRepairAttempt records the attempt before the developer is invoked. An
-// attempt that is interrupted still counts, so a restart resumes at the attempt
-// the run reached rather than buying it another one.
-func (a *activeRun) startRepairAttempt() error {
+// repair records one attempt against the budget and then hands the failure back
+// to the developer. The attempt is recorded before the developer is invoked, so
+// an interrupted attempt still counts and a restart resumes at the attempt the
+// run reached rather than buying it another one. The same developer continues in
+// the same worktree, resuming its session so the attempt keeps the context it
+// already built.
+func (a *activeRun) repair(ctx context.Context, prompt string) error {
 	a.state.RepairAttempts++
 	a.state.Phase = runstate.PhaseDeveloping
 	a.state.UpdatedAt = a.pipeline.clock().Now()
@@ -458,7 +492,20 @@ func (a *activeRun) startRepairAttempt() error {
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save repair attempt %d: %w", a.state.RepairAttempts, err)
 	}
-	return nil
+	return a.develop(ctx, prompt, a.state.ProviderSessionID)
+}
+
+// recordCheckFailure makes the failing check the run's outstanding repair input.
+// Any findings recorded beside it described the change an earlier attempt was
+// judged on, and that change no longer passes its checks, so they are cleared
+// rather than left to compete with the check for the next attempt.
+func (a *activeRun) recordCheckFailure(result checks.Result) {
+	a.clearReviewEvidence()
+	a.state.CheckFailure = &runstate.CheckFailure{
+		Command:  result.Command,
+		ExitCode: result.Process.ExitCode,
+		Output:   boundedCheckOutput(result.Process),
+	}
 }
 
 // blockOnUnresolvedFindings ends a run whose repair budget is spent. The design
@@ -474,6 +521,23 @@ func (a *activeRun) blockOnUnresolvedFindings(ctx context.Context, limit int) er
 	defer cancel()
 	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderBlockerNotes(a.outcome, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
+}
+
+// blockOnFailingCheck ends a run whose repair budget was spent on a check that
+// still fails. It is the check-side twin of blockOnUnresolvedFindings: the run
+// cannot reach review or integration, so what stopped it is recorded on the work
+// item rather than disappearing along with the failed run.
+func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
+	failure := *a.state.CheckFailure
+	cause := fmt.Errorf("verification failed after %d of %d permitted attempt(s): %s exited with %d",
+		a.state.RepairAttempts, limit, failure.Command, failure.ExitCode)
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderCheckBlockerNotes(a.outcome, failure, limit)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
 	}
 	a.outcome.Blocked = true
 	return cause
@@ -549,14 +613,34 @@ func (a *activeRun) verify(ctx context.Context) error {
 		return fmt.Errorf("verification infrastructure failed: %w", err)
 	}
 	for _, check := range checkResults {
-		if !check.Passed {
-			return phaseError{
-				status: statusForProcess(check.Process.Status),
-				cause:  fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode),
-			}
+		if check.Passed {
+			continue
 		}
+		// Only a check that actually ran and failed describes something the
+		// developer can repair. A cancelled or timed-out one says the run itself
+		// was stopped, so it ends the run rather than spending an attempt on a
+		// developer that would be stopped the same way.
+		var cause error = fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode)
+		if check.Process.Status == execution.ProcessFailed {
+			cause = checkFailure{result: check}
+		}
+		return phaseError{status: statusForProcess(check.Process.Status), cause: cause}
 	}
+	// The change in the worktree now passes, so any failure an earlier attempt
+	// was handed is no longer this run's outstanding repair input.
+	a.state.CheckFailure = nil
 	return nil
+}
+
+// checkFailure is a deterministic check that ran and failed. It is its own error
+// type because a failure the developer can be asked to repair has to be told
+// apart from verification infrastructure that could not run at all.
+type checkFailure struct {
+	result checks.Result
+}
+
+func (e checkFailure) Error() string {
+	return fmt.Sprintf("verification failed: %s exited with %d", e.result.Command, e.result.Process.ExitCode)
 }
 
 // integrate promotes an approved change and records the promotion.
@@ -855,8 +939,9 @@ func durableFindings(findings []review.Finding) []runstate.Finding {
 // loop, which is the only interrupted run this pipeline picks up. It needs the
 // worktree every attempt shares, the developer session the next attempt
 // continues, a recorded attempt count, and, when an attempt was in flight, the
-// findings that attempt was given. Anything else is left to reconciliation
-// rather than reconstructed from guesswork.
+// repair input that attempt was given: either the failing check or the
+// reviewer's findings. Anything else is left to reconciliation rather than
+// reconstructed from guesswork.
 func resumableRepair(state runstate.State) bool {
 	if state.Status != runstate.StatusRunning || state.RepairAttempts == 0 {
 		return false
@@ -869,7 +954,7 @@ func resumableRepair(state runstate.State) bool {
 	}
 	switch state.Phase {
 	case runstate.PhaseDeveloping:
-		return len(state.ReviewFindingDetails) > 0
+		return state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
 	case runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:
@@ -1073,6 +1158,72 @@ func repairPrompt(summary string, findings []runstate.Finding, attempt, limit in
 	return prompt.String(), nil
 }
 
+// checkRepairPrompt hands one failing deterministic check back to the developer
+// that produced the change. The command, its exit code, and its captured output
+// go back verbatim, because what makes a check better repair input than a
+// reviewer's finding is that it is reproducible and names the exact failure.
+// The harness contract is repeated for the same reason the review repair repeats
+// it: it bounds the attempt whether or not the provider actually restored the
+// session it was asked to resume.
+func checkRepairPrompt(failure runstate.CheckFailure, attempt, limit int) string {
+	var prompt strings.Builder
+	prompt.WriteString(developerContract)
+	prompt.WriteString("\n\n# Failing check: repair required\n\n")
+	fmt.Fprintf(&prompt, "A configured check failed on your change. This is repair attempt %d of %d. Continue the change already in your worktree instead of starting over, and make this check pass.\n\n", attempt, limit)
+	fmt.Fprintf(&prompt, "Command: %s\nExit code: %d\n\n", failure.Command, failure.ExitCode)
+	if failure.Output != "" {
+		prompt.WriteString("Captured output:\n\n```\n")
+		prompt.WriteString(failure.Output)
+		prompt.WriteString("\n```\n\n")
+	}
+	prompt.WriteString("Fix the cause, run the command yourself to confirm it passes, and finish with a concise summary of what you changed. The harness re-runs every configured check afterwards; review and integration stay out of reach until they all pass.")
+	return prompt.String()
+}
+
+// boundedCheckOutput is what a failing check gets to say, in the order a
+// terminal would have shown it. The tail is what is kept when a check says more
+// than the bound allows, because a suite prints its failures and its summary at
+// the end, and the truncation is stated so the developer reading it knows the
+// check did not simply stop there.
+func boundedCheckOutput(result execution.ProcessResult) string {
+	var combined strings.Builder
+	for _, stream := range []string{result.Stdout, result.Stderr} {
+		trimmed := strings.Trim(stream, "\n")
+		if trimmed == "" {
+			continue
+		}
+		if combined.Len() > 0 {
+			combined.WriteString("\n")
+		}
+		combined.WriteString(trimmed)
+	}
+	return boundedTail(combined.String(), runstate.MaxCheckOutputBytes)
+}
+
+// truncationNotice replaces the output boundedTail dropped. It counts against
+// the bound, so what is kept plus the notice never exceeds it.
+const truncationNotice = "[earlier check output truncated]\n"
+
+// boundedTail keeps the last bytes of a value within a limit, cut on a rune
+// boundary: output truncated mid-rune is not text.
+func boundedTail(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	keep := limit - len(truncationNotice)
+	if keep <= 0 {
+		keep = limit
+	}
+	cut := len(value) - keep
+	for cut < len(value) && !utf8.RuneStart(value[cut]) {
+		cut++
+	}
+	if keep == limit {
+		return value[cut:]
+	}
+	return truncationNotice + value[cut:]
+}
+
 // renderBlockerNotes describes a run that spent its repair budget. It names the
 // findings that are still unresolved and the artifacts that were kept, because
 // this note is what a human or a later development manager replans from.
@@ -1086,6 +1237,25 @@ func renderBlockerNotes(outcome Outcome, limit int) string {
 		"The branch and worktree are preserved; the unresolved findings below need a replan or a reassignment.",
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderCheckBlockerNotes describes a run that spent its repair budget on a
+// check that still fails. It names the exact command and what it printed,
+// because that is what a human or a later development manager replans from.
+func renderCheckBlockerNotes(outcome Outcome, failure runstate.CheckFailure, limit int) string {
+	lines := []string{
+		"Yoyodyne stopped this item: a configured check still failed after every permitted attempt.",
+		fmt.Sprintf("Repair attempts: %d of %d permitted", outcome.RepairAttempts, limit),
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"The branch and worktree are preserved; the failing check below needs a replan or a reassignment.",
+		fmt.Sprintf("Failing check: %s (exit %d)", failure.Command, failure.ExitCode),
+	}
+	if failure.Output != "" {
+		lines = append(lines, "Captured output:\n"+failure.Output)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderOutcomeNotes(outcome Outcome) string {

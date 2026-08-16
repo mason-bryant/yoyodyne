@@ -454,6 +454,9 @@ func renderReconcileBlockerNotes(state runstate.State, observation gitworktree.O
 		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(state.RepairAttempts))
 	}
 	lines = append(lines, renderObservedArtifacts(state, observation)...)
+	if state.CheckFailure != nil {
+		lines = append(lines, fmt.Sprintf("Last failing check: %s (exit %d)", state.CheckFailure.Command, state.CheckFailure.ExitCode))
+	}
 	if state.ReviewSummary != "" {
 		lines = append(lines, "Last review summary: "+state.ReviewSummary)
 	}

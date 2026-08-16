@@ -416,6 +416,26 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "repair_attempts cannot be negative",
 		},
 		{
+			name:    "a failing check the developer cannot re-run",
+			mutate:  func(state *State) { state.CheckFailure = &CheckFailure{ExitCode: 3} },
+			problem: "check_failure: command is required",
+		},
+		{
+			name: "a failing check that carries more output than the bound allows",
+			mutate: func(state *State) {
+				state.CheckFailure = &CheckFailure{Command: "go test ./...", ExitCode: 1, Output: strings.Repeat("x", MaxCheckOutputBytes+1)}
+			},
+			problem: "check_failure: output is",
+		},
+		{
+			name: "integration alongside a check that still fails",
+			mutate: func(state *State) {
+				state.CheckFailure = &CheckFailure{Command: "go test ./...", ExitCode: 1}
+				state.Integration = &integration
+			},
+			problem: "integration requires no recorded failing check",
+		},
+		{
 			name:    "integration target that is not a local branch",
 			mutate:  func(state *State) { state.TargetBranch = "refs/heads/main" },
 			problem: "target_branch must be a local branch name",
@@ -612,6 +632,43 @@ func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
 	}
 }
 
+// TestStoreRoundTripsTheFailingCheckARepairAttemptWasHanded proves the durable
+// repair input survives the process that recorded it: an interrupted attempt is
+// reissued from exactly this, so a command, exit code, or output lost here is an
+// attempt that cannot be rebuilt.
+func TestStoreRoundTripsTheFailingCheckARepairAttemptWasHanded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseDeveloping
+	state.ProviderSessionID = "developer-session"
+	state.RepairAttempts = 1
+	state.CheckFailure = &CheckFailure{
+		Command:  "go test ./...",
+		ExitCode: 1,
+		Output:   "--- FAIL: TestThing\n    thing_test.go:12: got 2, want 3\nFAIL",
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, state) {
+		t.Fatalf("Load() = %#v, want %#v", loaded, state)
+	}
+}
+
 // TestStoreLoadsStateWrittenBeforeTheRepairLoopExisted holds the schema to the
 // only bar that matters: a file the previous release actually wrote still
 // loads. The document below is the shape found in a real run state directory,
@@ -668,8 +725,8 @@ func TestStoreLoadsStateWrittenBeforeTheRepairLoopExisted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded.ReviewFindings != 2 || len(loaded.ReviewFindingDetails) != 0 {
-		t.Fatalf("Load() review evidence = %d counted, %#v recorded", loaded.ReviewFindings, loaded.ReviewFindingDetails)
+	if loaded.ReviewFindings != 2 || len(loaded.ReviewFindingDetails) != 0 || loaded.CheckFailure != nil {
+		t.Fatalf("Load() repair evidence = %d counted, %#v recorded, check %#v", loaded.ReviewFindings, loaded.ReviewFindingDetails, loaded.CheckFailure)
 	}
 	// Every run scans this directory before it does anything, so a file it
 	// cannot read would stop every later run rather than only its own.

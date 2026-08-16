@@ -613,8 +613,13 @@ func TestPipelineSkipsReviewAndIntegrationWhenChecksFail(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "verification failed") {
 		t.Fatalf("Run() error = %v", err)
 	}
+	// The check is returned to the developer for every permitted attempt, and
+	// none of them makes it pass, so the reviewer is never reached at all.
 	if len(provider.requestsForRole(domain.RoleReviewer)) != 0 {
 		t.Fatal("a failed check reached the reviewer")
+	}
+	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 3 {
+		t.Fatalf("developer invocations = %d, want the first attempt and both repairs", runs)
 	}
 	if outcome.Integration != nil || tracker.closed {
 		t.Fatalf("a failed check reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
@@ -860,6 +865,214 @@ func TestPipelineBlocksTheItemWhenTheRepairBudgetIsSpent(t *testing.T) {
 	}
 }
 
+func TestPipelineReturnsAFailingCheckToTheSameDeveloperUntilItPasses(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// The first attempt leaves the check failing; the repair attempt makes it
+		// pass in the same worktree.
+		if attempts == 1 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	command := `echo running the suite; test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("repaired work was not integrated: %#v, closed = %t, blocked = %t", outcome.Integration, tracker.closed, tracker.blocked)
+	}
+	// The failing check spent one attempt from the same budget review repairs
+	// draw on.
+	if outcome.RepairAttempts != 1 || outcome.ReviewDecision != review.DecisionApprove {
+		t.Fatalf("Run() outcome = %#v", outcome)
+	}
+
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want 2", len(developerRequests))
+	}
+	repair := developerRequests[1]
+	if repair.SessionID != provider.developerSession {
+		t.Fatalf("repair attempt session = %q, want %q", repair.SessionID, provider.developerSession)
+	}
+	if repair.WorkingDirectory != developerRequests[0].WorkingDirectory || repair.WorkingDirectory != outcome.WorktreePath {
+		t.Fatalf("repair attempt ran in %q, want %q", repair.WorkingDirectory, outcome.WorktreePath)
+	}
+	// The developer is handed the command, its exit code, and what it printed on
+	// both streams, which is what makes a check better repair input than a
+	// finding: it names the exact failure and can be re-run.
+	for _, want := range []string{
+		"repair attempt 1 of 2",
+		"Command: " + command,
+		"Exit code: 3",
+		"running the suite",
+		"feature.txt is missing",
+	} {
+		if !strings.Contains(repair.Prompt, want) {
+			t.Fatalf("check repair prompt is missing %q:\n%s", want, repair.Prompt)
+		}
+	}
+	// The reviewer only ever saw the change whose checks passed.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Fatalf("reviews = %d, want the one attempt that passed its checks", reviews)
+	}
+	if integrated := gitLine(t, repository, "show", "main:feature.txt"); integrated != "implemented" {
+		t.Fatalf("integrated feature.txt = %q, want the repaired content", integrated)
+	}
+	// An integrated run carries no outstanding check failure: the change that
+	// was approved is the one whose checks passed.
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.CheckFailure != nil || state.RepairAttempts != 1 {
+		t.Fatalf("integrated run kept the repaired check failure: %#v", state)
+	}
+}
+
+func TestPipelineBlocksTheItemWhenAFailingCheckSpendsTheRepairBudget(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	command := `echo "the suite is still red" >&2; exit 3`
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	before := gitLine(t, repository, "rev-parse", "refs/heads/main")
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	wantFailure := "verification failed after 2 of 2 permitted attempt(s)"
+	if err == nil || !strings.Contains(err.Error(), wantFailure) {
+		t.Fatalf("Run() error = %v, want %q", err, wantFailure)
+	}
+	// One budget covers both repair kinds, so the check spends exactly the
+	// attempts a reviewer's findings would have.
+	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 3 {
+		t.Fatalf("developer invocations = %d, want the first attempt and both repairs", runs)
+	}
+	// The reviewer would have approved every one of those attempts. It never
+	// gets the chance, because review is unreachable while a check fails.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 0 {
+		t.Fatalf("reviews = %d, want none while a check fails", reviews)
+	}
+	if outcome.Integration != nil || tracker.closed {
+		t.Fatalf("a failing check reached integration: %#v, closed = %t", outcome.Integration, tracker.closed)
+	}
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != before {
+		t.Fatalf("main moved with a failing check: %q, want %q", head, before)
+	}
+
+	// What the developer could not fix is recorded where the work is tracked.
+	if !tracker.blocked || !outcome.Blocked {
+		t.Fatalf("spent repair budget did not block the item: tracker = %t, outcome = %t", tracker.blocked, outcome.Blocked)
+	}
+	for _, want := range []string{
+		"Repair attempts: 2 of 2 permitted",
+		"Failing check: " + command + " (exit 3)",
+		"the suite is still red",
+		outcome.WorktreePath,
+		outcome.Branch,
+	} {
+		if !strings.Contains(tracker.blockReason, want) {
+			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("blocked worktree was not preserved: %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Status != runstate.StatusFailed || state.RepairAttempts != 2 || state.CheckFailure == nil {
+		t.Fatalf("state = %#v", state)
+	}
+	if state.CheckFailure.Command != command || state.CheckFailure.ExitCode != 3 {
+		t.Fatalf("durable check failure = %#v", state.CheckFailure)
+	}
+}
+
+func TestPipelineBoundsTheFailingCheckOutputItHandsBack(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	// A verbose suite must not be able to fill the developer's context, so only
+	// the tail of what it printed survives.
+	command := `awk 'BEGIN { for (i = 1; i <= 150; i++) print "line " i ": ------------------------------------------------------" }'; exit 3`
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	// No permitted attempt keeps this to a single check run; what is bounded is
+	// the same value either way.
+	pipeline.Config.Execution.RepairAttemptsBeforeReplan = 0
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "verification failed after 0 of 0 permitted attempt(s)") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.CheckFailure == nil {
+		t.Fatal("no failing check was recorded")
+	}
+	if len(state.CheckFailure.Output) > runstate.MaxCheckOutputBytes {
+		t.Fatalf("recorded check output is %d bytes, want at most %d", len(state.CheckFailure.Output), runstate.MaxCheckOutputBytes)
+	}
+	// The tail is what is kept, because that is where a suite prints its
+	// failures, and the truncation says so rather than pretending the check
+	// stopped there.
+	if !strings.Contains(state.CheckFailure.Output, "line 150:") {
+		t.Fatalf("bounded output dropped the tail of the check:\n%s", state.CheckFailure.Output)
+	}
+	if strings.Contains(state.CheckFailure.Output, "line 1:") {
+		t.Fatalf("bounded output kept the whole check:\n%s", state.CheckFailure.Output)
+	}
+	if !strings.HasPrefix(state.CheckFailure.Output, truncationNotice) {
+		t.Fatalf("bounded output does not say it was truncated:\n%s", state.CheckFailure.Output)
+	}
+	if !strings.Contains(tracker.blockReason, truncationNotice) {
+		t.Fatalf("blocker did not carry the bounded output:\n%s", tracker.blockReason)
+	}
+}
+
+func TestBoundedTailKeepsTheEndOfTheOutputOnARuneBoundary(t *testing.T) {
+	t.Parallel()
+
+	if kept := boundedTail("short", 64); kept != "short" {
+		t.Fatalf("boundedTail() = %q, want the value unchanged", kept)
+	}
+	// Every rune here is three bytes, so a limit that does not divide by three
+	// forces the cut off a boundary unless it is corrected.
+	value := strings.Repeat("は", 200)
+	limit := len(truncationNotice) + 100
+	kept := boundedTail(value, limit)
+	if len(kept) > limit {
+		t.Fatalf("boundedTail() kept %d bytes, want at most %d", len(kept), limit)
+	}
+	if !strings.HasPrefix(kept, truncationNotice) {
+		t.Fatalf("boundedTail() = %q, want the truncation stated", kept)
+	}
+	if !utf8.ValidString(kept) {
+		t.Fatalf("boundedTail() cut mid-rune: %q", kept)
+	}
+	if !strings.HasSuffix(kept, "は") {
+		t.Fatalf("boundedTail() = %q, want the end of the value", kept)
+	}
+}
+
 func TestPipelineResumesTheRepairLoopAtTheRecordedAttempt(t *testing.T) {
 	t.Parallel()
 
@@ -968,6 +1181,83 @@ func TestPipelineResumesTheRepairLoopAtTheRecordedAttempt(t *testing.T) {
 				t.Fatalf("resumed run did not block at the inherited limit: blocked = %t, outcome = %#v", tracker.blocked, outcome)
 			}
 		})
+	}
+}
+
+func TestPipelineResumesACheckRepairFromTheRecordedFailure(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	command := `test -f fixed.txt || { echo "fixed.txt is missing" >&2; exit 3; }`
+
+	// The first process never makes the check pass, and it is interrupted once
+	// its second attempt is already recorded. What survives is an attempt
+	// counted against the budget together with the check that triggered it.
+	interrupted := &interruptedStore{StateStore: store, atAttempt: 2, allowSaves: 1}
+	first := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{command}), first)
+	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !interrupted.stopped {
+		t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
+	}
+	interruptedState, err := store.Load(firstOutcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() interrupted state error = %v", err)
+	}
+	if interruptedState.Status.Terminal() || interruptedState.RepairAttempts != 2 || interruptedState.Phase != runstate.PhaseDeveloping {
+		t.Fatalf("interrupted state = %#v, want 2 attempts in the developing phase", interruptedState)
+	}
+	if interruptedState.CheckFailure == nil || interruptedState.CheckFailure.ExitCode != 3 {
+		t.Fatalf("interrupted state lost the failing check: %#v", interruptedState.CheckFailure)
+	}
+	// A run inside a check repair carries no findings to compete with the check
+	// for the resumed attempt.
+	if len(interruptedState.ReviewFindingDetails) != 0 {
+		t.Fatalf("interrupted state kept review findings beside a failing check: %#v", interruptedState)
+	}
+
+	// The second process rebuilds the interrupted attempt from durable state and
+	// makes the check pass.
+	second := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "fixed.txt"), []byte("fixed\n"), 0o600)
+	}, approveVerdict)
+	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{command}), second)
+	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if outcome.RunID != firstOutcome.RunID || outcome.WorktreePath != firstOutcome.WorktreePath {
+		t.Fatalf("resumed run = %#v, want the interrupted run %s in %s", outcome, firstOutcome.RunID, firstOutcome.WorktreePath)
+	}
+	// The recorded attempt is inherited rather than re-counted, so the restart
+	// buys the run no additional budget.
+	if outcome.RepairAttempts != 2 || outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("resumed run did not finish at the recorded attempt: %#v", outcome)
+	}
+	developerRequests := second.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 1 {
+		t.Fatalf("resumed developer invocations = %d, want the one recorded attempt reissued", len(developerRequests))
+	}
+	reissued := developerRequests[0]
+	if reissued.SessionID != second.developerSession {
+		t.Fatalf("resumed attempt session = %q, want %q", reissued.SessionID, second.developerSession)
+	}
+	// The prompt is rebuilt from the durable failure, not from a check this
+	// process re-ran to discover.
+	for _, want := range []string{"repair attempt 2 of 2", "Command: " + command, "Exit code: 3", "fixed.txt is missing"} {
+		if !strings.Contains(reissued.Prompt, want) {
+			t.Fatalf("resumed check repair prompt is missing %q:\n%s", want, reissued.Prompt)
+		}
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.CheckFailure != nil {
+		t.Fatalf("integrated run kept the repaired check failure: %#v", state.CheckFailure)
 	}
 }
 

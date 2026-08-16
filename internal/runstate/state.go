@@ -18,7 +18,8 @@ import (
 // A state file written before it still decodes, which is the bar every schema
 // change has to clear: `review_findings` keeps the meaning and the integer type
 // it was written with, and the structured findings the loop needs live under
-// their own key beside it.
+// their own key beside it, as does the failing check that triggers the same
+// loop.
 const StateSchemaVersion = 1
 
 type Status string
@@ -60,6 +61,34 @@ const (
 	SeverityMajor   = "major"
 	SeverityMinor   = "minor"
 )
+
+// MaxCheckOutputBytes bounds the captured output a failing check may carry into
+// durable state and into the developer's next attempt. A verbose suite must not
+// be able to fill either with output that is mostly unrelated to the failure.
+const MaxCheckOutputBytes = 8 << 10
+
+// CheckFailure is the deterministic check a repair attempt was handed back. It
+// is durable for the same reason the findings are: an attempt interrupted
+// before it ran has to be reissued with exactly the input it was given, and a
+// run that spends its attempts has to name what still fails. The output is the
+// bounded capture rather than everything the check printed.
+type CheckFailure struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Output   string `json:"output,omitempty"`
+}
+
+// Validate reports every contract violation in the recorded check at once.
+func (c CheckFailure) Validate() error {
+	var problems []error
+	if strings.TrimSpace(c.Command) == "" {
+		problems = append(problems, errors.New("command is required"))
+	}
+	if len(c.Output) > MaxCheckOutputBytes {
+		problems = append(problems, fmt.Errorf("output is %d bytes, which exceeds the %d byte bound", len(c.Output), MaxCheckOutputBytes))
+	}
+	return errors.Join(problems...)
+}
 
 // Finding is one durable reviewer finding. Findings are recorded rather than
 // only counted because they are the developer's input for the next repair
@@ -148,10 +177,19 @@ type State struct {
 	// always did, so a state file written before the repair loop existed keeps
 	// decoding unchanged.
 	ReviewFindingDetails []Finding `json:"review_finding_details,omitempty"`
+	// CheckFailure carries the failing deterministic check a repair attempt was
+	// handed. It and ReviewFindingDetails are the two kinds of repair input, and
+	// at most one of them describes the current attempt: the checks are re-run
+	// after every attempt, so recording a failing check clears findings that
+	// describe a change the gate has already moved past, and passing checks
+	// clear the failure.
+	CheckFailure *CheckFailure `json:"check_failure,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
-	// developer. It is recorded before each attempt starts, so an interrupted
-	// run resumes at the attempt it reached and a restart cannot buy the run a
-	// fresh budget.
+	// developer, whichever kind of failure triggered them: one budget covers
+	// both, so it bounds the developer invocations a run can make rather than
+	// bounding each trigger separately. It is recorded before each attempt
+	// starts, so an interrupted run resumes at the attempt it reached and a
+	// restart cannot buy the run a fresh budget.
 	RepairAttempts int          `json:"repair_attempts,omitempty"`
 	Integration    *Integration `json:"integration,omitempty"`
 	Failure        string       `json:"failure,omitempty"`
@@ -263,6 +301,11 @@ func (s State) Validate() error {
 	if len(s.ReviewFindingDetails) > 0 && s.ReviewFindings != len(s.ReviewFindingDetails) {
 		problems = append(problems, fmt.Errorf("review_findings is %d but %d review_finding_details are recorded", s.ReviewFindings, len(s.ReviewFindingDetails)))
 	}
+	if s.CheckFailure != nil {
+		if err := s.CheckFailure.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("check_failure: %w", err))
+		}
+	}
 	if s.RepairAttempts < 0 {
 		problems = append(problems, errors.New("repair_attempts cannot be negative"))
 	}
@@ -278,6 +321,12 @@ func (s State) Validate() error {
 		}
 		if s.BaseCommit == "" {
 			problems = append(problems, errors.New("integration requires the integrated worktree"))
+		}
+		// Review and integration are reachable only through passing checks, so a
+		// promotion recorded alongside a failing one describes a gate that was
+		// never actually cleared.
+		if s.CheckFailure != nil {
+			problems = append(problems, errors.New("integration requires no recorded failing check"))
 		}
 		// The target is fixed before the work starts, so an integration into a
 		// different branch describes a promotion this run was never set up to
