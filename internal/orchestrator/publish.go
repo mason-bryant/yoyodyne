@@ -154,6 +154,14 @@ const mergeMethod = publish.MergeCommit
 // and the pull request would then be closed as a side effect of its commits
 // appearing rather than merged deliberately.
 //
+// The merge is asked for as of when the requirements are met rather than as of
+// now, so a protected branch's required checks are waited for by the forge
+// instead of being demanded seconds after the reviewer approved. A queued merge
+// therefore ends this step: the request is recorded as queued, the run finishes,
+// and everything the merge itself would have settled — the remote target it
+// produced, the branch it consumed — is settled by reconciliation once the forge
+// has actually merged.
+//
 // The local target branch stays the authoritative one. It has already moved, so
 // everything here checks that the promotion is what reaches the remote: the
 // published branch must carry the commit that was integrated, the remote target
@@ -189,12 +197,30 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 		a.recordPublishFailure(fmt.Errorf("check the remote target branch before merging: %w", err))
 		return
 	}
-	if err := a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
+	result, err := a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
 		Number:     published.Number,
 		HeadCommit: published.HeadCommit,
 		Method:     mergeMethod,
-	}); err != nil {
+	})
+	if err != nil {
 		a.recordPublishFailure(err)
+		return
+	}
+	published.MergeMethod = string(mergeMethod)
+	// A queued merge is the ordinary answer from a protected branch: the forge
+	// performs it once the required checks pass, minutes after this run is over.
+	// The run records it as queued and finishes rather than waiting for a
+	// confirmation that cannot arrive while it watches — and leaves the published
+	// branch on the remote, because that branch is what the forge still has to
+	// merge. Reconciliation is what settles the queue afterwards.
+	if result.Queued {
+		published.MergeQueued = true
+		a.state.PullRequest = &published
+		a.outcome.PullRequest = &published
+		a.state.UpdatedAt = a.pipeline.clock().Now()
+		if err := a.pipeline.Store.Save(a.state); err != nil {
+			a.recordPublishFailure(fmt.Errorf("record the queued merge: %w", err))
+		}
 		return
 	}
 	merged, err := a.awaitMerge(ctx)
@@ -204,7 +230,6 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	}
 	published.State = merged.State
 	published.Merged = merged.Merged
-	published.MergeMethod = string(mergeMethod)
 	a.state.PullRequest = &published
 	a.outcome.PullRequest = &published
 	if !merged.Merged {
@@ -235,15 +260,17 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 }
 
 // mergeConfirmationDelays are the waits between asking the forge whether the
-// merge it accepted is reported on the pull request itself. A forge's own
-// record of a request can lag the merge it just performed by a moment, so
-// asking once would report a successful publication as outstanding whenever the
+// merge it performed is reported on the pull request itself. A forge's own
+// record of a request can lag the merge it just made by a moment, so asking
+// once would report a successful publication as outstanding whenever the
 // harness happened to be quicker. The waits are few and short: this is a race
-// with a remote bookkeeping step, not a state a run should sit on.
+// with a remote bookkeeping step, not a state a run should sit on. A merge the
+// forge queued rather than performed is never waited for here — it lands long
+// after any wait a run could hold, and reconciliation settles it instead.
 var mergeConfirmationDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
-// awaitMerge asks the forge whether the pull request it accepted a merge for
-// now reports as merged, retrying while it still reports the request open. A
+// awaitMerge asks the forge whether the pull request it has just merged now
+// reports as merged, retrying while it still reports the request open. A
 // query that fails is returned immediately: that is the forge being unreachable
 // rather than slow to notice, and retrying it would only delay a failure the
 // operator has to see.
@@ -310,7 +337,7 @@ func pullRequestBody(item beads.WorkItem, outcome Outcome, base string) string {
 		"- Branch: `" + outcome.Branch + "` into `" + base + "`",
 		"- Base commit: `" + outcome.BaseCommit + "`",
 		"",
-		fmt.Sprintf("The harness pushed this branch as part of the developer phase, and asks the forge to merge this request with the `%s` method once the configured checks pass and an independent reviewer approves the change. The reviewing agent has no tools and cannot merge anything; the harness makes the merge request itself, after fast-forwarding the local target branch onto this branch's head. The method is deliberate: a merge commit keeps the reviewed commit itself on the base, which a squash or a rebase would replace with a rewritten copy.", mergeMethod),
+		fmt.Sprintf("The harness pushed this branch as part of the developer phase, and asks the forge to merge this request with the `%s` method once the configured checks pass and an independent reviewer approves the change. That request is queued rather than immediate: the forge merges it when this pull request's own requirements are met, so a base branch with required checks is waited for rather than overridden. The reviewing agent has no tools and cannot merge anything; the harness makes the merge request itself, after fast-forwarding the local target branch onto this branch's head. The method is deliberate: a merge commit keeps the reviewed commit itself on the base, which a squash or a rebase would replace with a rewritten copy.", mergeMethod),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -324,6 +351,14 @@ func renderPublishNotes(outcome Outcome) []string {
 			fmt.Sprintf("Pull request: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL),
 			"Pull request merged: "+strconv.FormatBool(outcome.PullRequest.Merged),
 		)
+		// A queued merge is the ordinary outcome on a protected branch, and it is
+		// not the same fact as an unmerged one: the forge has accepted it and will
+		// perform it once the required checks pass. A reader of the item has to be
+		// able to tell the two apart without going to the forge.
+		if outcome.PullRequest.MergeQueued {
+			lines = append(lines,
+				"Merge queued: the forge merges this request once the base branch's requirements are met; `yoyo reconcile` settles the run when it does.")
+		}
 		// The method decides what the remote history looks like, and the merge
 		// commit is the one commit the remote target has that the authoritative
 		// local branch does not. A reader of the item can tell what the remote

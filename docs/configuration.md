@@ -178,6 +178,13 @@ With both on, a run works like this:
    integration also gate the merge, and the remote target is checked again right
    before the call, so a target that moved in the meantime refuses the merge
    rather than having the forge reconcile it.
+   The merge is asked for as of *when your branch protection is satisfied*
+   rather than as of now, so required checks that are still running are waited
+   for by the forge instead of refused seconds after the approval. Administrator
+   override is never used to get past them. This needs **"Allow auto-merge"**
+   enabled in your repository settings; a repository that has required checks
+   and forbids auto-merge cannot be published to, and the run says so and names
+   the setting rather than reporting a merge that mysteriously fails.
 3. **The merge method is a merge commit.** The harness names it rather than
    taking your repository's default, because it is the only method that puts the
    reviewed commit itself on your target branch. A squash replaces it with a
@@ -189,9 +196,20 @@ With both on, a run works like this:
 4. **The merge is confirmed, then the branch is cleaned up** on both sides,
    locally and on the remote, on the same compare-and-swap evidence. The
    confirmation waits briefly and boundedly, because a forge's own record of a
-   request can lag the merge it just performed. If the forge refuses, the run
-   reports which requirement was unmet — a missing required check, a review the
-   base branch demands — rather than a generic failure.
+   request can lag the merge it just performed. If the forge refuses outright —
+   a request that conflicts with its base, a merge method the repository
+   forbids — the run reports which requirement was unmet rather than a generic
+   failure.
+5. **A merge the forge queued ends the run rather than being waited for.** It
+   lands minutes later, when your checks pass. The run reports the pull request
+   as queued and finishes: your change is already in the local target branch,
+   which is the authoritative one, and the run branch stays on the remote
+   because that is what the forge still has to merge. `yoyo reconcile` settles
+   it afterwards — it asks the forge, and either finishes the publication (merge
+   commit recorded, remote branch deleted) or, if the forge dropped the queued
+   merge because something it required went unmet, reports an outstanding
+   publication on the work item for you. It never merges anything itself: a
+   requirement that stopped the forge is yours to satisfy.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that
@@ -224,7 +242,7 @@ integration policy would be taking the decision that setting reserves for you.
 | --- | --- | --- |
 | `human` | `human` | Local branch and worktree, preserved for you. |
 | `human` | `automatic` | Local fast-forward into the target branch, artifacts removed. Nothing pushed. |
-| `automatic` | `automatic` | Pull request opened, merged on approval, branch removed locally and on the remote. |
+| `automatic` | `automatic` | Pull request opened, merged on approval — or queued with the forge until your required checks pass — and the branch removed locally, then on the remote once the merge has happened. |
 | `automatic` | `human` | Pull request opened and left for you. Nothing merged, nothing cleaned up. |
 
 ### Which branch is authoritative

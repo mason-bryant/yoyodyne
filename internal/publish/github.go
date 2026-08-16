@@ -48,6 +48,11 @@ type PullRequest struct {
 	URL    string `json:"url"`
 	State  string `json:"state,omitempty"`
 	Merged bool   `json:"merged,omitempty"`
+	// AutoMerge reports a merge the forge is holding for this request: it will
+	// perform it once the base branch's requirements are met. It is what tells a
+	// queued merge that has not landed yet from one the forge dropped, which is
+	// otherwise the same observation — an open, unmerged request.
+	AutoMerge bool `json:"auto_merge,omitempty"`
 }
 
 // Request describes the pull request a published run branch must have open.
@@ -87,6 +92,39 @@ type MergeRequest struct {
 	Number     int
 	HeadCommit string
 	Method     MergeMethod
+}
+
+// MergeResult is what the forge did with a merge request. The harness asks for
+// the merge to happen when the base branch's requirements are met rather than
+// now, so the answer has to say which of the two the forge did: a queued merge
+// completes minutes later, without the harness watching, and a caller that
+// assumed otherwise would report a publication as unfinished on every protected
+// branch.
+type MergeResult struct {
+	// Queued reports a merge the forge accepted and will perform itself once the
+	// pull request's requirements are met. A result that is not queued is a
+	// merge the forge performed while it was asked.
+	Queued bool
+}
+
+// AutoMergeUnavailable reports a repository that does not offer the queued
+// merge the harness asks for. It is distinct from a refusal because the remedy
+// is a repository setting rather than an unmet requirement of this change: a
+// repository whose base branch requires checks and whose settings forbid
+// auto-merge cannot be published to this way at all, and the operator has to be
+// told which setting to change rather than left with a merge that fails on
+// every run.
+type AutoMergeUnavailable struct {
+	Number int
+	Reason string
+}
+
+func (e AutoMergeUnavailable) Error() string {
+	message := fmt.Sprintf("the forge cannot queue a merge for pull request %d: enable \"Allow auto-merge\" in the repository's settings, or remove the required checks from the base branch's protection rules", e.Number)
+	if e.Reason != "" {
+		message += ": " + e.Reason
+	}
+	return message
 }
 
 // MergeRefused reports a forge that declined to merge a pull request. It is a
@@ -229,38 +267,109 @@ func (g GitHub) Ensure(ctx context.Context, request Request) (PullRequest, error
 	return opened, nil
 }
 
-// Merge asks the forge to merge a pull request, which is what brings a
-// promotion onto the remote target branch. The head commit is passed along so
-// the forge refuses a request that moved since the harness published it: what
-// merges must be the commit the run integrated and nothing else.
+// Merge asks the forge to merge a pull request when its requirements are met,
+// which is what brings a promotion onto the remote target branch. The head
+// commit is passed along so the forge refuses a request that moved since the
+// harness published it: what merges must be the commit the run integrated and
+// nothing else.
+//
+// The request is queued rather than demanded. A protected branch will not
+// accept a merge until its required checks have passed, and those take longer
+// than the moment between an approving verdict and this call, so asking to
+// merge now is asking for a refusal. Queuing is what the branch protection is
+// asking for, and the forge performs the merge itself once the requirements it
+// names are satisfied. Administrator override is deliberately not offered here:
+// merging with it would bypass the very checks the protection expresses, which
+// removes the gate rather than satisfying it.
 //
 // A refusal comes back as MergeRefused rather than as a generic failure. A
-// protected branch declining the merge because a required check has not run is
-// the repository's rules being applied, not the harness failing, and the answer
-// has to name the requirement.
-func (g GitHub) Merge(ctx context.Context, request MergeRequest) error {
+// protected branch declining the merge because the pull request conflicts with
+// its base is the repository's rules being applied, not the harness failing,
+// and the answer has to name the requirement. A repository that does not offer
+// queued merges at all is reported separately, as AutoMergeUnavailable, because
+// its remedy is a setting rather than a requirement of this change.
+func (g GitHub) Merge(ctx context.Context, request MergeRequest) (MergeResult, error) {
 	if err := request.validate(); err != nil {
-		return err
+		return MergeResult{}, err
 	}
 	scope, err := g.repoArgs(ctx)
 	if err != nil {
-		return err
+		return MergeResult{}, err
 	}
-	merged, err := g.exec(ctx, append([]string{"pr", "merge", strconv.Itoa(request.Number)}, append(scope,
+	arguments := append([]string{"pr", "merge", strconv.Itoa(request.Number)}, append(scope,
 		request.Method.flag(),
-		"--match-head-commit", request.HeadCommit)...)...)
+		"--match-head-commit", request.HeadCommit)...)
+	// The queued request is the same command with one flag more, built as its own
+	// slice so the arguments stay intact for the immediate merge below.
+	queueing := append(append([]string{}, arguments...), "--auto")
+	queued, err := g.exec(ctx, queueing...)
 	if err != nil {
-		return fmt.Errorf("merge pull request %d: %w", request.Number, err)
+		return MergeResult{}, fmt.Errorf("merge pull request %d: %w", request.Number, err)
+	}
+	if queued.Status == execution.ProcessSucceeded {
+		return MergeResult{Queued: true}, nil
+	}
+	reason := g.redact(strings.TrimSpace(queued.Stderr))
+	if autoMergeUnavailable(reason) {
+		return MergeResult{}, AutoMergeUnavailable{Number: request.Number, Reason: reason}
+	}
+	if !nothingLeftToWaitFor(reason) {
+		return MergeResult{}, MergeRefused{
+			Number: request.Number,
+			Method: request.Method,
+			Status: g.mergeState(ctx, request.Number),
+			Reason: reason,
+		}
+	}
+	// The forge has nothing left to wait for, and says so by refusing to queue a
+	// merge it would perform immediately. Merging now is then what the queued
+	// request asked for rather than a way around it: every requirement the base
+	// branch names is already satisfied, and nothing is overridden to get there.
+	merged, err := g.exec(ctx, arguments...)
+	if err != nil {
+		return MergeResult{}, fmt.Errorf("merge pull request %d: %w", request.Number, err)
 	}
 	if merged.Status != execution.ProcessSucceeded {
-		return MergeRefused{
+		return MergeResult{}, MergeRefused{
 			Number: request.Number,
 			Method: request.Method,
 			Status: g.mergeState(ctx, request.Number),
 			Reason: g.redact(strings.TrimSpace(merged.Stderr)),
 		}
 	}
-	return nil
+	return MergeResult{}, nil
+}
+
+// autoMergeUnavailable recognizes the forge saying that this repository does
+// not allow queued merges. It is matched on the message because that is the
+// only place the forge reports it: the CLI exits the same way it does for any
+// other refusal, and an operator told "the merge was refused" would have no way
+// to discover that a repository setting is what needs changing.
+func autoMergeUnavailable(reason string) bool {
+	normalized := normalizeAutoMerge(reason)
+	return strings.Contains(normalized, "auto merge is not allowed") ||
+		strings.Contains(normalized, "auto merge is not enabled") ||
+		strings.Contains(normalized, "auto merge is disabled")
+}
+
+// nothingLeftToWaitFor recognizes the forge refusing to queue a merge because
+// the pull request already meets every requirement its base branch names. A
+// repository with no required checks answers this way to every queued merge, so
+// treating it as a refusal would leave the unprotected case — the one that
+// worked before queuing existed — unable to publish at all.
+func nothingLeftToWaitFor(reason string) bool {
+	normalized := strings.ToLower(reason)
+	return strings.Contains(normalized, "clean status") ||
+		strings.Contains(normalized, "not in the correct state") ||
+		strings.Contains(normalized, "does not need auto-merge")
+}
+
+// normalizeAutoMerge folds the spellings the forge uses for the setting into
+// one, so a message is matched on what it says rather than on how it hyphenates.
+func normalizeAutoMerge(reason string) string {
+	lowered := strings.ToLower(reason)
+	lowered = strings.ReplaceAll(lowered, "auto-merge", "auto merge")
+	return strings.ReplaceAll(lowered, "automerge", "auto merge")
 }
 
 // mergeState asks the forge what it thinks of a pull request it would not
@@ -287,7 +396,8 @@ func (g GitHub) mergeState(ctx context.Context, number int) string {
 
 // State reports what the forge currently says about a branch's pull request. It
 // is how the harness confirms that the merge it asked for actually happened
-// rather than assuming it did.
+// rather than assuming it did, and — for a merge the forge queued and has not
+// performed yet — whether that merge is still waiting or was dropped.
 func (g GitHub) State(ctx context.Context, head string) (PullRequest, error) {
 	if err := validateArgument("head branch", head); err != nil {
 		return PullRequest{}, err
@@ -315,7 +425,7 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		"--head", head,
 		"--state", "all",
 		"--limit", "1",
-		"--json", "number,url,state,mergedAt")...)...)
+		"--json", "number,url,state,mergedAt,autoMergeRequest")...)...)
 	if err != nil {
 		return PullRequest{}, false, fmt.Errorf("list pull requests for %s: %w", head, err)
 	}
@@ -327,6 +437,12 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		URL      string `json:"url"`
 		State    string `json:"state"`
 		MergedAt string `json:"mergedAt"`
+		// AutoMergeRequest is the merge the forge is holding, and is null on a
+		// request that has none. Its contents say who asked and how; only its
+		// presence matters here.
+		AutoMergeRequest *struct {
+			MergeMethod string `json:"mergeMethod"`
+		} `json:"autoMergeRequest"`
 	}
 	if err := json.Unmarshal([]byte(strings.TrimSpace(result.Stdout)), &reported); err != nil {
 		return PullRequest{}, false, fmt.Errorf("decode pull requests for %s: %w", head, err)
@@ -339,10 +455,11 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 		return PullRequest{}, false, fmt.Errorf("pull request for %s reported no number", head)
 	}
 	return PullRequest{
-		Number: one.Number,
-		URL:    one.URL,
-		State:  one.State,
-		Merged: strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
+		Number:    one.Number,
+		URL:       one.URL,
+		State:     one.State,
+		Merged:    strings.EqualFold(one.State, "MERGED") || strings.TrimSpace(one.MergedAt) != "",
+		AutoMerge: one.AutoMergeRequest != nil,
 	}, true, nil
 }
 

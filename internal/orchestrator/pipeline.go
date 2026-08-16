@@ -66,7 +66,7 @@ type WorktreeManager interface {
 type PullRequests interface {
 	Availability(ctx context.Context) (publish.Availability, error)
 	Ensure(ctx context.Context, request publish.Request) (publish.PullRequest, error)
-	Merge(ctx context.Context, request publish.MergeRequest) error
+	Merge(ctx context.Context, request publish.MergeRequest) (publish.MergeResult, error)
 	State(ctx context.Context, head string) (publish.PullRequest, error)
 }
 
