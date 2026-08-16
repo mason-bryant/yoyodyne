@@ -31,7 +31,7 @@ type runOutput struct {
 func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("run", flag.ContinueOnError)
 	flags.SetOutput(stderr)
-	configPath := flags.String("config", defaultConfigPath, "configuration file path")
+	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -51,16 +51,15 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 }
 
 func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
-	absoluteConfig, err := filepath.Abs(configPath)
-	if err != nil {
-		return orchestrator.Pipeline{}, fmt.Errorf("resolve config path: %w", err)
-	}
-	cfg, err := config.Load(absoluteConfig)
+	resolved, err := loadConfiguration(configPath)
 	if err != nil {
 		return orchestrator.Pipeline{}, err
 	}
-	configDirectory := filepath.Dir(absoluteConfig)
-	repository, err := resolvePath(configDirectory, cfg.Product.Repository)
+	cfg := resolved.Config
+	// Relative paths resolve against the project, not against the .yoyodyne
+	// directory the configuration happens to live in.
+	projectDirectory := config.ProjectDirectory(resolved.Path)
+	repository, err := resolvePath(projectDirectory, cfg.Product.Repository)
 	if err != nil {
 		return orchestrator.Pipeline{}, fmt.Errorf("resolve product repository: %w", err)
 	}
@@ -74,7 +73,7 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 	if worktreeRoot == "auto" {
 		worktreeRoot = filepath.Join(stateRoot, "worktrees", string(cfg.Product.ID), string(cfg.Product.RepositoryID))
 	} else {
-		worktreeRoot, err = resolvePath(configDirectory, worktreeRoot)
+		worktreeRoot, err = resolvePath(projectDirectory, worktreeRoot)
 		if err != nil {
 			return orchestrator.Pipeline{}, fmt.Errorf("resolve worktree root: %w", err)
 		}
@@ -112,10 +111,12 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 		},
 		// The reviewer runs its own provider invocation, so it is built from a
 		// separate backend value rather than sharing the developer's, and with
-		// the reviewer agent's own required model selector.
+		// the reviewer agent's own required model selector and effective
+		// persona.
 		Reviewer: review.Reviewer{
 			Backend: claudecode.Backend{Runner: processRunner},
 			Model:   agentModel(cfg, domain.RoleReviewer),
+			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 		},
 		NewRunID:     runstate.NewRunID,
 		Repository:   repository,
@@ -128,6 +129,12 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 // validation already requires one for every agent, so an empty result means the
 // role is not configured at all and the pipeline refuses the run.
 func agentModel(cfg config.Config, role domain.AgentRole) string {
+	return agentForRole(cfg, role).Model
+}
+
+// agentForRole returns the effective agent that fills a role, chosen by name so
+// the same configuration always wires the same agent.
+func agentForRole(cfg config.Config, role domain.AgentRole) config.AgentConfig {
 	names := make([]string, 0, len(cfg.Agents))
 	for name := range cfg.Agents {
 		names = append(names, name)
@@ -135,10 +142,10 @@ func agentModel(cfg config.Config, role domain.AgentRole) string {
 	sort.Strings(names)
 	for _, name := range names {
 		if agent := cfg.Agents[name]; agent.Role == role {
-			return agent.Model
+			return agent
 		}
 	}
-	return ""
+	return config.AgentConfig{}
 }
 
 func resolvePath(base, path string) (string, error) {
@@ -245,6 +252,6 @@ func printRunUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyodyne run [options] <beads-id>
 
 Options:
-  --config <path>   configuration file (default .yoyodyne.yaml)
+  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --json            emit machine-readable JSON`)
 }

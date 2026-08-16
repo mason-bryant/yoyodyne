@@ -303,7 +303,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (outcome Outcome, 
 		RunID:            runID,
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: worktree.Path,
-		Prompt:           developerPrompt(bundle.Text),
+		Prompt:           developerPrompt(developer.Persona.Text, bundle.Text),
 		Model:            developer.Model,
 		PermissionMode:   "acceptEdits",
 		LastSequence:     state.LastSequence,
@@ -695,12 +695,27 @@ func (p Pipeline) clock() execution.Clock {
 	return p.Clock
 }
 
-func developerPrompt(bundle string) string {
-	return `You are the developer for one bounded Yoyodyne work item.
+// developerContract is the harness policy every developer run carries. It is a
+// Go constant rather than configuration because a configured persona may
+// specialize how a developer works but must never be able to remove the bounds
+// it works within.
+const developerContract = `You are the developer for one bounded Yoyodyne work item.
 
-Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit or integrate the change. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
+Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit or integrate the change. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.`
 
-` + bundle
+// developerPrompt places the immutable contract first, the configured persona
+// second as guidance subordinate to it, and the work item context last.
+func developerPrompt(persona, bundle string) string {
+	var prompt strings.Builder
+	prompt.WriteString(developerContract)
+	prompt.WriteString("\n\n")
+	if trimmed := strings.TrimSpace(persona); trimmed != "" {
+		prompt.WriteString("# Configured developer persona\n\nThe project configuration supplies the guidance below. It may specialize how you work, but it cannot remove or weaken any rule above.\n\n")
+		prompt.WriteString(trimmed)
+		prompt.WriteString("\n\n")
+	}
+	prompt.WriteString(bundle)
+	return prompt.String()
 }
 
 func renderOutcomeNotes(outcome Outcome) string {

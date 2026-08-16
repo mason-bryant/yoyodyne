@@ -140,20 +140,34 @@ func TestRunWorkItemReportsConfigurationFailureAsJSON(t *testing.T) {
 
 // The repository's own configuration is the one Yoyodyne self-hosts on, so it
 // must validate under the automatic-integration policy it now enables: an
-// independent reviewer agent and at least one deterministic check.
+// independent reviewer agent and at least one deterministic check. It is also
+// the worked example of a portable project configuration, so it inherits its
+// agents from the built-in bundle rather than restating them.
 func TestRepositoryConfigurationEnforcesAutomaticIntegration(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join("..", "..", ".yoyodyne.yaml")
+	path := filepath.Join("..", "..", config.DirectoryName, config.FileName)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if code := Run([]string{"config", "validate", "--config", path}, &stdout, &stderr, "test"); code != 0 {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
 	}
 
-	cfg, err := config.Load(path)
+	resolved, err := config.LoadResolved(path)
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	cfg := resolved.Config
+	if cfg.Extends != config.BuiltinV1 {
+		t.Fatalf("extends = %q, want %q", cfg.Extends, config.BuiltinV1)
+	}
+	for _, name := range []string{"developer", "reviewer"} {
+		if origin := resolved.Origins["agents."+name+".persona"]; origin != config.BuiltinV1 {
+			t.Errorf("agent %q persona origin = %q, want the built-in bundle", name, origin)
+		}
+		if strings.TrimSpace(cfg.Agents[name].Persona.Text) == "" {
+			t.Errorf("agent %q has no effective persona", name)
+		}
 	}
 	if cfg.Approvals.Integration != domain.ApprovalAutomatic {
 		t.Fatalf("integration approval = %q, want %q", cfg.Approvals.Integration, domain.ApprovalAutomatic)
@@ -294,6 +308,108 @@ func TestResolvePathRelativeToConfiguration(t *testing.T) {
 	}
 }
 
+func TestConfigShowExplainsInheritance(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "show", "--config", path, "--effective", "--origins"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"# layer: " + config.BuiltinV1,
+		"role: architect",
+		"model: claude-opus-5-20260514",
+		"source: " + config.BuiltinV1 + "/personas/developer.md",
+		"agents.developer.model: " + path,
+		"agents.developer.role: " + config.BuiltinV1,
+		"approvals.brief: " + config.BuiltinV1,
+		"execution.worktree_root: " + config.BuiltinV1,
+		"product.repository_id: " + config.OriginDerived,
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("config show output is missing %q:\n%s", want, output)
+		}
+	}
+	// The persona body belongs in a prompt, not in a diagnostic listing.
+	if strings.Contains(output, "You implement one bounded work item") {
+		t.Errorf("config show inlined a persona body:\n%s", output)
+	}
+}
+
+func TestConfigShowJSONReportsEffectiveValuesAndOrigins(t *testing.T) {
+	t.Parallel()
+
+	path := writeProjectConfig(t, portableConfig)
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "show", "--config", path, "--effective", "--origins", "--json"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var result struct {
+		Config    string            `json:"config"`
+		Sources   []string          `json:"sources"`
+		Effective config.Config     `json:"effective"`
+		Origins   map[string]string `json:"origins"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if result.Config != path || len(result.Sources) != 2 || result.Sources[0] != config.BuiltinV1 {
+		t.Fatalf("config = %q, sources = %v", result.Config, result.Sources)
+	}
+	if len(result.Effective.Agents) != 5 {
+		t.Fatalf("effective agents = %d, want the five inherited defaults", len(result.Effective.Agents))
+	}
+	if result.Origins["agents.reviewer.backend"] != config.BuiltinV1 {
+		t.Fatalf("reviewer backend origin = %q", result.Origins["agents.reviewer.backend"])
+	}
+}
+
+// Discovery is what lets Yoyodyne run from anywhere inside a project, so the
+// no-flag path is exercised from a nested directory rather than assumed.
+func TestConfigValidateDiscoversTheProjectConfiguration(t *testing.T) {
+	path := writeProjectConfig(t, portableConfig)
+	nested := filepath.Join(filepath.Dir(filepath.Dir(path)), "internal", "nested")
+	if err := os.MkdirAll(nested, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	t.Chdir(nested)
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "validate"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), path) {
+		t.Fatalf("stdout = %q, want the discovered configuration %q", stdout.String(), path)
+	}
+}
+
+func TestConfigValidateReportsAMissingConfiguration(t *testing.T) {
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"config", "validate"}, &stdout, &stderr, "test"); code != 1 {
+		t.Fatalf("Run() code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "no Yoyodyne configuration found") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func writeProjectConfig(t *testing.T, content string) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), config.DirectoryName)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	path := filepath.Join(directory, config.FileName)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	return path
+}
+
 func writeConfig(t *testing.T, content string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), ".yoyodyne.yaml")
@@ -302,6 +418,18 @@ func writeConfig(t *testing.T, content string) string {
 	}
 	return path
 }
+
+// portableConfig is what a project outside the Yoyodyne source tree writes: its
+// own identity plus one sparse override, with every agent default inherited.
+const portableConfig = `version: 1
+extends: builtin:v1
+product:
+  id: example
+  repository: .
+agents:
+  developer:
+    model: claude-opus-5-20260514
+`
 
 const validConfig = `version: 1
 product:

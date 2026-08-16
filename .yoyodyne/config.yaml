@@ -1,0 +1,24 @@
+# Yoyodyne project configuration.
+#
+# Everything not written here is inherited from the built-in bundle shipped
+# inside the executable: the five default agents, their Claude Code backend,
+# model selectors, instance counts, and personas. Run
+# `yoyodyne config show --effective --origins` to see the resolved values and
+# where each one came from.
+version: 1
+extends: builtin:v1
+
+product:
+  id: yoyodyne
+  repository: .
+
+approvals:
+  # Enabled with the closed loop: checks, an independent reviewer verdict, and
+  # conflict-aware fast-forward integration now gate every promotion. The
+  # harness refuses automatic integration that is not actually gated.
+  integration: automatic
+
+checks:
+  - make test
+  - make race
+  - make vet
