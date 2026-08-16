@@ -9,8 +9,7 @@ A goal is one Markdown file stating an outcome the product is trying to reach.
 It should be:
 
 - **traceable upstream** — it names how it supports the brief. A goal that
-  supports nothing in the brief is an orphan, and the harness reports it rather
-  than assuming that related-sounding prose is a link.
+  supports nothing in the brief is an orphan.
 - **specific enough to design against** — an architect should be able to turn it
   into a design without first having to ask what was meant. Intent that is still
   ambiguous is a question for the operator, not a goal.
@@ -23,5 +22,7 @@ ask questions and propose amendments; they do not revise a goal directly. See
 
 Stable artifact IDs, lifecycle status, and the rest of the machine-readable
 metadata each goal will carry are not settled yet; they arrive with artifact
-governance in milestone 2. Until then a goal is ordinary prose in this
-directory.
+governance in milestone 2, and reference validation and orphan reporting arrive
+with them. Until then a goal is ordinary prose in this directory and the link to
+the brief is prose too: a reader has to check that it holds, because nothing in
+the harness does.

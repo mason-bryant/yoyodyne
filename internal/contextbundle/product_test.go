@@ -16,6 +16,9 @@ func TestAssembleProductReadsRepositoryMarkdownAndTrackerState(t *testing.T) {
 	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nA local harness.\n")
 	writeProductFile(t, root, "docs/v1-harness-design.md", "# Design\n\nThe product manager owns intent.\n")
 	writeProductFile(t, root, "docs/product/brief.md", "# Brief\n\nRun bounded work items.\n")
+	// The documentation tree is walked to any depth, so a document nested below
+	// docs/product/ is evidence exactly as one sitting directly under docs/ is.
+	writeProductFile(t, root, "docs/product/goals/README.md", "# Goals\n\nA goal states an outcome.\n")
 	// Only Markdown is product evidence, and only from the documented roots.
 	writeProductFile(t, root, "docs/diagram.png", "not markdown")
 	writeProductFile(t, root, "internal/notes.md", "implementation notes")
@@ -33,13 +36,14 @@ func TestAssembleProductReadsRepositoryMarkdownAndTrackerState(t *testing.T) {
 	for _, reference := range bundle.References {
 		got = append(got, reference.Path)
 	}
-	want := []string{"README.md", "docs/product/brief.md", "docs/v1-harness-design.md"}
+	want := []string{"README.md", "docs/product/brief.md", "docs/product/goals/README.md", "docs/v1-harness-design.md"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("documents = %v, want %v", got, want)
 	}
 	for _, required := range []string{
 		"A local harness.",
 		"The product manager owns intent.",
+		"A goal states an outcome.",
 		"- yoyodyne-ifd.4.4 [in_progress, p1, task] Add the product-manager conversation",
 	} {
 		if !strings.Contains(bundle.Text, required) {
