@@ -237,7 +237,7 @@ func writeJSON(stdout, stderr io.Writer, value any) int {
 }
 
 func printUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne <command> [options]
+	fmt.Fprintln(writer, `Usage: yoyo <command> [options]
 
 Commands:
   chat              talk with the product manager and steer the work from there
@@ -250,7 +250,7 @@ Commands:
 }
 
 func printConfigUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne config <validate|show> [options]
+	fmt.Fprintln(writer, `Usage: yoyo config <validate|show> [options]
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

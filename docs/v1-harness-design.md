@@ -311,17 +311,17 @@ It then resumes an eligible run, marks an external process outcome, or raises a 
 The exact command names may change, but v1 needs these operator capabilities:
 
 ```text
-yoyodyne init                 validate repository, Beads, Git, and providers
-yoyodyne chat                 talk with the product manager
-yoyodyne run <beads-id>       execute or resume a specific ready item
-yoyodyne work                 schedule ready development work
-yoyodyne status               show agents, runs, blockers, and stale artifacts
-yoyodyne directive ...        record and inspect durable user directives
-yoyodyne agent ...            inspect or address a specific logical agent
-yoyodyne doctor               diagnose configuration and recovery state
+yoyo init                 validate repository, Beads, Git, and providers
+yoyo chat                 talk with the product manager
+yoyo run <beads-id>       execute or resume a specific ready item
+yoyo work                 schedule ready development work
+yoyo status               show agents, runs, blockers, and stale artifacts
+yoyo directive ...        record and inspect durable user directives
+yoyo agent ...            inspect or address a specific logical agent
+yoyo doctor               diagnose configuration and recovery state
 ```
 
-These are not peers. `yoyodyne chat` is the primary interface; `work` schedules what the harness selects on its own. `run <beads-id>` executes one explicitly named item and is an administrative and recovery entry point, not the normal way to drive development — the Milestone 0 harness exposes it as the only verb because the management hierarchy does not exist yet, which is a bootstrap condition rather than the intended user experience.
+These are not peers. `yoyo chat` is the primary interface; `work` schedules what the harness selects on its own. `run <beads-id>` executes one explicitly named item and is an administrative and recovery entry point, not the normal way to drive development — the Milestone 0 harness exposes it as the only verb because the management hierarchy does not exist yet, which is a bootstrap condition rather than the intended user experience.
 
 Commands support machine-readable output so later orchestration, tests, and remote execution do not depend on terminal rendering.
 

@@ -286,7 +286,7 @@ func renderChatModel(evidence chat.Evidence) string {
 }
 
 func printChatUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne chat [options]
+	fmt.Fprintln(writer, `Usage: yoyo chat [options]
 
 Options:
   --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)

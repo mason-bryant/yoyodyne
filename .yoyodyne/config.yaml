@@ -46,6 +46,7 @@ approvals:
 #   checks:
 #     - ./gradlew --no-daemon check
 checks:
+  - make fmtcheck
   - make test
   - make race
   - make vet

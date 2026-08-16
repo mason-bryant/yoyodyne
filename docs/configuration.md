@@ -38,7 +38,7 @@ checks:
 
 `product` and `checks` are the two things the bundle never supplies, because
 both describe the project rather than the harness. Omitting `checks` still
-validates — the schema does not require it — but `yoyodyne run` refuses to
+validates — the schema does not require it — but `yoyo run` refuses to
 execute a work item with no configured check, so it is part of the smallest
 configuration that is actually usable rather than merely valid.
 
@@ -56,7 +56,7 @@ Yoyodyne looks for a configuration in this order:
    upwards to the filesystem root;
 3. otherwise `.yoyodyne.yaml` in the same directories.
 
-Because the search walks upwards, `yoyodyne run` works from the project root or
+Because the search walks upwards, `yoyo run` works from the project root or
 from any directory beneath it. When both forms exist in one directory, the
 directory form wins, so a half-finished migration cannot silently keep using the
 old file.
@@ -105,6 +105,7 @@ list is replaced wholesale rather than merged.
 checks:
   - go test ./...
   - go vet ./...
+  - gofmt -l . | (! grep .)
 
 # TypeScript / Node
 checks:
@@ -127,6 +128,12 @@ checks:
 checks:
   - ./gradlew --no-daemon check
 ```
+
+Note the shape of the Go formatting check. `gofmt -l` exits 0 even when it
+lists unformatted files, so `gofmt -l .` on its own is not a gate: it reports a
+problem and then passes. A check has to turn that output into a non-zero exit,
+as above or in a Makefile target. This repository learned it the ordinary way,
+by integrating an unformatted file through a green check run.
 
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
@@ -164,12 +171,12 @@ sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
 default every wait the harness will take is taken here and the run continues on
 its own once the limit resets. Lowering it — say to `15m` — makes a longer wait
 exit instead, with the run still in flight and its deadline recorded; running
-`yoyodyne run` on the same item after the reset time continues that same run.
+`yoyo run` on the same item after the reset time continues that same run.
 
 Both paths record the deadline in durable run state *before* any waiting begins,
 so a process that dies mid-wait loses nothing and a restart honors the same
 deadline rather than retrying straight back into the limit. Nothing polls and
-nothing retries before the deadline. `yoyodyne reconcile` leaves a paused run
+nothing retries before the deadline. `yoyo reconcile` leaves a paused run
 alone for the same reason it leaves a repair loop alone: it is not an interrupted
 run, it is a run that is owed the attempt it was refused.
 
@@ -294,7 +301,7 @@ one step:
 3. Add `extends: builtin:v1` near the top.
 4. Delete every agent field that now matches the bundle. In practice this is most
    of the `agents` block; keep only genuine deviations.
-5. Run `yoyodyne config show --effective --origins` and confirm the effective
+5. Run `yoyo config show --effective --origins` and confirm the effective
    values still match what the old file produced.
 
 Personas move to `.yoyodyne/personas/` and are referenced relative to the
@@ -303,11 +310,11 @@ Personas move to `.yoyodyne/personas/` and are referenced relative to the
 ## Inspection
 
 ```sh
-yoyodyne config validate                      # validate the discovered configuration
-yoyodyne config show --effective              # the values actually in force
-yoyodyne config show --origins                # where each value came from
-yoyodyne config show --effective --origins    # both
-yoyodyne config show --effective --json       # machine-readable
+yoyo config validate                      # validate the discovered configuration
+yoyo config show --effective              # the values actually in force
+yoyo config show --origins                # where each value came from
+yoyo config show --effective --origins    # both
+yoyo config show --effective --json       # machine-readable
 ```
 
 `config show` prints the layers it applied, the effective configuration as YAML,

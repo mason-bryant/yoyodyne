@@ -347,7 +347,7 @@ func nonEmptyValue(value, fallback string) string {
 }
 
 func printRunUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne run [options] <beads-id>
+	fmt.Fprintln(writer, `Usage: yoyo run [options] <beads-id>
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

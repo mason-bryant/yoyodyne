@@ -215,7 +215,6 @@ func renderUnread(group, reason string) string {
 		group, singleLine(reason, maxSurveyTitleBytes*2))
 }
 
-
 func renderRunSnapshots(runs []RunSnapshot) string {
 	if len(runs) == 0 {
 		return "in flight: none\n"

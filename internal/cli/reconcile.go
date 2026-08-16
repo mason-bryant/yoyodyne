@@ -89,7 +89,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 }
 
 func printReconcileUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyodyne reconcile [options]
+	fmt.Fprintln(writer, `Usage: yoyo reconcile [options]
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
