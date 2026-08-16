@@ -90,6 +90,46 @@ from the bundle would let a file written against a different schema load as
 whatever the bundle happened to say — which is what the version exists to
 prevent.
 
+## Checks
+
+Each entry runs through `/bin/sh -c` in the run's worktree, so shell syntax is
+available. A check must be non-interactive and must exit non-zero on failure: a
+failing check ends the run before any reviewer is asked and before anything can
+be integrated. Checks are the project's own — the bundle supplies none — and the
+list is replaced wholesale rather than merged.
+
+```yaml
+# Go
+checks:
+  - go test ./...
+  - go vet ./...
+
+# TypeScript / Node
+checks:
+  - npm ci
+  - npx tsc --noEmit
+  - npm test -- --run
+  - npx eslint .
+
+# Python
+checks:
+  - python -m pytest -q
+  - python -m ruff check .
+  - python -m mypy .
+
+# Java (Maven)
+checks:
+  - mvn --batch-mode --quiet verify
+
+# Java (Gradle)
+checks:
+  - ./gradlew --no-daemon check
+```
+
+Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
+check that prompts, starts a watcher, or resolves dependencies differently
+between runs makes the integration gate nondeterministic.
+
 ## Merge and removal semantics
 
 - A field a layer does not mention is **inherited** from the layer beneath it.

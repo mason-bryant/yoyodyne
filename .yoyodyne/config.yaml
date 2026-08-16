@@ -18,6 +18,33 @@ approvals:
   # harness refuses automatic integration that is not actually gated.
   integration: automatic
 
+# Checks are this project's own: the bundle never supplies them, and they are
+# replaced as a whole list rather than merged, so what is written here is
+# exactly what runs. Each entry is run through `/bin/sh -c` in the worktree,
+# so shell syntax works. A check must be non-interactive and must exit
+# non-zero on failure -- a run stops here and never reaches review or
+# integration. These are Go; the equivalents in other languages:
+#
+#   # TypeScript / Node
+#   checks:
+#     - npm ci
+#     - npx tsc --noEmit
+#     - npm test -- --run
+#     - npx eslint .
+#
+#   # Python
+#   checks:
+#     - python -m pytest -q
+#     - python -m ruff check .
+#     - python -m mypy .
+#
+#   # Java (Maven)
+#   checks:
+#     - mvn --batch-mode --quiet verify
+#
+#   # Java (Gradle)
+#   checks:
+#     - ./gradlew --no-daemon check
 checks:
   - make test
   - make race
