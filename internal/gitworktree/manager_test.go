@@ -21,7 +21,7 @@ func TestManagerCreateInspectPreserveAndCleanup(t *testing.T) {
 	repository := newRepository(t)
 	worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
 	manager := newManager(t, repository, worktreeRoot)
-	request := CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-1.2", BaseRef: "HEAD"}
+	request := CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-1.2", BaseRef: "HEAD", TargetBranch: "main"}
 
 	worktree, err := manager.Create(context.Background(), request)
 	if err != nil {
@@ -41,11 +41,21 @@ func TestManagerCreateInspectPreserveAndCleanup(t *testing.T) {
 		t.Fatalf("Inspect() = %#v", inspection)
 	}
 
+	// Cleanup only ever acts on a worktree that really integrated, so this
+	// promotes one first rather than passing the base commit off as an
+	// integrated one: the base is in the target by construction and would make
+	// the containment proof vacuous.
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+
 	dirtyPath := filepath.Join(worktree.Path, "failure.txt")
 	if err := os.WriteFile(dirtyPath, []byte("preserve me"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	cleanupRequest := CleanupRequest{Worktree: worktree, TargetBranch: "main", SourceCommit: worktree.BaseCommit}
+	cleanupRequest := CleanupRequest{Worktree: worktree, TargetBranch: "main", SourceCommit: integration.SourceCommit}
 	if _, err := manager.CleanupIntegrated(context.Background(), cleanupRequest); err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Fatalf("CleanupIntegrated() dirty error = %v", err)
 	}

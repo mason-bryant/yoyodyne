@@ -270,6 +270,29 @@ func TestManagerCleanupRefusesUnprovenOrForeignArtifacts(t *testing.T) {
 		t.Fatalf("unproven cleanup removed the worktree: %v", err)
 	}
 
+	// The base commit is in the target by construction, so accepting it would
+	// make the containment proof vacuous for a worktree that never integrated.
+	vacuous := request
+	vacuous.SourceCommit = worktree.BaseCommit
+	if _, err := manager.CleanupIntegrated(context.Background(), vacuous); err == nil || !strings.Contains(err.Error(), "proves no integration") {
+		t.Fatalf("CleanupIntegrated() base commit error = %v", err)
+	}
+	if _, err := os.Stat(worktree.Path); err != nil {
+		t.Fatalf("vacuous cleanup removed the worktree: %v", err)
+	}
+
+	// A target the worktree was never aimed at cannot authorize its removal,
+	// even when the integrated commit is genuinely contained in that branch.
+	runGit(t, repository, "branch", "elsewhere", worktree.TargetBranch)
+	foreign := request
+	foreign.TargetBranch = "elsewhere"
+	if _, err := manager.CleanupIntegrated(context.Background(), foreign); err == nil || !strings.Contains(err.Error(), "does not match the worktree's recorded target") {
+		t.Fatalf("CleanupIntegrated() foreign target error = %v", err)
+	}
+	if _, err := os.Stat(worktree.Path); err != nil {
+		t.Fatalf("foreign target cleanup removed the worktree: %v", err)
+	}
+
 	// A branch that moved off the integrated commit is not the branch we
 	// integrated, so it survives even though the worktree is removed.
 	runGit(t, repository, "worktree", "remove", worktree.Path)

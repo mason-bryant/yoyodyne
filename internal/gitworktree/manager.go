@@ -830,8 +830,22 @@ func (m *Manager) CleanupIntegrated(ctx context.Context, request CleanupRequest)
 	if err := validateTargetBranch(request.TargetBranch); err != nil {
 		return Cleanup{}, err
 	}
+	// The request describes an integration that already happened, so it must
+	// agree with what the worktree recorded at creation. Checking the two
+	// independently would let a caller name a branch this worktree was never
+	// aimed at and satisfy the containment proof below against that branch
+	// instead of the real target.
+	if worktree.TargetBranch != "" && request.TargetBranch != worktree.TargetBranch {
+		return Cleanup{}, fmt.Errorf("cleanup target %q does not match the worktree's recorded target %q", request.TargetBranch, worktree.TargetBranch)
+	}
 	if !commitPattern.MatchString(request.SourceCommit) {
 		return Cleanup{}, fmt.Errorf("integrated source commit %q is invalid", request.SourceCommit)
+	}
+	// The base commit is contained in the target by construction, so accepting
+	// it as the integrated commit would make the containment proof vacuous:
+	// it would hold for a worktree that never integrated anything.
+	if request.SourceCommit == worktree.BaseCommit {
+		return Cleanup{}, fmt.Errorf("integrated source commit %s is the worktree's base commit, which proves no integration", request.SourceCommit)
 	}
 	path, err := m.ownedPath(worktree)
 	if err != nil {
