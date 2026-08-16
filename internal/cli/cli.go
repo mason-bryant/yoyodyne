@@ -240,7 +240,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyodyne <command> [options]
 
 Commands:
-  chat              talk with the product manager about product intent
+  chat              talk with the product manager and steer the work from there
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
   run               run one Beads work item in an isolated worktree

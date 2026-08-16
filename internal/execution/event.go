@@ -28,6 +28,13 @@ const (
 	EventProposalApproved EventType = "proposal.approved"
 	EventProposalRejected EventType = "proposal.rejected"
 	EventProposalCreated  EventType = "proposal.created"
+	// Work a conversation steers is recorded in that conversation's own log, so
+	// what the operator asked the harness to do is evidence beside what was said
+	// to arrive at it. The run these describe keeps its own separate log.
+	EventWorkStarted  EventType = "work.started"
+	EventWorkFinished EventType = "work.finished"
+	EventWorkStopped  EventType = "work.stopped"
+	EventWorkDirected EventType = "work.directed"
 )
 
 type Event struct {

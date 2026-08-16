@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"time"
 
 	"yoyodyne/internal/backend/claudecode"
@@ -96,18 +95,19 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 
 // openChat builds the product manager's conversation from configuration: the
 // configured agent, the repository's own Markdown, the tracker state as it
-// stands, and the durable record a previous process left behind. The returned
-// lease is this process's exclusive hold on that conversation.
+// stands, the harness the operator steers work with, and the durable record a
+// previous process left behind. The returned lease is this process's exclusive
+// hold on that conversation.
 func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
-	resolved, err := loadConfiguration(configPath)
+	// The conversation is built over the same components a run is, because
+	// steering work from inside it means executing exactly the runs
+	// `yoyodyne run` would have executed.
+	parts, err := buildComponents(configPath)
 	if err != nil {
 		return nil, nil, err
 	}
-	cfg := resolved.Config
-	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), cfg.Product.Repository)
-	if err != nil {
-		return nil, nil, fmt.Errorf("resolve product repository: %w", err)
-	}
+	cfg := parts.config
+	repository := parts.repository
 
 	agent := agentForRole(cfg, domain.RoleProductManager)
 	if agent.Role != domain.RoleProductManager {
@@ -120,7 +120,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, fmt.Errorf("product-manager agent %s", err)
 	}
 
-	processRunner := execution.OSProcessRunner{}
+	processRunner := parts.runner
 	provider := claudecode.Backend{Runner: processRunner}
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
@@ -133,11 +133,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before starting a conversation (auth method: %s)", availability.AuthMethod)
 	}
 
-	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
-	if err != nil {
-		return nil, nil, err
-	}
-	store, err := runstate.NewConversationStore(stateRoot, cfg.Product.ID)
+	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -153,9 +149,11 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 	session, err := chat.Open(chat.Options{
 		Backend: provider,
 		Store:   store,
-		// The tracker is the harness's own hand, not the product manager's: it
-		// is used only where an operator has approved a proposal.
+		// The tracker and the harness behind the operator's commands are the
+		// harness's own hands, not the product manager's: they are used only
+		// where an operator approved a proposal or asked for something.
 		Tracker:      chatTracker(processRunner, repository),
+		Work:         newConversationWork(parts),
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
 		Provider:     domain.BackendClaudeCode,
@@ -163,7 +161,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		ProductID:    cfg.Product.ID,
 		RepositoryID: string(cfg.Product.RepositoryID),
 		Briefing:     briefing,
-		RedactValues: execution.SensitiveEnvironmentValues(os.Environ()),
+		RedactValues: parts.redactValues,
 		Fresh:        fresh,
 	})
 	if err != nil {
@@ -238,6 +236,7 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
 	fmt.Fprintln(writer, "The product manager is advisory here: it changes nothing and approves nothing.")
 	fmt.Fprintln(writer, "It may propose work items; each one is created only if you approve it.")
+	fmt.Fprintln(writer, "You steer the work yourself: /status, /work, /stop, /redirect. /help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
 	fmt.Fprintln(writer)
 }
@@ -293,5 +292,8 @@ Options:
   --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)
   --message <text>   send one message and print the reply instead of conversing
   --new              start a new conversation instead of resuming the recorded one
-  --json             emit machine-readable JSON (requires --message)`)
+  --json             emit machine-readable JSON (requires --message)
+
+An interactive conversation also carries out operator commands: /status, /work,
+/wait, /stop, and /redirect. Ask it for /help once it is open.`)
 }

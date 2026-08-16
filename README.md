@@ -57,7 +57,7 @@ It compares the recorded run against the repository and Beads, and then finishes
 
 ## Talking to the product manager
 
-`yoyodyne run` is a bootstrap entry point. The intended interface is a conversation with the product manager about what the product should be:
+`yoyodyne run` and `yoyodyne reconcile` are administrative and recovery entry points. The intended interface is a conversation with the product manager, and ordinary work no longer needs anything else: you state intent there, approve what it becomes, and run, watch, redirect, and stop the work from inside the same conversation.
 
 ```sh
 ./bin/yoyodyne chat
@@ -68,7 +68,31 @@ The product manager reads the repository's own Markdown — `README.md` and ever
 
 It can propose Beads work items from what you discussed, and a proposal is still only a recommendation. Each one is shown to you with its reasoning, and the harness creates the item only after you answer `y` or `yes`; any other answer declines it and is kept as the reason it was declined. Nothing you did not approve is created, a proposal you left undecided is named when the conversation ends, and a created item records the conversation, the turn, and the rationale it came from. A proposal the harness cannot read is reported and the conversation carries on; `--message` has nobody to ask, so it reports what was proposed and creates nothing.
 
-A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyodyne chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, and the provider session identifier, and the normalized event stream is stored beside it.
+### Steering the work from the conversation
+
+A line that begins with a slash is a command the harness carries out for you; everything else is said to the product manager:
+
+```text
+/status                  what is in flight, claimed, blocked, available, and done
+/work <beads-id>         run one work item now, while you keep talking
+/wait                    wait for the run this conversation started and report it
+/stop [reason]           stop that run and settle what it left behind
+/redirect <id> <what to do differently>
+/help                    the list
+/exit                    end the conversation, stopping anything it is running
+```
+
+`/work` runs exactly what `yoyodyne run` would run — the same worktree, developer, checks, reviewer, and integration policy — in the background, so the conversation stays a conversation. One run at a time. `/status` reads durable run state and the tracker, so a run another process is executing is as visible as one started here, and a run waiting out a provider usage limit is named as waiting rather than reported as progress. A finished run is reported when you next press enter, ask for `/status`, or `/wait` for it.
+
+`/stop` cancels the run, records why on the work item, and then settles what the cancelled run left behind exactly as `yoyodyne reconcile` would: integrated work is finished, and anything else becomes a durable blocker naming the branch and worktree that were preserved. Two cases are exceptions, and both are reported as what they are. A run that does not give up within the stop grace is reported as still in flight rather than described as stopped. A run that reached its own conclusion before the cancellation reached it — integrated under an automatic policy, or finished with its worktree preserved under a `human` one, since a successful run then promotes nothing — is reported as having finished on its own: nothing is recorded on the item and nothing is settled, because nothing was stopped. What separates the two is whether the harness reported a failure, not whether anything was integrated. A run that had paused itself for a usage limit is not one of these: it is owed a continuation rather than finished, so the stop is recorded against it, and the report says the run is preserved and continues only if you start it again. Ending the conversation stops its run the same way, because the process that owns the run is the one that is exiting.
+
+Either way the conversation's own log says what happened rather than only what was asked for: the stop is recorded as a request when you make it, and the run's outcome — what it left behind, or the integration that beat the cancellation — is recorded once it is known.
+
+`/redirect` records your direction in the item's notes, where the developer's context reads it on the next attempt, and stops the run first when the item you are redirecting is the one running. It never changes the item's status: saying what to do differently is not deciding that the work is done or blocked. Start it again with `/work` when you want it retried.
+
+Only you reach any of this. The product manager still has no tools, so nothing it says starts, stops, or redirects anything — a reply that contains `/work` is prose. What it does get is an account of what you had the harness do, carried into its next turn as evidence, so the conversation keeps discussing the product as it now is rather than as it was when the conversation opened.
+
+A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyodyne chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, and the provider session identifier, and the normalized event stream is stored beside it — including what the operator asked the harness to do, which is recorded in the conversation's own log beside the runs' logs.
 
 ## Configuring a project
 

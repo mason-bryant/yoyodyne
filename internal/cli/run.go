@@ -55,8 +55,12 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 // acts on runs shares. They are built once here so a pipeline and a reconciler
 // always address the same state root, worktree root, and repository.
 type components struct {
-	config       config.Config
-	repository   string
+	config     config.Config
+	repository string
+	// stateRoot is where everything durable that is not the repository lives.
+	// It is kept here so a command that needs a second store built on it — the
+	// conversation record beside the run state — addresses the same root.
+	stateRoot    string
 	runner       execution.OSProcessRunner
 	store        *runstate.Store
 	worktrees    *gitworktree.Manager
@@ -109,6 +113,7 @@ func buildComponents(configPath string) (components, error) {
 	return components{
 		config:       cfg,
 		repository:   repository,
+		stateRoot:    stateRoot,
 		runner:       processRunner,
 		store:        store,
 		worktrees:    worktrees,
@@ -125,6 +130,13 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 	if err != nil {
 		return orchestrator.Pipeline{}, err
 	}
+	return pipelineFrom(parts), nil
+}
+
+// pipelineFrom wires the run pipeline over parts that are already built, so a
+// command that needs more than one of them — a conversation that also steers
+// work — builds the repository and state boundaries exactly once.
+func pipelineFrom(parts components) orchestrator.Pipeline {
 	cfg := parts.config
 	processRunner := parts.runner
 	redactValues := parts.redactValues
@@ -153,7 +165,7 @@ func buildPipeline(configPath string) (orchestrator.Pipeline, error) {
 		Repository:   parts.repository,
 		Config:       cfg,
 		RedactValues: redactValues,
-	}, nil
+	}
 }
 
 func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
@@ -161,13 +173,18 @@ func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
 	if err != nil {
 		return orchestrator.Reconciler{}, err
 	}
-	// The reconciler is wired without a backend on purpose: settling an
-	// interrupted run is never a reason to invoke a provider.
+	return reconcilerFrom(parts), nil
+}
+
+// reconcilerFrom wires reconciliation over parts that are already built. It is
+// deliberately given no backend: settling an interrupted run is never a reason
+// to invoke a provider.
+func reconcilerFrom(parts components) orchestrator.Reconciler {
 	return orchestrator.Reconciler{
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
-	}, nil
+	}
 }
 
 // agentModel returns the configured selector for a role. Configuration
