@@ -59,6 +59,14 @@ type Execution struct {
 	// hours. It is never larger than UsageLimitMaxPause in effect, because a
 	// pause beyond that bound is refused before either path is chosen.
 	UsageLimitInProcessPause Duration `yaml:"usage_limit_in_process_pause" json:"usage_limit_in_process_pause"`
+	// UsageLimitUnknownResetPause is how long a run waits before asking again
+	// when the provider reports an exhausted limit without naming a reset time.
+	// That is not the same as having no capacity: the monthly overage allowance
+	// reports this way while the ordinary rolling window keeps resetting on its
+	// usual schedule, so the limit is waitable and simply carries no deadline.
+	// The wait still spends UsageLimitMaxPause, so a provider that keeps
+	// refusing walks into that bound rather than polling forever.
+	UsageLimitUnknownResetPause Duration `yaml:"usage_limit_unknown_reset_pause" json:"usage_limit_unknown_reset_pause"`
 }
 
 const (
@@ -77,6 +85,10 @@ const (
 	// Lowering it trades that for a run that exits with its deadline recorded
 	// and is resumed by a later invocation.
 	defaultUsageLimitInProcessPause = defaultUsageLimitMaxPause
+	// defaultUsageLimitUnknownResetPause is how long to wait before asking again
+	// when no reset time was named. Short enough to resume soon after a window
+	// rolls, long enough not to hammer a provider that is refusing.
+	defaultUsageLimitUnknownResetPause = Duration(30 * time.Minute)
 )
 
 type Approvals struct {
@@ -163,6 +175,9 @@ func (c Config) Validate() error {
 	// refused.
 	if c.Execution.UsageLimitMaxPause < 0 {
 		problems = append(problems, "usage_limit_max_pause cannot be negative")
+	}
+	if c.Execution.UsageLimitUnknownResetPause <= 0 {
+		problems = append(problems, "execution.usage_limit_unknown_reset_pause must be positive")
 	}
 	if c.Execution.UsageLimitInProcessPause < 0 {
 		problems = append(problems, "usage_limit_in_process_pause cannot be negative")

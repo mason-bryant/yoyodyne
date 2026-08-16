@@ -2134,10 +2134,11 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		Version: config.CurrentVersion,
 		Product: config.Product{ID: "yoyodyne", RepositoryID: "yoyodyne", Repository: repository},
 		Execution: config.Execution{
-			MaxConcurrentDevelopers:    1,
-			RepairAttemptsBeforeReplan: 2,
-			WorktreeRoot:               "auto",
-			Remote:                     "origin",
+			MaxConcurrentDevelopers:     1,
+			RepairAttemptsBeforeReplan:  2,
+			WorktreeRoot:                "auto",
+			Remote:                      "origin",
+			UsageLimitUnknownResetPause: config.Duration(30 * time.Minute),
 		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
@@ -2640,12 +2641,17 @@ func TestRunStopsWithABlockerWhenAUsageLimitResetIsUnusable(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string
 		limit      backend.UsageLimit
+		maxPause   time.Duration
 		wantReason string
 	}{
 		{
-			name:       "no reset time",
+			// A limit naming no reset time is deliberately absent here: it is
+			// waitable rather than unusable, so it polls instead of stopping.
+			// TestRunPollsAUsageLimitThatNamesNoResetTime covers it.
+			name:       "no reset time, beyond the configured maximum pause",
 			limit:      backend.UsageLimit{Kind: "seven_day"},
-			wantReason: "named no reset time",
+			maxPause:   time.Minute,
+			wantReason: "named no reset time, and waiting",
 		},
 		{
 			name:       "reset beyond the configured maximum pause",
@@ -2670,7 +2676,11 @@ func TestRunStopsWithABlockerWhenAUsageLimitResetIsUnusable(t *testing.T) {
 			provider := usageLimitBackend(1, &limit, approveVerdict)
 			pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 			clock := &pausingClock{now: baseTime}
-			pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+			maxPause := testCase.maxPause
+			if maxPause == 0 {
+				maxPause = 6 * time.Hour
+			}
+			pipeline = waiting(automatic(pipeline, provider), clock, maxPause, maxPause)
 
 			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 			if err == nil {
@@ -2914,5 +2924,43 @@ func TestRunPausesWhenTheReviewerHitsAnExhaustedUsageLimit(t *testing.T) {
 	}
 	if outcome.RepairAttempts != 0 {
 		t.Fatalf("a paused review spent a repair attempt: %#v", outcome)
+	}
+}
+
+// TestRunPollsAUsageLimitThatNamesNoResetTime covers the correction the operator
+// made on 2026-08-16: a limit reported without a reset time is unknown rather
+// than unwaitable. The overage allowance reports this way while the ordinary
+// rolling window keeps resetting on its usual schedule, so the run waits the
+// configured interval and asks again instead of stopping.
+func TestRunPollsAUsageLimitThatNamesNoResetTime(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	limit := backend.UsageLimit{Kind: "seven_day"}
+	provider := usageLimitBackend(1, &limit, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the run to wait and continue rather than stop", err)
+	}
+	if outcome.Blocked {
+		t.Fatalf("outcome = %#v, want the run continued rather than blocked", outcome)
+	}
+	if len(clock.slept) == 0 {
+		t.Fatal("nothing was waited for; a limit with no reset time should poll")
+	}
+	if got := clock.slept[0]; got != 30*time.Minute {
+		t.Errorf("waited %s, want the configured unknown-reset interval of 30m", got)
+	}
+	state, loadErr := store.Load(outcome.RunID)
+	if loadErr != nil {
+		t.Fatalf("Load() error = %v", loadErr)
+	}
+	if state.UsageLimitPausedSeconds == 0 {
+		t.Error("the poll did not spend the run's pause budget, so a refusing provider could poll forever")
 	}
 }

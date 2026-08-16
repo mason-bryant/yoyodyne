@@ -317,7 +317,16 @@ bound that wait, both written in Go's duration syntax (`6h`, `90m`, `45s`):
 execution:
   usage_limit_max_pause: 6h
   usage_limit_in_process_pause: 6h
+  usage_limit_unknown_reset_pause: 30m
 ```
+
+`usage_limit_unknown_reset_pause` is how long a run waits before asking again
+when the provider reports an exhausted limit but names no reset time. That is
+not the same as having no capacity: an exhausted overage allowance reports this
+way while the ordinary rolling window keeps resetting on its usual schedule, so
+the work is waitable and simply carries no deadline. The wait spends the same
+budget as any other, so a provider that keeps refusing reaches the maximum
+rather than polling forever.
 
 `usage_limit_max_pause` is the longest a single run will spend waiting **in
 total**, across every pause it takes. The budget is per run, not per pause,
