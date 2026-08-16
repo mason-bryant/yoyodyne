@@ -760,9 +760,19 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	// needs a deadline somebody actually stated, in the future, that fits inside
 	// what this run is still allowed to spend waiting. Anything else stops the
 	// run instead of becoming a guessed wait.
+	// A limit with no reset time is unknown rather than unwaitable. The overage
+	// allowance reports this way while the ordinary rolling window keeps
+	// resetting on its usual schedule, so the work resumes -- the harness simply
+	// has to ask again rather than be told when. It waits a configured interval
+	// and reattempts, and because that wait spends the same budget as any other,
+	// a provider that keeps refusing walks into the maximum instead of polling
+	// forever.
+	unknownReset := limit.ResetsAt.IsZero()
+	if unknownReset {
+		wait = p.Config.Execution.UsageLimitUnknownResetPause.Duration()
+		limit.ResetsAt = p.clock().Now().Add(wait)
+	}
 	switch {
-	case limit.ResetsAt.IsZero():
-		return a.blockOnUsageLimit(ctx, "the provider named no reset time for it")
 	case wait <= 0:
 		// A limit still refusing work while naming a reset that has already
 		// passed is not describing a wait. Honoring it would mean reissuing
@@ -777,6 +787,10 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 		// maximum an operator configured, one acceptable-looking wait at a time.
 		reason := fmt.Sprintf("waiting until %s would take this run past the %s maximum pause",
 			limit.ResetsAt.UTC().Format(time.RFC3339), maximum)
+		if unknownReset {
+			reason = fmt.Sprintf("it named no reset time, and waiting %s to ask again would take this run past the %s maximum pause",
+				p.Config.Execution.UsageLimitUnknownResetPause, maximum)
+		}
 		if spent > 0 {
 			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
 		}

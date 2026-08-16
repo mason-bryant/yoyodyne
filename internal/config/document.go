@@ -32,12 +32,13 @@ type productDocument struct {
 }
 
 type executionDocument struct {
-	MaxConcurrentDevelopers    *int      `yaml:"max_concurrent_developers"`
-	RepairAttemptsBeforeReplan *int      `yaml:"repair_attempts_before_replan"`
-	WorktreeRoot               *string   `yaml:"worktree_root"`
-	Remote                     *string   `yaml:"remote"`
-	UsageLimitMaxPause         *Duration `yaml:"usage_limit_max_pause"`
-	UsageLimitInProcessPause   *Duration `yaml:"usage_limit_in_process_pause"`
+	MaxConcurrentDevelopers     *int      `yaml:"max_concurrent_developers"`
+	RepairAttemptsBeforeReplan  *int      `yaml:"repair_attempts_before_replan"`
+	WorktreeRoot                *string   `yaml:"worktree_root"`
+	Remote                      *string   `yaml:"remote"`
+	UsageLimitMaxPause          *Duration `yaml:"usage_limit_max_pause"`
+	UsageLimitInProcessPause    *Duration `yaml:"usage_limit_in_process_pause"`
+	UsageLimitUnknownResetPause *Duration `yaml:"usage_limit_unknown_reset_pause"`
 }
 
 type approvalsDocument struct {

@@ -168,12 +168,13 @@ func newResolution() *resolution {
 	return &resolution{
 		config: Config{
 			Execution: Execution{
-				MaxConcurrentDevelopers:    1,
-				RepairAttemptsBeforeReplan: 2,
-				WorktreeRoot:               "auto",
-				Remote:                     defaultRemote,
-				UsageLimitMaxPause:         defaultUsageLimitMaxPause,
-				UsageLimitInProcessPause:   defaultUsageLimitInProcessPause,
+				MaxConcurrentDevelopers:     1,
+				RepairAttemptsBeforeReplan:  2,
+				WorktreeRoot:                "auto",
+				Remote:                      defaultRemote,
+				UsageLimitMaxPause:          defaultUsageLimitMaxPause,
+				UsageLimitInProcessPause:    defaultUsageLimitInProcessPause,
+				UsageLimitUnknownResetPause: defaultUsageLimitUnknownResetPause,
 			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
@@ -212,6 +213,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.remote", execution.Remote, &r.config.Execution.Remote, applied.origin)
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
 		setValue(r.origins, "execution.usage_limit_in_process_pause", execution.UsageLimitInProcessPause, &r.config.Execution.UsageLimitInProcessPause, applied.origin)
+		setValue(r.origins, "execution.usage_limit_unknown_reset_pause", execution.UsageLimitUnknownResetPause, &r.config.Execution.UsageLimitUnknownResetPause, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
