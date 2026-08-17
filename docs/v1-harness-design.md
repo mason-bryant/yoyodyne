@@ -20,7 +20,7 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 - Isolate implementation tasks in harness-managed Git worktrees and integrate successful work automatically.
 - Publish that work as pull requests the harness opens, and has the forge merge, on the roles' behalf, for projects that enable it, without letting any agent push or merge.
 - Use Beads as the durable workflow, dependency, blocker, directive, and handoff store.
-- Use repository Markdown as the human-readable source of truth for the brief, goals, designs, and specifications.
+- Use repository Markdown as the human-readable source of truth for the brief, goals, designs, specifications, decision records, and invariants.
 - Support Claude Code as the default backend and Codex as an optional developer/reviewer backend.
 - Reach a useful self-hosting threshold before implementing the entire v1 management hierarchy.
 - Keep roles, policies, and provider selection configurable without making safety invariants optional.
@@ -65,6 +65,11 @@ flowchart LR
     W --> C["Code changes"]
     C --> V["Checks and reviewer verdict"]
     V --> I["Integrated product"]
+    D --> R["Decision records"]
+    R --> N["Invariants"]
+    N -. constrain .-> D
+    N -. constrain .-> W
+    N -. constrain .-> C
     U["User directives"] -. constrain .-> B
     U -. constrain .-> G
     U -. constrain .-> D
@@ -89,12 +94,27 @@ The harness validates references and reports orphaned goals, designs, and work. 
 |---|---|---|
 | Product brief and goals | Product manager | Ask questions and propose amendments |
 | Designs and specifications | Architect | Identify risks, ask questions, and propose amendments |
+| Decision records and the invariants extracted from them | Architect | Propose a decision, ask for an invariant, and report one a change would violate |
 | Development plans and task decomposition | Development manager | Report dependencies, blockers, and side effects |
 | Assigned code change | Developer | Modify code within the assigned worktree and task scope |
 | Review verdict | Reviewer | Request repairs or approve against the design and checks |
 | Workflow state, worktrees, checks, integration, and publishing | Harness | Agents may request actions but cannot bypass policy |
 
 Ownership is an authorization boundary, not merely a prompt convention. A developer discovering a design problem creates a proposal or question for the architect; it does not edit the design and continue as if the change were approved.
+
+Two rows are worth reading deliberately. The architect's decision home is *additional* to designs rather than a move: designs and specifications stay with the architect, and the decision record is where the reasoning that produced one is kept after the design itself has moved on. The development manager, by contrast, owns no repository document at all. Its decomposition is the Beads work — items, dependencies, and acceptance criteria — so "development plans" names state in the tracker rather than Markdown in the repository, and the harness enforces that ownership over work items instead of over files.
+
+### Decision records and invariants
+
+A decision record and an invariant are complementary rather than two names for the same artifact, and the architect owns both.
+
+A **decision record** — an ADR, in the usual naming — is the durable history of one decision: what was chosen, what was rejected, and what forced the choice. It is written once and afterwards only gains a status — accepted, superseded by a later record, retired. It is not edited to stay current, because a record revised to match today's system stops recording the decision anybody actually made.
+
+An **invariant** is the live constraint extracted from such a decision: what must still hold, stated tightly enough that a developer can be held to it and a reviewer can find a violation. It is amended and retired as the system changes, and the set of active invariants is the answer to what currently holds.
+
+Using either as the other fails predictably. Edit decision records to keep them current and the decision history rots away; leave the live constraints buried in historical prose and nothing can say which of them still apply. Recording a decision is also not sufficient on its own: an invariant nobody puts in front of a developer constrains nothing, so delivering the relevant ones into the developer's context and the reviewer's evidence is what turns a written constraint into an enforced one.
+
+The [Design Invariants](#design-invariants) above are this document's own instance of the second kind — constraints extracted from the decisions that produced this design and stated so they can be enforced rather than rediscovered.
 
 ## Agent Model
 
@@ -122,6 +142,7 @@ The local Claude Code or Codex process is not the agent's durable identity. Each
 - Translates goals into designs and specifications.
 - Maintains traceability from each design to its supporting goals.
 - Defines boundaries and compatibility expectations so parallel specifications can be implemented safely.
+- Records the decisions behind those designs, and creates, amends, and retires the invariants extracted from them.
 - Evaluates downstream discoveries and owns resulting design amendments.
 
 #### Development manager
@@ -180,12 +201,18 @@ docs/
     goals/
   designs/
   specifications/
+  decisions/
+    invariants/
 .yoyodyne/
   config.yaml
   personas/
 ```
 
 These files are reviewable with the code and are the source of truth for their content. Beads records their workflow state and relationships but does not replace them with issue descriptions.
+
+`decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them in `invariants/` beneath it, kept in their own directory because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work rather than Markdown.
+
+One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default, and it is the only part of this layout the harness reads today. [Configuration](configuration.md#product-specifications) is the reference for it.
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
@@ -471,7 +498,7 @@ This sequence keeps the first bootstrap small, exercises real subprocess and Git
 
 These choices do not block the v1 architecture and should be decided in the milestone that first needs them:
 
-- the exact Markdown metadata schema and lifecycle vocabulary for brief, goal, design, and specification artifacts;
+- the exact Markdown metadata schema and lifecycle vocabulary for brief, goal, design, and specification artifacts, and for decision records and invariants, whose statuses differ from the rest: a record is superseded rather than revised, and an invariant is amended or retired;
 - the Beads issue types, labels, and link fields used to encode directives, approvals, artifact revisions, and provider sessions;
 - whether conflict-free integration uses fast-forward, rebase, or merge commits by default;
 - the local runtime-state format and operating-system-specific root directories;
