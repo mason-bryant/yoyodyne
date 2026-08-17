@@ -156,8 +156,8 @@ func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testin
 }
 
 // Chat talks to whichever agent fills the product-manager role, with the
-// persona that role resolved to. In this repository that is the built-in
-// bundle's agent and its builtin:v1 persona, inherited rather than restated.
+// persona that role resolved to. In this repository both are stated in the
+// project configuration and read from the project's own personas directory.
 func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	t.Parallel()
 
@@ -176,8 +176,8 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
 		t.Fatalf("product-manager model: %v", err)
 	}
-	if origin := resolved.Origins["agents.product-manager.persona"]; origin != config.BuiltinV1 {
-		t.Fatalf("product-manager persona origin = %q, want the built-in bundle", origin)
+	if origin := resolved.Origins["agents.product-manager.persona"]; origin != resolved.Path {
+		t.Fatalf("product-manager persona origin = %q, want the project configuration", origin)
 	}
 	if !strings.Contains(agent.Persona.Text, "You own product intent, not implementation.") {
 		t.Fatalf("product-manager persona = %q", agent.Persona.Text)
@@ -370,8 +370,8 @@ func TestRunWorkItemReportsConfigurationFailureAsJSON(t *testing.T) {
 // The repository's own configuration is the one Yoyodyne self-hosts on, so it
 // must validate under the automatic-integration policy it now enables: an
 // independent reviewer agent and at least one deterministic check. It is also
-// the worked example of a portable project configuration, so it inherits its
-// agents from the built-in bundle rather than restating them.
+// the worked example of the shape Yoyodyne ships, so it states its agents and
+// carries its own personas rather than inheriting either.
 func TestRepositoryConfigurationEnforcesAutomaticIntegration(t *testing.T) {
 	t.Parallel()
 
@@ -387,12 +387,15 @@ func TestRepositoryConfigurationEnforcesAutomaticIntegration(t *testing.T) {
 		t.Fatalf("LoadResolved() error = %v", err)
 	}
 	cfg := resolved.Config
-	if cfg.Extends != config.BuiltinV1 {
-		t.Fatalf("extends = %q, want %q", cfg.Extends, config.BuiltinV1)
+	if cfg.Extends != "" {
+		t.Fatalf("extends = %q, want a configuration that inherits nothing", cfg.Extends)
+	}
+	if len(resolved.Sources) != 1 {
+		t.Fatalf("sources = %v, want only the project file", resolved.Sources)
 	}
 	for _, name := range []string{"developer", "reviewer"} {
-		if origin := resolved.Origins["agents."+name+".persona"]; origin != config.BuiltinV1 {
-			t.Errorf("agent %q persona origin = %q, want the built-in bundle", name, origin)
+		if origin := resolved.Origins["agents."+name+".persona"]; origin != resolved.Path {
+			t.Errorf("agent %q persona origin = %q, want the project configuration", name, origin)
 		}
 		if strings.TrimSpace(cfg.Agents[name].Persona.Text) == "" {
 			t.Errorf("agent %q has no effective persona", name)

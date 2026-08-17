@@ -1,41 +1,78 @@
 # Yoyodyne project configuration.
 #
-# Everything not written here is inherited from the built-in bundle shipped
-# inside the executable: the five default agents, their Claude Code backend,
-# model selectors, instance counts, and personas. Run
-# `yoyodyne config show --effective --origins` to see the resolved values and
+# This file is complete. Every value the harness uses is written here, so what
+# the file says is what runs and there is nothing to look up somewhere else.
+# It was generated from the builtin:v1 template inside the executable, and
+# the personas beside it were copied from there at the same time; both are this
+# project's to edit now.
+#
+# That ownership has a price worth knowing up front: a later Yoyodyne that
+# improves a persona or corrects a model selector does not reach this project.
+# Run "yoyo init" again in a scratch directory and merge what changed if you
+# want those improvements.
+#
+# "yoyo config show --effective --origins" reports the resolved values and
 # where each one came from.
+#
+# This repository is the one that also contains the template, so it has two
+# copies of the persona text and they are not the same file. personas/ here is
+# what Yoyodyne's own agents read; internal/config/builtin/v1/personas/ is what
+# "yoyo init" gives a new project. Change both when the change is meant for
+# both.
 version: 1
-extends: builtin:v1
 
 product:
   id: yoyodyne
   repository: .
   # The product manager reads the specifications under this directory and
   # nothing else in the repository -- not this file, not the README, not the
-  # design document. `docs/product` is the harness default, so it is left
-  # unwritten here; name another directory to move it. It must stay inside the
-  # repository.
-  # specifications: docs/product
+  # design document. It must stay inside the repository.
+  specifications: docs/product
 
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+  # The remote publishing pushes to and opens pull requests against. It is only
+  # consulted when approvals.publishing is automatic; a repository with no
+  # remote by this name publishes nothing and stays purely local.
+  remote: origin
+  # A provider usage limit that is exhausted pauses a run rather than failing
+  # it. The maximum covers the five-hour limit and deliberately stops short of
+  # the seven-day one, so a capacity problem that needs a person reaches one
+  # instead of a timer. The in-process bound is how much of that a run spends
+  # sleeping here rather than exiting with its deadline recorded.
+  usage_limit_max_pause: 6h
+  usage_limit_in_process_pause: 6h
+  usage_limit_unknown_reset_pause: 30m
+
+# Conservative by default: integration and publishing are opted in to
+# separately. Automatic integration is refused unless it is actually gated by
+# the checks below and a reviewer agent, and publishing is what pushes a branch
+# and opens a pull request where other people can see it.
 approvals:
-  # Enabled with the closed loop: checks, an independent reviewer verdict, and
-  # conflict-aware fast-forward integration now gate every promotion. The
-  # harness refuses automatic integration that is not actually gated.
+  brief: human
+  goals: human
+  designs: automatic
+  # This project has opted in to both. The closed loop gates every promotion --
+  # checks, an independent reviewer verdict, and conflict-aware fast-forward
+  # integration -- and main is protected against direct pushes, so publishing is
+  # how work reaches the remote at all: the developer phase pushes its branch
+  # and opens a pull request, and the reviewer's approving verdict merges it.
   integration: automatic
-  # main is protected against direct pushes, so publishing is how work reaches
-  # the remote at all: the developer phase pushes its branch and opens a pull
-  # request, and the reviewer's approving verdict is what merges it. Nothing
-  # here bypasses the gates above -- it changes where the promotion lands, not
-  # what has to be true before it happens.
   publishing: automatic
 
-# Checks are this project's own: the bundle never supplies them, and they are
-# replaced as a whole list rather than merged, so what is written here is
-# exactly what runs. Each entry is run through `/bin/sh -c` in the worktree,
-# so shell syntax works. A check must be non-interactive and must exit
-# non-zero on failure -- a run stops here and never reaches review or
-# integration. These are Go; the equivalents in other languages:
+# Checks are this project's own. Each entry is run through "/bin/sh -c" in the
+# run's worktree, so shell syntax works. A check must be non-interactive and
+# must exit non-zero on failure -- a run stops at a failing check and never
+# reaches review or integration. A run with no checks at all is refused, so
+# this list is what makes the file usable rather than merely valid:
+#
+#   # Go
+#   checks:
+#     - go test ./...
+#     - go vet ./...
+#     - gofmt -l . | (! grep .)
 #
 #   # TypeScript / Node
 #   checks:
@@ -63,26 +100,49 @@ checks:
   - make race
   - make vet
 
-# Agents are inherited from builtin:v1 and are not listed here. To change one,
-# name only the fields you are changing; everything else keeps inheriting. The
-# five agent keys are product-manager, architect, development-manager,
-# developer, and reviewer.
-#
-# agents:
-#   developer:
-#     # A family alias floats to that family's current default; an exact
-#     # identifier such as claude-opus-5 pins a version. Every agent must
-#     # declare a selector -- there is no implicit harness default.
-#     model: opus
-#     instances: 1
-#   reviewer:
-#     # A persona override replaces the inherited persona completely rather
-#     # than merging into it. The path is relative to this .yoyodyne directory
-#     # and must be a Markdown file inside it.
-#     persona:
-#       version: house-1
-#       path: personas/reviewer.md
-#   architect:
-#     # Removing an inherited agent is explicit. Setting disabled alongside any
-#     # other field is rejected, so an agent is never half-removed.
-#     disabled: true
+# Every agent is stated in full: nothing about them is inherited. A model
+# selector that names a family, such as "opus", floats to that family's current
+# default; an exact identifier such as claude-opus-5 pins a version. Persona
+# paths are relative to this .yoyodyne directory and must be Markdown inside it.
+# Delete an agent to remove it, edit one to change it.
+agents:
+  architect:
+    role: architect
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/architect.md
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/developer.md
+  development-manager:
+    role: development-manager
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/development-manager.md
+  product-manager:
+    role: product-manager
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/product-manager.md
+  reviewer:
+    role: reviewer
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/reviewer.md

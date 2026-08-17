@@ -1,8 +1,12 @@
-// Package config loads Yoyodyne's effective configuration from a versioned
-// built-in bundle shipped inside the executable and a project configuration
-// that overlays it. Projects store only their machine-independent settings and
-// sparse agent overrides; the harness supplies everything else, so Yoyodyne is
-// usable from a repository that has no access to the Yoyodyne source checkout.
+// Package config loads Yoyodyne's effective configuration from a project's
+// .yoyodyne directory. A project owns its configuration outright: `yoyo init`
+// generates a complete file from the versioned bundle shipped inside the
+// executable and copies that bundle's personas into the project, so what runs
+// is what the project can read. A project may still inherit the bundle by name
+// with "extends" and overlay only what it changes, which trades the legibility
+// of an explicit file for defaults that improve when the executable does.
+// Either shape is usable from a repository with no access to the Yoyodyne
+// source checkout.
 package config
 
 import (

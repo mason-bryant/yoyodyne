@@ -21,6 +21,8 @@ make build
 ./bin/yoyo config validate
 ```
 
+A repository that has no `.yoyodyne/config.yaml` yet gets one from `./bin/yoyo init`, which writes a complete configuration and copies the agent personas into `.yoyodyne/personas/`. Fill in its `checks` before running work.
+
 Review `.yoyodyne/config.yaml`, commit any intended product changes, and choose an open, unblocked work item:
 
 ```sh
@@ -37,7 +39,7 @@ work_item_id="replace-with-a-ready-beads-id"
 
 On success, the JSON result reports the run ID, branch, worktree, base commit, change summary, checks, and agent summary.
 
-What happens next depends on `approvals.integration`. This repository sets it to `automatic`, so a run that passes its checks and is approved by the independent reviewer is committed, fast-forwarded into the target branch, closed in Beads, and its worktree and branch removed — the JSON reports the integrated commit and what was cleaned up. The built-in bundle defaults to `human` instead, so a new project preserves the worktree for external integration until it opts in. Either way the harness refuses `automatic` unless deterministic checks and a reviewer agent both exist.
+What happens next depends on `approvals.integration`. This repository sets it to `automatic`, so a run that passes its checks and is approved by the independent reviewer is committed, fast-forwarded into the target branch, closed in Beads, and its worktree and branch removed — the JSON reports the integrated commit and what was cleaned up. A freshly generated configuration says `human` instead, so a new project preserves the worktree for external integration until it opts in. Either way the harness refuses `automatic` unless deterministic checks and a reviewer agent both exist.
 
 A reviewer verdict of `repair` returns the findings to the same developer, up to `execution.repair_attempts_before_replan` attempts, before the run gives up and records a blocker.
 
@@ -134,43 +136,48 @@ Resuming is the better default the rest of the time, because the discussion itse
 
 ## Configuring a project
 
-Yoyodyne carries its own agent defaults, so a project repository stores only its own settings and any deliberate deviation from them. A configuration can be as small as this:
+A project owns its configuration outright. `yoyo init` writes it:
+
+```sh
+./bin/yoyo init                 # configure the current directory
+./bin/yoyo init --product example --directory path/to/project
+```
+
+That writes a complete `.yoyodyne/config.yaml` — every agent with its role, backend, model selector, instance count, and persona reference, plus the execution, approval, and product settings — and copies the five personas into `.yoyodyne/personas/`, where they are ordinary Markdown files in your repository. Nothing is inherited when the file loads, so `yoyo config show --origins` names the project file for every value, and editing a field is the whole of what changes the harness's behavior.
 
 ```yaml
-# .yoyodyne/config.yaml
+# .yoyodyne/config.yaml, abbreviated
 version: 1
-extends: builtin:v1
 
 product:
   id: example
   repository: .
+  specifications: docs/product
 
-checks:
-  - go test ./...
-```
+checks: []          # yours to write; a run with none is refused
 
-The bundle supplies the agents but never `product` or `checks`: both describe the project rather than the harness. A file that omits `checks` still validates, but `yoyo run` refuses it, because a run with nothing to verify has no gate to integrate behind.
-
-That inherits five default agents — product manager, architect, development manager, developer, and reviewer — each with a role, the Claude Code backend, a model selector, an instance count, and a persona. An override names only what it changes; everything else keeps inheriting:
-
-```yaml
 agents:
   developer:
-    model: claude-opus-5-20260514
-  reviewer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
     persona:
-      version: house-1
-      path: personas/reviewer.md   # relative to .yoyodyne/
-  architect:
-    disabled: true                 # remove an inherited agent
+      version: v1
+      path: personas/developer.md   # relative to .yoyodyne/
+  # ... product-manager, architect, development-manager, and reviewer
 ```
 
-Yoyodyne finds the nearest `.yoyodyne/config.yaml` from the current directory upwards, so it runs from the project root or anywhere beneath it. To see what a configuration actually resolves to and which layer each value came from:
+`checks` is the one thing `init` cannot write for you: the harness has no way to guess a project's toolchain, and a run with nothing to verify has no gate to integrate behind, so `yoyo run` refuses it. The generated file carries commented examples for Go, TypeScript, Python, and Java.
+
+**What owning the configuration costs.** A later Yoyodyne that improves a persona or corrects a model selector does not reach a project that already has its own copy of it. Re-run `yoyo init` in a scratch directory and merge the difference if you want those improvements. The executable's built-in bundle is now the template `init` generates from rather than a layer projects keep inheriting — inheritance still works for a project that writes `extends: builtin:v1`, and is the right choice for a fleet that should improve together, but the explicit file is what Yoyodyne ships.
+
+Yoyodyne finds the nearest `.yoyodyne/config.yaml` from the current directory upwards, so it runs from the project root or anywhere beneath it. To see what a configuration resolves to and where each value came from:
 
 ```sh
 ./bin/yoyo config show --effective --origins
 ```
 
-See the [configuration guide](docs/configuration.md) for the full layout, precedence, merge and removal semantics, persona rules, portability, and migration from `.yoyodyne.yaml`.
+See the [configuration guide](docs/configuration.md) for the full layout, the `init` flags, precedence, merge and removal semantics, persona rules, extending a bundle, and migration from `.yoyodyne.yaml`.
 
 See the [v1 harness design](docs/v1-harness-design.md) for the architecture and self-hosting sequence.
