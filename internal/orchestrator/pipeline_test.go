@@ -2132,7 +2132,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 	}
 	cfg := config.Config{
 		Version: config.CurrentVersion,
-		Product: config.Product{ID: "yoyodyne", RepositoryID: "yoyodyne", Repository: repository},
+		Product: config.Product{ID: "yoyodyne", RepositoryID: "yoyodyne", Repository: repository, Specifications: config.DefaultSpecifications},
 		Execution: config.Execution{
 			MaxConcurrentDevelopers:     1,
 			RepairAttemptsBeforeReplan:  2,

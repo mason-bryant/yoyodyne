@@ -8,6 +8,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +19,12 @@ import (
 )
 
 const CurrentVersion = 1
+
+// DefaultSpecifications is where the product manager reads product intent from
+// when nothing names another directory. It is the layout the design recommends
+// for human-readable product artifacts, so a project that followed that layout
+// needs no setting at all.
+const DefaultSpecifications = "docs/product"
 
 type Config struct {
 	Version int `yaml:"version" json:"version"`
@@ -35,6 +42,12 @@ type Product struct {
 	ID           domain.ProductID    `yaml:"id" json:"id"`
 	RepositoryID domain.RepositoryID `yaml:"repository_id,omitempty" json:"repository_id,omitempty"`
 	Repository   string              `yaml:"repository" json:"repository"`
+	// Specifications is the directory the product manager reads product intent
+	// from, relative to the repository root. It is the whole of what that role
+	// is shown about the product, so it is confined to the repository: a path
+	// that escapes it would put arbitrary text in front of the role that decides
+	// what the product is for.
+	Specifications string `yaml:"specifications" json:"specifications"`
 }
 
 type Execution struct {
@@ -157,6 +170,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.Product.Repository) == "" {
 		problems = append(problems, "product repository is required")
+	}
+	if err := validateSpecificationsDirectory(c.Product.Specifications); err != nil {
+		problems = append(problems, err.Error())
 	}
 	if c.Execution.MaxConcurrentDevelopers < 1 {
 		problems = append(problems, "max_concurrent_developers must be at least 1")
@@ -289,6 +305,22 @@ func (p Persona) problems(agentName string) []string {
 		problems = append(problems, fmt.Sprintf("agent %q persona %q is %d bytes, limit is %d", agentName, p.Path, len(p.Text), MaxPersonaBytes))
 	}
 	return problems
+}
+
+// validateSpecificationsDirectory keeps the product manager's inputs inside the
+// repository. The path is resolved against the repository root, so an absolute
+// path or one that climbs out of it names something the repository does not
+// contain and is refused rather than read.
+func validateSpecificationsDirectory(directory string) error {
+	trimmed := strings.TrimSpace(directory)
+	if trimmed == "" {
+		return errors.New("product specifications directory is required")
+	}
+	clean := filepath.Clean(trimmed)
+	if filepath.IsAbs(trimmed) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("product specifications %q must be a directory inside the repository", directory)
+	}
+	return nil
 }
 
 // remoteNamePattern keeps a configured remote a plain remote name. The harness

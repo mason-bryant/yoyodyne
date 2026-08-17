@@ -378,6 +378,7 @@ agents:
 		"execution.max_concurrent_developers",
 		"execution.repair_attempts_before_replan",
 		"execution.worktree_root",
+		"product.specifications",
 		"agents.developer.instances",
 	} {
 		if got := resolved.Origins[key]; got != OriginDefault {
@@ -589,6 +590,42 @@ agents:
 	}
 	if origin := resolved.Origins["approvals.publishing"]; origin != OriginDefault {
 		t.Errorf("publishing origin = %q, want %q", origin, OriginDefault)
+	}
+}
+
+// The specifications directory is the whole of what the product manager is
+// shown about the product, so a project that follows the recommended layout
+// inherits it and a project that does not names its own.
+func TestSpecificationsDirectoryDefaultsAndIsOverridable(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Product.Specifications != DefaultSpecifications {
+		t.Fatalf("specifications = %q, want %q", inherited.Config.Product.Specifications, DefaultSpecifications)
+	}
+	if origin := inherited.Origins["product.specifications"]; origin != OriginDefault {
+		t.Errorf("specifications origin = %q, want %q", origin, OriginDefault)
+	}
+
+	overridden := loadProject(t, minimalProjectConfig+"  specifications: docs/specs\n", nil)
+	if overridden.Config.Product.Specifications != "docs/specs" {
+		t.Fatalf("specifications = %q, want the project override", overridden.Config.Product.Specifications)
+	}
+	if origin := overridden.Origins["product.specifications"]; origin == OriginDefault {
+		t.Errorf("specifications origin = %q, want the project file", origin)
+	}
+}
+
+// The product manager reads whatever this names, so a path that leaves the
+// repository is refused before anything reads it.
+func TestSpecificationsDirectoryIsConfinedToTheRepository(t *testing.T) {
+	t.Parallel()
+
+	for _, directory := range []string{"\"\"", "\"   \"", "..", "../elsewhere", "/etc", "docs/../../elsewhere"} {
+		_, err := loadProjectError(t, minimalProjectConfig+"  specifications: "+directory+"\n", nil)
+		if err == nil || !strings.Contains(err.Error(), "specifications") {
+			t.Errorf("LoadResolved() specifications %q error = %v", directory, err)
+		}
 	}
 }
 
