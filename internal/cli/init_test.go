@@ -89,6 +89,24 @@ func TestRunInitRefusesToOverwriteWithoutForce(t *testing.T) {
 		t.Error("a refused init overwrote the existing configuration")
 	}
 
+	// The same refusal reported as JSON still exits nonzero, so a script does
+	// not have to parse the payload to notice that nothing was written.
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"init", "--directory", project, "--product", "example", "--json"}, &stdout, &stderr, "test"); code != 1 {
+		t.Fatalf("Run() code = %d, want 1", code)
+	}
+	var failure struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &failure); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if failure.Status != "failed" || !strings.Contains(failure.Error, "--force") {
+		t.Fatalf("failure = %+v", failure)
+	}
+
 	stdout.Reset()
 	stderr.Reset()
 	if code := Run([]string{"init", "--directory", project, "--product", "example", "--force", "--json"}, &stdout, &stderr, "test"); code != 0 {

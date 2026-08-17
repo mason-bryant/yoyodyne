@@ -32,10 +32,15 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 
 	written, err := initializeProject(*directory, *product, *force)
 	if err != nil {
+		// A reported failure exits nonzero whichever form it was reported in,
+		// so a script reading the JSON does not have to parse it to notice.
 		if *jsonOutput {
-			return writeJSON(stdout, stderr, map[string]any{"status": "failed", "error": err.Error()})
+			if code := writeJSON(stdout, stderr, map[string]any{"status": "failed", "error": err.Error()}); code != 0 {
+				return code
+			}
+		} else {
+			fmt.Fprintln(stderr, err)
 		}
-		fmt.Fprintln(stderr, err)
 		return 1
 	}
 

@@ -143,7 +143,7 @@ A project owns its configuration outright. `yoyo init` writes it:
 ./bin/yoyo init --product example --directory path/to/project
 ```
 
-That writes a complete `.yoyodyne/config.yaml` — every agent with its role, backend, model selector, instance count, and persona reference, plus the execution, approval, and product settings — and copies the five personas into `.yoyodyne/personas/`, where they are ordinary Markdown files in your repository. Nothing is inherited when the file loads, so `yoyo config show --origins` names the project file for every value, and editing a field is the whole of what changes the harness's behavior.
+That writes a complete `.yoyodyne/config.yaml` — every agent with its role, backend, model selector, instance count, and persona reference, plus the execution, approval, and product settings — and copies the five personas into `.yoyodyne/personas/`, where they are ordinary Markdown files in your repository. Nothing is inherited when the file loads, so `yoyo config show --origins` names the project file for every configured value — the one exception being `product.repository_id`, which is reported as `derived:product.id` because the file states the product id and lets the repository id follow from it. Editing a field is the whole of what changes the harness's behavior.
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated

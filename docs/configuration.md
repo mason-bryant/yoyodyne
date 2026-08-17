@@ -135,10 +135,15 @@ leaves it.
 
 ## Precedence
 
-A configuration `init` wrote has one layer: itself. There is nothing to trace,
-and `yoyo config show --origins` reports the project file as the origin of every
-value. The rest of this section describes what happens when a project uses
-`extends`, and what the harness still fills in when a file leaves something out.
+A configuration `init` wrote has one layer: itself. Every configured value comes
+from the project file, and nothing is inherited from a bundle. One value is
+still reported as computed rather than written: `product.repository_id` has the
+origin `derived:product.id`, because the generated file states the product id
+and lets the repository id follow from it. That is a value derived from
+something in the same file, not something arriving from outside it.
+
+The rest of this section describes what happens when a project uses `extends`,
+and what the harness still fills in when a file leaves something out.
 
 Up to three layers produce the effective configuration, later ones winning:
 
@@ -701,5 +706,11 @@ Origins use these values:
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.
-In a project `init` wrote, the answer is the project file every time, which is
-the point of writing it that way.
+
+In a project `init` wrote, the answer is the project file for every configured
+value, and `derived:product.id` for `product.repository_id` alone — the one
+value the generated file computes rather than states. Nothing reports
+`builtin:v1`, and nothing reports `harness-default`, because the generated file
+writes down every value the harness would otherwise have filled in. So an origin
+that is neither the project file nor that one derivation means the
+configuration is inheriting something, which is worth looking at.

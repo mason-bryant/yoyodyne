@@ -21,9 +21,20 @@ func TestScaffoldedProjectLoadsWithoutTheBundle(t *testing.T) {
 	if len(resolved.Sources) != 1 || resolved.Sources[0] != resolved.Path {
 		t.Fatalf("sources = %v, want only the project file", resolved.Sources)
 	}
+	// Every value is the project file's own. The single exception is the
+	// repository id, which the generated file lets follow from the product id
+	// it does state -- a derivation from something in the same file rather than
+	// a value arriving from outside it. Nothing is a harness default either,
+	// because the generated file writes down what the harness would have filled
+	// in. This is what the documentation promises an operator reading
+	// `config show --origins`, so it is asserted exactly.
 	for key, origin := range resolved.Origins {
-		if origin == BuiltinV1 {
-			t.Errorf("origin[%q] = %q, want no value inherited from the bundle", key, origin)
+		want := resolved.Path
+		if key == "product.repository_id" {
+			want = OriginDerived
+		}
+		if origin != want {
+			t.Errorf("origin[%q] = %q, want %q", key, origin, want)
 		}
 	}
 
