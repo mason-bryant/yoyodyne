@@ -1,4 +1,4 @@
-# Goals
+# Goals directory
 
 This directory holds the goals derived from [the product brief](../brief.md).
 It currently holds [the v1 goals](v1-goals.md) and
