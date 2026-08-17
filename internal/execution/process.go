@@ -23,6 +23,11 @@ const (
 	ProcessFailed    ProcessStatus = "failed"
 	ProcessCancelled ProcessStatus = "cancelled"
 	ProcessTimedOut  ProcessStatus = "timed_out"
+	// ProcessStalled is a process that stopped producing output for longer than
+	// its idle bound allowed. It is deliberately not ProcessTimedOut: a stalled
+	// process demonstrably stopped doing anything, while a timed-out one may have
+	// been working the whole time and simply ran out of budget.
+	ProcessStalled ProcessStatus = "stalled"
 )
 
 type Stream string
@@ -33,12 +38,22 @@ const (
 )
 
 type Command struct {
-	Name           string
-	Args           []string
-	Dir            string
-	Env            []string
-	Stdin          io.Reader
-	Timeout        time.Duration
+	Name  string
+	Args  []string
+	Dir   string
+	Env   []string
+	Stdin io.Reader
+	// Timeout is the total budget: how long the process may run at all,
+	// whatever it is doing. It is the right and only bound for a short command
+	// whose duration is known, such as a Git invocation.
+	Timeout time.Duration
+	// IdleTimeout bounds the gap between one line of output and the next, which
+	// is a different question from the total budget: a process still producing
+	// output is demonstrably working, however long it has been running, and one
+	// producing nothing is stalled however recently it started. Zero or less
+	// disables the check, which is what a command whose output arrives in one
+	// burst at the end needs.
+	IdleTimeout    time.Duration
 	MaxOutputBytes int
 	Redactor       Redactor
 }
@@ -153,22 +168,43 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	var stderrBuffer bytes.Buffer
 	outputBytes := 0
 	outputLimitExceeded := false
-	for output := range outputs {
-		lineBytes := len(output.Text) + 1
-		if outputBytes+lineBytes > maxOutput {
-			outputLimitExceeded = true
-			continue
-		}
-		outputBytes += lineBytes
-		if output.Stream == StreamStdout {
-			stdoutBuffer.WriteString(output.Text)
-			stdoutBuffer.WriteByte('\n')
-		} else {
-			stderrBuffer.WriteString(output.Text)
-			stderrBuffer.WriteByte('\n')
-		}
-		if observer != nil {
-			observer(output)
+	stalled := false
+	idle := newIdleWatch(command.IdleTimeout)
+	defer idle.stop()
+drain:
+	for {
+		select {
+		case output, received := <-outputs:
+			if !received {
+				break drain
+			}
+			// Any line at all is proof the process is still doing something, so
+			// the idle bound starts over from here rather than from the start.
+			idle.reset()
+			lineBytes := len(output.Text) + 1
+			if outputBytes+lineBytes > maxOutput {
+				outputLimitExceeded = true
+				continue
+			}
+			outputBytes += lineBytes
+			if output.Stream == StreamStdout {
+				stdoutBuffer.WriteString(output.Text)
+				stdoutBuffer.WriteByte('\n')
+			} else {
+				stderrBuffer.WriteString(output.Text)
+				stderrBuffer.WriteByte('\n')
+			}
+			if observer != nil {
+				observer(output)
+			}
+		case <-idle.expired():
+			// Nothing has been produced for the whole idle bound, so the process
+			// is not working on anything this runner can see. Terminate the tree
+			// and keep draining until both pipes close, so whatever it did say
+			// before it went quiet is still reported.
+			stalled = true
+			stopProcess()
+			idle.stop()
 		}
 	}
 
@@ -194,6 +230,10 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 	}
 
 	switch {
+	case stalled:
+		// The runner stopped this process itself, so the kill it observes is its
+		// own and says nothing about what the process was doing.
+		result.Status = ProcessStalled
 	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		result.Status = ProcessTimedOut
 	case errors.Is(ctx.Err(), context.Canceled):
@@ -204,6 +244,48 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 		result.Status = ProcessSucceeded
 	}
 	return result, nil
+}
+
+// idleWatch bounds the gap between one line of process output and the next. It
+// is the whole of the runner's liveness signal: a process that keeps producing
+// output keeps resetting it, and only one that produces nothing at all trips it.
+type idleWatch struct {
+	timeout time.Duration
+	timer   *time.Timer
+}
+
+func newIdleWatch(timeout time.Duration) *idleWatch {
+	watch := &idleWatch{timeout: timeout}
+	if timeout > 0 {
+		watch.timer = time.NewTimer(timeout)
+	}
+	return watch
+}
+
+// expired reports the idle bound elapsing. A disabled watch returns a nil
+// channel, which never fires, so a caller selecting on it needs no special case.
+func (w *idleWatch) expired() <-chan time.Time {
+	if w.timer == nil {
+		return nil
+	}
+	return w.timer.C
+}
+
+func (w *idleWatch) reset() {
+	if w.timer == nil {
+		return
+	}
+	w.timer.Reset(w.timeout)
+}
+
+// stop disables the watch for good. It is idempotent, so a watch that has
+// already tripped can still be cleaned up by the caller's deferred stop.
+func (w *idleWatch) stop() {
+	if w.timer == nil {
+		return
+	}
+	w.timer.Stop()
+	w.timer = nil
 }
 
 func scanOutput(reader io.Reader, stream Stream, clock Clock, redactor Redactor, outputs chan<- Output, scanErrors chan<- error, stopProcess context.CancelFunc, waitGroup *sync.WaitGroup) {

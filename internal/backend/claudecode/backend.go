@@ -15,7 +15,20 @@ import (
 	"yoyodyne/internal/execution"
 )
 
-const defaultTimeout = 30 * time.Minute
+// defaultTimeout is the total budget for one provider invocation: how long a
+// run may go on at all, whether or not it is getting anywhere. It is generous
+// because it answers a different question from whether the run is stuck --
+// defaultIdleTimeout answers that, far sooner -- and because a run stopped for
+// either reason is left resumable rather than discarded. What it exists to catch
+// is an invocation that stays live and unproductive, retrying or looping, which
+// no liveness signal will ever catch.
+const defaultTimeout = 4 * time.Hour
+
+// defaultIdleTimeout bounds the gap between one event and the next. A working
+// agent emits events continuously -- a thought, a tool call, its result -- so
+// silence for this long means nothing is happening, and it can be far shorter
+// than the total budget for exactly that reason.
+const defaultIdleTimeout = 5 * time.Minute
 
 const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
 
@@ -189,6 +202,10 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
+	idleTimeout := request.IdleTimeout
+	if idleTimeout == 0 {
+		idleTimeout = defaultIdleTimeout
+	}
 
 	clock := b.Clock
 	if clock == nil {
@@ -198,12 +215,16 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	parser := newStreamParser(request.RunID, request.LastSequence, clock, redactor, request.EventSink)
 	var parseErrors []error
 	processResult, err := b.Runner.Run(ctx, execution.Command{
-		Name:     b.binary(),
-		Args:     args,
-		Dir:      request.WorkingDirectory,
-		Stdin:    strings.NewReader(request.Prompt),
-		Timeout:  timeout,
-		Redactor: redactor,
+		Name:  b.binary(),
+		Args:  args,
+		Dir:   request.WorkingDirectory,
+		Stdin: strings.NewReader(request.Prompt),
+		// The stream this invocation is asked for is the liveness signal: every
+		// line the process writes is an event, so the gap between lines is
+		// exactly the gap between events.
+		Timeout:     timeout,
+		IdleTimeout: idleTimeout,
+		Redactor:    redactor,
 	}, func(output execution.Output) {
 		if output.Stream == execution.StreamStdout {
 			if parseErr := parser.ParseLine(output.Text); parseErr != nil {
@@ -227,7 +248,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	result := parser.Result()
 	result.Backend = domain.BackendClaudeCode
 	result.Process = processResult
-	if processResult.Status == execution.ProcessCancelled || processResult.Status == execution.ProcessTimedOut {
+	if processResult.Status == execution.ProcessCancelled || processResult.Status == execution.ProcessTimedOut || processResult.Status == execution.ProcessStalled {
 		result.IsError = true
 		if result.StopReason == "" {
 			result.StopReason = string(processResult.Status)

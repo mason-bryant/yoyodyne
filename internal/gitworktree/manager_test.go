@@ -481,10 +481,14 @@ func writeFile(t *testing.T, root, relative, content string) {
 type recordingProcessRunner struct {
 	delegate execution.ProcessRunner
 	commands [][]string
+	// bounds keeps every command as it was issued, so a test can hold Git to the
+	// flat deadline that is exactly right for it.
+	bounds []execution.Command
 }
 
 func (r *recordingProcessRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
 	r.commands = append(r.commands, append([]string(nil), command.Args...))
+	r.bounds = append(r.bounds, command)
 	return r.delegate.Run(ctx, command, observer)
 }
 
@@ -511,4 +515,36 @@ func containsArguments(arguments []string, first, second string) bool {
 		}
 	}
 	return false
+}
+
+// A Git command's duration is known and short, so a flat deadline is exactly
+// the right bound for it. The activity bound that keeps a working provider
+// alive would only mistake a quiet Git command for a stalled one.
+func TestManagerBoundsGitCommandsByAFlatDeadlineOnly(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if _, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-bounds", BaseRef: "main"}); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if len(runner.bounds) == 0 {
+		t.Fatal("no Git commands were recorded")
+	}
+	for _, command := range runner.bounds {
+		if command.Timeout <= 0 {
+			t.Fatalf("git %v carries no deadline", command.Args)
+		}
+		if command.IdleTimeout != 0 {
+			t.Fatalf("git %v carries an idle bound of %s", command.Args, command.IdleTimeout)
+		}
+	}
 }

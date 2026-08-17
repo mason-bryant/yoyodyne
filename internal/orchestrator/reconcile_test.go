@@ -709,3 +709,52 @@ func TestReconcileLeavesARunPausedForAUsageLimitAlone(t *testing.T) {
 		t.Fatalf("resumed run = %#v, want the reconciled run integrated", outcome)
 	}
 }
+
+// A run whose provider the harness stopped on time is not an interrupted run
+// either: it is owed the rest of an attempt, in the worktree and session that
+// attempt established. Settling it would discard a change that can still be
+// finished.
+func TestReconcileLeavesARunWithAStoppedProviderAlone(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	first := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
+	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil || !paused.Paused {
+		t.Fatalf("Run() error = %v, paused = %t", err, paused.Paused)
+	}
+	before, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionResumable {
+		t.Fatalf("reconciliation = %#v, want the stopped run left resumable", results)
+	}
+	if !strings.Contains(results[0].Detail, "stopped emitting events") {
+		t.Fatalf("reconciliation did not report why the provider was stopped: %q", results[0].Detail)
+	}
+	after, err := store.Load(paused.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if after.Status != before.Status || after.Phase != before.Phase || after.ProviderStop != before.ProviderStop {
+		t.Fatalf("reconciliation disturbed a stopped run: %#v", after)
+	}
+	if tracker.blocked || tracker.closed {
+		t.Fatalf("reconciliation acted on the item of a stopped run: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	}
+
+	second := providerStopBackend(0, execution.ProcessStalled, approveVerdict)
+	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if outcome.RunID != before.RunID || outcome.Integration == nil {
+		t.Fatalf("resumed run = %#v, want the reconciled run integrated", outcome)
+	}
+}

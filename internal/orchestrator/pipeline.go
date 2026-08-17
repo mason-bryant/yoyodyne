@@ -144,18 +144,25 @@ type Outcome struct {
 	// remained unresolved was recorded on the work item.
 	RepairAttempts int  `json:"repair_attempts,omitempty"`
 	Blocked        bool `json:"blocked,omitempty"`
-	// Paused reports a run that stopped short of finishing because a provider
-	// usage limit was exhausted, and that is waiting to be continued rather than
-	// having failed. The run is still in flight when it is set: its worktree,
-	// branch, claimed item, and developer session are all preserved, and the
-	// deadline below says when it becomes runnable again.
+	// Paused reports a run that stopped short of finishing and is owed a
+	// continuation rather than having failed. The run is still in flight when it
+	// is set: its worktree, branch, claimed item, and developer session are all
+	// preserved. Two things pause a run, and they are told apart by which of the
+	// fields below is set: an exhausted provider usage limit, whose deadline says
+	// when the run becomes runnable again, and a provider invocation the harness
+	// stopped on time, which is runnable immediately.
 	Paused bool `json:"paused,omitempty"`
 	// UsageLimitResetsAt is when the provider said the exhausted limit resets,
 	// and UsageLimitKind is the provider's own name for it. They are reported on
 	// a paused run and on a run that stopped because the reset was unusable.
-	UsageLimitResetsAt *time.Time               `json:"usage_limit_resets_at,omitempty"`
-	UsageLimitKind     string                   `json:"usage_limit_kind,omitempty"`
-	Integration        *gitworktree.Integration `json:"integration,omitempty"`
+	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
+	UsageLimitKind     string     `json:"usage_limit_kind,omitempty"`
+	// ProviderStop names why the harness stopped a provider invocation on time
+	// rather than the provider ending it: runstate.ProviderStopStalled when it
+	// stopped emitting events, runstate.ProviderStopBudgetExhausted when it was
+	// still live and out of budget. It is never a report of failure by the agent.
+	ProviderStop string                   `json:"provider_stop,omitempty"`
+	Integration  *gitworktree.Integration `json:"integration,omitempty"`
 	// PullRequest is the published pull request, present only on a run that
 	// published one. PublishSkipped says why a run that asked to publish did not,
 	// which is a repository with no configured remote and nothing else.
@@ -255,10 +262,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	switch {
 	case err == nil:
 		defer lease.Release()
-		// A usage-limit pause is resumable whatever the approval policy, because
-		// nothing about it depends on the repair loop: the run simply has not had
-		// its first attempt served yet.
-		if !pausedForUsageLimit(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		// A usage-limit pause and a provider the harness stopped on time are both
+		// resumable whatever the approval policy, because nothing about either
+		// depends on the repair loop: the first has not had its attempt served
+		// yet, and the second is owed the rest of an attempt it was making.
+		if !pausedForUsageLimit(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -369,8 +377,9 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 }
 
 // resumeRun picks up a run this process did not finish: one an interrupted
-// process left inside its repair loop, or one that paused because a provider
-// usage limit was exhausted. The worktree, branch, developer session, attempt
+// process left inside its repair loop, one that paused because a provider usage
+// limit was exhausted, or one whose provider the harness stopped on time. The
+// worktree, branch, developer session, attempt
 // count, and the failure the interrupted attempt was handed all come from
 // durable state, so the resumed run continues the same change at the attempt it
 // had reached instead of starting a second one against a fresh budget. Its
@@ -711,6 +720,9 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	a.state.ProviderSessionID = providerResult.SessionID
 	a.state.ProviderResolvedModel = providerResult.ResolvedModel
 	a.state.LastSequence = providerResult.LastEvent
+	// Whatever stopped the previous attempt is spent: this one ran, and how it
+	// ended is recorded below.
+	a.state.ProviderStop = ""
 	a.state.UpdatedAt = p.clock().Now()
 	a.outcome.ProviderSessionID = providerResult.SessionID
 	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
@@ -723,13 +735,31 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 		return fmt.Errorf("summarize developer changes: %w", err)
 	}
 	a.outcome.Changes = changeSummary
-	if providerResult.IsError {
+	if !providerResult.IsError {
+		return nil
+	}
+	// A stopped invocation is the harness's own doing, so it is never reported as
+	// the developer having said anything. What it produced is already in the
+	// worktree and its session is already recorded, so the run is left owed a
+	// continuation instead of being failed.
+	if reason, stopped := providerStopReason(providerResult.Process.Status); stopped {
+		resumable, err := a.recordProviderStop(reason)
+		if err != nil {
+			return err
+		}
+		if resumable {
+			return providerStop{reason: reason}
+		}
 		return phaseError{
 			status: statusForProcess(providerResult.Process.Status),
-			cause:  fmt.Errorf("developer reported failure: %s", nonEmpty(providerResult.StopReason, providerResult.FinalText)),
+			cause: fmt.Errorf("the harness stopped the developer: %s, and this run has nothing to continue from",
+				describeProviderStop(reason)),
 		}
 	}
-	return nil
+	return phaseError{
+		status: statusForProcess(providerResult.Process.Status),
+		cause:  fmt.Errorf("developer reported failure: %s", nonEmpty(providerResult.StopReason, providerResult.FinalText)),
+	}
 }
 
 // refusedForUsageLimit reports an attempt the provider declined for want of
@@ -743,6 +773,82 @@ func refusedForUsageLimit(result backend.RunResult, err error) (backend.UsageLim
 		return backend.UsageLimit{}, false
 	}
 	return *result.UsageLimit, true
+}
+
+// providerStopReason names the harness's reason for stopping a provider
+// invocation, and reports whether it stopped one at all. Only these two process
+// statuses are the harness acting on time; every other way a process ends is the
+// provider's own, including a cancelled one, which is an operator's.
+func providerStopReason(status execution.ProcessStatus) (string, bool) {
+	switch status {
+	case execution.ProcessStalled:
+		return runstate.ProviderStopStalled, true
+	case execution.ProcessTimedOut:
+		return runstate.ProviderStopBudgetExhausted, true
+	default:
+		return "", false
+	}
+}
+
+func describeProviderStop(reason string) string {
+	switch reason {
+	case runstate.ProviderStopStalled:
+		return "it stopped emitting events"
+	case runstate.ProviderStopBudgetExhausted:
+		return "it was still working when its total budget ran out"
+	default:
+		return "it was stopped on time"
+	}
+}
+
+// providerStop reports an invocation the harness stopped on time rather than one
+// the provider ended. Like a usage-limit pause it is an error only so that it
+// travels the path a stopped step already travels; it is deliberately not a
+// failure, and the run it leaves behind is still in flight and still resumable.
+type providerStop struct {
+	reason string
+}
+
+func (e providerStop) Error() string {
+	return "the harness stopped the provider: " + describeProviderStop(e.reason)
+}
+
+// recordProviderStop makes a stop durable and reports whether the run can be
+// picked up again from it. A stop the run could not be resumed from is
+// deliberately not recorded: a marker nothing can act on would leave the run in
+// flight with no way back into it, which is worse than ending it honestly.
+func (a *activeRun) recordProviderStop(reason string) (bool, error) {
+	a.state.ProviderStop = reason
+	if !stoppedProviderIsResumable(a.state) {
+		a.state.ProviderStop = ""
+		return false, nil
+	}
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return false, fmt.Errorf("record the stopped provider invocation: %w", err)
+	}
+	return true, nil
+}
+
+// stoppedProviderIsResumable reports a run whose provider the harness stopped on
+// time and which can be continued from durable state. It needs the worktree the
+// stopped invocation was working in and the developer session a continuation
+// resumes: a developer attempt continues in that session, and a review re-reads
+// the change that session produced, which is also the session integration later
+// demands as evidence of two independent invocations.
+func stoppedProviderIsResumable(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.ProviderStop == "" {
+		return false
+	}
+	switch state.Phase {
+	case runstate.PhaseDeveloping, runstate.PhaseReviewing:
+	default:
+		return false
+	}
+	if state.ProviderSessionID == "" {
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
 }
 
 // pauseForUsageLimit records an exhausted limit and waits it out. The reset time
@@ -1032,6 +1138,9 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	// a lost run. A reconciler re-runs cleanup, which refuses anything that is
 	// not the recorded, registered, already-integrated worktree.
 	completedAt := p.clock().Now()
+	// A recorded stop is an instruction to continue later, and this run has
+	// finished. Leaving it would promise a continuation of a completed run.
+	a.state.ProviderStop = ""
 	a.state.Status = runstate.StatusSucceeded
 	a.state.Phase = runstate.PhaseCleaningUp
 	a.state.UpdatedAt = completedAt
@@ -1084,14 +1193,20 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	return a.outcome, nil
 }
 
-// stop turns a stopped step into the outcome the run reports. A usage-limit
-// pause is deliberately not one of the failures: it leaves the run in flight,
-// with its worktree, branch, claimed work item, and developer session all
-// preserved, so a later invocation resumes it once the recorded deadline passes.
+// stop turns a stopped step into the outcome the run reports. Two things it can
+// be handed are deliberately not failures, because both leave the run in flight
+// with its worktree, branch, claimed work item, and developer session preserved:
+// a usage-limit pause, which a later invocation resumes once the recorded
+// deadline passes, and a provider the harness stopped on time, which a later
+// invocation resumes straight away.
 func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	var paused usageLimitPause
 	if errors.As(cause, &paused) {
 		return a.pause(paused)
+	}
+	var stopped providerStop
+	if errors.As(cause, &stopped) {
+		return a.pauseForProviderStop(stopped)
 	}
 	return a.fail(cause, failureStatus(ctx, cause))
 }
@@ -1125,16 +1240,43 @@ func (a *activeRun) pause(paused usageLimitPause) (Outcome, error) {
 	return a.outcome, nil
 }
 
+// pauseForProviderStop reports a run whose provider the harness stopped on time.
+// It is the twin of pause: the stop was made durable before this point, nothing
+// is cleaned up, and nothing is made terminal, so the change the stopped
+// invocation had already made stays where the next one continues it.
+func (a *activeRun) pauseForProviderStop(stopped providerStop) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	a.outcome.ProviderStop = stopped.reason
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderProviderStopNotes(a.outcome)); err != nil {
+		// The stop is already durable, so a note that could not be written costs
+		// the run nothing. It is still reported, for the same reason a pause is.
+		return a.outcome, fmt.Errorf("record the stopped provider invocation on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // fail records a terminal run failure everywhere it has to be visible: the
 // durable state, the reported outcome, and the work item when the run holds it.
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	p := a.pipeline
 	message := cause.Error()
 	completedAt := p.clock().Now()
-	// A recorded pause is an instruction to resume later, and this run is ending
-	// now. Clearing the deadline keeps the terminal record coherent; what stopped
+	// A recorded pause or stop is an instruction to resume later, and this run is
+	// ending now. Clearing both keeps the terminal record coherent; what stopped
 	// the run is still named by the recorded limit kind and by the failure.
 	a.state.UsageLimitResetsAt = nil
+	a.state.ProviderStop = ""
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
@@ -1236,14 +1378,35 @@ func (p Pipeline) reportOutstandingCleanup(state runstate.State, outcome Outcome
 func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	for {
 		decision, reported, err := a.attemptReview(ctx)
-		limit, refused := refusedReviewForUsageLimit(reported, err)
-		if !refused {
-			return decision, err
+		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
+			if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
+				return "", pauseErr
+			}
+			continue
 		}
-		if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
-			return "", pauseErr
+		// A review the harness stopped on time was never made either, and the
+		// change waiting to be judged is untouched by it. Continuing that run
+		// costs one more review; failing it would cost the whole change.
+		if reason, stopped := providerStopReason(reported.processStatus); stopped && err != nil {
+			resumable, recordErr := a.recordProviderStop(reason)
+			if recordErr != nil {
+				return "", recordErr
+			}
+			if resumable {
+				return "", providerStop{reason: reason}
+			}
 		}
+		return decision, err
 	}
+}
+
+// providerEvidence is what an attempted invocation says about why it produced no
+// answer, separately from the error it returned: a usage limit the provider
+// refused it for, or the way its own process ended. Both decide whether the run
+// continues, and neither is legible from the error alone.
+type providerEvidence struct {
+	usageLimit    *backend.UsageLimit
+	processStatus execution.ProcessStatus
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of
@@ -1260,7 +1423,7 @@ func refusedReviewForUsageLimit(limit *backend.UsageLimit, err error) (backend.U
 // exactly what it decided, including when it fails or answers with something the
 // verdict contract rejects. Every recorded outcome is written into the run state
 // before the caller acts on it, so a stopped run still explains why it stopped.
-func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, *backend.UsageLimit, error) {
+func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, providerEvidence, error) {
 	p := a.pipeline
 	a.state.Phase = runstate.PhaseReviewing
 	// Nothing an earlier attempt was told carries into this one. Clearing the
@@ -1268,13 +1431,17 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, *backen
 	// belong to the change that is about to be judged, so an earlier approval
 	// can never authorize a later attempt.
 	a.clearReviewEvidence()
+	// Whatever stopped a previous invocation is spent once this one starts: a
+	// stop left behind would make a running review look continuable to the next
+	// process that adopts the run.
+	a.state.ProviderStop = ""
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
-		return "", nil, fmt.Errorf("save reviewing run state: %w", err)
+		return "", providerEvidence{}, fmt.Errorf("save reviewing run state: %w", err)
 	}
 	changes, err := p.Worktrees.UnifiedChanges(ctx, a.worktree, gitworktree.DiffLimits{})
 	if err != nil {
-		return "", nil, fmt.Errorf("assemble reviewed change: %w", err)
+		return "", providerEvidence{}, fmt.Errorf("assemble reviewed change: %w", err)
 	}
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
 		RunID:        a.state.RunID,
@@ -1308,16 +1475,16 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, *backen
 		a.outcome.ReviewDecision = result.Decision
 	}
 	if reviewErr != nil {
-		return "", result.UsageLimit, fmt.Errorf("independent review failed: %w", reviewErr)
+		return "", providerEvidence{usageLimit: result.UsageLimit, processStatus: result.ProcessStatus}, fmt.Errorf("independent review failed: %w", reviewErr)
 	}
 	// The reviewer reports the selector it actually ran with. Auditing that
 	// against configuration here keeps the recorded evidence a fact rather than
 	// an assumption about how the reviewer was wired.
 	configured := p.reviewer().Model
 	if result.RequestedModel != configured {
-		return "", nil, fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
+		return "", providerEvidence{}, fmt.Errorf("reviewer ran with model %q, configured reviewer model is %q", result.RequestedModel, configured)
 	}
-	return result.Decision, nil, nil
+	return result.Decision, providerEvidence{}, nil
 }
 
 func (a *activeRun) clearReviewEvidence() {
@@ -1707,6 +1874,31 @@ func renderUsageLimitPauseNotes(outcome Outcome) string {
 	return strings.Join(lines, "\n")
 }
 
+// renderProviderStopNotes describes a run whose provider the harness stopped on
+// time. It says which of the two reasons it was, because they call for different
+// things from whoever reads it: a stall is worth investigating, an exhausted
+// budget is work that needs another pass. Neither is a report from the agent.
+func renderProviderStopNotes(outcome Outcome) string {
+	headline := "Yoyodyne stopped this run's provider: it stopped emitting events, so nothing was happening. The developer reported no failure."
+	if outcome.ProviderStop == runstate.ProviderStopBudgetExhausted {
+		headline = "Yoyodyne stopped this run's provider: it was still working when its total budget ran out. The developer reported no failure."
+	}
+	lines := []string{
+		headline,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+	}
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"Running Yoyodyne on this item again continues the same run from where it stopped; nothing needs to be restarted.",
+	)
+	return strings.Join(lines, "\n")
+}
+
 // renderUsageLimitBlockerNotes describes a run stopped by a limit it could not
 // wait out. It names the reason the wait was refused, because the alternative to
 // a stated deadline is a guessed one, and that is the decision being handed to a
@@ -1963,7 +2155,10 @@ func statusForProcess(status execution.ProcessStatus) runstate.Status {
 	switch status {
 	case execution.ProcessCancelled:
 		return runstate.StatusCancelled
-	case execution.ProcessTimedOut:
+	case execution.ProcessTimedOut, execution.ProcessStalled:
+		// Both are the harness stopping a process on time. There is no separate
+		// durable status for a stall, and recording it as a plain failure would
+		// describe the agent as having failed at something.
 		return runstate.StatusTimedOut
 	default:
 		return runstate.StatusFailed

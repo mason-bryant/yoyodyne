@@ -77,6 +77,77 @@ func TestOSProcessRunnerTimeout(t *testing.T) {
 	}
 }
 
+// A process that says nothing for the whole idle bound is stopped as stalled,
+// long before a total budget it would otherwise have to exhaust.
+func TestOSProcessRunnerStopsASilentProcessAsStalled(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("sleep", "")
+	command.Timeout = 30 * time.Second
+	command.IdleTimeout = 50 * time.Millisecond
+	started := time.Now()
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessStalled {
+		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessStalled)
+	}
+	if elapsed := time.Since(started); elapsed >= 5*time.Second {
+		t.Fatalf("Run() waited %s; the stall was not detected on the idle bound", elapsed)
+	}
+}
+
+// A process that keeps producing output keeps proving it is working, so an idle
+// bound far shorter than its total runtime never stops it.
+//
+// The bound has to absorb the child's own startup as well as the gaps between
+// its lines: the watch begins when the process is started, and the first line
+// cannot arrive until the helper binary has finished coming up, which is slow
+// under the race detector and slower again beside every other parallel test.
+// That is a property of this fixture rather than of a provider, whose idle bound
+// is minutes and whose startup is nothing beside it.
+func TestOSProcessRunnerLeavesAChattyProcessAlone(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("chatter", "")
+	command.Timeout = 60 * time.Second
+	command.IdleTimeout = 2 * time.Second
+	started := time.Now()
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessSucceeded {
+		t.Fatalf("Run() status = %q, want %q for a process that never went quiet", result.Status, ProcessSucceeded)
+	}
+	// Outliving the idle bound is the whole claim: without it a process that
+	// simply finished quickly would pass this test.
+	if elapsed := time.Since(started); elapsed <= command.IdleTimeout {
+		t.Fatalf("Run() returned after %s, which never outlived the %s idle bound", elapsed, command.IdleTimeout)
+	}
+	if lines := strings.Count(result.Stdout, "\n"); lines < 2 {
+		t.Fatalf("Run() stdout = %q, want the chatter it kept producing", result.Stdout)
+	}
+}
+
+// The total budget still bounds a process that is alive and producing output,
+// and what stops it is reported as the budget rather than as a stall.
+func TestOSProcessRunnerTimesOutAChattyProcessOnItsTotalBudget(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("endless-chatter", "")
+	command.Timeout = 150 * time.Millisecond
+	command.IdleTimeout = 30 * time.Second
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessTimedOut {
+		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessTimedOut)
+	}
+}
+
 func TestOSProcessRunnerCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +256,22 @@ func TestProcessHelper(t *testing.T) {
 	case "sleep":
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
+	case "chatter":
+		// Long enough overall to outlive an idle bound, and never quiet for
+		// anywhere near long enough to trip one. The end is a wall-clock deadline
+		// rather than a line count so that a loaded machine makes this process
+		// chattier, never longer.
+		deadline := time.Now().Add(4 * time.Second)
+		for line := 0; time.Now().Before(deadline); line++ {
+			fmt.Printf("working %d\n", line)
+			time.Sleep(20 * time.Millisecond)
+		}
+		os.Exit(0)
+	case "endless-chatter":
+		for {
+			fmt.Println("still working")
+			time.Sleep(10 * time.Millisecond)
+		}
 	case "oversized-line":
 		fmt.Print(strings.Repeat("x", 2<<20))
 		time.Sleep(5 * time.Second)
