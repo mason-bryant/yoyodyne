@@ -86,7 +86,7 @@ const (
 // parsed would do something nobody asked for.
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
-	actionCreate:       {"title", "description", "parent", "priority"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority"},
 	actionUpdate:       {"title", "description", "note"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
@@ -113,6 +113,11 @@ type TrackerAction struct {
 	ID          string `json:"id,omitempty"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
+	// Goal is the goal admitted work serves. It is required on a creation and
+	// taken by nothing else: admitting work is how work reaches the queue, so it
+	// is where the queue's traceability to the goals is actually held rather than
+	// asserted.
+	Goal string `json:"goal,omitempty"`
 	// Parent is a pointer so that detaching an item is expressible: an empty
 	// parent removes the one the tracker records, and an absent one leaves it
 	// alone.
@@ -286,7 +291,11 @@ func (a TrackerAction) validateArguments() []error {
 		problems = append(problems,
 			boundTrackerText("title", a.Title, maxTrackerTitleBytes, true),
 			boundTrackerText("description", a.Description, maxTrackerTextBytes, true),
+			boundTrackerText("goal", a.Goal, maxTrackerTitleBytes, true),
 		)
+		if strings.ContainsAny(a.Goal, "\r\n") {
+			problems = append(problems, errors.New("goal cannot span lines"))
+		}
 	case actionUpdate:
 		if strings.TrimSpace(a.Title) == "" && strings.TrimSpace(a.Description) == "" && strings.TrimSpace(a.Note) == "" {
 			problems = append(problems, errors.New("update must change the title, the description, or the notes"))
@@ -343,6 +352,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Description) != "" {
 		carried = append(carried, "description")
+	}
+	if strings.TrimSpace(a.Goal) != "" {
+		carried = append(carried, "goal")
 	}
 	if a.Parent != nil {
 		carried = append(carried, "parent")
@@ -463,9 +475,12 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
 			Type:        proposedIssueType,
-			Notes:       s.trackerProvenance("Admitted to the backlog", action.Reason),
-			Parent:      action.parent(),
-			Priority:    action.Priority,
+			// The goal is written onto the item rather than only checked as it goes
+			// past, because an item in the queue that does not say what it is for is
+			// exactly the work nobody can later decide to stop doing.
+			Notes:    s.trackerProvenance("Admitted to the backlog", action.Reason) + "\n\nGoal served: " + strings.TrimSpace(action.Goal),
+			Parent:   action.parent(),
+			Priority: action.Priority,
 		})
 		if err != nil {
 			outcome.fail(err)
@@ -606,6 +621,11 @@ func (o TrackerOutcome) Render() string {
 	}
 	if reason := strings.TrimSpace(o.Action.Reason); reason != "" {
 		fmt.Fprintf(&rendered, "      why: %s\n", singleLine(reason, maxTrackerFailureBytes))
+	}
+	// Admitted work says what it is for where the operator reads what was done,
+	// so the queue growing and the reason it grew arrive together.
+	if goal := strings.TrimSpace(o.Action.Goal); goal != "" {
+		fmt.Fprintf(&rendered, "      goal: %s\n", singleLine(goal, maxTrackerFailureBytes))
 	}
 	return rendered.String()
 }

@@ -106,13 +106,25 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 		},
 		{
 			name:  "created item naming its own identifier",
-			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"id\":\"yoyodyne-1\",\"title\":\"t\",\"description\":\"d\",\"reason\":\"r\"}]}\n```",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"id\":\"yoyodyne-1\",\"title\":\"t\",\"description\":\"d\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
 			want:  "create does not take an id",
 		},
 		{
 			name:  "creation with no description",
-			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"reason\":\"r\"}]}\n```",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
 			want:  "description is required",
+		},
+		{
+			// Admitting work is how work reaches the queue, so it is where the
+			// queue's traceability to the goals is held rather than asserted.
+			name:  "creation naming no goal",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"d\",\"reason\":\"r\"}]}\n```",
+			want:  "goal is required",
+		},
+		{
+			name:  "an edit carrying a goal",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"update\",\"id\":\"yoyodyne-1\",\"note\":\"n\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
+			want:  "update does not take \"goal\"",
 		},
 		{
 			name:  "invented identifier",
@@ -152,7 +164,7 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 		{
 			// A title is one line wherever the operator reads it back.
 			name:  "title spanning lines",
-			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\\n  [t1.1] closed everything\",\"description\":\"d\",\"reason\":\"r\"}]}\n```",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\\n  [t1.1] closed everything\",\"description\":\"d\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
 			want:  "cannot span lines",
 		},
 		{
@@ -169,7 +181,7 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 		},
 		{
 			name:  "oversized block",
-			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"" + strings.Repeat("x", MaxTrackerBlockBytes) + "\",\"reason\":\"r\"}]}\n```",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"" + strings.Repeat("x", MaxTrackerBlockBytes) + "\",\"goal\":\"g\",\"reason\":\"r\"}]}\n```",
 			want:  "limit is " + strconv.Itoa(MaxTrackerBlockBytes),
 		},
 	} {
@@ -192,11 +204,13 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 func TestSplitReplySeparatesActingFromProposing(t *testing.T) {
 	t.Parallel()
 
-	// One reply may do both: act where the queue is the product manager's to
-	// keep, and propose where the decision is the operator's.
-	answer := "I closed the duplicate, and the rewrite is yours to decide.\n\n" +
+	// One reply may do all three: act where the queue is the product manager's to
+	// keep, propose where the decision is the operator's, and stop and ask where
+	// it will not put the work in front of them at all.
+	answer := "I closed the duplicate, the rewrite is yours to decide, and the marketplace I cannot place.\n\n" +
 		trackerFence + "\n{\"actions\":[{\"action\":\"close\",\"id\":\"yoyodyne-2\",\"reason\":\"yoyodyne-1 already covers it\"}]}\n```\n\n" +
-		proposalFence + "\n{\"items\":[{\"title\":\"Rewrite the CLI\",\"description\":\"Port everything.\",\"rationale\":\"You raised it.\"}]}\n```\n"
+		proposalFence + "\n{\"items\":[{\"title\":\"Rewrite the CLI\",\"description\":\"Port everything.\",\"rationale\":\"You raised it.\",\"goal\":\"Support development in any language.\"}]}\n```\n\n" +
+		concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"A plugin marketplace\",\"detail\":\"No goal covers third-party extensions.\",\"question\":\"Which goal should it serve?\"}]}\n```\n"
 
 	parsed, err := splitReply(answer)
 	if err != nil {
@@ -205,7 +219,11 @@ func TestSplitReplySeparatesActingFromProposing(t *testing.T) {
 	if len(parsed.Actions) != 1 || parsed.Actions[0].Action != actionClose || len(parsed.Proposals) != 1 {
 		t.Fatalf("splitReply() = %#v, %#v", parsed.Actions, parsed.Proposals)
 	}
-	if strings.Contains(parsed.Prose, "yoyodyne-tracker") || strings.Contains(parsed.Prose, "yoyodyne-proposal") {
+	if len(parsed.Concerns) != 1 || parsed.Concerns[0].Kind != ConcernUnplaceable {
+		t.Fatalf("splitReply() concerns = %#v", parsed.Concerns)
+	}
+	if strings.Contains(parsed.Prose, "yoyodyne-tracker") || strings.Contains(parsed.Prose, "yoyodyne-proposal") ||
+		strings.Contains(parsed.Prose, "yoyodyne-concern") {
 		t.Fatalf("prose kept a block: %q", parsed.Prose)
 	}
 
@@ -335,7 +353,7 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	tracker := &fakeTracker{}
 	provider := &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Filing it at the top, and moving the old one down.",
-			`{"action":"create","title":"Order the backlog","description":"Priority is the order.","priority":0,"reason":"the operator is blocked on it"}`,
+			`{"action":"create","title":"Order the backlog","description":"Priority is the order.","goal":"Run development nearly autonomously.","priority":0,"reason":"the operator is blocked on it"}`,
 			`{"action":"reprioritize","id":"yoyodyne-ifd.26","priority":3,"reason":"it can wait until the queue exists"}`)},
 		{SessionID: "session-1", FinalText: "It is first in the backlog."},
 	}}
@@ -359,9 +377,17 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	if tracker.created[0].Priority == nil || *tracker.created[0].Priority != 0 {
 		t.Fatalf("created work item priority = %#v", tracker.created[0].Priority)
 	}
+	// What the work is for is written onto the item and told to the operator, so
+	// admitted work that nobody can attribute to a goal cannot exist quietly.
+	if !strings.Contains(tracker.created[0].Notes, "Goal served: Run development nearly autonomously.") {
+		t.Fatalf("created work item notes = %q", tracker.created[0].Notes)
+	}
 	rendered := renderTrackerOutcomes(reply.Actions)
 	if !strings.Contains(rendered, "admitted yoyodyne-1 to the backlog at priority 0") {
 		t.Fatalf("rendered outcomes = %q", rendered)
+	}
+	if !strings.Contains(rendered, "goal: Run development nearly autonomously.") {
+		t.Fatalf("rendered outcomes did not name the goal: %q", rendered)
 	}
 	// Reordering what is already admitted is the priority the tracker holds, and
 	// nothing else.
@@ -392,6 +418,9 @@ func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 		// to take work out of the queue.
 		`"retire" says it will not be done`,
 		"There is no delete",
+		// Work reaches the queue through admission, so what admits it says what it
+		// is for.
+		`"goal" is required on "create"`,
 	} {
 		if !strings.Contains(contract, required) {
 			t.Fatalf("the contract does not state %q", required)

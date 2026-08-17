@@ -39,6 +39,10 @@ type chatOutput struct {
 	// has nobody to approve anything, so they are reported for a person to
 	// decide on in a conversation rather than acted on here.
 	Proposals []chat.PendingProposal `json:"proposals,omitempty"`
+	// Concerns are what the product manager would not propose until somebody
+	// answers it. A one-shot message has nobody to answer, so they are reported
+	// as the open questions they are rather than as work.
+	Concerns []chat.PendingConcern `json:"concerns,omitempty"`
 	// Actions are the tracker changes the product manager made while answering.
 	// Unlike proposals they already happened, so they are reported rather than
 	// offered.
@@ -97,6 +101,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 				Evidence:           &evidence,
 				Reply:              reply.Text,
 				Proposals:          reply.Proposals,
+				Concerns:           reply.Concerns,
 				Actions:            reply.Actions,
 				ResultsCarriedOver: reply.ResultsCarriedOver,
 				Reports:            reply.Reports,
@@ -106,6 +111,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		fmt.Fprintln(stdout, reply.Text)
 		printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
 		printChatReports(stdout, reply.Reports, reply.ReportProblem)
+		printChatConcerns(stdout, reply.Concerns)
 		printChatProposals(stdout, reply.Proposals)
 		printChatEvidence(stdout, reply.Evidence)
 		return 0
@@ -128,6 +134,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	if err := screen.Close(); err != nil {
 		fmt.Fprintf(stderr, "restore the terminal: %v\n", err)
 	}
+	printOpenConcerns(stdout, theme, session.Concerns())
 	printUndecidedProposals(stdout, theme, session.Proposals())
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
@@ -268,6 +275,10 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 		output.Evidence = &evidence
 		output.Reply = reply.Text
 		output.Proposals = reply.Proposals
+		// A concern is recorded before the turn goes on to fail, and it is the one
+		// thing in the reply that is waiting on a person, so it travels with the
+		// failure rather than behind it.
+		output.Concerns = reply.Concerns
 		// A turn that failed may still have changed the tracker before it did, so
 		// what it changed is reported with the failure rather than lost behind it.
 		// The same is true of anything it reported: the report is already
@@ -288,6 +299,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 	}
 	printChatActions(stdout, output.Actions, output.ResultsCarriedOver)
 	printChatReports(stdout, output.Reports, output.ReportProblem)
+	printChatConcerns(stdout, output.Concerns)
 	printChatProposals(stdout, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
@@ -307,7 +319,10 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 	fmt.Fprintln(writer, "reprioritize, link, unlink, close, and retire items, and every change it makes")
 	fmt.Fprintln(writer, "is reported to you here. It has no files, commands, or network, and it proposes")
 	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
-	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it.")
+	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it,")
+	fmt.Fprintln(writer, "and every one of them names the goal it serves. Work it cannot place under a")
+	fmt.Fprintln(writer, "goal, work it says would cut against one, and work it judges to be against the")
+	fmt.Fprintln(writer, "product's intent are not proposed at all: it stops and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
 	fmt.Fprintln(writer, "shows you what has been collected.")
 	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect.")
@@ -366,6 +381,38 @@ func printChatProposals(writer io.Writer, proposals []chat.PendingProposal) {
 	for _, proposal := range proposals {
 		fmt.Fprint(writer, proposal.Render())
 	}
+}
+
+// printChatConcerns reports what a one-shot message would not propose. There is
+// nobody to answer it here, so the questions are printed with what they are:
+// raised, unanswered, and holding work that was never proposed.
+func printChatConcerns(writer io.Writer, concerns []chat.PendingConcern) {
+	if len(concerns) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\nThe product manager will not propose %d thing(s) until it is answered. Nothing was proposed or created: answer it in `yoyodyne chat`.\n\n", len(concerns))
+	for _, concern := range concerns {
+		fmt.Fprint(writer, concern.Render())
+	}
+}
+
+// printOpenConcerns names the questions a conversation ended without answering,
+// so one nobody answered is a visible loose end rather than silence that reads
+// as agreement.
+func printOpenConcerns(writer io.Writer, theme console.Theme, concerns []chat.PendingConcern) {
+	if len(concerns) == 0 {
+		return
+	}
+	var open strings.Builder
+	fmt.Fprintf(&open, "%d question(s) from the product manager were left unanswered, and the work behind them was never proposed:\n", len(concerns))
+	for _, concern := range concerns {
+		// The question itself is printed rather than only named, because what an
+		// operator has to come back to is what was asked and not that something
+		// was.
+		fmt.Fprintf(&open, "  [%s] %s: %s\n", concern.ID, concern.Concern.Kind.Headline(), concern.Concern.Subject)
+		fmt.Fprintf(&open, "      %s\n", strings.TrimSpace(concern.Concern.Question))
+	}
+	fmt.Fprint(writer, theme.Questions(open.String()))
 }
 
 // printUndecidedProposals names what a conversation left open, so a proposal

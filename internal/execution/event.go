@@ -28,6 +28,12 @@ const (
 	EventProposalApproved EventType = "proposal.approved"
 	EventProposalRejected EventType = "proposal.rejected"
 	EventProposalCreated  EventType = "proposal.created"
+	// A concern is work the product manager judged against the goals and put to
+	// the operator as a question instead of proposing. What it raised and what
+	// it was told are separate events for the same reason a proposal and its
+	// decision are: the concern is evidence whether or not anybody answered it.
+	EventConcernRaised   EventType = "concern.raised"
+	EventConcernAnswered EventType = "concern.answered"
 	// A tracker action the product manager takes is recorded as what was asked
 	// for and what came of it, separately, so an action that failed is never
 	// readable as one that was carried out.
