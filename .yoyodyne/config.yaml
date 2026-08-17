@@ -11,6 +11,12 @@ extends: builtin:v1
 product:
   id: yoyodyne
   repository: .
+  # The product manager reads the specifications under this directory and
+  # nothing else in the repository -- not this file, not the README, not the
+  # design document. `docs/product` is the harness default, so it is left
+  # unwritten here; name another directory to move it. It must stay inside the
+  # repository.
+  # specifications: docs/product
 
 approvals:
   # Enabled with the closed loop: checks, an independent reviewer verdict, and

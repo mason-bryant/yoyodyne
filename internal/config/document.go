@@ -26,9 +26,10 @@ type configDocument struct {
 }
 
 type productDocument struct {
-	ID           *domain.ProductID    `yaml:"id"`
-	RepositoryID *domain.RepositoryID `yaml:"repository_id"`
-	Repository   *string              `yaml:"repository"`
+	ID             *domain.ProductID    `yaml:"id"`
+	RepositoryID   *domain.RepositoryID `yaml:"repository_id"`
+	Repository     *string              `yaml:"repository"`
+	Specifications *string              `yaml:"specifications"`
 }
 
 type executionDocument struct {

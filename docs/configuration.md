@@ -64,14 +64,18 @@ old file.
 Relative paths inside the configuration — `product.repository` and a non-`auto`
 `execution.worktree_root` — resolve against the project directory, which is the
 parent of `.yoyodyne`, not the `.yoyodyne` directory itself. `repository: .`
-therefore keeps meaning the project root.
+therefore keeps meaning the project root. `product.specifications` is the one
+exception, and deliberately: it names a directory *inside the repository being
+worked on*, so it resolves against `product.repository` and is refused if it
+leaves it.
 
 ## Precedence
 
 Three layers produce the effective configuration, later ones winning:
 
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
-   them: `execution.max_concurrent_developers` (1),
+   them: `product.specifications` (`docs/product`),
+   `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -96,6 +100,73 @@ when `extends` names a bundle that declares its own, because a version taken
 from the bundle would let a file written against a different schema load as
 whatever the bundle happened to say — which is what the version exists to
 prevent.
+
+## Product specifications
+
+The product manager builds its picture of product intent from the specifications
+in one configured directory:
+
+```yaml
+product:
+  id: example
+  repository: .
+  specifications: docs/product   # the default; nothing to write down if you use it
+```
+
+A **specification** is one Markdown file that opens with an introduction saying
+what the thing is and why it exists, and states the goals that serve it after
+that introduction:
+
+```markdown
+# Bounded runs
+
+Yoyodyne runs one bounded work item at a time, because a change nobody can
+review is not a change anybody can trust.
+
+## Goals
+
+- A run integrates only behind deterministic checks and an independent review.
+- A run that cannot finish leaves its work recoverable rather than lost.
+```
+
+The directory is walked to any depth, and every `.md` file inside it is a
+specification. Nothing else about it is prescribed: the harness does not yet
+carry artifact IDs or lifecycle metadata, so a specification is prose in this
+directory and the introduction-then-goals shape is the whole contract.
+
+That shape is checked rather than merely described, because the goals are what
+downstream work is kept consistent with and goals with nothing behind them are
+not traceable to anything. A specification that does not follow it — no goals, no
+introduction before them, or an empty goals section — is **reported and still
+read**. `yoyo chat` names it on stderr when the conversation opens, and it is
+listed for the product manager alongside the specifications themselves. Refusing
+to load it would silently lose intent somebody wrote down, which is worse than
+loading intent in the wrong shape and saying so.
+
+An empty or missing specifications directory is not an error either. The
+conversation says that product intent is not written down, which is a true
+statement about the repository rather than a reason to fail.
+
+### What the product manager does not see
+
+**Only the specifications directory and the tracker.** No `README.md`, no
+architecture or operator documentation, no source. This is a deliberate trade
+rather than an oversight, and it is worth knowing which half you are getting.
+
+Product intent is what the specifications say. A README, a design document, and
+an operator guide describe how the product is built and run; they are owned by
+other roles, and they go stale against the code without anybody noticing.
+Handing all of them to the role that is authoritative about intent mixes intent
+with description and lets a stale description be reported as current product
+fact — which is exactly what happened here on 2026-08-16, when a sentence in
+`README.md` reached the operator as a statement about the product.
+
+What is given up is real: reading all of `docs/` is what let the product manager
+notice a contradiction between documentation and reality, and it can no longer
+do that. Reconciling accumulated documentation against the code belongs to a
+role that reads the code, and the harness does not have one yet. Point
+`specifications` at a wider directory if you would rather have the breadth than
+the authority; the confinement rule is the only limit on where it points.
 
 ## Checks
 
@@ -410,6 +481,8 @@ These are all errors, reported before any work is claimed:
   is accepted, because "never wait" is a choice somebody can mean;
 - an `execution.remote` that is empty or is not a plain remote name, since it
   reaches a `git push` command line;
+- a `product.specifications` that is empty, absolute, or climbs out of the
+  repository, since it decides what the product manager reads;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a role and backend combination the backend does not support, such as an

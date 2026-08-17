@@ -171,7 +171,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, err
 	}
 
-	briefing, err := assembleProductContext(ctx, repository, processRunner, stderr)
+	briefing, err := assembleProductContext(ctx, repository, cfg.Product.Specifications, processRunner, stderr)
 	if err != nil {
 		return nil, nil, errors.Join(err, lease.Release())
 	}
@@ -207,10 +207,13 @@ func chatTracker(runner execution.ProcessRunner, repository string) beads.Client
 	return beads.Client{Runner: runner, Dir: repository, Timeout: chatTrackerTimeout}
 }
 
-// assembleProductContext gathers what the product manager reasons over. A
-// tracker that cannot be read is reported in the context and to the operator
-// rather than silently rendered as a product with no work in flight.
-func assembleProductContext(ctx context.Context, repository string, runner execution.ProcessRunner, stderr io.Writer) (string, error) {
+// assembleProductContext gathers what the product manager reasons over: the
+// configured specifications and the tracker state. A tracker that cannot be
+// read is reported in the context and to the operator rather than silently
+// rendered as a product with no work in flight, and a specification that does
+// not follow the required structure is reported the same way rather than
+// dropped.
+func assembleProductContext(ctx context.Context, repository, specifications string, runner execution.ProcessRunner, stderr io.Writer) (string, error) {
 	trackerCtx, cancel := context.WithTimeout(ctx, chatTrackerTimeout)
 	defer cancel()
 	items, listErr := chatTracker(runner, repository).List(trackerCtx, chatWorkItemStatus)
@@ -220,12 +223,19 @@ func assembleProductContext(ctx context.Context, repository string, runner execu
 		fmt.Fprintf(stderr, "warning: Beads state is unavailable, continuing without it: %v\n", listErr)
 	}
 	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
-		RepositoryRoot:       repository,
-		WorkItems:            items,
-		WorkItemsUnavailable: unavailable,
+		RepositoryRoot:          repository,
+		SpecificationsDirectory: specifications,
+		WorkItems:               items,
+		WorkItemsUnavailable:    unavailable,
 	})
 	if err != nil {
 		return "", fmt.Errorf("assemble product context: %w", err)
+	}
+	for _, problem := range bundle.SpecificationProblems {
+		fmt.Fprintf(stderr, "warning: specification %s\n", problem)
+	}
+	if len(bundle.References) == 0 {
+		fmt.Fprintf(stderr, "warning: no specification was found under %s; the product manager has no recorded product intent to reason over\n", specifications)
 	}
 	return bundle.Text, nil
 }

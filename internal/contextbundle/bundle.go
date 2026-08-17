@@ -32,6 +32,11 @@ type Bundle struct {
 	Text       string
 	References []Reference
 	Bytes      int
+	// SpecificationProblems is set by AssembleProduct alone: it names the
+	// specifications that were included despite not following the required
+	// structure, so a caller can report them to the operator as well as to the
+	// product manager.
+	SpecificationProblems []SpecificationProblem
 }
 
 var markdownReferencePattern = regexp.MustCompile(`[A-Za-z0-9._/-]+\.md`)
