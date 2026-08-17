@@ -12,32 +12,11 @@ V1 supports one product and one Git repository at a time. Its identifiers, confi
 
 The implementation is deliberately sequenced around a narrow walking skeleton. Once Yoyodyne can take one Beads task, run one developer in an isolated worktree, execute deterministic checks, and preserve the result, that partial harness will be used to build later milestones. Automatic review and integration complete the self-hosting loop before the product-management hierarchy and concurrency are filled out.
 
-## Goals
+## Goals and Non-goals
 
-- Maintain a traceable chain from the product brief through goals, designs, work, code changes, and verification.
-- Let configurable agent roles collaborate without allowing downstream agents to silently redefine upstream intent.
-- Make user directives durable, discoverable, and enforceable regardless of which agent received them.
-- Isolate implementation tasks in harness-managed Git worktrees and integrate successful work automatically.
-- Publish that work as pull requests the harness opens, and has the forge merge, on the roles' behalf, for projects that enable it, without letting any agent push or merge.
-- Use Beads as the durable workflow, dependency, blocker, directive, and handoff store.
-- Use repository Markdown as the human-readable source of truth for the brief, goals, designs, specifications, decision records, and invariants.
-- Support Claude Code as the default backend and Codex as an optional developer/reviewer backend.
-- Reach a useful self-hosting threshold before implementing the entire v1 management hierarchy.
-- Keep roles, policies, and provider selection configurable without making safety invariants optional.
-- Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
-- Support development in any language. Yoyodyne is written in Go, but the projects it manages are not assumed to be: verification is whatever commands the project declares, and no language, build system, or test framework is built into the harness.
+The goals this design serves, and the non-goals that bound it, are product intent rather than design, so they live with the product manager's artifacts rather than here: [the v1 goals](product/goals/v1-goals.md) and [the v1 non-goals](product/goals/v1-non-goals.md). They were moved out of this document unchanged, because [artifact ownership](#artifact-ownership) assigns the goals to the product manager, and intent stated in an architect-owned document is intent the owning role does not hold.
 
-## Non-goals
-
-- Multiple human users, permissions between users, or a hosted control plane.
-- Remote agent execution in v1.
-- Multiple active products or repositories in one v1 harness instance.
-- Complete behavioral parity between Claude Code and Codex.
-- Direct model API integration when the local coding-agent CLIs provide the required execution interface.
-- A general-purpose chat application independent of software delivery.
-- Replacing Git, Beads, or the coding agents' native tool execution.
-- Native integration with any language's build system, test runner, or package manager. Language support means running the commands a project declares, not understanding its toolchain.
-- Fully unattended operation. The human still approves the brief and goals and answers what the product manager escalates; autonomy is the absence of routine per-change gates, not the absence of a human.
+Invariant 1 below is what binds this design back to them: every design and implementation item must trace to at least one active goal.
 
 ## Design Invariants
 

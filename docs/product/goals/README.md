@@ -1,12 +1,16 @@
 # Goals
 
 This directory holds the goals derived from [the product brief](../brief.md).
-It contains no goals yet — this file describes what one is so the directory
-exists in version control and so the first goal written here has a shape to
-follow.
+It currently holds [the v1 goals](v1-goals.md) and
+[the v1 non-goals](v1-non-goals.md) that bound them, moved here unchanged from
+[the v1 harness design](../../v1-harness-design.md) because goals are the
+product manager's to own rather than the architect's.
 
-A goal is one Markdown file stating an outcome the product is trying to reach.
-It should be:
+A goal document opens with an introduction saying what it covers and why, and
+states the goals that serve that introduction under a `Goals` heading — the
+[shape the harness checks](../../configuration.md#product-specifications) for
+every document under `docs/product`. Each goal states one outcome the product is
+trying to reach, and should be:
 
 - **traceable upstream** — it names how it supports the brief. A goal that
   supports nothing in the brief is an orphan.
