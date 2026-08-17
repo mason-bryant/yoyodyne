@@ -525,17 +525,21 @@ func (s Store) resolve() (root, directory string, err error) {
 	if err != nil {
 		return "", "", fmt.Errorf("resolve repository root symlinks: %w", err)
 	}
-	directory, err = ValidateDirectory(s.Directory)
+	directory, err = validateDirectory(s.Directory)
 	if err != nil {
 		return "", "", err
 	}
 	return root, directory, nil
 }
 
-// ValidateDirectory keeps the invariants directory inside the repository. It is
-// exported because configuration validates the same setting before anything
-// reads it, and one rule stated once is what keeps the two from disagreeing.
-func ValidateDirectory(directory string) (string, error) {
+// validateDirectory keeps the invariants directory inside the repository.
+// Configuration refuses the same setting when it loads, and this repeats the
+// rule rather than relying on it, because this package is what actually reads
+// and writes the filesystem: a confinement that holds only when a caller
+// remembered to check is not one. A path that escaped the repository would put
+// text nobody reviewed with the code in front of every developer as a
+// constraint on their change.
+func validateDirectory(directory string) (string, error) {
 	trimmed := strings.TrimSpace(directory)
 	if trimmed == "" {
 		return "", errors.New("invariants directory is required")

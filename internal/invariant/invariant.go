@@ -15,8 +15,12 @@
 //
 // Ownership follows the model the design already sets out for upstream
 // artifacts: only the architect creates, amends, or retires one, and every other
-// role proposes. It is an authorization boundary rather than a prompt
-// convention, so it is enforced here in Go — see Authorize.
+// role proposes. Authorize is where that is enforced, and it bounds every
+// authorized way to write an invariant, because Store is the only thing that
+// writes one. What it does not bound is a developer with a shell in its
+// worktree, which is the same gap the design records for pushing and merging:
+// that role is held by its contract and caught by the reviewer rather than
+// stopped here.
 //
 // The failure to design against is delivery rather than authorship. An invariant
 // nobody puts in front of a developer constrains nothing, so a Set selects the
@@ -248,9 +252,10 @@ var ErrUnauthorized = errors.New("only the architect may create, amend, or retir
 // Authorize reports whether a role may create, amend, or retire an invariant.
 // The architect owns them and nobody else does: a developer that found a
 // constraint reports it and a reviewer that found a violated one files a
-// finding, and both propose rather than write. Keeping this in Go is what makes
-// the boundary an authorization rule rather than a sentence in a prompt that a
-// well-behaved model happens to respect.
+// finding, and both propose rather than write. Being in Go rather than only in a
+// prompt is what makes this a rule about the mutation instead of an instruction
+// a well-behaved model happens to respect — for every mutation that comes
+// through this package, which is every authorized one there is.
 func Authorize(role domain.AgentRole) error {
 	if role == domain.RoleArchitect {
 		return nil

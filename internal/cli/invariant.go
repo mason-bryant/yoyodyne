@@ -11,7 +11,6 @@ package cli
 // authorization boundary is the same one a future architect agent will meet.
 
 import (
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -278,12 +277,8 @@ func reportInvariantError(stdout, stderr io.Writer, jsonOutput bool, err error) 
 		return 1
 	}
 	fmt.Fprintln(stderr, err)
-	// An unauthorized mutation is a boundary rather than a mistake in how the
-	// command was typed, so it fails like any other refusal instead of reading as
-	// a usage error.
-	if errors.Is(err, invariant.ErrUnauthorized) {
-		return 1
-	}
+	// Everything that reaches here failed for a reason the command stated, which
+	// is a different thing from the exit code 2 a mistyped command gets.
 	return 1
 }
 
