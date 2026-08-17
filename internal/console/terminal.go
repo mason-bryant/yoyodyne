@@ -50,9 +50,13 @@ type terminal struct {
 	line       []rune
 	cursor     int
 
-	// status is the account of work in progress, drawn on a line of its own at
-	// the top of the region. It is empty when nothing is being waited for.
-	status string
+	// status is the account of work in progress and resting is what is left on
+	// that line between turns. They share one row of the region, and work in
+	// progress covers what is merely true for as long as it lasts: what the
+	// operator is waiting on is the more urgent of the two, and a second row
+	// would take another line of their screen for good.
+	status  string
+	resting string
 
 	// drawn says whether a region is on screen, drawnStatus is the status line
 	// it was drawn with, and drawnCursor is where the cursor was left in the
@@ -213,18 +217,19 @@ func (t *terminal) columns() int {
 // work in progress if there is one, the line being composed under it, and the
 // cursor where the operator left it.
 func (t *terminal) drawRegion() string {
-	if !t.prompting && t.status == "" {
+	status := t.statusLine()
+	if !t.prompting && status == "" {
 		return ""
 	}
 	width := t.columns()
 	var out strings.Builder
-	if t.status != "" {
+	if status != "" {
 		// The status is written and left behind: the region is redrawn as a
 		// whole, so it is put back on every draw rather than moved.
-		out.WriteString(t.status)
+		out.WriteString(status)
 		out.WriteString("\n")
 	}
-	t.drawnStatus = t.status
+	t.drawnStatus = status
 	if !t.prompting {
 		// Nothing is being composed, so the cursor rests at the start of the row
 		// below the status, which is where the next thing written will go.
@@ -285,6 +290,31 @@ func (t *terminal) setStatus(text string) {
 	}
 	t.status = text
 	t.redraw()
+}
+
+// Status replaces what rests on that line between turns. It takes effect at
+// once when nothing is being waited for, and otherwise when the account of work
+// in progress ends: the two would fight over one row, and the work is what the
+// operator is waiting to hear about.
+func (t *terminal) Status(text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || t.resting == text {
+		return
+	}
+	t.resting = text
+	if t.status != "" {
+		return
+	}
+	t.redraw()
+}
+
+// statusLine is what the region's top row says now.
+func (t *terminal) statusLine() string {
+	if t.status != "" {
+		return t.status
+	}
+	return t.resting
 }
 
 func (t *terminal) Prompt(ctx context.Context, prompt string, interrupt <-chan struct{}) (string, error) {
@@ -438,6 +468,7 @@ func (t *terminal) Close() error {
 	t.closed = true
 	t.prompting = false
 	t.status = ""
+	t.resting = ""
 	var out strings.Builder
 	out.WriteString(t.eraseRegion())
 	// A part-line held back is written rather than dropped. It is something the

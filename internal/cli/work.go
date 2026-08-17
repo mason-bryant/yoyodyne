@@ -128,6 +128,20 @@ func (w conversationWork) Run(ctx context.Context, workItemID string) (chat.RunR
 	return runReportOf(outcome), err
 }
 
+// Progress reports where the most recent recorded run of a work item has got
+// to. It reads the durable run state and nothing else, exactly as Changes does
+// and for the same reason: the record is written as the run goes, so a
+// conversation watching one is reading what actually happened rather than
+// asking the process executing it. Reading decides nothing, so a run another
+// process is executing is as readable here as one this conversation started.
+func (w conversationWork) Progress(_ context.Context, workItemID string) (chat.RunProgress, error) {
+	state, err := w.store.Latest(workItemID)
+	if err != nil {
+		return chat.RunProgress{}, err
+	}
+	return progressOf(state), nil
+}
+
 // Changes reports what the most recent recorded run of a work item changed. It
 // reads the durable run state and nothing else: no worktree is inspected and no
 // git command is run, so the answer is the same whether the run finished a
@@ -263,6 +277,47 @@ func changesOf(state runstate.State) chat.RunChanges {
 		}
 	}
 	return changes
+}
+
+// progressOf projects one recorded run into where it has got to. Like the
+// account of what a run changed, it claims nothing the record does not hold:
+// the promotion comes from the recorded integration and the merge from what the
+// forge was last observed to say, rather than from the run having reached a
+// phase where either was attempted.
+func progressOf(state runstate.State) chat.RunProgress {
+	progress := chat.RunProgress{
+		RunID:          state.RunID,
+		Status:         string(state.Status),
+		Phase:          string(state.Phase),
+		ChecksPassed:   checksBehind(state),
+		ReviewDecision: state.ReviewDecision,
+	}
+	if state.Integration != nil {
+		progress.Integrated = true
+		progress.TargetBranch = state.Integration.TargetBranch
+	}
+	if state.PullRequest != nil {
+		progress.MergeQueued = state.PullRequest.MergeQueued
+		progress.Merged = state.PullRequest.Merged
+	}
+	return progress
+}
+
+// checksBehind reports a run with the deterministic checks behind it: the
+// record carries no failing check and the run has moved past running them. Both
+// halves are needed. A run in a later phase with a failing check recorded is one
+// the checks handed back to the developer, and a run that has not reached
+// reviewing has not been past the gate yet whatever else its record says.
+func checksBehind(state runstate.State) bool {
+	if state.CheckFailure != nil {
+		return false
+	}
+	switch state.Phase {
+	case runstate.PhaseReviewing, runstate.PhaseIntegrating, runstate.PhaseCompleting, runstate.PhaseCleaningUp, runstate.PhaseComplete:
+		return true
+	default:
+		return false
+	}
 }
 
 // runReportOf projects a pipeline outcome into what a conversation reports. It

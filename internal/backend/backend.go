@@ -44,6 +44,20 @@ type RunRequest struct {
 	LastSequence uint64
 	RedactValues []string
 	EventSink    func(execution.Event) error
+	// ReplySink receives the agent's prose as the provider produces it, so a
+	// caller with somebody watching can show a reply forming rather than holding
+	// it until the invocation is over. It is optional and it decides nothing:
+	// the same text reaches the event stream and the result whether or not
+	// anybody is listening, so a run watched and a run unwatched record and
+	// return byte for byte the same thing.
+	//
+	// A backend calls it only with text it has already redacted and already
+	// recorded, so what a watcher can be shown is bounded by what the durable
+	// record holds. Fragments are whatever size the provider reports; a caller
+	// that shows them has to cope with a reply that stops part way, because an
+	// invocation that fails is one whose fragments were the start of an answer
+	// nobody finished.
+	ReplySink func(fragment string)
 }
 
 // UsageLimit is a provider's report that a usage limit is exhausted. It is

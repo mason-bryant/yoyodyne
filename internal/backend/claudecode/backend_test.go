@@ -768,3 +768,126 @@ func TestRunRedactsSecretsInsideARateLimitPayload(t *testing.T) {
 		t.Fatalf("rate limit payload leaked a redacted value: %s", events[1].Payload)
 	}
 }
+
+// TestTheReplyReachesAWatcherRedactedRecordedAndBeforeTheResult is the whole
+// contract the streaming display rests on. What a watcher may be shown is
+// bounded at both ends: it has been through the redactor, and the event that
+// records it has already been persisted, so nothing can be put on a screen that
+// the durable record does not hold.
+func TestTheReplyReachesAWatcherRedactedRecordedAndBeforeTheResult(t *testing.T) {
+	t.Parallel()
+
+	const secret = "super-secret-value"
+	assistant, err := json.Marshal(map[string]any{
+		"type":       "assistant",
+		"session_id": "session-1",
+		"message":    map[string]any{"content": []any{map[string]any{"type": "text", "text": "the token is " + secret}}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() assistant error = %v", err)
+	}
+	stream := string(assistant) + "\n" +
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"the token is [REDACTED]"}` + "\n"
+
+	// recorded counts the events persisted when each fragment arrived, so
+	// "recorded first, shown second" is an assertion about order rather than a
+	// claim about the code.
+	var events []execution.Event
+	var fragments []string
+	var recordedWhenShown []int
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleProductManager,
+		WorkingDirectory: "/repository",
+		Prompt:           "what next?",
+		PermissionMode:   "plan",
+		AllowedTools:     []string{},
+		RedactValues:     []string{secret},
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+		ReplySink: func(fragment string) {
+			fragments = append(fragments, fragment)
+			recordedWhenShown = append(recordedWhenShown, len(events))
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(fragments) != 1 {
+		t.Fatalf("fragments = %#v, want the one assistant message", fragments)
+	}
+	if strings.Contains(fragments[0], secret) || fragments[0] != "the token is [REDACTED]" {
+		t.Fatalf("a watcher was shown %q", fragments[0])
+	}
+	// The fragment arrived after the event that records it and before the
+	// terminal result the turn is built from, which is the whole reason there is
+	// anything to show early.
+	if recordedWhenShown[0] != 1 {
+		t.Fatalf("the fragment was shown with %d event(s) recorded, want the one that records it", recordedWhenShown[0])
+	}
+	if events[len(events)-1].Type != execution.EventRunCompleted {
+		t.Fatalf("last event = %s, want the terminal result after the fragment", events[len(events)-1].Type)
+	}
+	if result.FinalText != "the token is [REDACTED]" {
+		t.Fatalf("FinalText = %q", result.FinalText)
+	}
+}
+
+// TestAWatchedInvocationRecordsAndReturnsWhatAnUnwatchedOneDoes is the promise
+// that showing a reply as it forms is presentation and nothing else. The same
+// stream is parsed with and without somebody watching, and the events and the
+// result are compared.
+func TestAWatchedInvocationRecordsAndReturnsWhatAnUnwatchedOneDoes(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test","permissionMode":"plan"}`,
+		`{"type":"assistant","session_id":"session-1","message":{"content":[{"type":"text","text":"Two goals, then."}]}}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"Two goals, then.","total_cost_usd":0.0125}`,
+	}, "\n") + "\n"
+
+	run := func(watch bool) ([]execution.Event, backendapi.RunResult) {
+		t.Helper()
+
+		var events []execution.Event
+		request := backendapi.RunRequest{
+			RunID:            testRunID,
+			Role:             domain.RoleProductManager,
+			WorkingDirectory: "/repository",
+			Prompt:           "what next?",
+			PermissionMode:   "plan",
+			AllowedTools:     []string{},
+			EventSink: func(event execution.Event) error {
+				events = append(events, event)
+				return nil
+			},
+		}
+		if watch {
+			request.ReplySink = func(string) {}
+		}
+		result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, Stdout: stream}}}}).Run(context.Background(), request)
+		if err != nil {
+			t.Fatalf("Run(watch=%v) error = %v", watch, err)
+		}
+		return events, result
+	}
+
+	watchedEvents, watchedResult := run(true)
+	unwatchedEvents, unwatchedResult := run(false)
+	if len(watchedEvents) != len(unwatchedEvents) {
+		t.Fatalf("recorded %d event(s) watched and %d unwatched", len(watchedEvents), len(unwatchedEvents))
+	}
+	for index := range watchedEvents {
+		if watchedEvents[index].Type != unwatchedEvents[index].Type ||
+			string(watchedEvents[index].Payload) != string(unwatchedEvents[index].Payload) {
+			t.Fatalf("event %d differs: watched %s %s, unwatched %s %s", index,
+				watchedEvents[index].Type, watchedEvents[index].Payload,
+				unwatchedEvents[index].Type, unwatchedEvents[index].Payload)
+		}
+	}
+	if !reflect.DeepEqual(watchedResult, unwatchedResult) {
+		t.Fatalf("watching changed the result:\nwatched   %#v\nunwatched %#v", watchedResult, unwatchedResult)
+	}
+}

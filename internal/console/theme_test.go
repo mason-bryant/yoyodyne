@@ -3,6 +3,7 @@ package console
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 // environment is the few variables a theme is decided by.
@@ -38,6 +39,9 @@ func TestTheEnvironmentDecidesWhetherAnythingIsDressed(t *testing.T) {
 			theme := NewTheme(environment(test.env), func() int { return 40 })
 			question := theme.Questions("What is missing from the brief?")
 			rule := theme.Rule()
+			if theme.Permitted() != test.dressed {
+				t.Fatalf("Permitted() = %v, want %v", theme.Permitted(), test.dressed)
+			}
 			if !test.dressed {
 				if question != "What is missing from the brief?" {
 					t.Fatalf("a question was coloured anyway: %q", question)
@@ -48,7 +52,23 @@ func TestTheEnvironmentDecidesWhetherAnythingIsDressed(t *testing.T) {
 				if dressed := theme.Proposal("proposal"); dressed != "proposal" {
 					t.Fatalf("a proposal was coloured anyway: %q", dressed)
 				}
+				// The bell and the window title are escapes exactly as the colours
+				// are, and they are suppressed with them rather than separately.
+				if alert := theme.Alert("a run finished"); alert != "" {
+					t.Fatalf("a bell rang anyway: %q", alert)
+				}
+				if title := theme.Title("a run finished"); title != "" {
+					t.Fatalf("the window was renamed anyway: %q", title)
+				}
 				return
+			}
+			if alert := theme.Alert("a run finished"); alert != "\a\x1b]2;a run finished\a" {
+				t.Fatalf("alert = %q", alert)
+			}
+			// A title outlives the process that set it, so a conversation has to be
+			// able to put the window's name back.
+			if title := theme.Title(""); title != "\x1b]2;\a" {
+				t.Fatalf("emptying the title = %q", title)
 			}
 			if !strings.HasPrefix(question, test.orange) || !strings.HasSuffix(question, resetColour) {
 				t.Fatalf("question = %q, want it wrapped in %q", question, test.orange)
@@ -172,5 +192,46 @@ func TestACardFramesWithoutCarryingMeaning(t *testing.T) {
 	long := NewTheme(environment(map[string]string{"TERM": "xterm-256color"}), func() int { return 10 }).Card(heading, "body")
 	if !strings.Contains(long, heading) {
 		t.Fatalf("a long heading was lost: %q", long)
+	}
+}
+
+// TestAWindowTitleCarriesNothingTheTerminalWouldInterpret is the one place here
+// where the text is interpreted rather than printed. A run headline carries a
+// work item's own title, so what goes into a title is whatever somebody typed
+// into the tracker, and a sequence that ended the title early or began another
+// one would be that text deciding what the terminal does.
+func TestAWindowTitleCarriesNothingTheTerminalWouldInterpret(t *testing.T) {
+	t.Parallel()
+
+	theme := NewTheme(environment(map[string]string{"TERM": "xterm-256color"}), func() int { return 40 })
+	for _, test := range []struct {
+		name  string
+		title string
+		want  string
+	}{
+		{"an ordinary headline", "yoyodyne-1 was integrated into main", "yoyodyne-1 was integrated into main"},
+		// The escape that opens a sequence and the bell that closes one are both
+		// removed rather than escaped: a title is a few words, not a place to
+		// preserve control characters faithfully.
+		{"an escape in the middle", "yoyodyne-1\x1b]0;whoami\a done", "yoyodyne-1 ]0;whoami done"},
+		{"a newline", "yoyodyne-1\nwas integrated", "yoyodyne-1 was integrated"},
+		{"leading and trailing space", "  yoyodyne-1  done  ", "yoyodyne-1 done"},
+		{"nothing at all", "", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := theme.Title(test.title); got != titleOpen+test.want+titleClose {
+				t.Fatalf("Title(%q) = %q, want %q", test.title, got, titleOpen+test.want+titleClose)
+			}
+		})
+	}
+
+	// A title longer than a window has room for is cut on a rune boundary, so
+	// what reaches the terminal is still text.
+	long := theme.Title(strings.Repeat("é", 200))
+	body := strings.TrimSuffix(strings.TrimPrefix(long, titleOpen), titleClose)
+	if len(body) > maxTitleBytes || !utf8.ValidString(body) {
+		t.Fatalf("a long title = %d bytes, valid = %v", len(body), utf8.ValidString(body))
 	}
 }
