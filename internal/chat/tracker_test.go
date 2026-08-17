@@ -1,11 +1,13 @@
 package chat
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
+	backendapi "yoyodyne/internal/backend"
 	"yoyodyne/internal/beads"
 )
 
@@ -154,6 +156,18 @@ func TestTrackerActionsRefuseWhatTheHarnessWillNotRun(t *testing.T) {
 			want:  "cannot span lines",
 		},
 		{
+			// Retiring work is how scope the operator asked for leaves the backlog,
+			// so it is never taken without a reason the operator can read.
+			name:  "retirement with no reason",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"retire\",\"id\":\"yoyodyne-1\"}]}\n```",
+			want:  "reason is required",
+		},
+		{
+			name:  "retirement carrying an argument it has no use for",
+			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"retire\",\"id\":\"yoyodyne-1\",\"priority\":4,\"reason\":\"r\"}]}\n```",
+			want:  "retire does not take \"priority\"",
+		},
+		{
 			name:  "oversized block",
 			reply: "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"create\",\"title\":\"t\",\"description\":\"" + strings.Repeat("x", MaxTrackerBlockBytes) + "\",\"reason\":\"r\"}]}\n```",
 			want:  "limit is " + strconv.Itoa(MaxTrackerBlockBytes),
@@ -254,6 +268,134 @@ func TestReadingAnItemReturnsItInFull(t *testing.T) {
 	}
 	if !strings.Contains(cut, "cut at") {
 		t.Fatalf("a cut item did not say so: %q", cut[len(cut)-200:])
+	}
+}
+
+func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("The first landed; the second is not worth doing.",
+			`{"action":"close","id":"yoyodyne-ifd.22","reason":"the work landed"}`,
+			`{"action":"retire","id":"yoyodyne-ifd.23","reason":"the operator dropped multi-repository support"}`)},
+		{SessionID: "session-1", FinalText: "Both are out of the backlog."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Is ifd.23 still worth doing?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// The tracker holds finished and retired work in the same closed state, so
+	// what separates them is what each item records about itself.
+	if len(tracker.closed) != 2 {
+		t.Fatalf("closed items = %#v", tracker.closed)
+	}
+	finished, retired := tracker.closed[0], tracker.closed[1]
+	if finished[0] != "yoyodyne-ifd.22" || !strings.Contains(finished[1], "Closed as done") {
+		t.Fatalf("completed item recorded %#v", finished)
+	}
+	if retired[0] != "yoyodyne-ifd.23" {
+		t.Fatalf("retired item = %#v", retired)
+	}
+	for _, required := range []string{
+		retiredWithoutBeingDone,
+		"by the product manager in conversation",
+		"the operator dropped multi-repository support",
+	} {
+		if !strings.Contains(retired[1], required) {
+			t.Fatalf("retired item recorded %q, want it to contain %q", retired[1], required)
+		}
+	}
+	if strings.Contains(retired[1], "Closed as done") {
+		t.Fatalf("retiring work was recorded as finishing it: %q", retired[1])
+	}
+
+	// The operator reads what the retirement actually was. Scope that was
+	// dropped never appears as scope that was delivered.
+	rendered := renderTrackerOutcomes(reply.Actions)
+	if !strings.Contains(rendered, "retired yoyodyne-ifd.23 from the backlog without it being done") {
+		t.Fatalf("rendered outcomes = %q", rendered)
+	}
+	if !strings.Contains(rendered, "closed yoyodyne-ifd.22 as done") {
+		t.Fatalf("rendered outcomes = %q", rendered)
+	}
+	if !strings.Contains(rendered, "why: the operator dropped multi-repository support") {
+		t.Fatalf("the reason for a retirement did not reach the operator: %q", rendered)
+	}
+}
+
+func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Filing it at the top, and moving the old one down.",
+			`{"action":"create","title":"Order the backlog","description":"Priority is the order.","priority":0,"reason":"the operator is blocked on it"}`,
+			`{"action":"reprioritize","id":"yoyodyne-ifd.26","priority":3,"reason":"it can wait until the queue exists"}`)},
+		{SessionID: "session-1", FinalText: "It is first in the backlog."},
+	}}
+	options := testOptions(t, provider)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "This one comes first.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// Admission is an act with an owner, so the item records that it was admitted
+	// rather than merely that a row appeared in the tracker.
+	if len(tracker.created) != 1 || !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the product manager") {
+		t.Fatalf("created work items = %#v", tracker.created)
+	}
+	// Where the work is admitted travels with the admission. The identifier does
+	// not exist until the tracker answers, so an order left to a later action is
+	// an item sitting at the tracker's default in the meantime.
+	if tracker.created[0].Priority == nil || *tracker.created[0].Priority != 0 {
+		t.Fatalf("created work item priority = %#v", tracker.created[0].Priority)
+	}
+	rendered := renderTrackerOutcomes(reply.Actions)
+	if !strings.Contains(rendered, "admitted yoyodyne-1 to the backlog at priority 0") {
+		t.Fatalf("rendered outcomes = %q", rendered)
+	}
+	// Reordering what is already admitted is the priority the tracker holds, and
+	// nothing else.
+	if len(tracker.updates) != 1 || tracker.updates[0].id != "yoyodyne-ifd.26" ||
+		tracker.updates[0].change.Priority == nil || *tracker.updates[0].change.Priority != 3 {
+		t.Fatalf("updates = %#v", tracker.updates)
+	}
+}
+
+func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
+	t.Parallel()
+
+	contract := SystemPrompt("")
+	// An action the harness runs but never states is one the product manager will
+	// not use, and an action stated but not implemented is one it will ask for and
+	// be refused. Both are ways for the contract and the harness to disagree.
+	for _, action := range trackerActionNames {
+		if !strings.Contains(contract, `{"action":"`+action+`"`) {
+			t.Fatalf("the contract does not offer the %q action it can carry out", action)
+		}
+	}
+	for _, required := range []string{
+		// Ordering is the product manager's, and it is what is actually pulled.
+		"That queue is a backlog with an order, and the order is yours",
+		"a development manager pulls from the order you set",
+		"No role but you admits work or orders it",
+		// Withdrawing scope is explicit and recorded, and there is no third way
+		// to take work out of the queue.
+		`"retire" says it will not be done`,
+		"There is no delete",
+	} {
+		if !strings.Contains(contract, required) {
+			t.Fatalf("the contract does not state %q", required)
+		}
 	}
 }
 

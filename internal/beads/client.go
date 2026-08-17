@@ -57,6 +57,11 @@ type NewWorkItem struct {
 	// description is edited.
 	Notes  string
 	Parent string
+	// Priority is where the item is admitted in the backlog's order. It is a
+	// pointer because zero is the highest Beads priority rather than an absent
+	// one, and because admitting work without saying where it goes is a real
+	// request: the tracker's own default is then what places it.
+	Priority *int
 }
 
 // WorkItemChange is a bounded edit to an item that already exists. Each field is
@@ -138,6 +143,9 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
 		args = append(args, "--parent="+parent)
 	}
+	if item.Priority != nil {
+		args = append(args, "--priority="+strconv.Itoa(*item.Priority))
+	}
 	args = append(args, "--json")
 	data, err := c.run(ctx, args...)
 	if err != nil {
@@ -157,6 +165,10 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if created.Title != item.Title {
 		return WorkItem{}, fmt.Errorf("bd created work item %s with title %q, want %q", created.ID, created.Title, item.Title)
 	}
+	// The requested priority is deliberately not read back, for the reason the
+	// parent is not read back after an update: an unset field and a field bd's
+	// response does not carry are indistinguishable here, and refusing a creation
+	// that actually happened would lose the item rather than protect the order.
 	return created, nil
 }
 
@@ -459,6 +471,9 @@ func (n NewWorkItem) validate() error {
 		if err := validateIssueID(parent); err != nil {
 			problems = append(problems, fmt.Errorf("invalid parent: %w", err))
 		}
+	}
+	if n.Priority != nil && (*n.Priority < 0 || *n.Priority > MaxPriority) {
+		problems = append(problems, fmt.Errorf("priority %d is outside 0..%d", *n.Priority, MaxPriority))
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))

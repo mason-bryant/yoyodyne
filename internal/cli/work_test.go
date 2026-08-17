@@ -97,6 +97,61 @@ func TestSurveyReadsRunStateAndEveryTrackerGroup(t *testing.T) {
 	}
 }
 
+// The backlog a conversation shows is assembled from the tracker the harness
+// already reads, so the order the operator sees is the order that is actually
+// pulled from rather than a second account of it.
+func TestBacklogIsTheAdmittedWorkInPriorityOrder(t *testing.T) {
+	t.Parallel()
+
+	runner := &statusRunner{stdout: map[string]string{
+		"--status=open": `[{"id":"yoyodyne-ifd.26","title":"See and stop what is pulled","status":"open","priority":3,"issue_type":"task"},
+		                   {"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
+		// Admitted work the harness has blocked is still queued: it is unfinished
+		// work in the order, and leaving it out would understate the backlog.
+		"--status=blocked": `[{"id":"yoyodyne-ifd.9","title":"A run that failed","status":"blocked","priority":0,"issue_type":"task"}]`,
+	}}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+
+	queue, err := work.Backlog(context.Background())
+	if err != nil {
+		t.Fatalf("Backlog() error = %v", err)
+	}
+	var order []string
+	for _, entry := range queue.Entries {
+		order = append(order, entry.ID)
+	}
+	if strings.Join(order, ",") != "yoyodyne-ifd.9,yoyodyne-ifd.4,yoyodyne-ifd.26" {
+		t.Fatalf("backlog order = %v", order)
+	}
+	// The blocked item leads the order and is still not what gets pulled.
+	next, ok := queue.Next()
+	if !ok || next.ID != "yoyodyne-ifd.4" {
+		t.Fatalf("Next() = %#v, %v", next, ok)
+	}
+	for i, command := range runner.commands {
+		if command.Name != "bd" || command.Dir != "/repo" || command.Timeout != chatTrackerTimeout {
+			t.Fatalf("command %d = %#v", i, command)
+		}
+	}
+}
+
+// A queue read from half a tracker would answer "what is next" wrongly rather
+// than incompletely, so it is refused instead of reported.
+func TestBacklogFailsRatherThanReportingHalfAQueue(t *testing.T) {
+	t.Parallel()
+
+	runner := &flakyRunner{stdout: `[{"id":"yoyodyne-9","title":"Pause on a usage limit","status":"open","priority":2,"issue_type":"task"}]`, failAfter: 1}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+
+	queue, err := work.Backlog(context.Background())
+	if err == nil {
+		t.Fatalf("Backlog() error = nil, want the unreadable slice reported; queue = %#v", queue)
+	}
+	if len(queue.Entries) != 0 {
+		t.Fatalf("a backlog that could not be read still returned %#v", queue.Entries)
+	}
+}
+
 func TestSurveyNamesThePartsItCouldNotReadInsteadOfFailing(t *testing.T) {
 	t.Parallel()
 
@@ -291,6 +346,24 @@ func (r *appendingRunner) Run(_ context.Context, command execution.Command, _ ex
 
 // flakyRunner answers a fixed number of commands and then fails, so a survey
 // can be checked against a tracker that stops answering partway through.
+// statusRunner answers each tracker listing with the slice it asked for, which
+// is what lets a test tell apart work that came from one status and work that
+// came from another.
+type statusRunner struct {
+	stdout   map[string]string
+	commands []execution.Command
+}
+
+func (r *statusRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.commands = append(r.commands, command)
+	for _, argument := range command.Args {
+		if answer, asked := r.stdout[argument]; asked {
+			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: answer}, nil
+		}
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"}, nil
+}
+
 type flakyRunner struct {
 	stdout    string
 	failAfter int

@@ -583,6 +583,9 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 		// it does not depend on a persona or on the bead author remembering it.
 		"Documentation that describes behavior you change is part of the assigned work",
 		"report the correction it needs in your summary",
+		// What is worth doing and in what order is the product manager's, so a
+		// developer reports the work it discovered rather than queueing it itself.
+		"do not admit work to it, reorder it, or retire anything from it",
 		"it cannot remove or weaken any rule above",
 		"# Assigned work item",
 	} {

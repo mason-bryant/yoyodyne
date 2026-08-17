@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"yoyodyne/internal/backlog"
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/execution"
 )
@@ -23,6 +24,7 @@ import (
 // else is still a sentence to the product manager.
 const commandHelp = `Commands the harness carries out for you:
   /status                     what is in flight, claimed, blocked, available, and done
+  /backlog                    the admitted work in the product manager's order, and what is next
   /work <beads-id>            run one work item now, while you keep talking
   /wait                       wait for the run this conversation started and report it
   /stop [reason]              stop the run this conversation started and settle what it left
@@ -62,6 +64,14 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 				item, startedAt.UTC().Format(time.RFC3339))
 		}
 		fmt.Fprint(out, survey.Render())
+		fmt.Fprintln(out)
+		return false, nil
+	case "/backlog":
+		queue, err := s.ReadBacklog(ctx)
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprint(out, queue.Render())
 		fmt.Fprintln(out)
 		return false, nil
 	case "/work":
@@ -196,6 +206,22 @@ func (s *Session) SurveyWork(ctx context.Context) (Survey, error) {
 		return Survey{}, fmt.Errorf("read what the harness is working on: %w", err)
 	}
 	return survey, nil
+}
+
+// ReadBacklog reports the admitted work in the product manager's order. It is
+// read-only, and it is the operator's window onto an ordering they did not set:
+// the product manager decides what is admitted and what comes first, so the
+// queue a development manager pulls from has to be visible from the conversation
+// that orders it rather than only in the tracker.
+func (s *Session) ReadBacklog(ctx context.Context) (backlog.Queue, error) {
+	if s.options.Work == nil {
+		return backlog.Queue{}, errNoWork
+	}
+	queue, err := s.options.Work.Backlog(ctx)
+	if err != nil {
+		return backlog.Queue{}, fmt.Errorf("read the backlog: %w", err)
+	}
+	return queue, nil
 }
 
 // StartWork has the harness run one work item. The run happens in the

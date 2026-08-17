@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"yoyodyne/internal/backlog"
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/chat"
 	"yoyodyne/internal/orchestrator"
@@ -26,6 +27,11 @@ var surveyedStatuses = []struct {
 	{"open", "available", func(s *chat.Survey, items []chat.WorkItemSummary) { s.Available = items }},
 	{"closed", "completed", func(s *chat.Survey, items []chat.WorkItemSummary) { s.Completed = items }},
 }
+
+// backlogStatuses are the tracker slices the backlog is assembled from: work
+// that has been admitted and is not finished. Claimed work has been pulled
+// already and closed work has left, so neither is still queued.
+var backlogStatuses = []string{"open", "blocked"}
 
 // conversationWork is the harness a product-manager conversation steers work
 // with: the same pipeline `yoyodyne run` executes, the same reconciler
@@ -79,6 +85,28 @@ func (w conversationWork) Survey(ctx context.Context) (chat.Survey, error) {
 	return survey, nil
 }
 
+// Backlog reads the admitted work and puts it in the product manager's order.
+// It is the same tracker the survey reads and the same ordering a development
+// manager pulls in, assembled here rather than stored, so the queue can never
+// drift from the priorities the product manager actually set.
+//
+// A slice that cannot be read fails the whole answer, where a survey would name
+// it as unknown and report the rest. The difference is what the two are for: a
+// survey describes what is happening, and a partial one is still worth reading,
+// while a backlog says what comes next, and half a queue would answer that
+// question wrongly rather than incompletely.
+func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
+	var admitted []beads.WorkItem
+	for _, status := range backlogStatuses {
+		items, err := w.listItems(ctx, status)
+		if err != nil {
+			return backlog.Queue{}, err
+		}
+		admitted = append(admitted, items...)
+	}
+	return backlog.Order(admitted), nil
+}
+
 // Run executes one work item through the pipeline. The outcome is reported even
 // when the run failed, because a failed run's branch, worktree, and blocker are
 // what the operator decides about next.
@@ -120,11 +148,9 @@ func (w conversationWork) Settle(ctx context.Context) ([]chat.Settlement, error)
 }
 
 func (w conversationWork) list(ctx context.Context, status string) ([]chat.WorkItemSummary, error) {
-	trackerCtx, cancel := context.WithTimeout(ctx, w.timeout)
-	defer cancel()
-	items, err := w.tracker.List(trackerCtx, status)
+	items, err := w.listItems(ctx, status)
 	if err != nil {
-		return nil, fmt.Errorf("list %s work items: %w", status, err)
+		return nil, err
 	}
 	summaries := make([]chat.WorkItemSummary, 0, len(items))
 	for _, item := range items {
@@ -136,6 +162,18 @@ func (w conversationWork) list(ctx context.Context, status string) ([]chat.WorkI
 		})
 	}
 	return summaries, nil
+}
+
+// listItems asks the tracker for one status, bounded so an unresponsive tracker
+// delays an answer rather than hanging the prompt.
+func (w conversationWork) listItems(ctx context.Context, status string) ([]beads.WorkItem, error) {
+	trackerCtx, cancel := context.WithTimeout(ctx, w.timeout)
+	defer cancel()
+	items, err := w.tracker.List(trackerCtx, status)
+	if err != nil {
+		return nil, fmt.Errorf("list %s work items: %w", status, err)
+	}
+	return items, nil
 }
 
 // snapshotOf describes one recorded run for a conversation. A run waiting out a

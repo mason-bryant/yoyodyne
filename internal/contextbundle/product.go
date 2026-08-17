@@ -11,6 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"yoyodyne/internal/backlog"
 	"yoyodyne/internal/beads"
 )
 
@@ -348,7 +349,18 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 		rendered.WriteString("Beads reported no matching work items.\n")
 		return rendered.String()
 	}
-	listed := items
+	// The listing is in backlog order rather than the tracker's, because this is
+	// the order a development manager pulls in and the product manager is the one
+	// who sets it. A queue shown in some other order would be a queue whose owner
+	// is reasoning about a sequence nobody will actually work in. Items sharing a
+	// priority are in no order that was decided, which the note below says
+	// outright rather than leaving their listed positions to imply one.
+	ordered := append([]beads.WorkItem(nil), items...)
+	backlog.Sort(ordered)
+	rendered.WriteString("These are in backlog order: highest priority first, which is the order work is\n")
+	rendered.WriteString("pulled in. Items at the same priority are listed in the tracker's own order,\n")
+	rendered.WriteString("and nothing has decided which of those comes first.\n\n")
+	listed := ordered
 	if len(listed) > maxProductWorkItems {
 		listed = listed[:maxProductWorkItems]
 	}

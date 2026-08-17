@@ -246,6 +246,28 @@ func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
 	}
 
+	// Work is admitted at a place in the backlog's order, and the highest place is
+	// zero, so an unstated priority and the top of the queue cannot be the same
+	// request. A creation that says nothing about it asks bd for its default.
+	top := 0
+	placed := &fakeRunner{responses: []string{created}}
+	if _, err := (Client{Runner: placed}).Create(context.Background(), NewWorkItem{
+		Title: "Pause on a usage limit", Description: "Wait and resume.", Type: "task", Priority: &top,
+	}); err != nil {
+		t.Fatalf("Create() with a priority error = %v", err)
+	}
+	wantPlaced := [][]string{{
+		"create",
+		"--title=Pause on a usage limit",
+		"--description=Wait and resume.",
+		"--type=task",
+		"--priority=0",
+		"--json",
+	}}
+	if !reflect.DeepEqual(placed.args, wantPlaced) {
+		t.Fatalf("bd args = %#v, want %#v", placed.args, wantPlaced)
+	}
+
 	// An item created as something other than what was asked for is a failure:
 	// the caller approved the item it described, not whatever bd produced.
 	mismatched := &fakeRunner{responses: []string{`{"id":"yoyodyne-9","title":"Something else","issue_type":"task"}`}}
@@ -264,6 +286,7 @@ func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 func TestClientRefusesToCreateAnUnusableWorkItem(t *testing.T) {
 	t.Parallel()
 
+	outsideScale := MaxPriority + 1
 	for _, test := range []struct {
 		name string
 		item NewWorkItem
@@ -274,6 +297,7 @@ func TestClientRefusesToCreateAnUnusableWorkItem(t *testing.T) {
 		{name: "no type", item: NewWorkItem{Title: "t", Description: "d"}, want: "invalid Beads issue type"},
 		{name: "smuggled type", item: NewWorkItem{Title: "t", Description: "d", Type: "task --force"}, want: "invalid Beads issue type"},
 		{name: "invented parent", item: NewWorkItem{Title: "t", Description: "d", Type: "task", Parent: "../etc"}, want: "invalid parent"},
+		{name: "priority outside the scale", item: NewWorkItem{Title: "t", Description: "d", Type: "task", Priority: &outsideScale}, want: "outside 0..4"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

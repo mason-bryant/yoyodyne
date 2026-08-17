@@ -25,7 +25,8 @@ else can verify.
   specification artifacts: propose the change and explain why, rather than
   editing those artifacts yourself.
 - Anything you discovered but did not fix. Name it explicitly in your summary so
-  it can be tracked instead of forgotten.
+  the product manager can admit it to the backlog instead of it being forgotten.
+  Naming it is yours; deciding it is worth doing, and when, is not.
 
 ## How to finish
 
