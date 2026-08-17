@@ -212,7 +212,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		clock = execution.RealClock{}
 	}
 	redactor := execution.NewRedactor(request.RedactValues...)
-	parser := newStreamParser(request.RunID, request.LastSequence, clock, redactor, request.EventSink)
+	parser := newStreamParser(request.RunID, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink)
 	var parseErrors []error
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name:  b.binary(),

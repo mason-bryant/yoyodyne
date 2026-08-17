@@ -55,6 +55,15 @@ type Work interface {
 	// policy. It returns what the run reported even when it failed, because a
 	// failed run's branch, worktree, and findings are what the operator acts on.
 	Run(ctx context.Context, workItemID string) (RunReport, error)
+	// Progress reports where the harness's most recent run of one work item has
+	// got to, read from the durable run record. It is how a conversation learns
+	// that a run it started has crossed a phase without knowing anything about
+	// how a run is executed: the pipeline writes down where it is as it goes,
+	// and this reads what it wrote. A work item with no recorded run is a
+	// failure like any other — a run that has not written anything down yet is
+	// simply a question this cannot answer, and a conversation asking it says
+	// nothing rather than guessing.
+	Progress(ctx context.Context, workItemID string) (RunProgress, error)
 	// Changes reports what the harness's most recent run of one work item
 	// changed, read from the durable run record rather than from a worktree. That
 	// is the whole point of it: the worktree a run wrote in is removed when the

@@ -14,11 +14,15 @@ import (
 const maxEventTextBytes = 16 << 10
 
 type streamParser struct {
-	runID     string
-	sequence  *execution.Sequence
-	clock     execution.Clock
-	redactor  execution.Redactor
-	sink      func(execution.Event) error
+	runID    string
+	sequence *execution.Sequence
+	clock    execution.Clock
+	redactor execution.Redactor
+	sink     func(execution.Event) error
+	// reply is where the agent's prose goes for whoever is watching it arrive.
+	// It is nil when nobody is, which is every invocation the harness makes on
+	// its own behalf.
+	reply     func(string)
 	result    backend.RunResult
 	sawResult bool
 }
@@ -133,8 +137,15 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error) *streamParser {
-	return &streamParser{runID: runID, sequence: execution.NewSequence(lastSequence), clock: clock, redactor: redactor, sink: sink}
+func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
+	return &streamParser{
+		runID:    runID,
+		sequence: execution.NewSequence(lastSequence),
+		clock:    clock,
+		redactor: redactor,
+		sink:     sink,
+		reply:    reply,
+	}
 }
 
 func (p *streamParser) ParseLine(line string) error {
@@ -272,6 +283,16 @@ func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) err
 				}
 				if err := p.emit(execution.EventAgentMessage, map[string]any{"text": truncate(block.Text)}); err != nil {
 					return err
+				}
+				// The prose reaches a watcher after the event that records it and
+				// after the redaction above, in that order and never the other:
+				// nothing may be shown that the record does not hold, and nothing
+				// may be shown before it has been redacted. It is handed over whole
+				// rather than truncated the way the event is — a bound that exists
+				// to keep the event log readable is not a reason to show the
+				// operator half of what they were told.
+				if p.reply != nil {
+					p.reply(block.Text)
 				}
 			}
 		case "tool_use":

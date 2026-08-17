@@ -82,6 +82,12 @@ func (p *plain) Working(phase string) Activity {
 	return activity
 }
 
+// Status has nothing to rest on. A stream is written once and never revisited,
+// so a line whose whole purpose is to be replaced would be a line repeated for
+// every turn of the conversation, and a redirected transcript would carry a
+// running total nobody asked it to.
+func (p *plain) Status(string) {}
+
 // Theme dresses nothing. Colour and rules are for a terminal, and a stream that
 // is not one gets the same lines a redirected conversation has always had.
 func (p *plain) Theme() Theme { return Theme{} }

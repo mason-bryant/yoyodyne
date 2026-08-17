@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"yoyodyne/internal/backend"
@@ -178,6 +179,35 @@ type Session struct {
 	// is nil outside an interactive conversation: a one-shot message has nobody
 	// watching, and its events are recorded exactly as they always were.
 	activity *turnActivity
+	// stream is where the reply is shown as the provider writes it. It is nil
+	// wherever the console may not be dressed, which is every conversation that
+	// is not on a colour terminal, and the reply is then written when it is
+	// finished exactly as it always was.
+	stream *replyStream
+	// shownReply says the answer to the message being handled has already been
+	// read on screen as it formed, so the conversation does not write it again.
+	shownReply bool
+	// turnCostUSD is what the provider charged for the message being answered,
+	// summed across the rounds it took, and sessionCostUSD is what this process
+	// has spent on the conversation. Both are what the provider reported rather
+	// than anything the harness worked out, and neither is recorded: they are
+	// shown to an operator watching their spend and nothing else reads them.
+	//
+	// Summing treats each invocation's reported cost as that invocation's own.
+	// If a provider ever reported a running total for a resumed session instead,
+	// the session figure would over-count while the per-turn figure stayed
+	// right; that is the safer way round for a number nobody decides anything
+	// from, and it is the first thing to check against a real bill.
+	turnCostUSD    float64
+	sessionCostUSD float64
+	// titled says a run this conversation reported renamed the operator's
+	// terminal window, so the conversation knows to put the name back when it
+	// ends rather than leaving it announcing work that finished.
+	titled bool
+	// progressInterval overrides how often a watched run's record is re-read. It
+	// exists so a test can watch a run without waiting on a clock; a
+	// conversation leaves it alone.
+	progressInterval time.Duration
 	// theme is how much the console this conversation is held over permits it to
 	// be dressed. Its zero value dresses nothing, which is what everything but an
 	// interactive conversation on a colour terminal gets.
@@ -198,7 +228,9 @@ type concernRecord struct {
 
 // activeRun is a run started from this conversation. The goroutine that runs it
 // writes report and err and then closes done; nothing reads either before done
-// is closed, so the run needs no lock of its own.
+// is closed, so neither needs a lock. What the run crosses on the way does: it
+// is written by the goroutine watching the record and read by the one the
+// operator is talking to.
 type activeRun struct {
 	workItemID string
 	startedAt  time.Time
@@ -206,6 +238,43 @@ type activeRun struct {
 	done       chan struct{}
 	report     RunReport
 	err        error
+
+	// mu guards the crossings the operator has not been told about yet.
+	mu         sync.Mutex
+	milestones []string
+	// wake is how a prompt hears that the run wants attention, whether it
+	// crossed something or ended. It carries one signal at a time because
+	// whoever it wakes drains everything there is: a second signal would only
+	// say again what the first already did.
+	wake chan struct{}
+}
+
+// crossed records what the run has passed and asks for the operator's
+// attention.
+func (r *activeRun) crossed(milestones []string) {
+	r.mu.Lock()
+	r.milestones = append(r.milestones, milestones...)
+	r.mu.Unlock()
+	r.signal()
+}
+
+// takeCrossings returns what the operator has not been told about and forgets
+// it, so a milestone is said once.
+func (r *activeRun) takeCrossings() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	taken := r.milestones
+	r.milestones = nil
+	return taken
+}
+
+// signal asks for the operator's attention without ever waiting for it. A run
+// must not be held up because nobody is at the prompt.
+func (r *activeRun) signal() {
+	select {
+	case r.wake <- struct{}{}:
+	default:
+	}
 }
 
 // Evidence is what a conversation can be audited against: which conversation
@@ -333,6 +402,10 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	}
 
 	var reply Reply
+	// What this message costs is counted from here, across however many rounds
+	// it takes: what the operator asked for is the answer, not any one turn of
+	// it, so that is what a per-turn cost has to describe.
+	s.turnCostUSD = 0
 	prompt := s.turnPrompt(trimmed)
 	for round := 1; ; round++ {
 		answer, err := s.takeTurn(ctx, prompt)
@@ -457,6 +530,11 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		LastSequence:     lastSequence,
 		RedactValues:     s.options.RedactValues,
 		EventSink:        sink,
+		// The reply is shown as the provider writes it where somebody is
+		// watching. It is the same text this turn is built from, redacted and
+		// recorded before it arrives here, so nothing about what is recorded
+		// depends on whether anybody was.
+		ReplySink: s.stream.write,
 	})
 	// Whatever happened, the event log advanced, and the record has to agree
 	// with it or the next turn would renumber events that already exist.
@@ -464,15 +542,31 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	if result.LastEvent > s.state.LastSequence {
 		s.state.LastSequence = result.LastEvent
 	}
+	// What the provider charged for this invocation is what it reported for it.
+	// The harness works none of it out and records none of it: it is shown to an
+	// operator who is watching what a conversation costs them. It is counted
+	// before the invocation is judged, because an invocation that failed was
+	// charged for exactly as one that succeeded was.
+	s.turnCostUSD += result.CostUSD
+	s.sessionCostUSD += result.CostUSD
+	// A failed invocation is exactly the case a reply shown as it formed must not
+	// be left looking whole: whatever prose reached the screen was the start of
+	// an answer nobody finished. The two failures below are the only ones that
+	// mean that — a block the harness could not read afterwards belongs to a
+	// reply that arrived complete — so the stream is told here rather than from
+	// wherever the error is eventually reported.
 	if err != nil {
+		s.stream.cutOff()
 		return "", errors.Join(fmt.Errorf("product manager backend failed: %w", err), s.record())
 	}
 	if result.IsError {
+		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("product manager reported failure: %s", firstNonEmpty(result.StopReason, result.FinalText, "unknown provider failure")),
 			s.record(),
 		)
 	}
+	s.stream.endMessage()
 
 	if result.SessionID != "" {
 		s.state.ProviderSessionID = result.SessionID
@@ -873,6 +967,12 @@ func (s *Session) Converse(ctx context.Context, screen console.Console) error {
 	// so ending the conversation stops it deliberately rather than leaving an
 	// interruption for somebody to discover later.
 	s.finishActiveRun(ctx, s.theme.Harness(screen))
+	// A window title outlives the process that set it. A conversation that
+	// renamed the operator's terminal to report a finished run puts the name
+	// back rather than leaving it announcing work that finished long ago.
+	if s.titled {
+		fmt.Fprintln(screen, s.theme.Title(""))
+	}
 	return err
 }
 
@@ -919,11 +1019,16 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 			continue
 		}
 		reply, err := s.speak(ctx, screen, message)
-		if reply.Text != "" {
+		// What the answer cost is left resting under the conversation rather than
+		// written into it: it is true until the next turn replaces it, and a
+		// running total repeated after every answer would be a log of itself.
+		s.reportSpend(screen)
+		if reply.Text != "" && !s.shownReply {
 			// The reply is Markdown, and on a terminal it is shown as Markdown
 			// rather than as its source. Nothing about the recorded reply
 			// changes: the dressing is inserted between characters that were
-			// already there.
+			// already there. An answer that was read as it was written is not
+			// written a second time.
 			fmt.Fprintf(out, "\nproduct-manager> %s\n\n", s.theme.Reply(reply.Text))
 		}
 		// What the product manager did to the tracker is reported whether or not
@@ -982,12 +1087,43 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 func (s *Session) speak(ctx context.Context, screen console.Console, message string) (Reply, error) {
 	display := screen.Working(phaseSending)
 	s.activity = &turnActivity{display: display, phase: phaseSending}
+	// Where the console may be dressed, the answer is read as it is written and
+	// the account of work in progress goes back to describing what the harness
+	// is doing between the rounds of it. Anywhere else the stream is nothing at
+	// all and the reply is written when it is finished.
+	stream := newReplyStream(screen, s.theme)
+	s.stream = stream
+	s.shownReply = false
 	defer func() {
 		display.Close()
 		s.activity = nil
+		s.stream = nil
 	}()
-	return s.Send(ctx, message)
+	reply, err := s.Send(ctx, message)
+	s.shownReply = stream.end()
+	return reply, err
 }
+
+// reportSpend leaves what the conversation has cost on the line that rests
+// under it. An operator running a product conversation is spending their own
+// provider budget on every turn of it, and a number they have to leave the
+// conversation to find out is a number they find out afterwards.
+//
+// It says nothing until the provider has charged something. A conversation
+// whose provider reports no cost — a subscription that meters differently, a
+// backend that does not say — is one this cannot answer for, and a confident
+// zero would be an answer rather than an absence of one.
+func (s *Session) reportSpend(screen console.Console) {
+	if !s.theme.Permitted() || s.sessionCostUSD <= 0 {
+		return
+	}
+	screen.Status(fmt.Sprintf("this turn %s · this session %s", money(s.turnCostUSD), money(s.sessionCostUSD)))
+}
+
+// money is a cost as an operator reads it. Four places is what a single turn of
+// a conversation costs to the nearest interesting digit; fewer would report
+// most turns as free.
+func money(amount float64) string { return fmt.Sprintf("$%.4f", amount) }
 
 // ask puts one question to the operator and waits for their answer. A run that
 // finishes while they are typing is reported the moment it does, rather than
@@ -997,12 +1133,16 @@ func (s *Session) speak(ctx context.Context, screen console.Console, message str
 // reported before the next question instead.
 func (s *Session) ask(ctx context.Context, screen console.Console, prompt string) (string, error) {
 	for {
-		// A run that finished while the operator was reading is reported before
-		// they are asked for the next line, so the prompt never sits above an
-		// outcome nobody has been told about. It is the harness's own report,
-		// and is dressed as one.
-		s.reportFinishedWork(s.theme.Harness(screen))
-		answer, err := screen.Prompt(ctx, prompt, s.workDone())
+		// A run that crossed a phase or finished while the operator was reading is
+		// reported before they are asked for the next line, so the prompt never
+		// sits above something nobody has been told about. Both are the harness's
+		// own report and are dressed as one, and what a run crossed is said before
+		// what became of it, because collecting the run is what forgets there was
+		// one.
+		harness := s.theme.Harness(screen)
+		s.reportMilestones(harness)
+		s.reportFinishedWork(harness)
+		answer, err := screen.Prompt(ctx, prompt, s.attention())
 		if errors.Is(err, console.ErrInterrupted) {
 			continue
 		}

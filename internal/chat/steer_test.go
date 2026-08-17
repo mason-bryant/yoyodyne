@@ -486,6 +486,10 @@ func TestAFinishedRunReportsItselfWithoutWaitingForAKey(t *testing.T) {
 type scriptedConsole struct {
 	out   io.Writer
 	steps []scriptedStep
+	// theme is how much this console permits itself to be dressed. Its zero
+	// value dresses nothing, which is what a stream gets and what most of these
+	// tests want to read.
+	theme console.Theme
 	// waiting records, for each prompt in order, whether it was offered with a
 	// run still to wait for.
 	waiting []bool
@@ -524,7 +528,11 @@ func (c *scriptedConsole) Working(phase string) console.Activity {
 	return testConsole(strings.NewReader(""), c.out).Working(phase)
 }
 
-func (c *scriptedConsole) Theme() console.Theme { return console.Theme{} }
+// Status is what a stream does with one: nothing. A transcript a test reads
+// carries no line whose whole purpose is to be replaced.
+func (c *scriptedConsole) Status(string) {}
+
+func (c *scriptedConsole) Theme() console.Theme { return c.theme }
 
 func (c *scriptedConsole) Close() error { return nil }
 
@@ -909,12 +917,17 @@ type fakeWork struct {
 	// changesAsked records the work items /diff asked about, so what an operator
 	// gets when they name nothing is an assertion rather than a claim.
 	changesAsked []string
-	notes        [][2]string
-	directErr    error
-	settlements  []Settlement
-	settleErr    error
-	settles      int
-	cancelled    bool
+	// progress is the readings a watcher gets from the run's record, in order,
+	// and progressAsked is every item it was asked about.
+	progress      []RunProgress
+	progressAsked []string
+	progressErr   error
+	notes         [][2]string
+	directErr     error
+	settlements   []Settlement
+	settleErr     error
+	settles       int
+	cancelled     bool
 	// gate holds every run until a test releases it, so a run can be observed
 	// in flight. A nil gate finishes at once.
 	gate chan struct{}
@@ -983,6 +996,26 @@ func (f *fakeWork) Direct(_ context.Context, workItemID, note string) error {
 	return nil
 }
 
+// Progress replays the readings of a run's record in order, holding the last
+// one once they run out, which is what a record that has stopped changing looks
+// like to whoever is watching it.
+func (f *fakeWork) Progress(_ context.Context, workItemID string) (RunProgress, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.progressAsked = append(f.progressAsked, workItemID)
+	if f.progressErr != nil {
+		return RunProgress{}, f.progressErr
+	}
+	if len(f.progress) == 0 {
+		return RunProgress{}, errors.New("no run has been recorded for " + workItemID)
+	}
+	reading := f.progress[0]
+	if len(f.progress) > 1 {
+		f.progress = f.progress[1:]
+	}
+	return reading, nil
+}
+
 func (f *fakeWork) Settle(context.Context) ([]Settlement, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -1000,6 +1033,12 @@ func (f *fakeWork) takenNotes() [][2]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([][2]string(nil), f.notes...)
+}
+
+func (f *fakeWork) progressReadings() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.progressAsked)
 }
 
 func (f *fakeWork) settleCount() int {

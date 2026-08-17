@@ -226,3 +226,62 @@ func TestAStreamIsToldEachPhaseOnce(t *testing.T) {
 		t.Fatal("a stream was given a rule to draw")
 	}
 }
+
+// TestAStatusLineRestsUnderTheConversationAndYieldsToWorkInProgress covers the
+// row the region keeps for what is true between turns. Both things want that
+// row, and only one of them can have it: what the operator is waiting on is the
+// more urgent, so it covers the other for as long as it lasts and gives the row
+// back when it ends.
+func TestAStatusLineRestsUnderTheConversationAndYieldsToWorkInProgress(t *testing.T) {
+	t.Parallel()
+
+	console, keys, out := terminalUnderTest(t, 40)
+	lines := prompting(context.Background(), console, "you> ", nil)
+	keys.Write([]byte("what next"))
+	out.await(t, "the typed text", func(s *screen) bool {
+		return s.lastLine() == "you> what next"
+	})
+
+	console.Status("this turn $0.0125 · this session $0.0125")
+	rendered := out.await(t, "the resting line", func(s *screen) bool {
+		return strings.Contains(s.text(), "this session $0.0125")
+	})
+	if rendered.lastLine() != "you> what next" {
+		t.Fatalf("the composing line was disturbed:\n%s", rendered.text())
+	}
+
+	// Work in progress takes the row while it lasts.
+	activity := console.Working("the product manager is thinking")
+	rendered = out.await(t, "the activity line", func(s *screen) bool {
+		return strings.Contains(s.text(), "the product manager is thinking")
+	})
+	if strings.Contains(rendered.text(), "this session") {
+		t.Fatalf("the resting line and the activity line shared a screen:\n%s", rendered.text())
+	}
+
+	// A new resting line set while work is in progress waits for it rather than
+	// fighting it for the row, and is there when it ends.
+	console.Status("this turn $0.0300 · this session $0.0425")
+	activity.Close()
+	rendered = out.await(t, "the resting line to come back", func(s *screen) bool {
+		return strings.Contains(s.text(), "this session $0.0425")
+	})
+	if strings.Contains(rendered.text(), "the product manager is thinking") {
+		t.Fatalf("the activity line was left in the scrollback:\n%s", rendered.text())
+	}
+	if rendered.lastLine() != "you> what next" {
+		t.Fatalf("the composing line was disturbed:\n%s", rendered.text())
+	}
+
+	// Nothing that was only ever a display of what is true now survives the
+	// conversation: closing takes the whole region away.
+	keys.Write([]byte("\r"))
+	if line := lines.line(t); line != "what next" {
+		t.Fatalf("line = %q", line)
+	}
+	console.Close()
+	rendered = out.screen()
+	if strings.Contains(rendered.text(), "this session") {
+		t.Fatalf("closing left the resting line behind:\n%s", rendered.text())
+	}
+}

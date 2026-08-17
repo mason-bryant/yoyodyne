@@ -48,6 +48,9 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 	// A run that finished while the operator was typing is collected before the
 	// command acts, so a command never decides anything about a run that is
 	// already over — stopping something finished, or reporting it as in flight.
+	// What it crossed on the way is said first, because collecting the run is
+	// what forgets there was one.
+	s.reportMilestones(out)
 	s.reportFinishedWork(out)
 	name, argument, _ := strings.Cut(line, " ")
 	argument = strings.TrimSpace(argument)
@@ -136,7 +139,7 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		}
 		// The run ended, so it is reported even when recording that it did
 		// failed; the failure travels with it rather than replacing it.
-		printFinishedRun(out, finished, err)
+		s.printFinishedRun(out, finished, err)
 		return false, nil
 	case "/stop":
 		stopped, err := s.StopWork(ctx, argument)
@@ -160,14 +163,16 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 	}
 }
 
-// workDone is the run this conversation is waiting on, or nothing. It is what
-// a prompt waits beside, so on a terminal the operator hears about a run when
-// it ends rather than when they next say something.
-func (s *Session) workDone() <-chan struct{} {
+// attention is how the run this conversation started interrupts the prompt, or
+// nothing when there is no run. It is what a prompt waits beside, so on a
+// terminal the operator hears about a run when something happens to it rather
+// than when they next say something — whether that is a phase it crossed or the
+// end of it.
+func (s *Session) attention() <-chan struct{} {
 	if s.active == nil {
 		return nil
 	}
-	return s.active.done
+	return s.active.wake
 }
 
 // reportFinishedWork prints the run this conversation started once it has
@@ -185,17 +190,29 @@ func (s *Session) reportFinishedWork(out io.Writer) {
 		}
 		return
 	}
-	printFinishedRun(out, finished, err)
+	s.printFinishedRun(out, finished, err)
 }
 
 // printFinishedRun describes a run that has ended, along with anything that
 // went wrong reporting it. The report is printed either way: an outcome nobody
 // could write down is still the operator's to read.
-func printFinishedRun(out io.Writer, finished *FinishedRun, recordErr error) {
+//
+// A run is the one thing here the operator was not waiting at the prompt for,
+// so the terminal is asked for their attention as well: the bell, and the
+// window title saying what happened. A conversation is often left in a
+// background tab while a run works, and those are the only two places a
+// terminal can say so where somebody who is not looking at it will notice.
+func (s *Session) printFinishedRun(out io.Writer, finished *FinishedRun, recordErr error) {
 	if finished == nil {
 		return
 	}
-	fmt.Fprintf(out, "\n%s", finished.Report.Render())
+	headline := finished.Report.Headline()
+	if alert := s.theme.Alert(headline); alert != "" {
+		s.titled = true
+		fmt.Fprintf(out, "\n%s%s", alert, finished.Report.Render())
+	} else {
+		fmt.Fprintf(out, "\n%s", finished.Report.Render())
+	}
 	if finished.Err != nil {
 		fmt.Fprintf(out, "  the harness reported: %v\n", finished.Err)
 	}
@@ -210,6 +227,7 @@ func printFinishedRun(out io.Writer, finished *FinishedRun, recordErr error) {
 // deliberately and abandoning it; only one of those leaves a record the
 // operator can act on.
 func (s *Session) finishActiveRun(ctx context.Context, out io.Writer) {
+	s.reportMilestones(out)
 	s.reportFinishedWork(out)
 	run := s.active
 	if run == nil {
@@ -354,12 +372,25 @@ func (s *Session) StartWork(ctx context.Context, workItemID string) error {
 		startedAt:  s.options.clock().Now(),
 		cancel:     cancel,
 		done:       make(chan struct{}),
+		wake:       make(chan struct{}, 1),
 	}
 	work := s.options.Work
 	go func() {
+		// The run ending is itself something the operator is waiting to hear, so
+		// it asks for their attention the same way a crossing does — after done
+		// is closed, so whoever it wakes finds a run that has actually ended.
+		defer run.signal()
 		defer close(run.done)
 		run.report, run.err = work.Run(runContext, id)
 	}()
+	// The run is watched only where the console can say something about it
+	// without disturbing the operator. A stream has no moment at which it could:
+	// reporting between two lines that are already buffered would make a
+	// redirected transcript depend on how long a run took, which is exactly what
+	// the plain console refuses to do with everything else.
+	if s.theme.Permitted() {
+		go s.watchProgress(runContext, work, run)
+	}
 	s.active = run
 	s.notice("the operator started work on %s, and the harness is running it now", id)
 	return nil

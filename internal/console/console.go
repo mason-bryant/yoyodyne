@@ -52,6 +52,13 @@ type Console interface {
 	// beginning with the phase it is in now. It is closed by the caller once
 	// there is an answer to read.
 	Working(phase string) Activity
+	// Status leaves one line resting under the conversation, above whatever is
+	// being composed, until it is replaced or emptied. It carries what is true
+	// between turns — what the last turn cost — rather than what happened, which
+	// is written into the conversation. An account of work in progress covers it
+	// while there is one and it comes back underneath when that ends. A stream
+	// has no line to rest anything on and ignores it.
+	Status(text string)
 	// Theme reports how much this console may dress what is written to it.
 	Theme() Theme
 	// Close restores the terminal and flushes anything held back. It is safe to

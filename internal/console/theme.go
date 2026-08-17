@@ -73,6 +73,21 @@ const (
 	unknownWidth = 60
 )
 
+// bell is the terminal's own way of asking for attention, and titleOpen and
+// titleClose rename the window. Both are escapes exactly as the colours are:
+// written into a file they are corruption rather than presentation, so they are
+// permitted and suppressed with the rest of the dressing.
+const (
+	bell       = "\a"
+	titleOpen  = "\x1b]2;"
+	titleClose = "\a"
+)
+
+// maxTitleBytes bounds what may be put in a window title. A title is a few
+// words in a tab, and a terminal handed a paragraph either truncates it itself
+// or scrolls the rest of the window's furniture out of reach.
+const maxTitleBytes = 96
+
 // Theme is how much a conversation may be dressed. Its zero value dresses
 // nothing at all, which is what a stream that is not a terminal gets, and what
 // a terminal gets where NO_COLOR or TERM says colour is unwelcome.
@@ -139,6 +154,67 @@ func deepColour(term, colorterm string) bool {
 		strings.Contains(colorterm, "256") ||
 		strings.Contains(colorterm, "truecolor") ||
 		strings.Contains(colorterm, "24bit")
+}
+
+// Permitted reports whether this console may be dressed at all. It is one
+// question rather than several because the answer is always the same: an
+// operator who set NO_COLOR, a terminal that says it is dumb, and a stream that
+// is not a terminal each rule out every escape there is, not only the colours.
+// Everything that writes one — the rules, the cards, the bell, the window
+// title, and a reply shown as it forms — asks this before it writes anything.
+func (t Theme) Permitted() bool { return t.width != nil }
+
+// Alert is what a terminal is sent when something the operator was not watching
+// has finished: the bell, and the window title renamed to say what it was. A
+// conversation is often left in a background tab while a run works, and those
+// are the two places a terminal can say so where the operator will see it.
+//
+// It is written at the start of the line that says the same thing in words,
+// rather than on a line of its own. Neither escape occupies a column, so a
+// transcript with them stripped out is the transcript without them, which is
+// the same discipline the colours follow.
+func (t Theme) Alert(title string) string {
+	if !t.Permitted() {
+		return ""
+	}
+	return bell + t.Title(title)
+}
+
+// Title renames the terminal window, and empties the name when given nothing:
+// a title outlives the process that set it, so a conversation that renamed the
+// operator's window has to be able to put it back. It is empty where dressing
+// is suppressed, so a caller writes it unconditionally.
+func (t Theme) Title(title string) string {
+	if !t.Permitted() {
+		return ""
+	}
+	return titleOpen + titleText(title) + titleClose
+}
+
+// titleText is what may be put in a window title: one bounded line of printable
+// text. The terminal interprets this rather than printing it, so anything that
+// could end the sequence early or begin another one is removed rather than
+// escaped — a run headline carries a work item's own title, and a title is not
+// a place to find out what somebody put in one.
+func titleText(title string) string {
+	// A control character becomes a space rather than vanishing, so a headline
+	// folded onto one line still reads as words rather than running two of them
+	// together.
+	printable := strings.Map(func(character rune) rune {
+		if character < 0x20 || character == 0x7f {
+			return ' '
+		}
+		return character
+	}, title)
+	folded := strings.Join(strings.Fields(printable), " ")
+	if len(folded) <= maxTitleBytes {
+		return folded
+	}
+	cut := maxTitleBytes
+	for cut > 0 && !utf8.RuneStart(folded[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(folded[:cut])
 }
 
 // Rule returns the horizontal rule that separates what the operator said from
