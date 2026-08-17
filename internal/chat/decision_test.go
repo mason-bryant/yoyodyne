@@ -55,6 +55,24 @@ func TestOnlyAnApprovalThatNamesItsItemsCreatesAnything(t *testing.T) {
 		}
 	})
 
+	t.Run("a bare yes approves the last card left, whatever number it carries", func(t *testing.T) {
+		t.Parallel()
+
+		// Card numbers are a proposal's place in its turn and never renumber, so
+		// the last of three undecided proposals is still card 3. The prompt for
+		// it says y creates it, and y has to mean that card rather than card 1.
+		last := testCards(3)[2:]
+		for _, answer := range []string{"y", "yes", "approve"} {
+			decisions, err := readDecisions(answer, last)
+			if err != nil {
+				t.Fatalf("readDecisions(%q) error = %v", answer, err)
+			}
+			if want := []decision{{proposalID: "2.3", approve: true}}; !reflect.DeepEqual(decisions, want) {
+				t.Fatalf("readDecisions(%q) = %#v, want %#v", answer, decisions, want)
+			}
+		}
+	})
+
 	t.Run("a bare yes to several proposals names none of them and creates none", func(t *testing.T) {
 		t.Parallel()
 
@@ -135,12 +153,35 @@ func TestOneAnswerDecidesSeveralProposals(t *testing.T) {
 			},
 		},
 		{
-			name:   "a decline naming nothing declines what is left",
+			// A clause that names nothing is all of it the operator's words about
+			// what it declines, so all of it is kept, down to the word they
+			// declined with.
+			name:   "a decline naming nothing declines what is left, in the words it was written in",
 			answer: "approve 2 and decline too speculative",
 			want: []decision{
-				{proposalID: "2.1", reason: "too speculative"},
+				{proposalID: "2.1", reason: "decline too speculative"},
 				{proposalID: "2.2", approve: true},
-				{proposalID: "2.3", reason: "too speculative"},
+				{proposalID: "2.3", reason: "decline too speculative"},
+			},
+		},
+		{
+			name:   "a short no keeps the word it was said with",
+			answer: "no thanks",
+			want: []decision{
+				{proposalID: "2.1", reason: "no thanks"},
+				{proposalID: "2.2", reason: "no thanks"},
+				{proposalID: "2.3", reason: "no thanks"},
+			},
+		},
+		{
+			// What a single proposal answered with "n" has always recorded: the
+			// answer itself, rather than nothing at all.
+			name:   "a bare no is recorded as the answer it was",
+			answer: "n",
+			want: []decision{
+				{proposalID: "2.1", reason: "n"},
+				{proposalID: "2.2", reason: "n"},
+				{proposalID: "2.3", reason: "n"},
 			},
 		},
 		{
@@ -415,4 +456,102 @@ func TestABatchAnswerNeverCreatesWhatItDidNotName(t *testing.T) {
 			}
 		}
 	})
+}
+
+// A batch decided down to its last proposal is asked as the single question it
+// now is, and answered the way that question has always been answered. The card
+// keeps the number it was proposed with, so the yes has to mean that card rather
+// than the first one.
+func TestTheLastProposalOfABatchIsStillApprovedWithAYes(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply(
+			"Three things.",
+			`{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously."}`,
+			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`,
+			`{"title":"Publish a pull request","description":"Push the branch.","rationale":"You asked for review on the forge.","goal":"Run development nearly autonomously."}`,
+		),
+	}}})
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// Two are decided by number; the third is then the only one left, and y is
+	// what the prompt for it asks for.
+	input := strings.NewReader("what next?\napprove 1,2\ny\n/exit\n")
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	created := make([]string, 0, len(tracker.created))
+	for _, item := range tracker.created {
+		created = append(created, item.Title)
+	}
+	want := []string{"Pause on a usage limit", "Add a retry budget", "Publish a pull request"}
+	if !reflect.DeepEqual(created, want) {
+		t.Fatalf("created work items = %#v, want %#v", created, want)
+	}
+	if pending := session.Proposals(); len(pending) != 0 {
+		t.Fatalf("awaiting decision = %#v, want all three decided", pending)
+	}
+	transcript := out.String()
+	if !strings.Contains(transcript, "create 1.3?") {
+		t.Fatalf("transcript = %q, want the last proposal asked as a single question", transcript)
+	}
+	// The card kept its number, and the yes was not read as naming card 1.
+	if strings.Contains(transcript, "is not one of the proposals") {
+		t.Fatalf("transcript = %q, want the yes to name the card it was asked about", transcript)
+	}
+}
+
+// A tracker that will not create the item is not a reason to hold the operator
+// at the prompt. The proposal stays undecided, exactly as it does when a single
+// answer fails, and the conversation carries on.
+func TestAProposalTheTrackerRefusesIsNotAskedAboutAgain(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{err: errors.New("bd create failed")}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply(
+			"Two things.",
+			`{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously."}`,
+			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`,
+		),
+	}}})
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// Both are approved and neither can be created. The conversation reaches the
+	// /exit that follows rather than asking about them until the input runs out.
+	input := strings.NewReader("what next?\napprove 1,2\n/exit\n")
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	if len(tracker.created) != 0 {
+		t.Fatalf("a refusing tracker created %#v", tracker.created)
+	}
+	// Neither was decided, so both are named as loose ends when the conversation
+	// ends rather than being recorded as declined by a failure.
+	if pending := session.Proposals(); len(pending) != 2 {
+		t.Fatalf("awaiting decision = %#v, want both still undecided", pending)
+	}
+	transcript := out.String()
+	for _, required := range []string{
+		"1.1 was not created: ",
+		"bd create failed",
+		"left undecided rather than asked about again",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	if asked := strings.Count(transcript, "decide 2 proposals?"); asked != 1 {
+		t.Fatalf("the operator was asked %d times, want once", asked)
+	}
 }

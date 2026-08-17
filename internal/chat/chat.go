@@ -1080,7 +1080,9 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 // An answer that decides only some of them leaves the others exactly where they
 // were, and they are put again: an operator who named two of five has not said
 // anything about the other three, and the harness neither guesses nor drops
-// them.
+// them. The one thing that is not put again is a proposal whose approval the
+// tracker refused, because asking somebody the same question until the answer
+// changes is not asking them anything.
 func (s *Session) decide(ctx context.Context, proposals []PendingProposal, screen console.Console) error {
 	if len(proposals) == 0 {
 		return nil
@@ -1093,8 +1095,14 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 	// it is not the conversation, it is something waiting on the operator, and
 	// what says so when the colour is gone is the text itself.
 	fmt.Fprint(out, s.theme.Proposal(fmt.Sprintf("The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))))
+	// refused is what the tracker would not create while this batch was being
+	// decided. Those proposals are still awaiting a decision and are named as
+	// such when the conversation ends; what they are not is asked about again
+	// here, which would leave the operator with no way past the prompt but to
+	// decline work they wanted.
+	refused := make(map[string]bool)
 	for {
-		cards := s.undecidedCards(proposals)
+		cards := s.undecidedCards(proposals, refused)
 		if len(cards) == 0 {
 			return nil
 		}
@@ -1125,7 +1133,7 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 			fmt.Fprintf(out, "%v\nnothing was decided, so all of it is still waiting on you.\n\n", err)
 			continue
 		}
-		if err := s.applyDecisions(ctx, out, decisions); err != nil {
+		if err := s.applyDecisions(ctx, out, decisions, refused); err != nil {
 			return err
 		}
 	}
@@ -1135,10 +1143,10 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 // each proposal's place in the turn that proposed it. The numbering is fixed
 // when the turn is proposed rather than when a card is drawn, so the number
 // beside a proposal means the same thing on every round of deciding.
-func (s *Session) undecidedCards(proposals []PendingProposal) []card {
+func (s *Session) undecidedCards(proposals []PendingProposal, refused map[string]bool) []card {
 	cards := make([]card, 0, len(proposals))
 	for index, proposal := range proposals {
-		if s.isDecided(proposal.ID) {
+		if s.isDecided(proposal.ID) || refused[proposal.ID] {
 			continue
 		}
 		cards = append(cards, card{number: index + 1, proposal: proposal})
@@ -1160,8 +1168,10 @@ func (s *Session) isDecided(proposalID string) bool {
 // applyDecisions carries out one answer, one proposal at a time. Each decision
 // goes through the same Approve and Reject a single answer goes through, so a
 // batch is several decisions rather than a different kind of one, and what is
-// recorded for each of them is identical either way.
-func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions []decision) error {
+// recorded for each of them is identical either way. A proposal the tracker
+// would not create is added to refused, which is what keeps it from being put
+// again on the next round.
+func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions []decision, refused map[string]bool) error {
 	for _, made := range decisions {
 		if !made.approve {
 			if err := s.Reject(made.proposalID, made.reason); err != nil {
@@ -1170,13 +1180,17 @@ func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions [
 			fmt.Fprintf(out, "declined %s; the decision is recorded.\n\n", made.proposalID)
 			continue
 		}
-		// A tracker that fails is reported and the conversation continues: the
-		// proposal is still awaiting a decision, and an operator who wanted the
-		// item can ask for it again once the tracker answers.
+		// A tracker that fails is reported and the conversation continues. The
+		// proposal is still awaiting a decision, so it is named as undecided when
+		// the conversation ends and an operator who wanted the item can ask for it
+		// again once the tracker answers — but it is not offered again here, where
+		// a tracker that is still down would leave them answering the same prompt
+		// for as long as they had the patience for it.
 		created, err := s.Approve(ctx, made.proposalID)
 		switch {
 		case err != nil && created.WorkItemID == "":
-			fmt.Fprintf(out, "%s was not created: %v\n\n", made.proposalID, err)
+			refused[made.proposalID] = true
+			fmt.Fprintf(out, "%s was not created: %v\nit is left undecided rather than asked about again; ask for it once the tracker answers.\n\n", made.proposalID, err)
 		case err != nil:
 			fmt.Fprintf(out, "created %s: %s\nthe item is incomplete: %v\n\n", created.WorkItemID, created.Title, err)
 		default:

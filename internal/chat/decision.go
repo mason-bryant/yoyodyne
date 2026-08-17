@@ -88,6 +88,7 @@ func readDecisions(answer string, cards []card) ([]decision, error) {
 	var decisions []decision
 	named := make(map[string]bool, len(cards))
 	for rest != "" {
+		clause := rest
 		verb, after := nextWord(rest)
 		approve := matches(verb, approveWords)
 		if !approve && !matches(verb, declineWords) {
@@ -117,7 +118,15 @@ func readDecisions(answer string, cards []card) ([]decision, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A clause that names no proposals is entirely the operator's words about
+		// the ones it declines, so the whole of it is kept — the word they turned
+		// them down with included. That is what "n" recorded when proposals were
+		// answered one at a time, and "no thanks" recorded as "thanks" would be
+		// the harness editing what somebody said about work it then refused.
 		reason := strings.TrimSpace(remainder)
+		if len(selectors) == 0 {
+			reason = strings.TrimSpace(clause)
+		}
 		for _, id := range chosen {
 			decisions = append(decisions, decision{proposalID: id, reason: reason})
 		}
@@ -140,7 +149,16 @@ func resolveApproved(selectors []string, cards []card, named map[string]bool) ([
 		if len(cards) != 1 {
 			return nil, fmt.Errorf("say which of the %d proposals to approve, as approve 1,3; an approval has to name what it creates", len(cards))
 		}
-		selectors = []string{"1"}
+		// The card in front of the operator is taken directly rather than by the
+		// number it happens to carry. A batch decided down to its last proposal
+		// keeps that proposal's original number, so a bare yes to the last of
+		// three is a yes to card 3, and reading it as card 1 would refuse the very
+		// answer the prompt asks for.
+		found, err := claim(cards[0], named)
+		if err != nil {
+			return nil, err
+		}
+		return []string{found}, nil
 	}
 	var chosen []string
 	for _, selector := range selectors {
@@ -199,13 +217,20 @@ func resolve(selector string, cards []card, named map[string]bool) (string, erro
 		if entry.proposal.ID != selector && !(numeric && entry.number == number) {
 			continue
 		}
-		if named[entry.proposal.ID] {
-			return "", fmt.Errorf("proposal %s is decided twice in that answer", entry.proposal.ID)
-		}
-		named[entry.proposal.ID] = true
-		return entry.proposal.ID, nil
+		return claim(entry, named)
 	}
 	return "", fmt.Errorf("%s is not one of the proposals you are being asked about", selector)
+}
+
+// claim records that one answer has decided a card, and refuses a second
+// decision about it: an answer that contradicts itself is exactly the kind
+// nobody can be sure of.
+func claim(entry card, named map[string]bool) (string, error) {
+	if named[entry.proposal.ID] {
+		return "", fmt.Errorf("proposal %s is decided twice in that answer", entry.proposal.ID)
+	}
+	named[entry.proposal.ID] = true
+	return entry.proposal.ID, nil
 }
 
 // cardNumber reads a selector as the number on a card. A proposal identifier is
