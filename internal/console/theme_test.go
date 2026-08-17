@@ -138,3 +138,39 @@ func TestColourIsAnAdditionAndNeverTheMeaning(t *testing.T) {
 		}
 	}
 }
+
+// A card is a frame around something the operator has to act on. Like the rule
+// it is decoration: it makes the boundary between two of them findable, and
+// everything that carries meaning is in the heading and the body, which is what
+// is left when the frame is suppressed.
+func TestACardFramesWithoutCarryingMeaning(t *testing.T) {
+	t.Parallel()
+
+	const heading = "1 · proposal 2.1 · Pause on a usage limit"
+	body := "Wait and resume.\nwhy: Capacity is not failure."
+
+	framed := NewTheme(environment(map[string]string{"TERM": "xterm-256color"}), func() int { return 30 }).Card(heading, body)
+	want := strings.Join([]string{
+		"╭─ " + heading + " ",
+		"│ Wait and resume.",
+		"│ why: Capacity is not failure.",
+		"╰" + strings.Repeat("─", 29),
+		"",
+	}, "\n")
+	if framed != want {
+		t.Fatalf("framed card =\n%q\nwant\n%q", framed, want)
+	}
+
+	// Where nothing may be dressed, the same card is the heading with its body
+	// indented under it, which is what one of these has always been on a stream.
+	plain := Theme{}.Card(heading, body)
+	if plain != heading+"\n    Wait and resume.\n    why: Capacity is not failure.\n" {
+		t.Fatalf("undressed card = %q", plain)
+	}
+	// A heading too long for the screen still opens its card rather than being
+	// cut: what it names matters more than the frame lining up.
+	long := NewTheme(environment(map[string]string{"TERM": "xterm-256color"}), func() int { return 10 }).Card(heading, "body")
+	if !strings.Contains(long, heading) {
+		t.Fatalf("a long heading was lost: %q", long)
+	}
+}

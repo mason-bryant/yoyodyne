@@ -303,16 +303,18 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string)
 	fmt.Fprintln(writer, "reprioritize, link, unlink, close, and retire items, and every change it makes")
 	fmt.Fprintln(writer, "is reported to you here. It has no files, commands, or network, and it proposes")
 	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
-	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it,")
-	fmt.Fprintln(writer, "and every one of them names the goal it serves. Work it cannot place under a")
+	fmt.Fprintln(writer, "It may also propose work items; one is created only when you approve it by name,")
+	fmt.Fprintln(writer, "and every one of them names the goal it serves. Several proposals are decided in")
+	fmt.Fprintln(writer, "one answer: approve 1,3 and decline 2 <reason>. Work it cannot place under a")
 	fmt.Fprintln(writer, "goal, work it says would cut against one, and work it judges to be against the")
 	fmt.Fprintln(writer, "product's intent are not proposed at all: it stops and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
 	fmt.Fprintln(writer, "shows you what has been collected.")
 	fmt.Fprintln(writer, "Its picture of the repository and the tracker is the one gathered above; /refresh")
 	fmt.Fprintln(writer, "reads them again into this conversation without discarding what has been said.")
-	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect.")
-	fmt.Fprintln(writer, "/help lists them.")
+	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect. /show")
+	fmt.Fprintln(writer, "reads one item in full and /diff says what a run changed, both without leaving")
+	fmt.Fprintln(writer, "this conversation. /help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
 	fmt.Fprintln(writer)
 }
@@ -446,6 +448,6 @@ Options:
   --json             emit machine-readable JSON (requires --message)
 
 An interactive conversation also carries out operator commands: /backlog,
-/status, /refresh, /work, /wait, /stop, and /redirect. Ask it for /help once it
-is open.`)
+/status, /show, /diff, /refresh, /work, /wait, /stop, and /redirect. Ask it for
+/help once it is open.`)
 }

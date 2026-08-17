@@ -55,6 +55,12 @@ type Work interface {
 	// policy. It returns what the run reported even when it failed, because a
 	// failed run's branch, worktree, and findings are what the operator acts on.
 	Run(ctx context.Context, workItemID string) (RunReport, error)
+	// Changes reports what the harness's most recent run of one work item
+	// changed, read from the durable run record rather than from a worktree. That
+	// is the whole point of it: the worktree a run wrote in is removed when the
+	// run is cleaned up, and the branch with it, so a change nobody recorded is a
+	// change nobody can be shown afterwards.
+	Changes(ctx context.Context, workItemID string) (RunChanges, error)
 	// Direct records durable operator direction on a work item, where the next
 	// attempt at it reads it. It never changes the item's status: redirecting
 	// work says what to do differently, it does not decide the work is done.
@@ -143,6 +149,52 @@ type RunReport struct {
 	// something new in it.
 	Reported      int    `json:"reported,omitempty"`
 	ReportProblem string `json:"report_problem,omitempty"`
+}
+
+// RunChanges is what one recorded run changed, as the durable record holds it.
+// Every field comes from that record rather than from the repository, so a run
+// whose worktree and branch are long gone still says what it did and still
+// points at the pull request it published. What it cannot say is what has
+// happened since: this describes the change the run made, not the state of the
+// repository now.
+type RunChanges struct {
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Status     string `json:"status"`
+	Phase      string `json:"phase,omitempty"`
+	// StartedAt and CompletedAt say when the run this describes happened, so an
+	// account of a change is never mistaken for an account of the latest one.
+	StartedAt   time.Time  `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Branch      string     `json:"branch,omitempty"`
+	// WorktreePath is where the change was written, and Preserved reports that
+	// it is still there to be looked at. A cleaned-up run says so rather than
+	// naming a directory that no longer exists.
+	WorktreePath string `json:"worktree_path,omitempty"`
+	Preserved    bool   `json:"preserved,omitempty"`
+	// Files and DiffStat are the recorded account of the change itself: which
+	// files the run touched and how much of each.
+	Files    string `json:"files,omitempty"`
+	DiffStat string `json:"diff_stat,omitempty"`
+	// Integrated, TargetBranch, and Commit describe a promotion that actually
+	// happened, and are read from the recorded integration rather than inferred
+	// from a run having succeeded.
+	Integrated   bool   `json:"integrated,omitempty"`
+	TargetBranch string `json:"target_branch,omitempty"`
+	Commit       string `json:"commit,omitempty"`
+	// PullRequest is where the work was published, when the project publishes.
+	// It outlives the branch, which is exactly why it is worth pointing at.
+	PullRequest *PublishedChange `json:"pull_request,omitempty"`
+	Failure     string           `json:"failure,omitempty"`
+}
+
+// PublishedChange is the pull request a run published its work through, as the
+// run's record holds it.
+type PublishedChange struct {
+	Number int    `json:"number"`
+	URL    string `json:"url"`
+	State  string `json:"state,omitempty"`
+	Merged bool   `json:"merged,omitempty"`
 }
 
 // Settlement is what settling did with one run.
@@ -430,6 +482,74 @@ func (r RunReport) Headline() string {
 		return fmt.Sprintf("%s finished with status %s and nothing integrated", item, r.Status)
 	default:
 		return item + " finished with nothing integrated"
+	}
+}
+
+// Render describes what a run changed. It says which run it is describing
+// first, because the answer to "what did that change" is only worth anything
+// once you know which attempt it is about, and it says plainly when the record
+// holds no account of a change rather than printing an empty listing that reads
+// like one.
+func (c RunChanges) Render() string {
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "%s on %s [%s], started %s\n", c.RunID, c.WorkItemID, c.state(), c.StartedAt.UTC().Format(time.RFC3339))
+	if c.Branch != "" {
+		fmt.Fprintf(&rendered, "  branch: %s\n", c.Branch)
+	}
+	if c.WorktreePath != "" {
+		if c.Preserved {
+			fmt.Fprintf(&rendered, "  worktree: %s\n", c.WorktreePath)
+		} else {
+			fmt.Fprintf(&rendered, "  worktree: %s, removed when the run was cleaned up\n", c.WorktreePath)
+		}
+	}
+	if c.Integrated {
+		fmt.Fprintf(&rendered, "  integrated into %s at %s\n", c.TargetBranch, c.Commit)
+	}
+	if c.PullRequest != nil {
+		fmt.Fprintf(&rendered, "  pull request: #%d %s%s\n", c.PullRequest.Number, c.PullRequest.URL, c.PullRequest.describe())
+	}
+	if c.Failure != "" {
+		fmt.Fprintf(&rendered, "  failure: %s\n", singleLine(c.Failure, MaxOperatorMessageBytes))
+	}
+	if c.Files == "" && c.DiffStat == "" {
+		rendered.WriteString("  nothing was recorded about what this run changed; it may not have got as far as changing anything.\n")
+		return rendered.String()
+	}
+	for _, section := range []struct {
+		label string
+		text  string
+	}{{"files", c.Files}, {"diff stat", c.DiffStat}} {
+		if strings.TrimSpace(section.text) == "" {
+			continue
+		}
+		fmt.Fprintf(&rendered, "  %s:\n", section.label)
+		for _, line := range strings.Split(strings.TrimRight(section.text, "\n"), "\n") {
+			fmt.Fprintf(&rendered, "    %s\n", strings.TrimRight(line, " \t"))
+		}
+	}
+	return rendered.String()
+}
+
+// state names where the run is, the way a survey names it: its status, and the
+// phase it reached when the record has one.
+func (c RunChanges) state() string {
+	if c.Phase == "" {
+		return c.Status
+	}
+	return c.Status + ", " + c.Phase
+}
+
+// describe says what the forge last said about a published request, when it
+// said anything at all.
+func (p PublishedChange) describe() string {
+	switch {
+	case p.Merged:
+		return " (merged)"
+	case p.State != "":
+		return " (" + p.State + ")"
+	default:
+		return ""
 	}
 }
 

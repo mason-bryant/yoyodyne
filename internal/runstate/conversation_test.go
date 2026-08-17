@@ -36,6 +36,10 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	// as it was and sounds exactly as certain about it.
 	conversation.ContextGatheredAt = conversation.StartedAt
 	conversation.ContextCommit = "a1a1a1a1a1a1"
+	// So does the work item it last ran, for the same reason: "what did that
+	// change" is a question about the run the operator last watched, and the
+	// process that started it is often not the one they come back to.
+	conversation.LastRunWorkItemID = "yoyodyne-ifd.39"
 	conversation.LastSequence = 4
 	conversation.UpdatedAt = conversation.StartedAt.Add(time.Minute)
 	if err := store.Save(conversation); err != nil {

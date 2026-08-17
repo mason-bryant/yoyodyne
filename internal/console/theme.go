@@ -3,6 +3,7 @@ package console
 import (
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // A theme dresses the conversation so that one kind of thing can be told from
@@ -147,6 +148,13 @@ func (t Theme) Rule() string {
 	if t.width == nil {
 		return ""
 	}
+	return strings.Repeat("─", t.columns()) + "\n"
+}
+
+// columns is how wide the theme may draw something that spans the screen. It is
+// asked at every draw rather than remembered, so a window the operator resized
+// is measured as it now is.
+func (t Theme) columns() int {
 	width := unknownWidth
 	if measured := t.width(); measured > 0 {
 		width = measured
@@ -154,7 +162,64 @@ func (t Theme) Rule() string {
 	if width > ruleWidth {
 		width = ruleWidth
 	}
-	return strings.Repeat("─", width) + "\n"
+	return width
+}
+
+// Card frames one thing the operator has to act on, so several of them in a row
+// are told apart at a glance instead of read as one wall of text. The heading
+// names it — which is what an operator answers with — and the body is what they
+// are deciding about.
+//
+// The frame is decoration exactly as the rule is, and it is suppressed with the
+// rest wherever decoration is unwelcome. What is left then is the heading with
+// its body indented underneath, which is what one of these has always looked
+// like on a stream: the frame makes the boundary findable and never carries any
+// part of the meaning.
+func (t Theme) Card(heading, body string) string {
+	lines := cardLines(body)
+	var card strings.Builder
+	if t.width == nil {
+		card.WriteString(strings.TrimRight(heading, " ") + "\n")
+		for _, line := range lines {
+			card.WriteString(strings.TrimRight("    "+line, " ") + "\n")
+		}
+		return card.String()
+	}
+	width := t.columns()
+	top := cardCornerTop + cardEdge + " " + strings.TrimRight(heading, " ") + " "
+	if fill := width - utf8.RuneCountInString(top); fill > 0 {
+		top += strings.Repeat(cardEdge, fill)
+	}
+	card.WriteString(top + "\n")
+	for _, line := range lines {
+		card.WriteString(strings.TrimRight(cardSide+" "+line, " ") + "\n")
+	}
+	card.WriteString(cardCornerBottom + strings.Repeat(cardEdge, width-1) + "\n")
+	return card.String()
+}
+
+// The pieces one card is drawn from. They are box-drawing characters rather
+// than ASCII for the same reason the rule is: a terminal that may be dressed at
+// all is a terminal that renders them.
+const (
+	cardCornerTop    = "╭"
+	cardCornerBottom = "╰"
+	cardEdge         = "─"
+	cardSide         = "│"
+)
+
+// cardLines is the body of a card as the lines it is drawn from, with the
+// trailing blank ones dropped so a card never ends in an empty row it was
+// handed by accident.
+func cardLines(body string) []string {
+	if strings.TrimSpace(body) == "" {
+		return nil
+	}
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	for index, line := range lines {
+		lines[index] = strings.TrimRight(line, " \t")
+	}
+	return lines
 }
 
 // Questions dresses a reply so the questions in it stand out. Only the lines

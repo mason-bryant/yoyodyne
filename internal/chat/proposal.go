@@ -349,19 +349,30 @@ func (p Proposal) dependencies() []string {
 func (p PendingProposal) Render() string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "[%s] %s\n", p.ID, strings.TrimSpace(p.Proposal.Title))
-	rendered.WriteString(indent(p.Proposal.Description))
-	rendered.WriteString(indent("why: " + strings.TrimSpace(p.Proposal.Rationale)))
+	for _, line := range p.body() {
+		rendered.WriteString(indent(line))
+	}
+	return rendered.String()
+}
+
+// body is what the operator reads under a proposal's heading, whichever shape
+// it is shown in. It is one list rather than a rendering, so a proposal put in a
+// card and a proposal printed as plain text can never come to say different
+// things about the same work.
+func (p PendingProposal) body() []string {
+	lines := strings.Split(strings.TrimSpace(p.Proposal.Description), "\n")
+	lines = append(lines, "why: "+strings.TrimSpace(p.Proposal.Rationale))
 	// The goal is shown beside the reasoning, because what the operator is
 	// deciding is whether this work serves the product rather than whether the
 	// sentence describing it reads well.
-	rendered.WriteString(indent("goal: " + strings.TrimSpace(p.Proposal.Goal)))
+	lines = append(lines, "goal: "+strings.TrimSpace(p.Proposal.Goal))
 	if parent := strings.TrimSpace(p.Proposal.Parent); parent != "" {
-		rendered.WriteString(indent("parent: " + parent))
+		lines = append(lines, "parent: "+parent)
 	}
 	if dependencies := p.Proposal.dependencies(); len(dependencies) > 0 {
-		rendered.WriteString(indent("depends on: " + strings.Join(dependencies, ", ")))
+		lines = append(lines, "depends on: "+strings.Join(dependencies, ", "))
 	}
-	return rendered.String()
+	return lines
 }
 
 // provenanceNotes is what a created item records about where it came from. The

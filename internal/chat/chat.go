@@ -819,19 +819,40 @@ func (s *Session) emit(eventType execution.EventType, payload any) error {
 	return s.record()
 }
 
-// operatorPrompt is what the operator composes their turn under, and
-// decisionPrompt is what they decide one proposal under. Both name what is
-// being asked for in the prompt itself, because on a terminal the composing
+// operatorPrompt is what the operator composes their turn under. It names what
+// is being asked for in the prompt itself, because on a terminal the composing
 // region is drawn from the prompt and the line together: a line that has
 // scrolled past still says what it was answering.
 const (
 	operatorPrompt = "you> "
-	decisionPrompt = "create %s? [y or yes creates it; anything else declines, and is kept as the reason] "
 	// A concern is not a decision, so its prompt asks for words rather than a
 	// yes: there is nothing here to create, and what the operator says is the
 	// instruction the product manager stopped to ask for.
 	answerPrompt = "answer %s? [what you say reaches the product manager; empty leaves the question open] "
 )
+
+// decisionPrompt is what the operator decides proposals under. One proposal is
+// asked for exactly as it always was, because a bare yes does name the only
+// item on the table; several are named by their numbers, and the prompt says
+// what an answer nobody can be sure of comes to, since that is the rule the
+// harness is about to apply.
+func decisionPrompt(cards []card) string {
+	if len(cards) == 1 {
+		return fmt.Sprintf("create %s? [y or yes creates it; anything else declines, and is kept as the reason] ", cards[0].proposal.ID)
+	}
+	return fmt.Sprintf("decide %d proposals? [%s; anything else declines them all] ", len(cards), decisionExample(cards))
+}
+
+// decisionExample shows the shape of an answer using numbers that are actually
+// on the table, because an example naming a proposal that is not there is worse
+// than no example: it is an instruction to type something the harness refuses.
+func decisionExample(cards []card) string {
+	first, last := cards[0].number, cards[len(cards)-1].number
+	if len(cards) < 3 {
+		return fmt.Sprintf("approve %d and decline %d <reason>", first, last)
+	}
+	return fmt.Sprintf("approve %d,%d and decline %d <reason>", first, last, cards[1].number)
+}
 
 // Converse runs the interactive loop: one line in, one answer out, until the
 // operator ends it or the input does. A line that begins with a slash is an
@@ -1046,10 +1067,18 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 	return nil
 }
 
-// decide puts every proposal from a turn to the operator, one at a time.
+// decide puts the proposals from a turn to the operator as numbered cards and
+// takes their decisions about them, however many of those one answer carries.
 // Nothing is created until they say so, a proposal they turn down is recorded
-// as rejected, and input that ends mid-decision leaves the rest undecided:
-// silence is never approval.
+// as rejected with their words, and input that ends mid-decision leaves the
+// rest undecided: silence is never approval.
+//
+// An answer that decides only some of them leaves the others exactly where they
+// were, and they are put again: an operator who named two of five has not said
+// anything about the other three, and the harness neither guesses nor drops
+// them. The one thing that is not put again is a proposal whose approval the
+// tracker refused, because asking somebody the same question until the answer
+// changes is not asking them anything.
 func (s *Session) decide(ctx context.Context, proposals []PendingProposal, screen console.Console) error {
 	if len(proposals) == 0 {
 		return nil
@@ -1062,10 +1091,22 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 	// it is not the conversation, it is something waiting on the operator, and
 	// what says so when the colour is gone is the text itself.
 	fmt.Fprint(out, s.theme.Proposal(fmt.Sprintf("The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))))
-	for _, proposal := range proposals {
-		fmt.Fprint(out, s.theme.Proposal(proposal.Render()))
-		fmt.Fprintln(out)
-		line, err := s.ask(ctx, screen, fmt.Sprintf(decisionPrompt, proposal.ID))
+	// refused is what the tracker would not create while this batch was being
+	// decided. Those proposals are still awaiting a decision and are named as
+	// such when the conversation ends; what they are not is asked about again
+	// here, which would leave the operator with no way past the prompt but to
+	// decline work they wanted.
+	refused := make(map[string]bool)
+	for {
+		cards := s.undecidedCards(proposals, refused)
+		if len(cards) == 0 {
+			return nil
+		}
+		for _, entry := range cards {
+			fmt.Fprint(out, s.theme.Proposal(entry.Render(s.theme)))
+			fmt.Fprintln(out)
+		}
+		line, err := s.ask(ctx, screen, decisionPrompt(cards))
 		if errors.Is(err, io.EOF) {
 			fmt.Fprintln(out, "input ended before you decided; nothing was created.")
 			return nil
@@ -1074,20 +1115,78 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 			return fmt.Errorf("read approval decision: %w", err)
 		}
 		answer := strings.TrimSpace(line)
-		if !isApproval(answer) {
-			if err := s.Reject(proposal.ID, answer); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "declined %s; the decision is recorded.\n\n", proposal.ID)
+		decisions, err := readDecisions(answer, cards)
+		switch {
+		case errors.Is(err, errNotADecision):
+			// The contract's own rule, applied to as many proposals as were on the
+			// table: an answer nobody can be sure of declines, and is kept as the
+			// reason it was declined.
+			decisions = declineAll(cards, answer)
+		case err != nil:
+			// The answer was a decision the harness could not carry out whole, so
+			// it carries out none of it. Nothing was created, so asking again costs
+			// the operator a line and never costs them an item.
+			fmt.Fprintf(out, "%v\nnothing was decided, so all of it is still waiting on you.\n\n", err)
 			continue
 		}
-		// A tracker that fails is reported and the conversation continues: the
-		// proposal is still awaiting a decision, and an operator who wanted the
-		// item can ask for it again once the tracker answers.
-		created, err := s.Approve(ctx, proposal.ID)
+		if err := s.applyDecisions(ctx, out, decisions, refused); err != nil {
+			return err
+		}
+	}
+}
+
+// undecidedCards is what the operator is still being asked about, numbered by
+// each proposal's place in the turn that proposed it. The numbering is fixed
+// when the turn is proposed rather than when a card is drawn, so the number
+// beside a proposal means the same thing on every round of deciding.
+func (s *Session) undecidedCards(proposals []PendingProposal, refused map[string]bool) []card {
+	cards := make([]card, 0, len(proposals))
+	for index, proposal := range proposals {
+		if s.isDecided(proposal.ID) || refused[proposal.ID] {
+			continue
+		}
+		cards = append(cards, card{number: index + 1, proposal: proposal})
+	}
+	return cards
+}
+
+func (s *Session) isDecided(proposalID string) bool {
+	for _, record := range s.proposals {
+		if record.pending.ID == proposalID {
+			return record.decided
+		}
+	}
+	// A proposal this session has no record of cannot be decided from here, and
+	// leaving it out of the cards is what says so.
+	return true
+}
+
+// applyDecisions carries out one answer, one proposal at a time. Each decision
+// goes through the same Approve and Reject a single answer goes through, so a
+// batch is several decisions rather than a different kind of one, and what is
+// recorded for each of them is identical either way. A proposal the tracker
+// would not create is added to refused, which is what keeps it from being put
+// again on the next round.
+func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions []decision, refused map[string]bool) error {
+	for _, made := range decisions {
+		if !made.approve {
+			if err := s.Reject(made.proposalID, made.reason); err != nil {
+				return err
+			}
+			fmt.Fprintf(out, "declined %s; the decision is recorded.\n\n", made.proposalID)
+			continue
+		}
+		// A tracker that fails is reported and the conversation continues. The
+		// proposal is still awaiting a decision, so it is named as undecided when
+		// the conversation ends and an operator who wanted the item can ask for it
+		// again once the tracker answers — but it is not offered again here, where
+		// a tracker that is still down would leave them answering the same prompt
+		// for as long as they had the patience for it.
+		created, err := s.Approve(ctx, made.proposalID)
 		switch {
 		case err != nil && created.WorkItemID == "":
-			fmt.Fprintf(out, "%s was not created: %v\n\n", proposal.ID, err)
+			refused[made.proposalID] = true
+			fmt.Fprintf(out, "%s was not created: %v\nit is left undecided rather than asked about again; ask for it once the tracker answers.\n\n", made.proposalID, err)
 		case err != nil:
 			fmt.Fprintf(out, "created %s: %s\nthe item is incomplete: %v\n\n", created.WorkItemID, created.Title, err)
 		default:
@@ -1101,18 +1200,6 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 		}
 	}
 	return nil
-}
-
-// isApproval reads the operator's answer. Exactly "y" or "yes" approves, in any
-// case; everything else declines and becomes the reason it was declined,
-// because an answer nobody can be sure of is not an approval.
-func isApproval(answer string) bool {
-	switch strings.ToLower(strings.TrimSpace(answer)) {
-	case "y", "yes":
-		return true
-	default:
-		return false
-	}
 }
 
 // turnPrompt carries the product context on the first turn only. Every later

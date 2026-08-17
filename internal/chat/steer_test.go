@@ -896,20 +896,25 @@ func TestNoticesToTheProductManagerAreBounded(t *testing.T) {
 // exactly what it was asked to do, which is what makes "only the operator
 // steers work" an assertion rather than a claim.
 type fakeWork struct {
-	mu          sync.Mutex
-	survey      Survey
-	surveyErr   error
-	queue       backlog.Queue
-	backlogErr  error
-	started     []string
-	report      RunReport
-	runErr      error
-	notes       [][2]string
-	directErr   error
-	settlements []Settlement
-	settleErr   error
-	settles     int
-	cancelled   bool
+	mu         sync.Mutex
+	survey     Survey
+	surveyErr  error
+	queue      backlog.Queue
+	backlogErr error
+	started    []string
+	report     RunReport
+	runErr     error
+	changes    RunChanges
+	changesErr error
+	// changesAsked records the work items /diff asked about, so what an operator
+	// gets when they name nothing is an assertion rather than a claim.
+	changesAsked []string
+	notes        [][2]string
+	directErr    error
+	settlements  []Settlement
+	settleErr    error
+	settles      int
+	cancelled    bool
 	// gate holds every run until a test releases it, so a run can be observed
 	// in flight. A nil gate finishes at once.
 	gate chan struct{}
@@ -956,6 +961,18 @@ func (f *fakeWork) Run(ctx context.Context, workItemID string) (RunReport, error
 	return report, f.runErr
 }
 
+func (f *fakeWork) Changes(_ context.Context, workItemID string) (RunChanges, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.changesAsked = append(f.changesAsked, workItemID)
+	if f.changesErr != nil {
+		return RunChanges{}, f.changesErr
+	}
+	changes := f.changes
+	changes.WorkItemID = workItemID
+	return changes, nil
+}
+
 func (f *fakeWork) Direct(_ context.Context, workItemID, note string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -998,3 +1015,254 @@ func (f *fakeWork) wasCancelled() bool {
 }
 
 var _ Work = (*fakeWork)(nil)
+
+// Reading a work item in full and seeing what a run changed are the two things
+// an operator used to have to leave the conversation for. Both are commands the
+// harness carries out, and both are read-only.
+func TestTheOperatorReadsItemsAndRunsFromInsideTheConversation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an item is shown in full, exactly as the product manager could read it", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{items: map[string]beads.WorkItem{"yoyodyne-ifd.39": {
+			ID:                 "yoyodyne-ifd.39",
+			Title:              "Decide proposals in batches",
+			Status:             "in_progress",
+			Priority:           1,
+			IssueType:          "task",
+			Parent:             "yoyodyne-ifd.1",
+			Description:        "Proposals are decided one at a time.",
+			Design:             "Batching changes the prompt, not the contract.",
+			AcceptanceCriteria: "Several proposals decided in one answer.",
+			Notes:              "From the operator.",
+			Dependencies:       []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: "blocks", Status: "closed"}},
+		}}}
+		options := testOptions(t, &fakeBackend{})
+		options.Tracker = tracker
+		options.Work = &fakeWork{}
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/show yoyodyne-ifd.39\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+
+		transcript := out.String()
+		for _, required := range []string{
+			"id: yoyodyne-ifd.39",
+			"status: in_progress",
+			"parent: yoyodyne-ifd.1",
+			"dependency: yoyodyne-ifd.4 (blocks, closed)",
+			"Batching changes the prompt, not the contract.",
+			"acceptance criteria:",
+			"From the operator.",
+		} {
+			if !strings.Contains(transcript, required) {
+				t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+			}
+		}
+		if len(tracker.shown) != 1 || tracker.shown[0] != "yoyodyne-ifd.39" {
+			t.Fatalf("items read = %#v, want the one the operator named", tracker.shown)
+		}
+	})
+
+	t.Run("an item nobody named, or one the tracker refuses, is reported", func(t *testing.T) {
+		t.Parallel()
+
+		options := testOptions(t, &fakeBackend{})
+		options.Tracker = &fakeTracker{}
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/show\n/show yoyodyne-9\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+		transcript := out.String()
+		for _, required := range []string{"name the work item to show", "no work item yoyodyne-9"} {
+			if !strings.Contains(transcript, required) {
+				t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+			}
+		}
+	})
+
+	t.Run("the diff of the run this conversation is watching", func(t *testing.T) {
+		t.Parallel()
+
+		work := &fakeWork{changes: RunChanges{
+			RunID:     "run-0123456789abcdef0123456789abcdef",
+			Status:    "succeeded",
+			Phase:     "complete",
+			StartedAt: fixedClock{}.Now(),
+			Branch:    "yoyodyne/yoyodyne-1/abcd",
+			Files:     "M internal/chat/chat.go",
+			DiffStat:  " internal/chat/chat.go | 12 ++++++++----",
+		}}
+		options := testOptions(t, &fakeBackend{})
+		options.Work = work
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		// The operator names nothing, so the run they just watched is the one
+		// they are asking about.
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/work yoyodyne-1\n/wait\n/diff\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+
+		if asked := work.changesAskedAbout(); len(asked) != 1 || asked[0] != "yoyodyne-1" {
+			t.Fatalf("diffs asked for = %#v, want the run this conversation started", asked)
+		}
+		transcript := out.String()
+		for _, required := range []string{
+			"run-0123456789abcdef0123456789abcdef on yoyodyne-1 [succeeded, complete]",
+			"M internal/chat/chat.go",
+			"diff stat:",
+		} {
+			if !strings.Contains(transcript, required) {
+				t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+			}
+		}
+	})
+
+	t.Run("a cleaned-up run still says what it changed and where it was published", func(t *testing.T) {
+		t.Parallel()
+
+		// The worktree and the branch are gone, which is what success looks like
+		// once cleanup has run. The record is all there is, and it is enough.
+		changes := RunChanges{
+			RunID:        "run-0123456789abcdef0123456789abcdef",
+			WorkItemID:   "yoyodyne-ifd.39",
+			Status:       "succeeded",
+			Phase:        "complete",
+			StartedAt:    fixedClock{}.Now(),
+			Branch:       "yoyodyne/yoyodyne-ifd.39/abcd",
+			WorktreePath: "/tmp/worktrees/yoyodyne-ifd.39",
+			Preserved:    false,
+			Files:        "M internal/chat/chat.go",
+			DiffStat:     " internal/chat/chat.go | 12 ++++++++----",
+			Integrated:   true,
+			TargetBranch: "main",
+			Commit:       "0f1e2d3c",
+			PullRequest:  &PublishedChange{Number: 19, URL: "https://forge/pull/19", State: "closed", Merged: true},
+		}
+		options := testOptions(t, &fakeBackend{})
+		options.Work = &fakeWork{changes: changes}
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/diff yoyodyne-ifd.39\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+		transcript := out.String()
+		for _, required := range []string{
+			"removed when the run was cleaned up",
+			"integrated into main at 0f1e2d3c",
+			"pull request: #19 https://forge/pull/19 (merged)",
+			"M internal/chat/chat.go",
+		} {
+			if !strings.Contains(transcript, required) {
+				t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+			}
+		}
+	})
+
+	t.Run("a conversation that has run nothing says so rather than guessing", func(t *testing.T) {
+		t.Parallel()
+
+		work := &fakeWork{}
+		options := testOptions(t, &fakeBackend{})
+		options.Work = work
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/diff\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+		if len(work.changesAskedAbout()) != 0 {
+			t.Fatalf("a diff was asked for without a run: %#v", work.changesAskedAbout())
+		}
+		if !strings.Contains(out.String(), "has not run anything") {
+			t.Fatalf("transcript = %q", out.String())
+		}
+	})
+
+	t.Run("a run whose record holds no change says that rather than showing an empty one", func(t *testing.T) {
+		t.Parallel()
+
+		changes := RunChanges{
+			RunID:     "run-0123456789abcdef0123456789abcdef",
+			Status:    "failed",
+			StartedAt: fixedClock{}.Now(),
+			Failure:   "the developer backend failed",
+		}
+		options := testOptions(t, &fakeBackend{})
+		options.Work = &fakeWork{changes: changes}
+		session := openTestSession(t, options)
+
+		var out strings.Builder
+		if err := session.Converse(context.Background(), testConsole(strings.NewReader("/diff yoyodyne-1\n/exit\n"), &out)); err != nil {
+			t.Fatalf("Converse() error = %v", err)
+		}
+		transcript := out.String()
+		for _, required := range []string{"failure: the developer backend failed", "nothing was recorded about what this run changed"} {
+			if !strings.Contains(transcript, required) {
+				t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+			}
+		}
+	})
+}
+
+func (f *fakeWork) changesAskedAbout() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.changesAsked...)
+}
+
+// The process that started a run is often not the one the operator comes back
+// to. "What did that change" is a question about the run they last watched, so
+// the item it was on is written into the conversation's record rather than kept
+// in the process that happened to start it.
+func TestABareDiffSurvivesTheProcessThatStartedTheRun(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Run it and we will see."},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Work = &fakeWork{}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// A turn first, because a conversation with no provider session is one a
+	// later process starts again rather than resumes.
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what next?\n/work yoyodyne-ifd.39\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	// A second process sees only what was written down.
+	work := &fakeWork{changes: RunChanges{
+		RunID:     "run-0123456789abcdef0123456789abcdef",
+		Status:    "succeeded",
+		StartedAt: fixedClock{}.Now(),
+		Files:     "M internal/chat/chat.go",
+	}}
+	resumedOptions := testOptions(t, &fakeBackend{})
+	resumedOptions.Store = newTestStore(t, root)
+	resumedOptions.Work = work
+	resumed := openTestSession(t, resumedOptions)
+	if !resumed.Resumed() {
+		t.Fatal("the conversation was not resumed, so this proves nothing about resuming one")
+	}
+
+	var resumedOut strings.Builder
+	if err := resumed.Converse(context.Background(), testConsole(strings.NewReader("/diff\n/exit\n"), &resumedOut)); err != nil {
+		t.Fatalf("resumed Converse() error = %v", err)
+	}
+	if asked := work.changesAskedAbout(); len(asked) != 1 || asked[0] != "yoyodyne-ifd.39" {
+		t.Fatalf("diffs asked for = %#v, want the run the earlier process started", asked)
+	}
+	if !strings.Contains(resumedOut.String(), "M internal/chat/chat.go") {
+		t.Fatalf("transcript = %q", resumedOut.String())
+	}
+}

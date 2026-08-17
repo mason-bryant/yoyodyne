@@ -100,6 +100,13 @@ func TestPipelineEndToEndWithFakeBackend(t *testing.T) {
 	if state.Status != runstate.StatusSucceeded || state.Branch != outcome.Branch || state.BaseCommit != outcome.BaseCommit || state.ProviderSessionID != "session-1" {
 		t.Fatalf("state = %#v", state)
 	}
+	// What the run changed is in the durable record as well as in the outcome
+	// this process happens to be holding. It has to be: the worktree it
+	// describes is removed when the run is cleaned up, and a change nobody
+	// recorded is one nobody can be shown afterwards.
+	if state.Changes == nil || !strings.Contains(state.Changes.Files, "?? feature.txt") {
+		t.Fatalf("recorded changes = %#v, want the account of what the run changed", state.Changes)
+	}
 	events, err := store.LoadEvents(outcome.RunID)
 	if err != nil {
 		t.Fatalf("LoadEvents() error = %v", err)

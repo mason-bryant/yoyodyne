@@ -479,3 +479,117 @@ func contains(values []string, want string) bool {
 	}
 	return false
 }
+
+// What a run changed is answered from the durable record and nothing else. That
+// is what makes the answer survive success: a run is cleaned up once it
+// integrates — worktree removed, branch deleted — so anything that answered by
+// diffing a tree would stop having an answer exactly when the work landed.
+func TestChangesAnswerFromTheRecordEvenAfterCleanup(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	completed := started.Add(time.Hour)
+	cleaned := runstate.State{
+		SchemaVersion:   runstate.StateSchemaVersion,
+		RunID:           "run-0123456789abcdef0123456789abcdef",
+		ProductID:       "yoyodyne",
+		RepositoryID:    "yoyodyne",
+		WorkItemID:      "yoyodyne-ifd.39",
+		Backend:         domain.BackendClaudeCode,
+		Status:          runstate.StatusSucceeded,
+		Phase:           runstate.PhaseComplete,
+		StartedAt:       started,
+		UpdatedAt:       completed,
+		CompletedAt:     &completed,
+		WorktreePath:    "/state/worktrees/yoyodyne-ifd.39",
+		Branch:          "yoyodyne/yoyodyne-ifd.39/abcd",
+		BaseCommit:      strings.Repeat("a", 40),
+		WorktreeRemoved: true,
+		BranchRemoved:   true,
+		// A promotion is only recorded on a run that developed and reviewed its
+		// work, so the record carries that evidence too.
+		ProviderSessionID:     "session-1",
+		ProviderModel:         "opus",
+		ProviderResolvedModel: "claude-opus-5",
+		ReviewSessionID:       "session-2",
+		ReviewModel:           "opus",
+		ReviewResolvedModel:   "claude-opus-5",
+		ReviewDecision:        runstate.ReviewApprove,
+		Changes:               runstate.RecordChanges("M internal/chat/chat.go", " internal/chat/chat.go | 12 ++++++++----"),
+		Integration: &runstate.Integration{
+			TargetBranch:         "main",
+			SourceCommit:         strings.Repeat("b", 40),
+			TargetCommit:         strings.Repeat("b", 40),
+			PreviousTargetCommit: strings.Repeat("a", 40),
+		},
+		PullRequest: &runstate.PullRequest{
+			Remote:     "origin",
+			Branch:     "yoyodyne/yoyodyne-ifd.39/abcd",
+			Number:     19,
+			URL:        "https://forge/pull/19",
+			HeadCommit: strings.Repeat("b", 40),
+			State:      "closed",
+			Merged:     true,
+		},
+	}
+	if err := store.Create(cleaned); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// An earlier attempt at the same item, so the answer is about the latest one
+	// rather than whichever file the directory listed first.
+	earlier := cleaned
+	earlier.RunID = "run-fedcba9876543210fedcba9876543210"
+	earlier.StartedAt = started.Add(-2 * time.Hour)
+	earlier.UpdatedAt = earlier.StartedAt
+	earlierCompleted := earlier.StartedAt
+	earlier.CompletedAt = &earlierCompleted
+	earlier.Status = runstate.StatusFailed
+	earlier.Phase = runstate.PhaseDeveloping
+	earlier.Integration = nil
+	earlier.PullRequest = nil
+	// It failed, so its artifacts were preserved rather than cleaned up.
+	earlier.WorktreeRemoved = false
+	earlier.BranchRemoved = false
+	earlier.ReviewDecision = ""
+	earlier.Changes = runstate.RecordChanges("M internal/chat/steer.go", "")
+	if err := store.Create(earlier); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	work := conversationWork{store: store, timeout: chatTrackerTimeout}
+	changes, err := work.Changes(context.Background(), "yoyodyne-ifd.39")
+	if err != nil {
+		t.Fatalf("Changes() error = %v", err)
+	}
+	if changes.RunID != cleaned.RunID {
+		t.Fatalf("Changes() described %s, want the most recent run %s", changes.RunID, cleaned.RunID)
+	}
+	if changes.Files != "M internal/chat/chat.go" || changes.DiffStat == "" {
+		t.Fatalf("Changes() = %#v, want the recorded account of the change", changes)
+	}
+	// The worktree is gone, and the answer says so rather than pointing at a
+	// directory that is not there.
+	if changes.Preserved {
+		t.Fatalf("Changes() = %#v, want a removed worktree reported as removed", changes)
+	}
+	if !changes.Integrated || changes.TargetBranch != "main" {
+		t.Fatalf("Changes() = %#v, want the recorded promotion", changes)
+	}
+	if changes.PullRequest == nil || changes.PullRequest.Number != 19 || !changes.PullRequest.Merged {
+		t.Fatalf("Changes() = %#v, want the published request to point at", changes)
+	}
+	rendered := changes.Render()
+	for _, required := range []string{"removed when the run was cleaned up", "pull request: #19", "M internal/chat/chat.go"} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered changes = %q, want it to contain %q", rendered, required)
+		}
+	}
+
+	if _, err := work.Changes(context.Background(), "yoyodyne-ifd.99"); err == nil {
+		t.Fatal("Changes() invented a run for a work item nothing has run")
+	}
+}

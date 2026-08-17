@@ -21,6 +21,11 @@ import (
 // conversation is not a run: it has no worktree, no checks, no verdict, and
 // nothing to integrate, so it is recorded in its own shape rather than squeezed
 // into a schema whose invariants describe bounded work.
+//
+// It stays 1 because every addition since has been an optional key: a record
+// written before the work item this conversation last ran was kept still
+// decodes, and its absence means what it always meant, which is that this
+// conversation has started nothing.
 const ConversationSchemaVersion = 1
 
 // ErrNoConversation reports that a role has no recorded conversation, so the
@@ -66,6 +71,13 @@ type Conversation struct {
 	// delivered, never when it is merely taken.
 	ContextGatheredAt time.Time `json:"context_gathered_at,omitempty"`
 	ContextCommit     string    `json:"context_commit,omitempty"`
+	// LastRunWorkItemID is the work item of the run this conversation started
+	// most recently. It is durable for the same reason the rest of this is: the
+	// process that started the run is often not the one the operator comes back
+	// to, and "what did that change" is a question about the run they last
+	// watched rather than about whichever process was holding it. It is empty on
+	// a conversation that has never started one.
+	LastRunWorkItemID string    `json:"last_run_work_item_id,omitempty"`
 	LastSequence      uint64    `json:"last_sequence"`
 	StartedAt         time.Time `json:"started_at"`
 	UpdatedAt         time.Time `json:"updated_at"`

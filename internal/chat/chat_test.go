@@ -585,9 +585,9 @@ func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
 	session := openTestSession(t, options)
 
 	var out strings.Builder
-	// The operator approves the first, declines the second with a reason, and
-	// ends the input before deciding the third.
-	input := strings.NewReader("what next?\ny\nnot this quarter\n")
+	// The operator approves the first and declines the second with a reason, in
+	// one answer, and ends the input before deciding the third.
+	input := strings.NewReader("what next?\napprove 1 and decline 2 not this quarter\n")
 	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
 		t.Fatalf("Converse() error = %v", err)
 	}
@@ -598,9 +598,12 @@ func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
 	transcript := out.String()
 	for _, required := range []string{
 		"proposes 3 work item(s)",
-		"create 1.1?",
+		"decide 3 proposals?",
 		"created yoyodyne-1",
 		"declined 1.2",
+		// What the answer said nothing about is put again rather than decided
+		// for the operator, and only then does the input run out.
+		"create 1.3?",
 		"input ended before you decided",
 	} {
 		if !strings.Contains(transcript, required) {
@@ -618,6 +621,12 @@ func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
 		counted[execution.EventProposalCreated] != 1 ||
 		counted[execution.EventProposalRejected] != 1 {
 		t.Fatalf("recorded proposal events = %#v", counted)
+	}
+	// Each decision in the batch is recorded exactly as a serial answer records
+	// it, which for a decline means keeping the operator's own words.
+	rejected := onlyEventPayload(t, root, session, execution.EventProposalRejected)
+	if !strings.Contains(rejected, `"reason":"not this quarter"`) {
+		t.Fatalf("proposal.rejected event = %s, want the operator's reason kept", rejected)
 	}
 }
 
@@ -663,23 +672,6 @@ func TestConverseSurvivesAProposalItCannotRead(t *testing.T) {
 	// decision either.
 	if pending := session.Proposals(); len(pending) != 0 {
 		t.Fatalf("awaiting decision = %#v", pending)
-	}
-}
-
-func TestOnlyAnExplicitYesApproves(t *testing.T) {
-	t.Parallel()
-
-	for _, answer := range []string{"y", "Y", "yes", "YES", " yes "} {
-		if !isApproval(answer) {
-			t.Fatalf("isApproval(%q) = false, want true", answer)
-		}
-	}
-	// Anything else is a decline, including answers that merely lean that way:
-	// an answer nobody can be sure of never creates work.
-	for _, answer := range []string{"", "n", "no", "N", "yeah", "y please", "sure", "not this quarter"} {
-		if isApproval(answer) {
-			t.Fatalf("isApproval(%q) = true, want false", answer)
-		}
 	}
 }
 
