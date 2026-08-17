@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -794,7 +795,7 @@ func TestSurveyRenderingStatesEmptyGroupsAndCutsLongOnes(t *testing.T) {
 			Status: "open",
 		})
 	}
-	rendered := survey.Render()
+	rendered := survey.Render(console.Theme{})
 	if !strings.Contains(rendered, fmt.Sprintf("available (%d):", maxSurveyItems+3)) {
 		t.Fatalf("rendered survey = %q, want the exact count", rendered)
 	}
@@ -807,6 +808,68 @@ func TestSurveyRenderingStatesEmptyGroupsAndCutsLongOnes(t *testing.T) {
 		}
 	}
 }
+
+// A survey is read down a column, and the state of each group is findable at a
+// glance. Both are additions: the identifiers are padded with spaces and the
+// colours are escapes, so a survey read where neither is permitted says exactly
+// the same things.
+func TestSurveyRenderingAlignsItsColumnsAndColoursTheStates(t *testing.T) {
+	t.Parallel()
+
+	survey := Survey{
+		InFlight: []RunSnapshot{{
+			RunID:      "run-0123456789abcdef0123456789abcdef",
+			WorkItemID: "yoyodyne-ifd.16",
+			Status:     "running",
+			StartedAt:  fixedClock{}.Now(),
+		}},
+		Blocked: []WorkItemSummary{
+			{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: "blocked", Priority: 1},
+			{ID: "yoyodyne-ifd.38", Title: "Say how fresh the picture is", Status: "blocked", Priority: 2},
+		},
+		Completed: []WorkItemSummary{{ID: "yoyodyne-ifd.12", Title: "Pause on a usage limit", Status: "closed", Priority: 2}},
+	}
+
+	// The identifiers in a group are padded to the widest, so the priorities and
+	// titles beside them start in the same column.
+	plain := survey.Render(console.Theme{})
+	for _, required := range []string{
+		"[yoyodyne-ifd.4]  p1 The development manager that pulls",
+		"[yoyodyne-ifd.38] p2 Say how fresh the picture is",
+	} {
+		if !strings.Contains(plain, required) {
+			t.Fatalf("rendered survey = %q, want the aligned line %q", plain, required)
+		}
+	}
+
+	theme := console.NewTheme(func(name string) string {
+		if name == "TERM" {
+			return "xterm-256color"
+		}
+		return ""
+	}, nil)
+	dressed := survey.Render(theme)
+	// Each group wears the colour its state has everywhere else, and stripping
+	// the colour gives back the survey that was rendered without it.
+	for _, group := range []struct {
+		state console.State
+		line  string
+	}{
+		{console.StateRunning, "in flight (1):\n"},
+		{console.StateBlocked, "blocked (2):\n"},
+		{console.StateDone, "completed (1):\n"},
+	} {
+		if !strings.Contains(dressed, theme.State(group.state, group.line)) {
+			t.Fatalf("rendered survey = %q, want %q coloured for %s", dressed, group.line, group.state)
+		}
+	}
+	if stripped := ansi.ReplaceAllString(dressed, ""); stripped != plain {
+		t.Fatalf("colour changed the survey:\n%q\n%q", stripped, plain)
+	}
+}
+
+// ansi is how a transcript reads once the dressing is taken out of it.
+var ansi = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func TestNoticesToTheProductManagerAreBounded(t *testing.T) {
 	t.Parallel()

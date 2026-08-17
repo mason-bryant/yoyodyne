@@ -26,6 +26,7 @@ const commandHelp = `Commands the harness carries out for you:
   /status                     what is in flight, claimed, blocked, available, and done
   /backlog                    the admitted work in the product manager's order, and what is next
   /reports                    what agents have reported without it stopping their work
+  /refresh                    re-read the repository and tracker into this conversation
   /work <beads-id>            run one work item now, while you keep talking
   /wait                       wait for the run this conversation started and report it
   /stop [reason]              stop the run this conversation started and settle what it left
@@ -64,7 +65,20 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 			fmt.Fprintf(out, "this conversation started work on %s at %s and is still waiting for it.\n",
 				item, startedAt.UTC().Format(time.RFC3339))
 		}
-		fmt.Fprint(out, survey.Render())
+		// The survey dresses itself: what is running, blocked, done, and failed
+		// gets the colour that state has everywhere, which is a distinction the
+		// group headings already make in words.
+		fmt.Fprint(out, survey.Render(s.theme))
+		fmt.Fprintln(out)
+		return false, nil
+	case "/refresh":
+		// A refresh that was taken and could not be recorded still happened, so
+		// it is reported before the failure rather than behind it.
+		refreshed, err := s.Refresh(ctx)
+		fmt.Fprint(out, refreshed.Render())
+		if err != nil {
+			return false, err
+		}
 		fmt.Fprintln(out)
 		return false, nil
 	case "/backlog":

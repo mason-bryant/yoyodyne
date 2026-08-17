@@ -100,7 +100,9 @@ On a terminal, the line you are composing has a region of its own at the bottom 
 
 While a turn is being answered, the line below the conversation says what it is doing: a spinner, the phase it has reached, and how long you have been waiting. The phases are read off the same event stream the turn is already recording — your message going out, the model thinking, the model writing its reply, the harness carrying out tracker actions it asked for — and a provider that is refusing requests is named as exactly that, with the attempt it is on, because a turn that is slow because the service or your account is declining work is telling you something worth knowing. Nothing arriving for twenty seconds stops the animation: the line then says how long it has been quiet, because a display that keeps moving through a stall looks like progress, and looking like progress is worse than saying nothing. It is drawn above the line you are typing and erased when there is a reply to read, so it is never in your way and never in the scrollback.
 
-A horizontal rule separates your turn from the answer to it, and colour tells apart the things you have to act on rather than read past: a question the product manager asks you is orange, and a proposal awaiting your decision and the harness's own answer to a command each have a colour of their own. Colour is an addition to the text and never what carries the meaning — the question still ends in a question mark, the proposal still says what it is proposing, the reply still says who said it — so a transcript with the escapes stripped out loses the decoration and nothing else. `NO_COLOR`, a terminal that reports itself as `dumb`, and output that is not a terminal each suppress the colour and the rules together.
+A horizontal rule separates your turn from the answer to it, and colour tells apart the things you have to act on rather than read past: a question the product manager asks you is orange, and a proposal awaiting your decision and the harness's own answer to a command each have a colour of their own. The states work is in are coloured too, and the same way wherever they appear — running blue, blocked orange, done green, failed red — so `/status` is read down its aligned columns rather than picked out of ragged prose. Colour is an addition to the text and never what carries the meaning — the question still ends in a question mark, the proposal still says what it is proposing, the group still says "blocked (2)" in words — so a transcript with the escapes stripped out loses the decoration and nothing else. `NO_COLOR`, a terminal that reports itself as `dumb`, and output that is not a terminal each suppress the colour and the rules together.
+
+The product manager writes Markdown, and on a terminal you read it as Markdown: headings, list markers, thematic breaks, and bold spans are shown as structure rather than spelled out in punctuation. That is presentation and only presentation. Nothing is added to the reply and nothing is taken out of it — every escape is inserted between characters that were already there — so the same reply stripped of its escapes is the recorded reply byte for byte, and a stream that may not be dressed is shown exactly what was written.
 
 Anywhere else the same conversation is an ordinary stream of text. A pipe, a file, a redirected terminal, and a terminal that reports itself as `dumb` get no cursor control, no colour, and no rules at all: the same lines in the same order a redirected conversation has always had, plus each phase of a turn said once as a line of its own, with nothing in it that a clock decided — there is nothing to animate or erase on a stream, and a transcript whose contents depended on how long the provider took would not be one you could compare against another. None of this reaches the recorded reply, the event stream, or `--json` — it is how the conversation is shown and nothing more, so what is recorded is identical either way.
 
@@ -112,6 +114,7 @@ A line that begins with a slash is a command the harness carries out for you; ev
 /status                  what is in flight, claimed, blocked, available, and done
 /backlog                 the admitted work in order, and what would be pulled next
 /reports                 what agents reported without it stopping their work
+/refresh                 re-read the repository and tracker into this conversation
 /work <beads-id>         run one work item now, while you keep talking
 /wait                    wait for the run this conversation started and report it
 /stop [reason]           stop that run and settle what it left behind
@@ -134,7 +137,7 @@ Either way the conversation's own log says what happened rather than only what w
 
 Only you reach any of this. The product manager owns what the queue says and the order it is in; running, stopping, and redirecting the work itself stays yours, so nothing it writes starts or stops anything — a reply that contains `/work` is prose. What it does get is an account of what you had the harness do, carried into its next turn as evidence, so the conversation keeps discussing the product as it now is rather than as it was when the conversation opened.
 
-A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyo chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, the provider session identifier, and any action results the product manager has not been told about yet, and the normalized event stream is stored beside it — including what the operator asked the harness to do, which is recorded in the conversation's own log beside the runs' logs.
+A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyo chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, the provider session identifier, any action results the product manager has not been told about yet, and when its picture of the repository and tracker was gathered and against what commit, and the normalized event stream is stored beside it — including what the operator asked the harness to do, which is recorded in the conversation's own log beside the runs' logs.
 
 ### What agents report, and where it reaches you
 
@@ -150,19 +153,23 @@ Volume is the risk this design has, and the answer to it is in the role contract
 
 The pile lives outside the repository under the operating system's state directory, beside the run and conversation records rather than among them. It outlives them: a run is settled and its worktree and branch are removed, and what it reported is still there for you to read.
 
-### What a resumed conversation knows, and when to start a new one
+### How fresh the conversation's picture is, and how to refresh it
 
 The specifications and tracker the product manager reads are gathered once, when a conversation opens, and sent on its first turn only. Every later turn resumes a provider session that already holds them, so re-sending would pay to restate what it was already told. The consequence is worth knowing before it surprises you: **a resumed conversation keeps the snapshot it opened with.** Change a specification, and a conversation started beforehand will still describe the old one, confidently, because that is genuinely the evidence it has.
 
-It is not frozen entirely. Every turn carries what you did through the harness since the last reply — the runs you started, stopped, and redirected — so `/work`, `/stop`, and `/redirect` reach a resumed conversation, and reading an item goes to the tracker as it stands rather than to that opening snapshot. What does not reach it is anything else that changed outside those commands: edits under `docs/product`, and items created or closed by something other than this conversation, which it will not know about until it happens to read one or you start a new conversation.
+So the conversation says so itself, on one line, as it opens and as it resumes:
 
-So use `--new` when the ground has moved under the conversation rather than within it:
+```text
+context gathered 2h ago; 14 commits and 3 tracker changes since. /refresh reads what moved into this conversation.
+```
 
-- after editing a specification, or after another process changed the tracker;
-- when it asserts something about product intent that you know is out of date;
-- when you are starting an unrelated topic and its memory of the last one is not worth carrying.
+Freshness is a comparison rather than a timestamp. The picture records when it was assembled and what commit the repository was on, both durably, so the process that resumes a conversation can say how old it is without having been the one that briefed it. What has moved since is two cheap questions: what `HEAD` holds that the picture did not, and what the tracker wrote into its own interactions log after the picture was taken. Either comparison can fail — an unrecorded commit, a repository that will not answer — and a comparison that could not be made is reported as unknown rather than counted as nothing, because "0 commits" from a broken comparison is the same confident staleness this exists to end. The tracker's log is an export rather than its live state, so the count is a floor on what has moved, and a repository whose tracker has never exported one is reported as unknown rather than as unchanged. A one-shot `--message` says the same line on stderr, where it cannot disturb the reply on stdout or the `--json` document.
 
-Resuming is the better default the rest of the time, because the discussion itself is usually the valuable part. `--new` costs a fresh reading of the specifications and tracker, and it replaces the recorded conversation: there is one per product, so the previous discussion is not kept alongside it.
+`/refresh` re-reads the repository and the tracker into the running conversation. It discards nothing: what has been said stays said, and the new picture reaches the product manager on your next message, framed as evidence with an account of what moved, so it reconciles what it believed rather than having it swapped underneath. The transcript says the refresh happened, the conversation's own log records it, and the durable record only says the conversation is working from the new picture once a turn has actually carried it — a refresh nobody was told about never reads as one that landed.
+
+It was never frozen entirely. Every turn carries what you did through the harness since the last reply — the runs you started, stopped, and redirected — so `/work`, `/stop`, and `/redirect` reach a resumed conversation, and reading an item goes to the tracker as it stands rather than to that opening snapshot. What did not reach it before was anything else that changed outside those commands: edits under `docs/product`, and items created or closed by something other than this conversation. That is exactly what `/refresh` is for.
+
+`--new` is now a different tool rather than the answer to staleness. A refreshed conversation and a new one end up equally current; they differ in what they remember, and that difference is the point. Start a new one when the history itself is the problem — an unrelated topic where its memory of the last one is not worth carrying — and refresh when the ground has moved under a discussion worth keeping. `--new` replaces the recorded conversation: there is one per product, so the previous discussion is not kept alongside it.
 
 ## Configuring a project
 

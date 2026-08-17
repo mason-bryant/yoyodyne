@@ -14,7 +14,6 @@ import (
 	"yoyodyne/internal/chat"
 	"yoyodyne/internal/config"
 	"yoyodyne/internal/console"
-	"yoyodyne/internal/contextbundle"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/report"
@@ -89,6 +88,11 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	defer lease.Release()
 
 	if *message != "" {
+		// A one-shot message resumes the same recorded conversation an
+		// interactive one does, and carries the same risk of answering from a
+		// picture taken hours ago. It is said on stderr because stdout is the
+		// reply and, with --json, a document.
+		fmt.Fprintln(stderr, session.Freshness(ctx))
 		reply, err := session.Send(ctx, *message)
 		if err != nil {
 			// The answer travels with the failure. A turn that produced one is
@@ -123,7 +127,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	// of text. Either way what is recorded is identical.
 	screen := console.Open(console.Options{In: stdin, Out: stdout})
 	defer screen.Close()
-	printChatHeader(screen, session.Evidence())
+	printChatHeader(screen, session.Evidence(), session.Freshness(ctx))
 	converseErr := session.Converse(ctx, screen)
 	// What was decided about is the console's to dress, and it is asked before
 	// the console is closed: restoring the terminal changes how it reads input,
@@ -193,9 +197,13 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, err
 	}
 
-	briefing, err := assembleProductContext(ctx, repository, cfg.Product.Specifications, processRunner, stderr)
+	ground := newConversationGround(parts)
+	briefing, err := ground.Gather(ctx)
 	if err != nil {
 		return nil, nil, errors.Join(err, lease.Release())
+	}
+	for _, problem := range briefing.Problems {
+		fmt.Fprintf(stderr, "warning: %s\n", problem)
 	}
 	session, err := chat.Open(chat.Options{
 		Backend: provider,
@@ -216,6 +224,11 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		ProductID:    cfg.Product.ID,
 		RepositoryID: string(cfg.Product.RepositoryID),
 		Briefing:     briefing,
+		// The repository and the tracker are kept reachable so the conversation
+		// can say how old its picture is and take a new one when the operator
+		// asks. The product manager reaches neither: this is the harness's hand,
+		// like the work it steers.
+		Ground:       ground,
 		RedactValues: parts.redactValues,
 		Fresh:        fresh,
 	})
@@ -231,39 +244,6 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 // conversation makes can outlast the operator's patience.
 func chatTracker(runner execution.ProcessRunner, repository string) beads.Client {
 	return beads.Client{Runner: runner, Dir: repository, Timeout: chatTrackerTimeout}
-}
-
-// assembleProductContext gathers what the product manager reasons over: the
-// configured specifications and the tracker state. A tracker that cannot be
-// read is reported in the context and to the operator rather than silently
-// rendered as a product with no work in flight, and a specification that does
-// not follow the required structure is reported the same way rather than
-// dropped.
-func assembleProductContext(ctx context.Context, repository, specifications string, runner execution.ProcessRunner, stderr io.Writer) (string, error) {
-	trackerCtx, cancel := context.WithTimeout(ctx, chatTrackerTimeout)
-	defer cancel()
-	items, listErr := chatTracker(runner, repository).List(trackerCtx, chatWorkItemStatus)
-	unavailable := ""
-	if listErr != nil {
-		unavailable = listErr.Error()
-		fmt.Fprintf(stderr, "warning: Beads state is unavailable, continuing without it: %v\n", listErr)
-	}
-	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
-		RepositoryRoot:          repository,
-		SpecificationsDirectory: specifications,
-		WorkItems:               items,
-		WorkItemsUnavailable:    unavailable,
-	})
-	if err != nil {
-		return "", fmt.Errorf("assemble product context: %w", err)
-	}
-	for _, problem := range bundle.SpecificationProblems {
-		fmt.Fprintf(stderr, "warning: specification %s\n", problem)
-	}
-	if len(bundle.References) == 0 {
-		fmt.Fprintf(stderr, "warning: no specification was found under %s; the product manager has no recorded product intent to reason over\n", specifications)
-	}
-	return bundle.Text, nil
 }
 
 // reportChatFailure reports a failed conversation, carrying whatever the turn
@@ -308,12 +288,16 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 	return 1
 }
 
-func printChatHeader(writer io.Writer, evidence chat.Evidence) {
+func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string) {
 	state := "new conversation"
 	if evidence.Resumed {
 		state = fmt.Sprintf("resumed conversation after %d turn(s)", evidence.Turns)
 	}
 	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
+	// How old its picture of the product is goes at the top, where an operator
+	// cannot miss it, because everything below is what it will say about a
+	// repository it may have read hours ago.
+	fmt.Fprintln(writer, freshness)
 	fmt.Fprintln(writer, "It owns the backlog: what is admitted to it, and the order work is pulled in.")
 	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, update, reparent,")
 	fmt.Fprintln(writer, "reprioritize, link, unlink, close, and retire items, and every change it makes")
@@ -325,6 +309,8 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 	fmt.Fprintln(writer, "product's intent are not proposed at all: it stops and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
 	fmt.Fprintln(writer, "shows you what has been collected.")
+	fmt.Fprintln(writer, "Its picture of the repository and the tracker is the one gathered above; /refresh")
+	fmt.Fprintln(writer, "reads them again into this conversation without discarding what has been said.")
 	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect.")
 	fmt.Fprintln(writer, "/help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
@@ -460,5 +446,6 @@ Options:
   --json             emit machine-readable JSON (requires --message)
 
 An interactive conversation also carries out operator commands: /backlog,
-/status, /work, /wait, /stop, and /redirect. Ask it for /help once it is open.`)
+/status, /refresh, /work, /wait, /stop, and /redirect. Ask it for /help once it
+is open.`)
 }

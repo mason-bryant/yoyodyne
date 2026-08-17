@@ -27,6 +27,41 @@ const (
 	harnessDeep   = "\x1b[38;5;44m"
 	harnessBasic  = "\x1b[36m"
 	resetColour   = "\x1b[0m"
+	// emphasis is what Markdown structure is shown with. It is not a colour: a
+	// heading and a bold run are the author's own emphasis rather than a kind of
+	// thing the harness is telling apart, so they are weighted rather than
+	// recoloured, and they leave the colours above to mean what they mean.
+	emphasisOn = "\x1b[1m"
+)
+
+// The states work is reported in, coloured the same way wherever they are
+// reported. They are a fixed set rather than free text so that one report
+// cannot colour a blocked item differently from another, and they are an
+// addition exactly like the rest: every group and every item says its state in
+// words as well.
+const (
+	runningDeep  = "\x1b[38;5;39m"
+	runningBasic = "\x1b[94m"
+	// Blocked shares orange with a question, and for the same reason: it is
+	// work that is waiting on somebody.
+	blockedDeep  = questionDeep
+	blockedBasic = questionBasic
+	doneDeep     = "\x1b[38;5;42m"
+	doneBasic    = "\x1b[92m"
+	failedDeep   = "\x1b[38;5;203m"
+	failedBasic  = "\x1b[91m"
+)
+
+// State is one of the states work is reported in. A caller names the state and
+// the theme decides what it looks like, so the colour of "blocked" is decided
+// once rather than at every place that prints it.
+type State string
+
+const (
+	StateRunning State = "running"
+	StateBlocked State = "blocked"
+	StateDone    State = "done"
+	StateFailed  State = "failed"
 )
 
 // ruleWidth bounds the horizontal rule, and unknownWidth is how wide it is
@@ -46,6 +81,12 @@ type Theme struct {
 	question string
 	proposal string
 	harness  string
+	// emphasis is what Markdown structure is shown with, and is empty with the
+	// rest when nothing may be dressed.
+	emphasis string
+	// states is what each state of work looks like. It is nil when nothing may
+	// be coloured, so a state is named in words and dressed in nothing.
+	states map[State]string
 	// width is how wide the rule may be drawn, and is nil where there is no
 	// rule to draw.
 	width func() int
@@ -65,9 +106,27 @@ func NewTheme(env func(string) string, width func() int) Theme {
 	if term == "" || term == "dumb" {
 		return Theme{}
 	}
-	theme := Theme{width: width, question: questionBasic, proposal: proposalBasic, harness: harnessBasic}
+	theme := Theme{
+		width:    width,
+		question: questionBasic,
+		proposal: proposalBasic,
+		harness:  harnessBasic,
+		emphasis: emphasisOn,
+		states: map[State]string{
+			StateRunning: runningBasic,
+			StateBlocked: blockedBasic,
+			StateDone:    doneBasic,
+			StateFailed:  failedBasic,
+		},
+	}
 	if deepColour(term, env("COLORTERM")) {
 		theme.question, theme.proposal, theme.harness = questionDeep, proposalDeep, harnessDeep
+		theme.states = map[State]string{
+			StateRunning: runningDeep,
+			StateBlocked: blockedDeep,
+			StateDone:    doneDeep,
+			StateFailed:  failedDeep,
+		}
 	}
 	return theme
 }
@@ -110,10 +169,18 @@ func (t Theme) Questions(reply string) string {
 	lines := strings.Split(reply, "\n")
 	for index, line := range lines {
 		if asksSomething(line) {
-			lines[index] = t.question + line + resetColour
+			lines[index] = wrap(t.question, line)
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+// State dresses a piece of text as the state of work it describes. What it is
+// given already says the state in words — "blocked (2):" is an answer with the
+// colour gone — so this only makes it findable at a glance. Like everything
+// else here, the colour never outlives the line it began on.
+func (t Theme) State(state State, text string) string {
+	return dress(t.states[state], text)
 }
 
 // asksSomething reports a line that puts a question to the operator.
@@ -162,7 +229,7 @@ func dress(colour, text string) string {
 	for _, segment := range strings.SplitAfter(text, "\n") {
 		body := strings.TrimSuffix(segment, "\n")
 		if strings.TrimSpace(body) != "" {
-			out.WriteString(colour + body + resetColour)
+			out.WriteString(wrap(colour, body))
 		} else {
 			out.WriteString(body)
 		}
@@ -171,4 +238,17 @@ func dress(colour, text string) string {
 		}
 	}
 	return out.String()
+}
+
+// wrap puts one piece of text in a colour, and puts that colour back after
+// anything inside it that was already dressed. Without that, text that says
+// something of its own — a state inside a survey the harness is answering
+// with — would end its own colour and leave the rest of the line wearing the
+// terminal's default, which reads as the dressing having stopped rather than
+// resumed.
+func wrap(colour, text string) string {
+	if colour == "" || text == "" {
+		return text
+	}
+	return colour + strings.ReplaceAll(text, resetColour, resetColour+colour) + resetColour
 }

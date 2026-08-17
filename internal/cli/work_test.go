@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"yoyodyne/internal/chat"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/contextbundle"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
@@ -249,7 +250,7 @@ func TestSurveyNamesThePartsItCouldNotReadInsteadOfFailing(t *testing.T) {
 	if len(survey.Unavailable) != 3 {
 		t.Fatalf("unavailable = %#v, want the three groups that could not be read", survey.Unavailable)
 	}
-	rendered := survey.Render()
+	rendered := survey.Render(console.Theme{})
 	// An unreadable group must never read as an empty one: it says so where it
 	// would have been listed.
 	if !strings.Contains(rendered, "blocked: could not be read, so treat it as unknown rather than empty: list blocked work items") {

@@ -30,6 +30,12 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	conversation.ProviderResolvedModel = "claude-opus-5-20260514"
 	conversation.Turns = 1
 	conversation.PendingTrackerResults = "- t1.1: closed yoyodyne-2\n"
+	// What the agent is reasoning from travels with the record, because the
+	// process that briefed it is usually not the one that resumes it: a resumed
+	// conversation that cannot say how old its picture is describes a repository
+	// as it was and sounds exactly as certain about it.
+	conversation.ContextGatheredAt = conversation.StartedAt
+	conversation.ContextCommit = "a1a1a1a1a1a1"
 	conversation.LastSequence = 4
 	conversation.UpdatedAt = conversation.StartedAt.Add(time.Minute)
 	if err := store.Save(conversation); err != nil {
@@ -159,6 +165,15 @@ func TestConversationValidateRejectsIncoherentRecords(t *testing.T) {
 			name:   "backwards clock",
 			mutate: func(c *Conversation) { c.UpdatedAt = c.StartedAt.Add(-time.Second) },
 			want:   "updated_at cannot be before started_at",
+		},
+		{
+			// A picture may predate the conversation that carries it, because it
+			// is assembled before the record exists. What it may not do is claim
+			// to have been taken later than the record was written, which would
+			// make every comparison against it read as fresher than it is.
+			name:   "a picture from the future",
+			mutate: func(c *Conversation) { c.ContextGatheredAt = c.UpdatedAt.Add(time.Second) },
+			want:   "context_gathered_at cannot be after updated_at",
 		},
 		{
 			// What waits inside the record has to keep the record loadable, so an
