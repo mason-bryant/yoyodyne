@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -30,6 +31,10 @@ type terminal struct {
 	// width is asked for at every draw rather than remembered, so a window the
 	// operator resized is drawn at the size it is now.
 	width func() int
+	// theme is how much this terminal's environment permits it to be dressed.
+	// It is fixed for the life of the console, because an operator who set
+	// NO_COLOR set it before the conversation opened.
+	theme Theme
 
 	// pending is text written without a newline yet. It is held back rather than
 	// drawn, because half a line above the composing region cannot be erased
@@ -45,12 +50,19 @@ type terminal struct {
 	line       []rune
 	cursor     int
 
-	// drawn says whether a region is on screen, and drawnCursor is where the
-	// cursor was left within it, counted in columns from the start of the
-	// region. The row it is on is worked out from the width at the time rather
-	// than remembered, so a window the operator resized between the drawing and
-	// the erasing is erased at the size the terminal has rewrapped it to.
+	// status is the account of work in progress, drawn on a line of its own at
+	// the top of the region. It is empty when nothing is being waited for.
+	status string
+
+	// drawn says whether a region is on screen, drawnStatus is the status line
+	// it was drawn with, and drawnCursor is where the cursor was left in the
+	// composing line, counted in columns from the start of that line. Both the
+	// rows the status occupies and the row the cursor is on are worked out from
+	// the width at the time rather than remembered, so a window the operator
+	// resized between the drawing and the erasing is erased at the size the
+	// terminal has rewrapped it to.
 	drawn       bool
+	drawnStatus string
 	drawnCursor int
 	closed      bool
 }
@@ -61,12 +73,15 @@ type chunk struct {
 	err  error
 }
 
-func openTerminal(in, out *os.File) (*terminal, error) {
+func openTerminal(in, out *os.File, env func(string) string) (*terminal, error) {
 	restore, err := enterCBreak(in.Fd())
 	if err != nil {
 		return nil, err
 	}
-	return newTerminal(in, out, func() int { return terminalWidth(out.Fd()) }, restore), nil
+	width := func() int { return terminalWidth(out.Fd()) }
+	terminal := newTerminal(in, out, width, restore)
+	terminal.theme = NewTheme(env, width)
+	return terminal, nil
 }
 
 // newTerminal builds the console over whatever the caller supplies, so the
@@ -163,13 +178,25 @@ func (t *terminal) eraseRegion() string {
 		return ""
 	}
 	var out strings.Builder
-	if rows := t.drawnCursor / t.columns(); rows > 0 {
+	if rows := t.statusRows() + t.drawnCursor/t.columns(); rows > 0 {
 		fmt.Fprintf(&out, "\x1b[%dA", rows)
 	}
 	out.WriteString("\r\x1b[J")
 	t.drawn = false
+	t.drawnStatus = ""
 	t.drawnCursor = 0
 	return out.String()
+}
+
+// statusRows is how many rows the status line took at the width the terminal
+// has now, counting the newline that ends it. A line that exactly fills the
+// width still occupies one row: the terminal defers the wrap, and the newline
+// is what commits it.
+func (t *terminal) statusRows() int {
+	if t.drawnStatus == "" {
+		return 0
+	}
+	return (visibleWidth(t.drawnStatus)-1)/t.columns() + 1
 }
 
 // columns is how wide the terminal is now. It divides the arithmetic that
@@ -182,14 +209,29 @@ func (t *terminal) columns() int {
 	return 1
 }
 
-// drawRegion returns the sequence that puts the region back: the line being
-// composed, with the cursor where the operator left it.
+// drawRegion returns the sequence that puts the region back: the account of
+// work in progress if there is one, the line being composed under it, and the
+// cursor where the operator left it.
 func (t *terminal) drawRegion() string {
-	if !t.prompting {
+	if !t.prompting && t.status == "" {
 		return ""
 	}
 	width := t.columns()
 	var out strings.Builder
+	if t.status != "" {
+		// The status is written and left behind: the region is redrawn as a
+		// whole, so it is put back on every draw rather than moved.
+		out.WriteString(t.status)
+		out.WriteString("\n")
+	}
+	t.drawnStatus = t.status
+	if !t.prompting {
+		// Nothing is being composed, so the cursor rests at the start of the row
+		// below the status, which is where the next thing written will go.
+		t.drawn = true
+		t.drawnCursor = 0
+		return out.String()
+	}
 	composed := t.promptText + string(t.line)
 	out.WriteString(composed)
 	end := visibleWidth(composed)
@@ -217,6 +259,32 @@ func (t *terminal) drawRegion() string {
 // changed. It writes nothing into the scrollback.
 func (t *terminal) redraw() error {
 	return t.render(nil)
+}
+
+// Working draws the account of work in progress on a line of its own below the
+// conversation, where it is erased and drawn again exactly as the composing
+// line is. It is a region rather than ordinary output for the same reason the
+// composing line is: an indicator that scrolled away with the transcript would
+// be a log of itself, and one written into the operator's own line would be
+// worse than none at all.
+func (t *terminal) Working(phase string) Activity {
+	return newSpinner(phase, t.setStatus, time.Now, spinnerInterval)
+}
+
+// Theme reports how much this terminal may be dressed.
+func (t *terminal) Theme() Theme { return t.theme }
+
+// setStatus replaces what the activity line says. A console that has been
+// closed keeps the screen the operator's shell left it with, and an unchanged
+// line is not redrawn, so a display that has nothing new to say costs nothing.
+func (t *terminal) setStatus(text string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed || t.status == text {
+		return
+	}
+	t.status = text
+	t.redraw()
 }
 
 func (t *terminal) Prompt(ctx context.Context, prompt string, interrupt <-chan struct{}) (string, error) {
@@ -369,6 +437,7 @@ func (t *terminal) Close() error {
 	}
 	t.closed = true
 	t.prompting = false
+	t.status = ""
 	var out strings.Builder
 	out.WriteString(t.eraseRegion())
 	// A part-line held back is written rather than dropped. It is something the

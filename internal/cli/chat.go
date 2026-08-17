@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"yoyodyne/internal/backend/claudecode"
@@ -108,12 +109,16 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	defer screen.Close()
 	printChatHeader(screen, session.Evidence())
 	converseErr := session.Converse(ctx, screen)
+	// What was decided about is the console's to dress, and it is asked before
+	// the console is closed: restoring the terminal changes how it reads input,
+	// not what it is allowed to be shown in.
+	theme := screen.Theme()
 	// The terminal is handed back before the closing report, so the evidence
 	// below is written to a terminal in the state the operator's shell left it.
 	if err := screen.Close(); err != nil {
 		fmt.Fprintf(stderr, "restore the terminal: %v\n", err)
 	}
-	printUndecidedProposals(stdout, session.Proposals())
+	printUndecidedProposals(stdout, theme, session.Proposals())
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
 		fmt.Fprintf(stderr, "conversation ended: %v\n", converseErr)
@@ -322,15 +327,19 @@ func printChatProposals(writer io.Writer, proposals []chat.PendingProposal) {
 }
 
 // printUndecidedProposals names what a conversation left open, so a proposal
-// nobody decided on ends as a visible loose end rather than as silence.
-func printUndecidedProposals(writer io.Writer, proposals []chat.PendingProposal) {
+// nobody decided on ends as a visible loose end rather than as silence. It is
+// dressed as what it is — something still waiting on the operator — and the
+// text says so without the colour.
+func printUndecidedProposals(writer io.Writer, theme console.Theme, proposals []chat.PendingProposal) {
 	if len(proposals) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "%d proposal(s) were left undecided and nothing was created for them:\n", len(proposals))
+	var undecided strings.Builder
+	fmt.Fprintf(&undecided, "%d proposal(s) were left undecided and nothing was created for them:\n", len(proposals))
 	for _, proposal := range proposals {
-		fmt.Fprintf(writer, "  [%s] %s\n", proposal.ID, proposal.Proposal.Title)
+		fmt.Fprintf(&undecided, "  [%s] %s\n", proposal.ID, proposal.Proposal.Title)
 	}
+	fmt.Fprint(writer, theme.Proposal(undecided.String()))
 }
 
 func printChatEvidence(writer io.Writer, evidence chat.Evidence) {

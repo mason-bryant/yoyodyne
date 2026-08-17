@@ -13,6 +13,7 @@ import (
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/chat"
 	"yoyodyne/internal/config"
+	"yoyodyne/internal/console"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
@@ -313,14 +314,16 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	// A conversation that ended without a decision says so rather than leaving
 	// the proposal to be assumed either way.
 	var undecided bytes.Buffer
-	printUndecidedProposals(&undecided, proposals)
+	// The theme a stream gets dresses nothing, so what is printed here is the
+	// text and only the text.
+	printUndecidedProposals(&undecided, console.Theme{}, proposals)
 	if !strings.Contains(undecided.String(), "undecided") || !strings.Contains(undecided.String(), "[1.1]") {
 		t.Fatalf("undecided output = %q", undecided.String())
 	}
 
 	var quiet bytes.Buffer
 	printChatProposals(&quiet, nil)
-	printUndecidedProposals(&quiet, nil)
+	printUndecidedProposals(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no proposals printed %q", quiet.String())
 	}

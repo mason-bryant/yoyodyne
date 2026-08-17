@@ -71,6 +71,21 @@ func (p *plain) Prompt(ctx context.Context, prompt string, _ <-chan struct{}) (s
 	return p.scanner.Text(), nil
 }
 
+// Working says each phase once, as a line like any other. A stream has nothing
+// to animate and nothing to erase, so what an operator watching a redirected
+// conversation gets is the phases themselves: fewer than a terminal shows, and
+// every one of them a fact about what happened rather than about how long it
+// took.
+func (p *plain) Working(phase string) Activity {
+	activity := &narration{out: p}
+	activity.Doing(phase)
+	return activity
+}
+
+// Theme dresses nothing. Colour and rules are for a terminal, and a stream that
+// is not one gets the same lines a redirected conversation has always had.
+func (p *plain) Theme() Theme { return Theme{} }
+
 // Close has nothing to restore: a stream was never put into a state anybody
 // has to be got out of.
 func (p *plain) Close() error { return nil }
