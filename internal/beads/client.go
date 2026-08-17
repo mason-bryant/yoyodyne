@@ -124,6 +124,23 @@ func (c Client) List(ctx context.Context, status string) ([]WorkItem, error) {
 	return decodeWorkItems(data)
 }
 
+// Ready reports the work items the tracker itself considers ready to be worked
+// on: admitted, not already claimed, and waiting on nothing unfinished. It is
+// read-only.
+//
+// It exists because readiness is the tracker's answer to give rather than this
+// client's to infer. A dependency lives in the tracker's own graph, and a status
+// listing is not guaranteed to carry it, so deciding "this item lists no
+// blockers, therefore it can be pulled" would report a blocked item as the next
+// thing to work on wherever the listing leaves dependencies out.
+func (c Client) Ready(ctx context.Context) ([]WorkItem, error) {
+	data, err := c.run(ctx, "ready", "--json")
+	if err != nil {
+		return nil, err
+	}
+	return decodeWorkItems(data)
+}
+
 // Create records a new work item. Unlike every other call here it brings work
 // into existence, so the caller is responsible for having the authority to ask:
 // this adapter is the mechanism, never the approval.

@@ -104,7 +104,20 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 		}
 		admitted = append(admitted, items...)
 	}
-	return backlog.Order(admitted), nil
+	// The order comes from the listings; which of those items can actually be
+	// pulled comes from the tracker, because a blocker lives in its dependency
+	// graph rather than reliably in a status listing.
+	trackerCtx, cancel := context.WithTimeout(ctx, w.timeout)
+	defer cancel()
+	ready, err := w.tracker.Ready(trackerCtx)
+	if err != nil {
+		return backlog.Queue{}, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
+	}
+	pullable := make([]string, 0, len(ready))
+	for _, item := range ready {
+		pullable = append(pullable, item.ID)
+	}
+	return backlog.Order(admitted, pullable), nil
 }
 
 // Run executes one work item through the pipeline. The outcome is reported even

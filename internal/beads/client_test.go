@@ -212,6 +212,42 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	}
 }
 
+// What can be pulled is a question the tracker answers from its own dependency
+// graph. The payload below is what bd actually returns, dependency shape and
+// all: the relation is recorded with no completion state on it, which is exactly
+// why readiness is asked for rather than worked out from a listing.
+func TestClientAsksTheTrackerWhatIsReadyRatherThanWorkingItOut(t *testing.T) {
+	t.Parallel()
+
+	ready := `[{"id":"bdprobe-uxm","title":"Waiting item","description":"d","status":"open","priority":0,
+	            "issue_type":"task","owner":"someone@example.com",
+	            "dependencies":[{"issue_id":"bdprobe-uxm","depends_on_id":"bdprobe-3kw","type":"blocks",
+	                             "created_by":"Someone","metadata":"{}"}],
+	            "dependency_count":1,"dependent_count":0,"comment_count":0}]`
+	runner := &fakeRunner{responses: []string{ready}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+
+	items, err := client.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "bdprobe-uxm" {
+		t.Fatalf("Ready() = %#v", items)
+	}
+	// The dependency decodes from the spelling bd uses, and carries no status,
+	// which is the fact the backlog is built around.
+	if len(items[0].Dependencies) != 1 {
+		t.Fatalf("dependencies = %#v", items[0].Dependencies)
+	}
+	dependency := items[0].Dependencies[0]
+	if dependency.ID != "bdprobe-3kw" || dependency.Type != "blocks" || dependency.Status != "" {
+		t.Fatalf("dependency = %#v", dependency)
+	}
+	if !reflect.DeepEqual(runner.args, [][]string{{"ready", "--json"}}) {
+		t.Fatalf("bd args = %#v", runner.args)
+	}
+}
+
 func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 	t.Parallel()
 

@@ -104,11 +104,19 @@ func TestBacklogIsTheAdmittedWorkInPriorityOrder(t *testing.T) {
 	t.Parallel()
 
 	runner := &statusRunner{stdout: map[string]string{
-		"--status=open": `[{"id":"yoyodyne-ifd.26","title":"See and stop what is pulled","status":"open","priority":3,"issue_type":"task"},
+		// A listing carrying the dependency bd records between two items, in the
+		// shape bd reports one: the client decodes it, and the queue has to hold
+		// the waiting item back and say what it waits for.
+		"--status=open": `[{"id":"yoyodyne-ifd.3","title":"The scheduler that runs it","status":"open","priority":0,"issue_type":"task",
+		                     "dependencies":[{"issue_id":"yoyodyne-ifd.3","depends_on_id":"yoyodyne-ifd.4","dependency_type":"blocks","status":"open"}]},
+		                   {"id":"yoyodyne-ifd.26","title":"See and stop what is pulled","status":"open","priority":3,"issue_type":"task"},
 		                   {"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
 		// Admitted work the harness has blocked is still queued: it is unfinished
 		// work in the order, and leaving it out would understate the backlog.
 		"--status=blocked": `[{"id":"yoyodyne-ifd.9","title":"A run that failed","status":"blocked","priority":0,"issue_type":"task"}]`,
+		// What can actually be pulled is the tracker's own answer.
+		"ready": `[{"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"},
+		           {"id":"yoyodyne-ifd.26","title":"See and stop what is pulled","status":"open","priority":3,"issue_type":"task"}]`,
 	}}
 	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
 
@@ -120,18 +128,85 @@ func TestBacklogIsTheAdmittedWorkInPriorityOrder(t *testing.T) {
 	for _, entry := range queue.Entries {
 		order = append(order, entry.ID)
 	}
-	if strings.Join(order, ",") != "yoyodyne-ifd.9,yoyodyne-ifd.4,yoyodyne-ifd.26" {
+	if strings.Join(order, ",") != "yoyodyne-ifd.3,yoyodyne-ifd.9,yoyodyne-ifd.4,yoyodyne-ifd.26" {
 		t.Fatalf("backlog order = %v", order)
 	}
-	// The blocked item leads the order and is still not what gets pulled.
+	// The dependency survived the tracker's JSON, so the entry says what it is
+	// waiting for rather than only that it is not ready.
+	waiting := queue.Entries[0]
+	if waiting.Ready || len(waiting.WaitingOn) != 1 || waiting.WaitingOn[0] != "yoyodyne-ifd.4" {
+		t.Fatalf("waiting entry = %#v", waiting)
+	}
+	// A dependency-blocked item and a harness-blocked one both lead the order and
+	// neither is what gets pulled.
 	next, ok := queue.Next()
 	if !ok || next.ID != "yoyodyne-ifd.4" {
 		t.Fatalf("Next() = %#v, %v", next, ok)
+	}
+	if !contains(runner.subcommands(), "ready") {
+		t.Fatalf("the backlog never asked the tracker what is ready: %#v", runner.subcommands())
 	}
 	for i, command := range runner.commands {
 		if command.Name != "bd" || command.Dir != "/repo" || command.Timeout != chatTrackerTimeout {
 			t.Fatalf("command %d = %#v", i, command)
 		}
+	}
+}
+
+// The failure this guards against is silent: a listing that carries no
+// dependency data looks exactly like work with nothing in its way, so a queue
+// that decided readiness from the listing alone would name a blocked item as the
+// next thing to pull. Readiness comes from the tracker instead, which answers
+// that question from its own dependency graph.
+func TestBacklogDoesNotCallAnItemReadyOnAListingWithNoDependencies(t *testing.T) {
+	t.Parallel()
+
+	runner := &statusRunner{stdout: map[string]string{
+		// Neither item carries a dependency here, which is what a listing without
+		// dependency data looks like from the harness's side.
+		"--status=open": `[{"id":"yoyodyne-ifd.3","title":"Blocked, though this listing does not say so","status":"open","priority":0,"issue_type":"task"},
+		                   {"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
+		"ready": `[{"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
+	}}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+
+	queue, err := work.Backlog(context.Background())
+	if err != nil {
+		t.Fatalf("Backlog() error = %v", err)
+	}
+	if queue.Entries[0].ID != "yoyodyne-ifd.3" || queue.Entries[0].Ready {
+		t.Fatalf("the head of the queue was reported ready without the tracker offering it: %#v", queue.Entries[0])
+	}
+	next, ok := queue.Next()
+	if !ok || next.ID != "yoyodyne-ifd.4" {
+		t.Fatalf("Next() = %#v, %v", next, ok)
+	}
+	// It says why it is holding the item rather than inventing a blocker.
+	if !strings.Contains(queue.Render(), "the tracker does not report it as ready to pull") {
+		t.Fatalf("rendered backlog = %q", queue.Render())
+	}
+}
+
+// A readiness answer nobody could read decides nothing, so the backlog is
+// refused rather than reported with everything in it held back — which would
+// read as a queue that had stalled.
+func TestBacklogFailsWhenTheTrackerWillNotSayWhatIsReady(t *testing.T) {
+	t.Parallel()
+
+	runner := &statusRunner{
+		stdout: map[string]string{
+			"--status=open": `[{"id":"yoyodyne-ifd.4","title":"The development manager that pulls","status":"open","priority":1,"issue_type":"task"}]`,
+		},
+		fail: map[string]bool{"ready": true},
+	}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), timeout: chatTrackerTimeout}
+
+	queue, err := work.Backlog(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "reports as ready") {
+		t.Fatalf("Backlog() error = %v, want the unreadable readiness reported", err)
+	}
+	if len(queue.Entries) != 0 {
+		t.Fatalf("a backlog that could not be read still returned %#v", queue.Entries)
 	}
 }
 
@@ -346,22 +421,39 @@ func (r *appendingRunner) Run(_ context.Context, command execution.Command, _ ex
 
 // flakyRunner answers a fixed number of commands and then fails, so a survey
 // can be checked against a tracker that stops answering partway through.
-// statusRunner answers each tracker listing with the slice it asked for, which
-// is what lets a test tell apart work that came from one status and work that
-// came from another.
+// statusRunner answers each tracker command with the slice it asked for, keyed
+// by the subcommand or the status argument. That is what lets a test tell apart
+// work that came from one listing, work that came from another, and the
+// tracker's own answer about what can be pulled.
 type statusRunner struct {
 	stdout   map[string]string
+	fail     map[string]bool
 	commands []execution.Command
 }
 
 func (r *statusRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
 	r.commands = append(r.commands, command)
-	for _, argument := range command.Args {
-		if answer, asked := r.stdout[argument]; asked {
+	for _, key := range command.Args {
+		if r.fail[key] {
+			return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "bd is unavailable"}, nil
+		}
+		if answer, asked := r.stdout[key]; asked {
 			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: answer}, nil
 		}
 	}
 	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"}, nil
+}
+
+// subcommands names the bd commands that were run, which is how a test asserts
+// that a question was actually asked of the tracker rather than answered locally.
+func (r *statusRunner) subcommands() []string {
+	run := make([]string, 0, len(r.commands))
+	for _, command := range r.commands {
+		if len(command.Args) > 0 {
+			run = append(run, command.Args[0])
+		}
+	}
+	return run
 }
 
 type flakyRunner struct {

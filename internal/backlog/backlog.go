@@ -56,13 +56,18 @@ type Entry struct {
 	ID       string `json:"id"`
 	Title    string `json:"title"`
 	Priority int    `json:"priority"`
+	Status   string `json:"status"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
-	// WaitingOn names the unfinished work this item waits for, when the tracker
-	// reported any. An entry can be unready without it: an item the tracker
-	// records as blocked is held back by whatever produced that blocker, which
-	// is written on the item rather than in a dependency.
+	// WaitingOn names the unfinished work this item waits for. It explains an
+	// unready entry; it never decides one. Both halves of that are forced by what
+	// a listing actually carries: a listing that omitted dependencies would make
+	// every item look unblocked, and the dependencies it does carry say what an
+	// item depends on without saying whether that work is finished. So a
+	// dependency is named here only when the depended-on item is itself still in
+	// the backlog, and what decides readiness is the tracker's own account of what
+	// can be pulled.
 	WaitingOn []string `json:"waiting_on,omitempty"`
 }
 
@@ -80,7 +85,22 @@ type Queue struct {
 // that is deliberately not presented as a decision: the product manager says
 // which of two items comes first by giving one a higher priority, and until it
 // does, nothing here invents an order it did not choose.
-func Order(items []beads.WorkItem) Queue {
+//
+// ready names the items the tracker itself reports as pullable, and an item
+// missing from it is unready however clean its listing looks. Readiness is taken
+// rather than inferred, because neither thing a listing offers can decide it. A
+// listing that carries no dependencies at all is indistinguishable from work
+// with none, so inferring "nothing listed, therefore nothing is in the way"
+// would name a blocked item as the next thing to pull. And the dependencies a
+// listing does carry say what an item depends on without saying whether that
+// work is done, so inferring the opposite from their presence would hold an item
+// back for a blocker that finished long ago. The tracker answers this from its
+// own dependency graph; this only asks.
+func Order(items []beads.WorkItem, ready []string) Queue {
+	pullable := make(map[string]struct{}, len(ready))
+	for _, id := range ready {
+		pullable[id] = struct{}{}
+	}
 	admitted := make([]beads.WorkItem, 0, len(items))
 	for _, item := range items {
 		if item.Status == statusOpen || item.Status == statusBlocked {
@@ -88,17 +108,25 @@ func Order(items []beads.WorkItem) Queue {
 		}
 	}
 	Sort(admitted)
+	// Unfinished work is what is still in the backlog, which is what makes a
+	// dependency worth naming: an item this one depends on that is no longer
+	// queued has been done or pulled, and is not what anybody is waiting for.
+	unfinished := make(map[string]struct{}, len(admitted))
+	for _, item := range admitted {
+		unfinished[item.ID] = struct{}{}
+	}
 
 	queue := Queue{Entries: make([]Entry, 0, len(admitted))}
 	for position, item := range admitted {
-		waiting := waitingOn(item)
+		_, reportedReady := pullable[item.ID]
 		queue.Entries = append(queue.Entries, Entry{
 			Position:  position + 1,
 			ID:        item.ID,
 			Title:     item.Title,
 			Priority:  item.Priority,
-			Ready:     item.Status == statusOpen && len(waiting) == 0,
-			WaitingOn: waiting,
+			Status:    item.Status,
+			Ready:     reportedReady && item.Status == statusOpen,
+			WaitingOn: waitingOn(item, unfinished),
 		})
 	}
 	return queue
@@ -160,11 +188,7 @@ func (q Queue) Render() string {
 		if entry.Ready {
 			continue
 		}
-		if len(entry.WaitingOn) > 0 {
-			fmt.Fprintf(&rendered, "     waiting on %s\n", strings.Join(entry.WaitingOn, ", "))
-			continue
-		}
-		fmt.Fprintln(&rendered, "     blocked; the item says what by")
+		fmt.Fprintf(&rendered, "     %s\n", entry.hold())
 	}
 	if len(q.Entries) > len(listed) {
 		fmt.Fprintf(&rendered, "  %d further admitted item(s) are not listed here.\n", len(q.Entries)-len(listed))
@@ -177,14 +201,37 @@ func (q Queue) Render() string {
 	return rendered.String()
 }
 
-// waitingOn names the unfinished work an item depends on. A dependency the
-// tracker reports as closed is finished and holds nothing back; a listing that
-// carries no dependencies at all leaves this empty, and the item's own status is
-// then what says whether it is ready.
-func waitingOn(item beads.WorkItem) []string {
+// hold says what is keeping an unready entry from being pulled. The three
+// answers are different things to act on: named work it waits for, a blocker
+// recorded on the item itself, and the tracker simply not offering it, which is
+// what a dependency the listing did not carry looks like from here.
+func (e Entry) hold() string {
+	switch {
+	case len(e.WaitingOn) > 0:
+		return "waiting on " + strings.Join(e.WaitingOn, ", ")
+	case e.Status == statusBlocked:
+		return "blocked; the item says what by"
+	default:
+		return "the tracker does not report it as ready to pull"
+	}
+}
+
+// waitingOn names the unfinished work an item depends on: the blocking
+// dependencies its listing recorded whose own item is still in the backlog.
+//
+// The membership test is what keeps this honest. A dependency in a Beads listing
+// records that the relation exists and carries no completion state at all — it
+// reads the same after the blocker is closed as before — so a dependency alone
+// says nothing about whether anybody is still waiting. What does say so is
+// whether the depended-on item is still queued. A dependency whose status is
+// reported is believed as well, for a tracker that does carry one.
+func waitingOn(item beads.WorkItem, unfinished map[string]struct{}) []string {
 	var waiting []string
 	for _, dependency := range item.Dependencies {
-		if dependency.Type == blocksDependency && dependency.Status != "closed" {
+		if dependency.Type != blocksDependency || dependency.Status == "closed" {
+			continue
+		}
+		if _, queued := unfinished[dependency.ID]; queued {
 			waiting = append(waiting, dependency.ID)
 		}
 	}
