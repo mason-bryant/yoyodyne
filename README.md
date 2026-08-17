@@ -80,6 +80,14 @@ Nothing here assumes your project is written in Go, and nothing after the build
 step needs the Yoyodyne checkout again: a configured project carries its own
 configuration and personas.
 
+Every step below is executed by [`scripts/walk-adoption.sh`](scripts/walk-adoption.sh),
+which walks this section against a throwaway Python project — its own scratch
+repository, its own temporary state directory, removed when it exits — and
+asserts what each step is documented to do. Run it if you would rather watch the
+path work than take this section's word for it. It needs no provider unless you
+pass `WALK_PROVIDER=1`, and it names any claim it could not exercise rather than
+passing over it.
+
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; [Claude Code](https://code.claude.com/docs), installed and
