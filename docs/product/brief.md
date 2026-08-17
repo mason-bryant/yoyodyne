@@ -1,24 +1,62 @@
 # Product brief
 
-> **This is an empty stub.** Nothing below states what this product is for; the
-> brief has no content yet. Read it as a location that exists and is waiting,
-> not as evidence about the product. `README.md` and
-> [the v1 harness design](../v1-harness-design.md) are what currently describe
-> Yoyodyne.
+Yoyodyne turns product intent into shipped software. Someone with a repository
+and an idea says what they want, in conversation. Yoyodyne carries that intent
+through goals, design, decomposition, implementation, independent review, and
+integration, and gives back merged code. Intent in, software out.
 
-The brief is the root of the traceable chain: every active goal must support it,
-and every design and implementation item must trace to an active goal. See
-[design invariant 1](../v1-harness-design.md#design-invariants).
+It exists because coding agents are good at the part that was never the hard
+part. Writing code was rarely the bottleneck; deciding what should be built,
+keeping the reason for it traceable to the change that resulted, and making sure
+somebody other than the author looked before it landed — that is the work an
+agent handed a prompt does not do, and the work a person still ends up doing by
+hand around it. Yoyodyne is that surrounding structure, built so the loop can run
+without a person driving each turn of it.
 
-Its content is settled by the operator and the product manager in conversation
-(`yoyo chat`) and written here by the operator. It is deliberately not text a
-developer agent supplies: the brief is owned by the product manager, and
-[artifact ownership](../v1-harness-design.md#artifact-ownership) is an
-authorization boundary rather than a prompt convention, so a role that does not
-own the brief proposes a change to it instead of making one.
+The nearest picture is a dark factory: a production line that runs unattended.
+The picture is right about the floor and wrong about the building. The floor is
+dark — work is designed, built, reviewed, and integrated without a person
+watching each step, and no agent can push or merge to reach the outside world.
+The office is not. A person sets what the line is for. They state intent, approve
+the brief and the goals it becomes, and answer what gets escalated to them.
+Autonomy here is the absence of routine per-change gates, not the absence of a
+human, and a system that never needed to ask its owner anything would be a
+system that had stopped taking direction.
 
-The goals derived from this brief live in [`goals/`](goals/).
+Yoyodyne is for anyone with a repository and an idea: someone building a weekend
+project, someone shipping professionally, and teams. It is not a tool for the
+people who wrote it. It is finished when someone who has never seen its internals
+can point it at their own repository, in their own language, and get software
+back.
 
-Stable artifact IDs and the Markdown metadata schema that will accompany this
-document are not settled yet; they arrive with artifact governance in
-milestone 2.
+The bar for that is the whole management hierarchy working — product management,
+architecture, development management, implementation, and review as real roles
+with real authority between them, not one agent playing every part. A person's
+routine surface is intent, goals, and escalations. Everything between those and
+merged code belongs to the harness.
+
+What Yoyodyne's first version deliberately does not do is bounded separately in
+[the v1 non-goals](goals/v1-non-goals.md); those are decisions about where v1
+stops, not limits on what the product is for.
+
+## Goals
+
+- **Intent goes in and merged software comes out.** A person states what they
+  want in conversation and receives designed, implemented, independently
+  reviewed, integrated code, without directing how the work is done.
+- **Every change traces to intent somebody approved.** A reader can follow any
+  merged change back through the work, the design, and the goal to the brief, and
+  find nothing in the codebase that arrived from nowhere.
+- **Intent is only redefined by whoever owns it.** A role that does not own an
+  artifact proposes a change to it rather than making one, and that boundary is
+  structural rather than a matter of an agent's good behavior.
+- **Nothing lands unreviewed by someone other than its author.**
+- **The human's attention goes only where it is needed.** Intent, goals, and
+  escalations reach the person; routine per-change approval does not.
+- **It works on other people's projects.** Any language, any build system, any
+  test framework — Yoyodyne runs what a project declares rather than
+  understanding its toolchain, and general adoption is the aim rather than
+  self-hosting.
+- **Safety invariants hold whatever the configuration says.** Roles, policies,
+  and providers are the operator's to change; the boundaries that keep agents
+  from reaching outside the harness are not optional.
