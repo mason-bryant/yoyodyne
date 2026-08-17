@@ -555,10 +555,18 @@ numbers and this shows the truth.
 
 Every figure is the provider's own report of what an invocation cost, read from
 the run's event log, never an estimate from a price table that drifts the moment
-a provider changes what it charges. A run finishing writes the item's total onto
-the item in the tracker, so the price travels with the work: `/status`, `/show`,
-the product manager's briefing, and `bd` itself all read one number from one
-place.
+a provider changes what it charges.
+
+A run finishing writes the item's total onto the item in the tracker, and that
+recorded total is what travels with the work: `/status`, the product manager's
+briefing, and `bd` itself all read the one number the tracker holds, rather than
+each assembling a price of their own. `/show` is the exception, deliberately: it
+prices the item from the run records themselves every time it is asked. That is
+what lets it answer for an item nothing has recorded a price for yet — anything
+finished before this existed, or an item whose run could not write its price
+down — and it is why the two can differ. Where they do, `/show` is the current
+one and the tracker is what was last recorded; `yoyo cost --record` makes them
+agree.
 
 Three things it deliberately will not do. A run whose event log no longer
 survives is priced as unknown rather than as nothing — it is counted, left out

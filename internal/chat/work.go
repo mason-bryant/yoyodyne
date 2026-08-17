@@ -549,10 +549,25 @@ func (r RunPrice) price() string {
 	if r.Unknown != "" {
 		return "unknown: " + singleLine(r.Unknown, maxSurveyTitleBytes*2)
 	}
-	if r.Status == "running" || r.Status == "pending" {
+	if !r.finished() {
 		return fmt.Sprintf("$%.2f so far from %d invocation(s)", r.CostUSD, r.Invocations)
 	}
 	return fmt.Sprintf("$%.2f from %d invocation(s)", r.CostUSD, r.Invocations)
+}
+
+// finished reports a run that has stopped spending. The terminal statuses are
+// named here rather than imported, as the provider-stop reasons above are, so a
+// conversation stays independent of how a run is executed. Everything else is
+// treated as still spending — a run in flight, one paused and owed a
+// continuation, and any status this does not recognize — because a figure that
+// is still growing reads as final if this guesses the wrong way.
+func (r RunPrice) finished() bool {
+	switch r.Status {
+	case "succeeded", "failed", "cancelled", "timed_out":
+		return true
+	default:
+		return false
+	}
 }
 
 func runPriceIDWidth(runs []RunPrice) int {

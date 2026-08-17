@@ -73,6 +73,10 @@ func TestCostLedgerCountsUnpricedRunsRatherThanChargingNothingForThem(t *testing
 		"$27.93",
 		"TOTAL",
 		"≥ $27.93",
+		// A row whose own runs went unpriced is marked as a floor like every
+		// other figure, rather than reading as an exact price of nothing because
+		// the count that says otherwise is in the next column.
+		"≥ $0.00",
 		"counted as unpriced and left out of the total",
 		"conversation turns are recorded but not attributed",
 	} {

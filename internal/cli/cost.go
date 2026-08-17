@@ -26,10 +26,12 @@ type recordedCost struct {
 	Failure    string     `json:"failure,omitempty"`
 }
 
-// costTimeout bounds the tracker writes a backfill makes. Each item is a
-// separate bd invocation, so the bound is per item rather than over the lot: a
-// tracker that has gone slow should cost the backfill an item, not the ledger.
-const costTimeout = 30 * time.Second
+// costTrackerTimeout bounds one bd command taken to record a price. It is
+// carried by the tracker the ledger writes through rather than applied at a call
+// site, so every write is bounded the same way whether it is one item or a
+// backfill of all of them: a tracker that has gone slow costs a backfill an item
+// rather than the whole ledger.
+const costTrackerTimeout = 30 * time.Second
 
 // reportCosts prices work items from the runs the harness recorded for them.
 // Reading is the default and recording is asked for, because writing a price
@@ -105,9 +107,7 @@ func readPrices(parts components, workItemID string) ([]runstate.ItemPrice, erro
 func recordPrices(ctx context.Context, parts components, workItemID string) ([]recordedCost, error) {
 	ledger := ledgerFrom(parts)
 	if workItemID != "" {
-		recordCtx, cancel := context.WithTimeout(ctx, costTimeout)
-		defer cancel()
-		recorded, err := ledger.Record(recordCtx, workItemID)
+		recorded, err := ledger.Record(ctx, workItemID)
 		if recorded == nil {
 			// Nothing was priced, so nothing was written; the failure, if there was
 			// one, is the caller's to report.
@@ -150,7 +150,7 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, single bool) {
 		if !price.Recorded() {
 			continue
 		}
-		fmt.Fprintf(writer, "%-38s %6d %9d %12s\n", price.WorkItemID, len(price.Runs), price.UnknownRuns, renderPrice(price))
+		fmt.Fprintf(writer, "%-38s %6d %9d %12s\n", price.WorkItemID, len(price.Runs), price.UnknownRuns, renderTotal(price.TotalUSD, price.UnknownRuns))
 		total += price.TotalUSD
 		runs += len(price.Runs)
 		unpriced += price.UnknownRuns
@@ -193,10 +193,10 @@ func printRecordedPrices(stdout, stderr io.Writer, recorded []recordedCost) {
 	fmt.Fprintf(stdout, "recorded the price of %d of %d work item(s) on the tracker\n", written, len(recorded))
 }
 
-func renderPrice(price runstate.ItemPrice) string {
-	return fmt.Sprintf("$%.2f", price.TotalUSD)
-}
-
+// renderTotal marks a figure the unpriced runs behind it make a floor rather
+// than a price. Every surface that shows money uses it, including each row of
+// the ledger: a row whose own runs went unpriced must not read as exact merely
+// because the count that says so is in the next column.
 func renderTotal(total float64, unpriced int) string {
 	if unpriced > 0 {
 		return fmt.Sprintf("≥ $%.2f", total)

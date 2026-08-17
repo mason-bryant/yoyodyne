@@ -1164,6 +1164,37 @@ func TestShowBreaksAnItemsCostDownByRun(t *testing.T) {
 	}
 }
 
+// A run that has not stopped spending must not report a figure that reads as
+// final, and only a run known to have stopped may. Anything else — a run in
+// flight, one owed a continuation, a status this does not recognize — is still
+// spending as far as the rendering is concerned.
+func TestARunStillSpendingIsNotPricedAsThoughItHadFinished(t *testing.T) {
+	t.Parallel()
+
+	price := ItemPrice{
+		WorkItemID: "yoyodyne-ifd.41",
+		Runs: []RunPrice{
+			{RunID: "run-1", Status: "running", StartedAt: fixedClock{}.Now(), CostUSD: 3.5, Invocations: 1},
+			{RunID: "run-2", Status: "waiting", StartedAt: fixedClock{}.Now(), CostUSD: 1.25, Invocations: 1},
+			{RunID: "run-3", Status: "cancelled", StartedAt: fixedClock{}.Now(), CostUSD: 2, Invocations: 1},
+		},
+		TotalUSD: 6.75,
+	}
+	rendered := price.Render()
+	for _, required := range []string{
+		"$3.50 so far from 1 invocation(s)",
+		"$1.25 so far from 1 invocation(s)",
+		"$2.00 from 1 invocation(s)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered price = %q, want it to contain %q", rendered, required)
+		}
+	}
+	if strings.Contains(rendered, "$2.00 so far") {
+		t.Fatalf("a run that had stopped was priced as still spending: %q", rendered)
+	}
+}
+
 // A price nobody could read must not cost the operator the item they asked for,
 // and it must not read as an item that was free.
 func TestShowReportsAPriceItCouldNotReadWithoutLosingTheItem(t *testing.T) {

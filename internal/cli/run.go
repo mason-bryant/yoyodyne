@@ -208,8 +208,14 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 // ledgerFrom wires the ledger that prices work items over parts that are
 // already built, so the price a run records and the price `yoyo cost` reports
 // are read from one set of records and written to one tracker.
+//
+// Recording a price is one bd command per item, and the tracker carries the
+// bound on it, so a backfill of a hundred items is a hundred separately bounded
+// writes rather than one long one nothing can interrupt.
 func ledgerFrom(parts components) cost.Ledger {
-	return cost.Ledger{Prices: parts.store, Tracker: parts.tracker()}
+	tracker := parts.tracker()
+	tracker.Timeout = costTrackerTimeout
+	return cost.Ledger{Prices: parts.store, Tracker: tracker}
 }
 
 func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
