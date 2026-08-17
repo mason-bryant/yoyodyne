@@ -418,6 +418,57 @@ func TestManagerRejectsUnsafeRootsAndTamperedOwnership(t *testing.T) {
 	}
 }
 
+// A test's own teardown is part of what it asserts: a run that passes every
+// check and then fails deleting its temporary directory is still a red required
+// check, and one that is usually spurious is one people stop reading. Both
+// halves of that are guarded here, because both are a line someone can delete
+// without any test noticing.
+func TestRepositoryUnderTestLeavesNothingForTempDirToRace(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	// Writing commands otherwise detach "git maintenance run --auto", which
+	// outlives them and is still working inside .git when TempDir deletes it.
+	for _, setting := range []struct{ name, want string }{
+		{"maintenance.auto", "false"},
+		{"gc.auto", "0"},
+	} {
+		value, err := attemptGit(repository, "config", "--get", setting.name)
+		if err != nil || strings.TrimSpace(value) != setting.want {
+			t.Errorf("%s = %q (%v), want %q", setting.name, strings.TrimSpace(value), err, setting.want)
+		}
+	}
+
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-teardown", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "work.txt", "left behind\n")
+
+	// Calling the cleanup here proves it removes a dirty worktree that was never
+	// integrated. TempDir deletes directories and unregisters nothing, so an
+	// unregistered repository is the state this has to reach.
+	removeLinkedWorktrees(t, repository)
+	if registrations := gitOutput(t, repository, "worktree", "list", "--porcelain"); strings.Contains(registrations, worktree.Path) {
+		t.Errorf("worktree registration survived cleanup: %q", registrations)
+	}
+	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+		t.Errorf("worktree directory survived cleanup: %v", err)
+	}
+
+	// A second worktree is left registered on purpose, so the cleanup
+	// newRepository registered has something real to remove rather than an
+	// already-empty repository. Its own assertions fail this test if any
+	// registration survives into TempDir's removal, which is the case that
+	// every other test in this package relies on.
+	survivor, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-teardown-survivor", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() survivor error = %v", err)
+	}
+	writeFile(t, survivor.Path, "work.txt", "left for teardown\n")
+}
+
 func newManager(t *testing.T, repository, worktreeRoot string) *Manager {
 	t.Helper()
 	manager, err := New(Options{
@@ -440,6 +491,10 @@ func newRepository(t *testing.T) string {
 	runGit(t, repository, "init", "-b", "main")
 	runGit(t, repository, "config", "user.name", "Yoyodyne Test")
 	runGit(t, repository, "config", "user.email", "yoyodyne@example.invalid")
+	disableBackgroundMaintenance(t, repository)
+	// Registered after the first TempDir call above and therefore run before
+	// TempDir's removal, so the repository is idle by the time Go deletes it.
+	t.Cleanup(func() { removeLinkedWorktrees(t, repository) })
 	if err := os.WriteFile(filepath.Join(repository, "README.txt"), []byte("test\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
@@ -448,13 +503,79 @@ func newRepository(t *testing.T) string {
 	return repository
 }
 
+// disableBackgroundMaintenance stops Git from handing this repository to a
+// process that outlives the command which started it. Writing commands
+// otherwise start "git maintenance run --auto --detach", which daemonizes into
+// its own session: it escapes both the caller's wait and the process group the
+// runner kills, and it is still working inside .git when a test's TempDir
+// cleanup deletes that directory. A directory Go has already emptied and that
+// then gains an entry again is exactly what makes the removal fail. Nothing
+// under test needs maintenance, so none is started.
+func disableBackgroundMaintenance(t *testing.T, repository string) {
+	t.Helper()
+	runGit(t, repository, "config", "maintenance.auto", "false")
+	runGit(t, repository, "config", "gc.auto", "0")
+}
+
+// removeLinkedWorktrees makes a test responsible for the worktrees it
+// registered. TempDir deletes directories and unregisters nothing, so a
+// registration inside .git outlives the checkout it names and leaves the
+// repository holding state no test still describes.
+func removeLinkedWorktrees(t *testing.T, repository string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
+		return
+	}
+	for _, path := range linkedWorktreePaths(t, repository) {
+		// A worktree whose directory a test deleted on purpose cannot be
+		// removed, only pruned. One that is still on disk must come off here.
+		if output, err := attemptGit(repository, "worktree", "remove", "--force", path); err != nil {
+			if _, statErr := os.Stat(path); statErr == nil {
+				t.Errorf("cleanup could not remove worktree %s: %v: %s", path, err, output)
+			}
+		}
+	}
+	if output, err := attemptGit(repository, "worktree", "prune"); err != nil {
+		t.Errorf("cleanup could not prune worktree registrations: %v: %s", err, output)
+	}
+	if remaining := linkedWorktreePaths(t, repository); len(remaining) > 0 {
+		t.Errorf("cleanup left worktree registrations behind: %v", remaining)
+	}
+}
+
+// linkedWorktreePaths names every worktree registered against repository apart
+// from the primary checkout, which is the repository itself.
+func linkedWorktreePaths(t *testing.T, repository string) []string {
+	t.Helper()
+	listing, err := attemptGit(repository, "worktree", "list", "--porcelain")
+	if err != nil {
+		t.Errorf("cleanup could not list worktrees: %v: %s", err, listing)
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(listing, "\n") {
+		path, found := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
+		if !found || samePath(path, repository) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
 func runGit(t *testing.T, repository string, args ...string) {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
-	output, err := command.CombinedOutput()
-	if err != nil {
+	if output, err := attemptGit(repository, args...); err != nil {
 		t.Fatalf("git %v error = %v: %s", args, err, output)
 	}
+}
+
+// attemptGit runs a Git command whose failure is the caller's to interpret,
+// rather than a test failure at the point of the call.
+func attemptGit(repository string, args ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
+	output, err := command.CombinedOutput()
+	return string(output), err
 }
 
 func gitOutput(t *testing.T, repository string, args ...string) string {

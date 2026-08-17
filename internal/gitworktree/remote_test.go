@@ -397,6 +397,7 @@ func pushUnrelatedCommit(t *testing.T, remote, branch string) string {
 	runGit(t, root, "clone", remote, clone)
 	runGit(t, clone, "config", "user.name", "Someone Else")
 	runGit(t, clone, "config", "user.email", "someone@example.invalid")
+	disableBackgroundMaintenance(t, clone)
 	writeFile(t, clone, "elsewhere.txt", "someone else's work\n")
 	runGit(t, clone, "add", ".")
 	runGit(t, clone, "commit", "-m", "someone else's work")
@@ -487,6 +488,7 @@ func newPublishedRepository(t *testing.T) (string, string) {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	runGit(t, remote, "init", "--bare", "-b", "main")
+	disableBackgroundMaintenance(t, remote)
 	runGit(t, repository, "remote", "add", "origin", remote)
 	runGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
 	return repository, remote
