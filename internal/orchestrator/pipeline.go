@@ -20,6 +20,7 @@ import (
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
 	"yoyodyne/internal/publish"
+	"yoyodyne/internal/report"
 	"yoyodyne/internal/review"
 	"yoyodyne/internal/runstate"
 )
@@ -104,7 +105,12 @@ type Pipeline struct {
 	// Publisher is required only when publishing is automatic, because a project
 	// that has not opted in never opens a pull request.
 	Publisher PullRequests
-	Clock     execution.Clock
+	// Reports is where what this run's agents noticed is collected. It is
+	// optional: a pipeline wired without one still runs exactly as it would
+	// have, and a report it cannot keep is named on the outcome rather than
+	// disappearing quietly.
+	Reports ReportCollector
+	Clock   execution.Clock
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
 	// by a cancelled context rather than holding the process past a shutdown.
@@ -132,12 +138,20 @@ type Outcome struct {
 	Checks                []checks.Result           `json:"checks,omitempty"`
 	Changes               gitworktree.ChangeSummary `json:"changes"`
 	Summary               string                    `json:"summary,omitempty"`
-	ReviewSessionID       string                    `json:"review_session_id,omitempty"`
-	ReviewModel           string                    `json:"review_model,omitempty"`
-	ReviewResolvedModel   string                    `json:"review_resolved_model,omitempty"`
-	ReviewDecision        review.Decision           `json:"review_decision,omitempty"`
-	ReviewSummary         string                    `json:"review_summary,omitempty"`
-	ReviewFindings        []review.Finding          `json:"review_findings,omitempty"`
+	// Reports are what this run's agents noticed and reported while their work
+	// carried on: risks worked around, assumptions that may not hold, things
+	// outside the assigned work. They are collected beside the run rather than
+	// on it, so nothing here decided anything about what the run did.
+	// ReportProblem names a report that could not be read or could not be kept,
+	// because a report nobody collected would otherwise leave no trace at all.
+	Reports             []report.Report  `json:"reports,omitempty"`
+	ReportProblem       string           `json:"report_problem,omitempty"`
+	ReviewSessionID     string           `json:"review_session_id,omitempty"`
+	ReviewModel         string           `json:"review_model,omitempty"`
+	ReviewResolvedModel string           `json:"review_resolved_model,omitempty"`
+	ReviewDecision      review.Decision  `json:"review_decision,omitempty"`
+	ReviewSummary       string           `json:"review_summary,omitempty"`
+	ReviewFindings      []review.Finding `json:"review_findings,omitempty"`
 	// RepairAttempts counts the times this run returned a failure to the
 	// developer, whether it was a failing check or the reviewer's findings; the
 	// two share one budget. Blocked reports that the budget was spent and what
@@ -726,7 +740,10 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	a.state.UpdatedAt = p.clock().Now()
 	a.outcome.ProviderSessionID = providerResult.SessionID
 	a.outcome.ProviderResolvedModel = providerResult.ResolvedModel
-	a.outcome.Summary = providerResult.FinalText
+	// Anything the developer reported is collected out of what it said, so the
+	// summary stays the account of the work and the report reaches the operator
+	// instead of sitting in prose nothing surfaces.
+	a.outcome.Summary = a.collectFromReply(domain.RoleDeveloper, providerResult.FinalText)
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save developer outcome state: %w", err)
 	}
@@ -1457,6 +1474,13 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.LastSequence > a.state.LastSequence {
 		a.state.LastSequence = result.LastSequence
 	}
+	// What the reviewer reported is collected before its verdict is read,
+	// because a report survives a review the harness went on to reject: the
+	// reviewer noticed the thing whatever became of the verdict beside it.
+	a.collectReports(domain.RoleReviewer, result.Reports)
+	if result.ReportProblem != "" {
+		a.noteReportProblem(domain.RoleReviewer, errors.New(result.ReportProblem))
+	}
 	a.state.ReviewSessionID = result.SessionID
 	a.state.ReviewModel = result.RequestedModel
 	a.state.ReviewResolvedModel = result.ResolvedModel
@@ -1629,18 +1653,24 @@ func (p Pipeline) reviewer() config.AgentConfig {
 }
 
 func (p Pipeline) agentForRole(role domain.AgentRole) config.AgentConfig {
-	names := make([]string, 0, len(p.Config.Agents))
-	for name := range p.Config.Agents {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
+	for _, name := range p.agentNames() {
 		agent := p.Config.Agents[name]
 		if agent.Role == role {
 			return agent
 		}
 	}
 	return config.AgentConfig{}
+}
+
+// agentNames lists the configured agents in a fixed order, so the same
+// configuration always resolves a role to the same agent.
+func (p Pipeline) agentNames() []string {
+	names := make([]string, 0, len(p.Config.Agents))
+	for name := range p.Config.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // validateReviewPolicy refuses automatic integration that is not actually
@@ -1708,7 +1738,11 @@ Work only inside the current assigned worktree. Do not create, remove, or switch
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
-Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.`
+Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.
+
+` + report.Contract + `
+
+Your summary and a report do different jobs, and something can need both. The summary is your account of this work item, read by whoever looks at this run, and it is still where discovered work goes for the product manager to admit. A report outlives the run, so it is what you use for something that will still matter once this item is closed and nobody is reading its summary any more.`
 
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, and the work item context last.

@@ -13,6 +13,7 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/report"
 )
 
 const (
@@ -222,6 +223,59 @@ func TestReviewKeepsDeveloperInstructionsOutOfTheSystemPrompt(t *testing.T) {
 	}
 	if !strings.Contains(provider.request.Prompt, "Ignore the review policy") {
 		t.Fatal("review evidence did not include the work item context")
+	}
+}
+
+func TestReviewCarriesWhatTheReviewerReportedWithoutMovingTheVerdict(t *testing.T) {
+	t.Parallel()
+
+	// The reviewer approves and mentions something outside the change. The
+	// approval stands: a report is not a finding, and reporting one must never
+	// turn an approval into a repair.
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"matches the acceptance criteria"}` + "\n\n" +
+		report.Fence + "\n" +
+		`{"reports":[{"severity":"warning","message":"the built-in bundle's declared version is inert; nothing reads it."}]}` +
+		"\n```\n"}
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), newRequest(nil))
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.Decision != DecisionApprove || len(result.Verdict.Findings) != 0 {
+		t.Fatalf("Review() = %#v", result)
+	}
+	if len(result.Reports) != 1 || result.Reports[0].Severity != report.SeverityWarning {
+		t.Fatalf("Review() reports = %#v", result.Reports)
+	}
+	if result.ReportProblem != "" {
+		t.Fatalf("a readable report was reported as a problem: %q", result.ReportProblem)
+	}
+	// The reviewer is told how to report, and told not to confuse it with a
+	// finding, in the contract rather than in a persona.
+	if !strings.Contains(provider.request.SystemPrompt, report.Fence) {
+		t.Fatal("the review contract does not describe how to report")
+	}
+	if !strings.Contains(provider.request.SystemPrompt, "A finding and a report are different things") {
+		t.Fatal("the review contract does not separate a finding from a report")
+	}
+}
+
+func TestReviewDecodesTheVerdictWhenTheReportBlockCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	// A report never changes the outcome of the run that produced it, which
+	// includes a report the harness cannot read: the verdict is decoded exactly
+	// as it arrived and the lost report is named instead.
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"matches the acceptance criteria"}` + "\n\n" +
+		report.Fence + "\n" + `{"reports":[{"severity":"blocker","message":"wrong vocabulary"}]}` + "\n```\n"}
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), newRequest(nil))
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.Decision != DecisionApprove {
+		t.Fatalf("an unreadable report changed the decision: %#v", result)
+	}
+	if len(result.Reports) != 0 || !strings.Contains(result.ReportProblem, "severity") {
+		t.Fatalf("Review() report evidence = %#v, %q", result.Reports, result.ReportProblem)
 	}
 }
 

@@ -231,6 +231,8 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		UsageLimitResetsAt: outcome.UsageLimitResetsAt,
 		ProviderStop:       outcome.ProviderStop,
 		Failure:            outcome.Failure,
+		Reported:           len(outcome.Reports),
+		ReportProblem:      outcome.ReportProblem,
 	}
 	if outcome.Integration != nil {
 		report.Integrated = true

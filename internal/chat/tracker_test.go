@@ -198,27 +198,27 @@ func TestSplitReplySeparatesActingFromProposing(t *testing.T) {
 		trackerFence + "\n{\"actions\":[{\"action\":\"close\",\"id\":\"yoyodyne-2\",\"reason\":\"yoyodyne-1 already covers it\"}]}\n```\n\n" +
 		proposalFence + "\n{\"items\":[{\"title\":\"Rewrite the CLI\",\"description\":\"Port everything.\",\"rationale\":\"You raised it.\"}]}\n```\n"
 
-	prose, actions, proposals, err := splitReply(answer)
+	parsed, err := splitReply(answer)
 	if err != nil {
 		t.Fatalf("splitReply() error = %v", err)
 	}
-	if len(actions) != 1 || actions[0].Action != actionClose || len(proposals) != 1 {
-		t.Fatalf("splitReply() = %#v, %#v", actions, proposals)
+	if len(parsed.Actions) != 1 || parsed.Actions[0].Action != actionClose || len(parsed.Proposals) != 1 {
+		t.Fatalf("splitReply() = %#v, %#v", parsed.Actions, parsed.Proposals)
 	}
-	if strings.Contains(prose, "yoyodyne-tracker") || strings.Contains(prose, "yoyodyne-proposal") {
-		t.Fatalf("prose kept a block: %q", prose)
+	if strings.Contains(parsed.Prose, "yoyodyne-tracker") || strings.Contains(parsed.Prose, "yoyodyne-proposal") {
+		t.Fatalf("prose kept a block: %q", parsed.Prose)
 	}
 
 	// A block the harness cannot read leaves the answer whole and reports a typed
 	// failure, so the caller can say what was lost and nothing is run from it.
 	broken := "Closing it.\n\n" + trackerFence + "\n{\"actions\":[{\"action\":\"close\"}]}\n```\n"
-	prose, actions, proposals, err = splitReply(broken)
+	parsed, err = splitReply(broken)
 	var unreadable *TrackerError
 	if !errors.As(err, &unreadable) {
 		t.Fatalf("splitReply() error = %v, want a TrackerError", err)
 	}
-	if prose != broken || len(actions) != 0 || len(proposals) != 0 {
-		t.Fatalf("a refused block yielded %q, %#v, %#v", prose, actions, proposals)
+	if parsed.Prose != strings.TrimSpace(broken) || len(parsed.Actions) != 0 || len(parsed.Proposals) != 0 {
+		t.Fatalf("a refused block yielded %q, %#v, %#v", parsed.Prose, parsed.Actions, parsed.Proposals)
 	}
 }
 

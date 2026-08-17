@@ -34,6 +34,14 @@ const (
 	EventTrackerActionRequested EventType = "tracker.action.requested"
 	EventTrackerActionApplied   EventType = "tracker.action.applied"
 	EventTrackerActionFailed    EventType = "tracker.action.failed"
+	// What an agent reports while its work continues is recorded in that
+	// invocation's own log as well as in the collected pile: the run or
+	// conversation says a report was made, and the pile says what it was. A
+	// block the harness could not read is recorded too, because the work it
+	// accompanied is unaffected by it and the report would otherwise leave no
+	// trace at all.
+	EventReportRecorded   EventType = "report.recorded"
+	EventReportUnreadable EventType = "report.unreadable"
 	// Work a conversation steers is recorded in that conversation's own log, so
 	// what the operator asked the harness to do is evidence beside what was said
 	// to arrive at it. The run these describe keeps its own separate log.

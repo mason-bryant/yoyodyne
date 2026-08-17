@@ -59,11 +59,16 @@ type components struct {
 	config     config.Config
 	repository string
 	// stateRoot is where everything durable that is not the repository lives.
-	// It is kept here so a command that needs a second store built on it — the
-	// conversation record beside the run state — addresses the same root.
-	stateRoot    string
-	runner       execution.OSProcessRunner
-	store        *runstate.Store
+	// It is kept here so a command that needs another store built on it — the
+	// conversation record and the collected reports beside the run state —
+	// addresses the same root.
+	stateRoot string
+	runner    execution.OSProcessRunner
+	store     *runstate.Store
+	// reports is the collected pile of what agents noticed while their work
+	// carried on. It is built beside the run store because it is durable in the
+	// same way and outlives the runs that fill it.
+	reports      *runstate.ReportStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -102,6 +107,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	reports, err := runstate.NewReportStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -118,6 +127,7 @@ func buildComponents(configPath string) (components, error) {
 		stateRoot:    stateRoot,
 		runner:       processRunner,
 		store:        store,
+		reports:      reports,
 		worktrees:    worktrees,
 		redactValues: execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
@@ -176,6 +186,12 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			Remote:       cfg.Execution.Remote,
 			RedactValues: redactValues,
 		},
+		// What the developer and the reviewer report while their work carries on
+		// is collected here. It is wired as its own store rather than through the
+		// run state, because a report outlives the run that made it: the run is
+		// settled and its artifacts are removed, and what it reported is still
+		// waiting for somebody to read.
+		Reports:      parts.reports,
 		NewRunID:     runstate.NewRunID,
 		Repository:   parts.repository,
 		Config:       cfg,
@@ -220,17 +236,27 @@ func agentModel(cfg config.Config, role domain.AgentRole) string {
 // agentForRole returns the effective agent that fills a role, chosen by name so
 // the same configuration always wires the same agent.
 func agentForRole(cfg config.Config, role domain.AgentRole) config.AgentConfig {
+	if name := agentNameForRole(cfg, role); name != "" {
+		return cfg.Agents[name]
+	}
+	return config.AgentConfig{}
+}
+
+// agentNameForRole names that agent, which is what a record attributed to it
+// says: a project may configure more than one agent for a role, and the role
+// alone would not say which of them acted.
+func agentNameForRole(cfg config.Config, role domain.AgentRole) string {
 	names := make([]string, 0, len(cfg.Agents))
 	for name := range cfg.Agents {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		if agent := cfg.Agents[name]; agent.Role == role {
-			return agent
+		if cfg.Agents[name].Role == role {
+			return name
 		}
 	}
-	return config.AgentConfig{}
+	return ""
 }
 
 func resolvePath(base, path string) (string, error) {
@@ -377,10 +403,28 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 			fmt.Fprintf(stdout, "diff stat:\n%s\n", outcome.Changes.DiffStat)
 		}
 	}
+	if !jsonOutput {
+		// What the run's agents reported is collected whichever way the run went,
+		// so it is named whichever way this reports.
+		reportCollectedReports(stdout, outcome)
+	}
 	if err != nil {
 		return 1
 	}
 	return 0
+}
+
+// reportCollectedReports names what this run's agents reported without it
+// stopping their work. The reports themselves are read from the conversation,
+// which is where the operator already is; what this owes them is to say there
+// is something new to read.
+func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
+	if len(outcome.Reports) > 0 {
+		fmt.Fprintf(writer, "reported %d thing(s) without stopping the run; `yoyo chat` shows them with /reports\n", len(outcome.Reports))
+	}
+	if outcome.ReportProblem != "" {
+		fmt.Fprintln(writer, outcome.ReportProblem)
+	}
 }
 
 // reportPullRequest names the published work. A run that asked to publish and

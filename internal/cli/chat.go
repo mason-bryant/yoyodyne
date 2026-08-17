@@ -17,6 +17,7 @@ import (
 	"yoyodyne/internal/contextbundle"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
+	"yoyodyne/internal/report"
 	"yoyodyne/internal/runstate"
 )
 
@@ -47,8 +48,14 @@ type chatOutput struct {
 	// not seen. They are recorded with the conversation and reach it when the
 	// conversation is next spoken to, which for a one-shot message is a later
 	// invocation.
-	ResultsCarriedOver bool   `json:"results_carried_over,omitempty"`
-	Error              string `json:"error,omitempty"`
+	ResultsCarriedOver bool `json:"results_carried_over,omitempty"`
+	// Reports are what the product manager filed for the operator while it
+	// answered, and ReportProblem is one that could not be read or kept. Both
+	// are reported here for the same reason the actions are: they already
+	// happened, and a report nobody is shown is one nobody reads.
+	Reports       []report.Report `json:"reports,omitempty"`
+	ReportProblem string          `json:"report_problem,omitempty"`
+	Error         string          `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -92,10 +99,13 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 				Proposals:          reply.Proposals,
 				Actions:            reply.Actions,
 				ResultsCarriedOver: reply.ResultsCarriedOver,
+				Reports:            reply.Reports,
+				ReportProblem:      reply.ReportProblem,
 			})
 		}
 		fmt.Fprintln(stdout, reply.Text)
 		printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
+		printChatReports(stdout, reply.Reports, reply.ReportProblem)
 		printChatProposals(stdout, reply.Proposals)
 		printChatEvidence(stdout, reply.Evidence)
 		return 0
@@ -186,10 +196,14 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		// The tracker and the harness behind the operator's commands are the
 		// harness's own hands, not the product manager's: they are used only
 		// where an operator approved a proposal or asked for something.
-		Tracker:      chatTracker(processRunner, repository),
-		Work:         newConversationWork(parts),
+		Tracker: chatTracker(processRunner, repository),
+		Work:    newConversationWork(parts),
+		// The collected reports are the same pile the runs fill, read and written
+		// from here because this conversation is where the operator already is.
+		Reports:      parts.reports,
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
+		Agent:        agentNameForRole(cfg, domain.RoleProductManager),
 		Provider:     domain.BackendClaudeCode,
 		Repository:   repository,
 		ProductID:    cfg.Product.ID,
@@ -256,8 +270,12 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 		output.Proposals = reply.Proposals
 		// A turn that failed may still have changed the tracker before it did, so
 		// what it changed is reported with the failure rather than lost behind it.
+		// The same is true of anything it reported: the report is already
+		// collected, and it never had anything to do with the failure.
 		output.Actions = reply.Actions
 		output.ResultsCarriedOver = reply.ResultsCarriedOver
+		output.Reports = reply.Reports
+		output.ReportProblem = reply.ReportProblem
 	}
 	if jsonOutput {
 		if code := writeJSON(stdout, stderr, output); code != 0 {
@@ -269,6 +287,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 		fmt.Fprintln(stdout, output.Reply)
 	}
 	printChatActions(stdout, output.Actions, output.ResultsCarriedOver)
+	printChatReports(stdout, output.Reports, output.ReportProblem)
 	printChatProposals(stdout, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
@@ -289,6 +308,8 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 	fmt.Fprintln(writer, "is reported to you here. It has no files, commands, or network, and it proposes")
 	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
 	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it.")
+	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
+	fmt.Fprintln(writer, "shows you what has been collected.")
 	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect.")
 	fmt.Fprintln(writer, "/help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
@@ -312,6 +333,25 @@ func printChatActions(writer io.Writer, actions []chat.TrackerOutcome, resultsCa
 	if resultsCarriedOver {
 		fmt.Fprintln(writer, "It ran out of rounds of actions; what the last ones returned is recorded with")
 		fmt.Fprintln(writer, "the conversation and reaches it the next time you say something to it.")
+	}
+}
+
+// printChatReports names what the product manager reported for the operator
+// while it answered. It is printed for a one-shot message as well as a
+// conversation: the report is already collected, and one that is only in the
+// pile is one nobody has been told about yet.
+func printChatReports(writer io.Writer, reports []report.Report, problem string) {
+	if len(reports) == 0 && problem == "" {
+		return
+	}
+	if len(reports) > 0 {
+		fmt.Fprintf(writer, "\nThe product manager reported %d thing(s) for you:\n", len(reports))
+		for _, reported := range reports {
+			fmt.Fprint(writer, reported.Render())
+		}
+	}
+	if problem != "" {
+		fmt.Fprintf(writer, "\na report was not collected: %s\n", problem)
 	}
 }
 
