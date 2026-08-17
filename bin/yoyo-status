@@ -1,19 +1,23 @@
 #!/usr/bin/env bash
 #
-# yoyo-status - follow the event stream of a Yoyodyne run.
+# yoyo-status - follow the event stream of a Yoyodyne run or conversation.
 #
-# With no arguments it follows the most recent run. The state directory is
-# resolved the same way the harness resolves it, so this keeps working when
-# YOYODYNE_STATE_HOME or XDG_STATE_HOME is set, and on Linux and Windows
-# checkouts as well as macOS.
+# A conversation is recorded beside runs rather than among them, but it is the
+# same question being asked of both - is this alive, and what is it doing - so
+# every mode here covers both and the default never asks which kind you meant.
+# The state directory is resolved the same way the harness resolves it, so this
+# keeps working when YOYODYNE_STATE_HOME or XDG_STATE_HOME is set, and on Linux
+# and Windows checkouts as well as macOS.
 #
-#   yoyo-status                  follow the newest run
-#   yoyo-status -L               follow the newest run, and switch when a new one starts
-#   yoyo-status 40b68275         follow a run by id or unique id prefix
-#   yoyo-status -l               list recent runs and exit
-#   yoyo-status -c               report token spend and cost per run, and in total
-#   yoyo-status -c 40b68275      report spend for one run
+#   yoyo-status                  follow the newest run or conversation
+#   yoyo-status -L               follow the newest, and switch when a later one starts
+#   yoyo-status 40b68275         follow one by id or unique id prefix
+#   yoyo-status -l               list recent runs and conversations and exit
+#   yoyo-status -c               report token spend and cost for each, and in total
+#   yoyo-status -c 40b68275      report spend for one run or conversation
 #   yoyo-status -n 200           replay the last 200 events before following
+#   yoyo-status --runs           runs only
+#   yoyo-status --chats          conversations only
 #   yoyo-status --all            include thinking-token noise
 #   yoyo-status --raw            emit raw JSONL, no jq shaping
 #   yoyo-status --no-follow      print and exit instead of following
@@ -33,6 +37,8 @@ list_only=0
 cost_only=0
 raw=0
 include_all=0
+want_runs=1
+want_chats=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -41,6 +47,8 @@ while [ $# -gt 0 ]; do
     -c|--cost) cost_only=1; shift ;;
     -L|--follow-latest) follow_latest=1; shift ;;
     -n|--lines) lines="${2:?-n needs a value}"; shift 2 ;;
+    --runs) want_chats=0; shift ;;
+    --chats|--conversations) want_runs=0; shift ;;
     --raw) raw=1; shift ;;
     --all) include_all=1; shift ;;
     --no-follow) follow=0; shift ;;
@@ -85,13 +93,93 @@ if [ -z "$product" ] || [ ! -d "$products/$product" ]; then
 fi
 
 runs="$products/$product/runs"
-[ -d "$runs" ] || { echo "no runs directory at $runs" >&2; exit 1; }
+conversations="$products/$product/conversations"
 
-newest() { ls -t "$runs"/*.events.jsonl 2>/dev/null | head -1; }
+# A product that has only ever chatted has no runs directory, and one that has
+# only ever run has no conversations directory. Either on its own is enough to
+# work with, so only having neither of the selected kinds is a refusal.
+have_kind() {
+  case "$1" in
+    runs) [ "$want_runs" = "1" ] && [ -d "$runs" ] ;;
+    chats) [ "$want_chats" = "1" ] && [ -d "$conversations" ] ;;
+  esac
+}
+if ! have_kind runs && ! have_kind chats; then
+  echo "no runs or conversations under $products/$product" >&2
+  exit 1
+fi
+
+# Every event log of the selected kinds, newest first, optionally narrowed to
+# the ones whose id contains a pattern. The globs are passed as separate
+# arguments so a state directory whose path contains spaces survives, and an
+# unmatched glob simply contributes nothing.
+event_logs() {
+  local pattern="${1:-}" order="${2:--t}"
+  set --
+  if have_kind runs; then set -- "$@" "$runs"/*"$pattern"*.events.jsonl; fi
+  if have_kind chats; then set -- "$@" "$conversations"/*"$pattern"*.events.jsonl; fi
+  [ $# -gt 0 ] || return 0
+  ls "$order" "$@" 2>/dev/null || true
+}
+
+newest() { event_logs | head -1; }
+
+# Runs and conversations are told apart by their id, which is the same thing
+# their state records are named for.
+kind_of() {
+  case "$(basename "$1")" in
+    chat-*) echo conversation ;;
+    *) echo run ;;
+  esac
+}
+
+# A conversation has no state file of its own. The role's record names the
+# conversation that role is in now, so every other log in the directory belonged
+# to one that has since been replaced. Loaded once: a listing asks for this on
+# every row.
+current_conversation_ids=""
+current_conversation_ids_loaded=0
+load_current_conversation_ids() {
+  if [ "$current_conversation_ids_loaded" = "1" ]; then return 0; fi
+  current_conversation_ids_loaded=1
+  if [ ! -d "$conversations" ]; then return 0; fi
+  local file id
+  for file in "$conversations"/*.json; do
+    [ -f "$file" ] || continue
+    # The record is pretty-printed one key per line and conversation_id appears
+    # once, unnested, so this needs no jq and a listing stays useful without it.
+    id="$(sed -n 's/^[[:space:]]*"conversation_id":[[:space:]]*"\([^"]*\)".*/\1/p' "$file" | head -1)"
+    if [ -n "$id" ]; then current_conversation_ids="$current_conversation_ids $id"; fi
+  done
+  return 0
+}
+
+# What a conversation is doing, which is what "is this alive" is asking: an
+# agent is answering it, it is between turns and waiting for you, or it has been
+# replaced and nothing will happen in it again.
+conversation_status() {
+  local id turn
+  id="$(basename "$1" .events.jsonl)"
+  load_current_conversation_ids
+  case " $current_conversation_ids " in
+    *" $id "*) ;;
+    *) echo "ended"; return ;;
+  esac
+  # Each turn is a provider invocation and is bracketed by the same two events a
+  # run's are, so a conversation whose last one is a start is still being
+  # answered. A quote inside a payload is escaped, so no payload text can match
+  # this and it needs no jq either.
+  turn="$(grep -oE '"type":"run\.(started|completed)"' "$1" 2>/dev/null | tail -1 || true)"
+  case "$turn" in
+    *started*) echo "answering" ;;
+    *) echo "waiting" ;;
+  esac
+}
 
 # The state file is pretty-printed and has nested "status" keys, so match the
 # top-level one by its indent rather than the first occurrence anywhere.
 status_of() {
+  if [ "$(kind_of "$1")" = "conversation" ]; then conversation_status "$1"; return; fi
   local state="${1%.events.jsonl}.json"
   [ -f "$state" ] || { echo "?"; return; }
   if command -v jq >/dev/null 2>&1; then
@@ -101,23 +189,31 @@ status_of() {
   fi
 }
 
-# Run start, in local time, to the minute. The stored timestamp is UTC with
-# fractional seconds, which fromdateiso8601 will not parse, so drop them first.
+# When it started, in local time, to the minute. A run records that in its state
+# file; a conversation's is the timestamp of its first event, which is the same
+# moment and needs no state file to find.
 started_of() {
-  local state="${1%.events.jsonl}.json"
-  [ -f "$state" ] || { echo "-"; return; }
-  if command -v jq >/dev/null 2>&1; then
-    jq -r '(.started_at // empty)
-           | sub("\\.[0-9]+";"")
-           | fromdateiso8601
-           | strflocaltime("%m %d %Y %H:%M")' "$state" 2>/dev/null || echo "-"
+  command -v jq >/dev/null 2>&1 || { echo "-"; return; }
+  local stamp="" state
+  if [ "$(kind_of "$1")" = "conversation" ]; then
+    stamp="$(head -1 "$1" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null || true)"
   else
-    echo "-"
+    state="${1%.events.jsonl}.json"
+    if [ -f "$state" ]; then
+      stamp="$(jq -r '.started_at // empty' "$state" 2>/dev/null || true)"
+    fi
   fi
+  [ -n "$stamp" ] || { echo "-"; return; }
+  # The stored timestamp is UTC with fractional seconds, which fromdateiso8601
+  # will not parse, so drop them first.
+  jq -rn --arg stamp "$stamp" '$stamp
+         | sub("\\.[0-9]+";"")
+         | fromdateiso8601
+         | strflocaltime("%m %d %Y %H:%M")' 2>/dev/null || echo "-"
 }
 
 if [ "$list_only" = "1" ]; then
-  ls -t "$runs"/*.events.jsonl 2>/dev/null | head -20 | while read -r f; do
+  event_logs | head -20 | while read -r f; do
     b="$(basename "$f" .events.jsonl)"
     printf '%-40s %-10s %s events\n' "$b" "$(status_of "$f")" "$(wc -l < "$f" | tr -d ' ')"
   done
@@ -125,23 +221,24 @@ if [ "$list_only" = "1" ]; then
 fi
 
 # Every provider invocation ends in a run.completed event carrying that
-# invocation's usage and cost, so a run's spend is the sum over its agents:
-# a developer, plus a reviewer once automatic integration is enabled, plus one
-# more per repair attempt. Cost is what the provider reported, not an estimate.
+# invocation's usage and cost. For a run that is the sum over its agents: a
+# developer, plus a reviewer once automatic integration is enabled, plus one
+# more per repair attempt. For a conversation it is the sum over its turns,
+# which are provider invocations like any other and are recorded the same way,
+# so leaving them out understated every total they belonged in. Cost is what the
+# provider reported, not an estimate.
 cost_report() {
   command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
-  local pattern="${1:-}" files
-  if [ -n "$pattern" ]; then
-    files=$(ls -tr "$runs"/*"$pattern"*.events.jsonl 2>/dev/null || true)
-  else
-    files=$(ls -tr "$runs"/*.events.jsonl 2>/dev/null || true)
-  fi
-  [ -n "$files" ] || { echo "no runs found" >&2; exit 1; }
+  local files
+  files=$(event_logs "${1:-}" -tr)
+  [ -n "$files" ] || { echo "no runs or conversations found" >&2; exit 1; }
 
   # Aggregate per run at full precision first. Totalling the displayed values
   # instead would accumulate the rounding error from each row.
+  # An explicit template, because macOS mktemp ignores TMPDIR without one and
+  # falls back to a per-user directory a restricted environment can deny.
   local tmp
-  tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  tmp="$(mktemp "${TMPDIR:-/tmp}/yoyo-status.XXXXXX")"; trap 'rm -f "$tmp"' RETURN
   printf '%s\n' "$files" | while read -r f; do
     [ -n "$f" ] || continue
     jq -r 'select(.type=="run.completed")
@@ -151,22 +248,28 @@ cost_report() {
                (.payload.usage.cache_creation_input_tokens // 0),
                (.payload.usage.cache_read_input_tokens // 0) ]
            | @tsv' "$f" 2>/dev/null \
-    | awk -v run="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" -v ts="$(started_of "$f")" '
+    | awk -v id="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" -v ts="$(started_of "$f")" '
         { n++; cost+=$1; in_+=$2; out+=$3; cw+=$4; cr+=$5 }
         END { if (n>0) printf "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
-                            run, ts, n, in_, out, cw, cr, cost, st }'
+                            id, ts, n, in_, out, cw, cr, cost, st }'
   done > "$tmp"
 
-  printf '%-38s %-17s %6s %8s %9s %10s %11s %9s  %s\n' run started agents in out cache_w cache_r USD status
+  printf '%-38s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
   awk -F'\t' '{ printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9 }' "$tmp"
   awk -F'\t' '
-    { n+=$3; in_+=$4; out+=$5; cw+=$6; cr+=$7; cost+=$8 }
+    { n+=$3; in_+=$4; out+=$5; cw+=$6; cr+=$7; cost+=$8;
+      if ($1 ~ /^chat-/) { chats+=$3; chat_cost+=$8 } else { plain+=$3; run_cost+=$8 } }
     END {
       if (n==0) { print "no completed provider invocations yet"; exit }
       print  "----------------------------------------------------------------------------------------------------------------";
       printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", "", n, in_, out, cw, cr, cost;
       t=in_+out+cw+cr;
       printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
+      # Split the total only when it is actually mixed, so the one number is
+      # never left ambiguous about which kinds of work went into it.
+      if (chats>0 && plain>0)
+        printf "runs: $%.2f from %d invocation(s)   conversations: $%.2f from %d turn(s)\n",
+               run_cost, plain, chat_cost, chats
     }' "$tmp"
 }
 
@@ -176,13 +279,14 @@ if [ "$cost_only" = "1" ]; then
 fi
 
 if [ -n "$run_arg" ]; then
-  target="$(ls "$runs"/*"$run_arg"*.events.jsonl 2>/dev/null | head -1 || true)"
-  [ -n "$target" ] || { echo "no run matching '$run_arg' in $runs" >&2; exit 1; }
+  # Newest first, so an ambiguous prefix lands on the one most likely meant.
+  target="$(event_logs "$run_arg" | head -1)"
+  [ -n "$target" ] || { echo "no run or conversation matching '$run_arg' under $products/$product" >&2; exit 1; }
 else
   target="$(newest)"
   # Nothing yet is normal when a run is about to start, so wait rather than fail.
   while [ -z "$target" ]; do
-    echo "waiting for a run to start in $runs ..." >&2
+    echo "waiting for a run or conversation to start under $products/$product ..." >&2
     sleep 2
     target="$(newest)"
   done
@@ -212,8 +316,9 @@ if [ "$follow_latest" = "0" ]; then
   exit 0
 fi
 
-# Follow the newest run, moving on when a later one appears. Each tail is
-# killed only after a successor exists, so no events are dropped in between.
+# Follow the newest run or conversation, moving on when a later one appears.
+# Each tail is killed only after a successor exists, so no events are dropped in
+# between.
 while :; do
   tail -n "$lines" -F "$target" | shape &
   tail_pid=$!

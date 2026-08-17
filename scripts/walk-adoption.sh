@@ -228,10 +228,12 @@ origins="$("$yoyo" config show --origins 2>&1)"
 contains "$origins" "$project/.yoyodyne/config.yaml" "config show --origins names the project file"
 missing "$origins" "builtin:v1" "nothing is inherited from the built-in bundle"
 
-step "10. following a run's event stream"
+step "10. following a run or a conversation"
 # yoyo-status resolves the state directory the same way the harness does, which
 # is what makes the temporary state root above enough to keep this off an
-# operator's real runs. Both spellings are exercised.
+# operator's real runs. Both spellings are exercised. What it reports about
+# runs and conversations is checked by scripts/yoyo-status-test.sh, which needs
+# no provider and no repository to build both.
 # Both are pointed at roots that hold nothing, so what is being checked is which
 # directory the tool resolved rather than what happens to be in this walk's own.
 status_listing="$(YOYODYNE_STATE_HOME="$scratch/named" \
@@ -271,9 +273,9 @@ if [ "${WALK_PROVIDER:-0}" = "1" ]; then
       (*"USD"*|*"TOTAL"*|*"no completed provider invocations"*)
         pass "yoyo-status -c reports spend when jq is installed" ;;
       (*"Operation not permitted"*|*"mkstemp failed"*)
-        # macOS mktemp with no template ignores TMPDIR and uses the per-user
-        # temporary directory, which a restricted environment can deny. That is
-        # the environment refusing the tool, not the tool being wrong.
+        # The report aggregates through a temporary file under TMPDIR, and a
+        # restricted environment can deny even that. That is the environment
+        # refusing the tool, not the tool being wrong.
         skip "yoyo-status -c: this environment denies the temporary file it needs" ;;
       (*)
         fail "yoyo-status -c produced no report -- got: $cost" ;;
