@@ -53,6 +53,9 @@ stops, not limits on what the product is for.
 - **Nothing lands unreviewed by someone other than its author.**
 - **The human's attention goes only where it is needed.** Intent, goals, and
   escalations reach the person; routine per-change approval does not.
+- **The operator can see what the system does on their behalf.** Work that runs
+  without being individually approved is visible while it runs and after it
+  lands, and what it costs is reported rather than discovered.
 - **It works on other people's projects.** Any language, any build system, any
   test framework — Yoyodyne runs what a project declares rather than
   understanding its toolchain, and general adoption is the aim rather than
