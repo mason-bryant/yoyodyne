@@ -175,6 +175,37 @@ func TestGatherReportsWhatItCouldNotRead(t *testing.T) {
 	}
 }
 
+// A log too large to read is a comparison that was not made. Stopping at the
+// bound would drop the newest entries — the only ones being counted — and
+// render as "nothing has moved in the tracker", which is the one answer this
+// must never give without having earned it.
+func TestATrackerLogLargerThanTheBoundIsReportedRatherThanTruncated(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	gathered := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	recent := interaction("yoyodyne-ifd.2", gathered.Add(time.Hour))
+	writeInteractions(t, repository,
+		interaction("yoyodyne-ifd.1", gathered.Add(-time.Hour)),
+		recent,
+	)
+
+	// Read to a bound the log fits inside, and the newest entry is counted.
+	changes, err := trackerChangesSince(repository, gathered, 1<<20)
+	if err != nil || changes != 1 {
+		t.Fatalf("trackerChangesSince() = %d, %v, want the one change after the picture", changes, err)
+	}
+	// Read to a bound it does not fit inside, and the count is refused rather
+	// than answered from the part that fitted.
+	changes, err = trackerChangesSince(repository, gathered, len(recent))
+	if err == nil || !strings.Contains(err.Error(), "larger than") {
+		t.Fatalf("trackerChangesSince() = %d, %v, want the bound reported", changes, err)
+	}
+	if changes != 0 {
+		t.Fatalf("trackerChangesSince() = %d, want no count beside the failure", changes)
+	}
+}
+
 // The counting is checked against a real repository as well as a scripted one,
 // because what is being claimed is about Git rather than about how the harness
 // spells a command: a picture taken two commits ago is two commits old.

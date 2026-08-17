@@ -111,7 +111,12 @@ var errNoGround = errors.New("no repository or tracker is wired to this conversa
 func (s *Session) Freshness(ctx context.Context) string {
 	picture := s.picture()
 	age := ageOf(s.options.clock().Now().Sub(picture.GatheredAt))
-	if !s.resumed {
+	if !s.briefed() {
+		// The product manager has been given nothing yet, so what the
+		// conversation holds is the picture its next turn will carry: it was
+		// taken moments ago, there is nothing for a comparison to be about, and
+		// spending a repository read to say so would be spending it to print a
+		// zero.
 		return fmt.Sprintf("context gathered %s, as this conversation opened.", age)
 	}
 	if s.options.Ground == nil {
@@ -119,6 +124,14 @@ func (s *Session) Freshness(ctx context.Context) string {
 	}
 	movement := s.options.Ground.Movement(ctx, picture)
 	return fmt.Sprintf("context gathered %s; %s.%s", age, movement.render(), movement.hint())
+}
+
+// briefed reports whether the product manager has actually been given a
+// picture. A conversation with turns behind it has been, whether or not the
+// harness recorded which picture: those turns are what makes its age worth
+// comparing rather than something it is about to be told.
+func (s *Session) briefed() bool {
+	return s.state.Turns > 0 || !s.state.ContextGatheredAt.IsZero()
 }
 
 // Refresh re-reads the repository and the tracker into the running
@@ -165,22 +178,34 @@ func (s *Session) Refresh(ctx context.Context) (Refreshed, error) {
 	return refreshed, nil
 }
 
-// picture is what the product manager is currently working from. A resumed
-// conversation reads it from the durable record, because the process that
-// briefed it is usually gone.
+// picture is what the product manager is working from — or, before it has been
+// given anything, what the next turn will hand it. The durable record is what
+// says so, and it is read whether or not this process is the one that resumed
+// the conversation: a picture a refresh delivered earlier in this very session
+// is just as much the one being held as a picture some other process delivered
+// yesterday. Measuring from anything else would re-count drift that has already
+// been reported and call the conversation older than it is, which is the exact
+// failure this is here to end.
 func (s *Session) picture() Briefing {
-	picture := s.options.Briefing
-	if s.resumed {
-		picture = Briefing{GatheredAt: s.state.ContextGatheredAt, Commit: s.state.ContextCommit}
-	}
-	if picture.GatheredAt.IsZero() {
+	switch {
+	case !s.state.ContextGatheredAt.IsZero():
+		return Briefing{GatheredAt: s.state.ContextGatheredAt, Commit: s.state.ContextCommit}
+	case s.state.Turns == 0 && s.refresh != nil:
+		// Nothing has been delivered, so what the conversation holds is what its
+		// first turn will carry, which a refresh has already replaced.
+		return s.refresh.briefing
+	case s.state.Turns == 0 && !s.options.Briefing.GatheredAt.IsZero():
+		// The same, for the picture this process gathered as it opened. Calling
+		// it stale because the conversation is old would report an age for
+		// something that has not been used yet.
+		return s.options.Briefing
+	default:
 		// A conversation recorded before the harness wrote this down was briefed
 		// as it opened. That is the closest thing to the truth available, and it
 		// is never later than the truth, so the picture is never reported as
 		// fresher than it is.
-		picture.GatheredAt = s.state.StartedAt
+		return Briefing{GatheredAt: s.state.StartedAt}
 	}
-	return picture
 }
 
 // Render describes a refresh for the operator. It says plainly that the refresh

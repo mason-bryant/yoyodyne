@@ -115,7 +115,7 @@ func (g conversationGround) Movement(ctx context.Context, since chat.Briefing) c
 	} else {
 		movement.Commits = commits
 	}
-	changes, err := trackerChangesSince(g.repository, since.GatheredAt)
+	changes, err := trackerChangesSince(g.repository, since.GatheredAt, maxInteractionsBytes)
 	if err != nil {
 		movement.TrackerProblem = err.Error()
 	} else {
@@ -186,7 +186,7 @@ func (g conversationGround) now() time.Time {
 // live state, so a change it has not written down yet is not counted: the count
 // is a floor on what has moved, which is the safe direction for a number an
 // operator uses to decide whether to refresh.
-func trackerChangesSince(repository string, since time.Time) (int, error) {
+func trackerChangesSince(repository string, since time.Time, limit int) (int, error) {
 	if since.IsZero() {
 		return 0, errors.New("when it was gathered was not recorded")
 	}
@@ -209,7 +209,13 @@ func trackerChangesSince(repository string, since time.Time) (int, error) {
 	defer file.Close()
 
 	changes := 0
-	scanner := bufio.NewScanner(io.LimitReader(file, maxInteractionsBytes))
+	// The log is read to a bound, and how much was actually read is what says
+	// whether the bound was reached. Stopping at it silently would drop the
+	// newest entries — the only ones this counts — and answer "nothing has
+	// moved" from a comparison that was truncated, which is the one answer this
+	// must never give without having earned it.
+	counted := &countingReader{reader: io.LimitReader(file, int64(limit)+1)}
+	scanner := bufio.NewScanner(counted)
 	scanner.Buffer(make([]byte, 64*1024), 1<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -232,7 +238,23 @@ func trackerChangesSince(repository string, since time.Time) (int, error) {
 	if err := scanner.Err(); err != nil {
 		return 0, fmt.Errorf("read the tracker's interactions log: %w", err)
 	}
+	if counted.read > limit {
+		return 0, fmt.Errorf("the tracker's interactions log is larger than the %d bytes this reads, so what it holds cannot be counted", limit)
+	}
 	return changes, nil
+}
+
+// countingReader reports how much was actually read, which is what tells a
+// bounded read apart from one that stopped at its bound.
+type countingReader struct {
+	reader io.Reader
+	read   int
+}
+
+func (c *countingReader) Read(buffer []byte) (int, error) {
+	read, err := c.reader.Read(buffer)
+	c.read += read
+	return read, err
 }
 
 // singleLine folds a command's own output into one line, so a Git failure stays

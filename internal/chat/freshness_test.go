@@ -10,6 +10,7 @@ import (
 	backendapi "yoyodyne/internal/backend"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
+	"yoyodyne/internal/runstate"
 )
 
 // gatheredAt is when the picture in these tests was taken: two hours before the
@@ -251,6 +252,105 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 	}
 	if strings.Contains(provider.requests[2].Prompt, "# Refreshed product context") {
 		t.Fatalf("the refreshed context was sent twice: %q", provider.requests[2].Prompt)
+	}
+}
+
+// A second refresh is measured against what the first one delivered, not
+// against the picture the conversation opened with. Measuring from the opening
+// picture would re-count everything the first refresh already reported and call
+// the conversation hours older than it is — a confidently wrong freshness
+// statement, in the operator's line and in the evidence the product manager is
+// handed, which is the failure this whole item exists to end.
+func TestASecondRefreshIsMeasuredAgainstWhatTheFirstDelivered(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-9", ResolvedModel: "claude-opus-5", FinalText: "Noted."},
+		{SessionID: "session-9", ResolvedModel: "claude-opus-5", FinalText: "Noted again."},
+	}}
+	delivered := Briefing{Text: "# Product context\n\nNewer.\n", GatheredAt: fixedClock{}.Now(), Commit: "b2b2b2b2"}
+	ground := &fakeGround{movement: Movement{Commits: 14, TrackerChanges: 3}, briefing: delivered}
+	options := testOptions(t, provider)
+	options.Briefing.GatheredAt = gatheredAt
+	options.Briefing.Commit = "a1a1a1a1"
+	options.Ground = ground
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "first"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if _, err := session.Refresh(context.Background()); err != nil {
+		t.Fatalf("Refresh() error = %v", err)
+	}
+	if _, err := session.Send(context.Background(), "second"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	// The refreshed picture has now reached the product manager, so it is what
+	// the next comparison is about. Nothing has moved since it was taken.
+	ground.movement = Movement{}
+	refreshed, err := session.Refresh(context.Background())
+	if err != nil {
+		t.Fatalf("second Refresh() error = %v", err)
+	}
+	compared := ground.compared[len(ground.compared)-1]
+	if !compared.GatheredAt.Equal(delivered.GatheredAt) || compared.Commit != delivered.Commit {
+		t.Fatalf("compared against %#v, want the picture the first refresh delivered", compared)
+	}
+	rendered := refreshed.Render()
+	if !strings.Contains(rendered, "gathered just now") || !strings.Contains(rendered, "nothing has moved") {
+		t.Fatalf("Refreshed.Render() = %q, want the age and delta of the picture actually held", rendered)
+	}
+	// And what the product manager is told says the same thing, because it is
+	// built from the same comparison.
+	provider.results = append(provider.results, backendapi.RunResult{SessionID: "session-9", ResolvedModel: "claude-opus-5", FinalText: "Still."})
+	if _, err := session.Send(context.Background(), "third"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	last := provider.requests[len(provider.requests)-1].Prompt
+	if !strings.Contains(last, "gathered just now, and nothing has moved") {
+		t.Fatalf("the turn after the second refresh = %q, want it told what actually moved", last)
+	}
+}
+
+// A conversation that was opened and left before anything was said to it has
+// been given no picture at all. Reporting the age of the record would tell the
+// operator to refresh a conversation whose very next turn briefs it with a
+// picture gathered moments ago.
+func TestAConversationThatWasNeverSpokenToIsNotReportedAsStale(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestStore(t, root)
+	opened := fixedClock{}.Now().Add(-5 * time.Hour)
+	if err := store.Save(runstate.Conversation{
+		SchemaVersion:  runstate.ConversationSchemaVersion,
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		ProductID:      "yoyodyne",
+		RepositoryID:   "yoyodyne",
+		Role:           domain.RoleProductManager,
+		Backend:        domain.BackendClaudeCode,
+		// A session with no turns behind it: recorded, resumable, and never
+		// actually briefed.
+		ProviderSessionID: "session-10",
+		StartedAt:         opened,
+		UpdatedAt:         opened,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	ground := &fakeGround{movement: Movement{Commits: 14}}
+	options := testOptions(t, &fakeBackend{})
+	options.Store = newTestStore(t, root)
+	options.Ground = ground
+	session := openTestSession(t, options)
+
+	freshness := session.Freshness(context.Background())
+	if !strings.Contains(freshness, "gathered just now") {
+		t.Fatalf("Freshness() = %q, want the picture the next turn carries", freshness)
+	}
+	if len(ground.compared) != 0 {
+		t.Fatalf("a conversation that holds nothing compared something: %#v", ground.compared)
 	}
 }
 
