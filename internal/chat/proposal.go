@@ -2,10 +2,12 @@ package chat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"yoyodyne/internal/beads"
@@ -28,6 +30,7 @@ const (
 
 const (
 	maxProposalTitleBytes = 200
+	maxProposalGoalBytes  = 200
 	maxProposalTextBytes  = 8 << 10
 )
 
@@ -46,6 +49,12 @@ type Proposal struct {
 	// because an operator approving work needs the reasoning, not only the
 	// wording, and it is what a created item is traced back to.
 	Rationale string `json:"rationale"`
+	// Goal is the goal this work serves, named from the specifications. It is
+	// required, and requiring it is what makes traceability something the
+	// harness holds rather than something a well-behaved model asserts: work
+	// that serves no goal cannot be proposed at all, so it is raised as a
+	// concern instead and the operator is asked.
+	Goal string `json:"goal"`
 	// Parent and Dependencies name Beads items that already exist. The product
 	// manager may place proposed work in the tracker's structure; it may not
 	// invent the items it is placed against.
@@ -218,6 +227,14 @@ func (p Proposal) Validate() error {
 	}
 	problems = append(problems, validateProposalText("description", p.Description))
 	problems = append(problems, validateProposalText("rationale", p.Rationale))
+	switch goal := strings.TrimSpace(p.Goal); {
+	case goal == "":
+		problems = append(problems, errors.New("goal is required; work that serves no goal is raised as a concern rather than proposed"))
+	case len(goal) > maxProposalGoalBytes:
+		problems = append(problems, fmt.Errorf("goal is %d bytes, limit is %d", len(goal), maxProposalGoalBytes))
+	case strings.ContainsAny(goal, "\r\n"):
+		problems = append(problems, errors.New("goal cannot span lines"))
+	}
 	if parent := strings.TrimSpace(p.Parent); parent != "" {
 		if err := beads.ValidateIssueID(parent); err != nil {
 			problems = append(problems, fmt.Errorf("parent: %w", err))
@@ -253,6 +270,69 @@ func validateProposalText(field, value string) error {
 	return nil
 }
 
+// ProposalPlacementError reports that a turn proposed work placed against items
+// the tracker does not hold. Like ProposalError it is not a broken
+// conversation: the turn completed, the answer is real, and nothing was
+// created. It is a separate failure because it is a different thing to be told —
+// the block was perfectly readable, and what it named does not exist.
+type ProposalPlacementError struct {
+	Err error
+}
+
+func (e *ProposalPlacementError) Error() string {
+	return "the product manager proposed work placed against items that do not exist: " + e.Err.Error()
+}
+
+func (e *ProposalPlacementError) Unwrap() error { return e.Err }
+
+// verifyProposalReferences checks that every item the proposals are placed
+// against is one the tracker actually holds. Validation alone only says an
+// identifier is well formed, which is how a proposal naming an item nobody ever
+// created reached the operator looking exactly like one that did. The check runs
+// before the operator is asked rather than at approval, because an approval that
+// then fails has already spent the decision it was asking for.
+func (s *Session) verifyProposalReferences(ctx context.Context, proposals []Proposal) error {
+	referenced := referencedItems(proposals)
+	if len(referenced) == 0 {
+		return nil
+	}
+	if s.options.Tracker == nil {
+		return fmt.Errorf("no work tracker is configured, so %s could not be checked", strings.Join(referenced, ", "))
+	}
+	var problems []error
+	for _, id := range referenced {
+		if _, err := s.options.Tracker.Show(ctx, id); err != nil {
+			// A tracker that refused the lookup is reported the same way as one
+			// that answered "no such item": either way the reference is unverified,
+			// and unverified is not what the operator is asked to approve.
+			problems = append(problems, fmt.Errorf("%s could not be confirmed: %w", id, err))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+// referencedItems lists every existing item the proposals name, once each and in
+// a stable order, so a turn placing three items under one parent asks the
+// tracker about it once and a failure always reads the same way.
+func referencedItems(proposals []Proposal) []string {
+	seen := make(map[string]struct{})
+	var referenced []string
+	for _, proposal := range proposals {
+		for _, id := range append([]string{strings.TrimSpace(proposal.Parent)}, proposal.dependencies()...) {
+			if id == "" {
+				continue
+			}
+			if _, duplicate := seen[id]; duplicate {
+				continue
+			}
+			seen[id] = struct{}{}
+			referenced = append(referenced, id)
+		}
+	}
+	sort.Strings(referenced)
+	return referenced
+}
+
 // dependencies returns the proposal's dependencies as validated identifiers.
 func (p Proposal) dependencies() []string {
 	trimmed := make([]string, 0, len(p.Dependencies))
@@ -271,6 +351,10 @@ func (p PendingProposal) Render() string {
 	fmt.Fprintf(&rendered, "[%s] %s\n", p.ID, strings.TrimSpace(p.Proposal.Title))
 	rendered.WriteString(indent(p.Proposal.Description))
 	rendered.WriteString(indent("why: " + strings.TrimSpace(p.Proposal.Rationale)))
+	// The goal is shown beside the reasoning, because what the operator is
+	// deciding is whether this work serves the product rather than whether the
+	// sentence describing it reads well.
+	rendered.WriteString(indent("goal: " + strings.TrimSpace(p.Proposal.Goal)))
 	if parent := strings.TrimSpace(p.Proposal.Parent); parent != "" {
 		rendered.WriteString(indent("parent: " + parent))
 	}
@@ -283,11 +367,13 @@ func (p PendingProposal) Render() string {
 // provenanceNotes is what a created item records about where it came from. The
 // conversation, the turn, and the proposal are named so the item traces back to
 // the intent that produced it, and the rationale travels with it because the
-// reasoning is not in the description.
+// reasoning is not in the description. So does the goal: an item in the queue
+// that does not say what it is for is exactly the work nobody can later decide
+// to stop doing.
 func (p PendingProposal) provenanceNotes() string {
 	return fmt.Sprintf(
-		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\nRationale: %s",
-		p.ConversationID, p.Turn, p.ID, strings.TrimSpace(p.Proposal.Rationale),
+		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\nGoal served: %s\n\nRationale: %s",
+		p.ConversationID, p.Turn, p.ID, strings.TrimSpace(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
 	)
 }
 

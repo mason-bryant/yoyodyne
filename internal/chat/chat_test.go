@@ -339,10 +339,15 @@ func TestSendRecordsProposalsAndCreatesNothing(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	tracker := &fakeTracker{}
+	// The tracker holds what the proposal is placed against, because a proposal
+	// naming an item nobody created never reaches the operator.
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.12":  {ID: "yoyodyne-ifd.12", Title: "Usage limits"},
+		"yoyodyne-ifd.4.4": {ID: "yoyodyne-ifd.4.4", Title: "Run state"},
+	}}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
 		SessionID: "session-1",
-		FinalText: proposalReply("Two follow-ups, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]}`),
+		FinalText: proposalReply("Two follow-ups, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","goal":"Run development nearly autonomously.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]}`),
 	}}})
 	options.Store = newTestStore(t, root)
 	options.Tracker = tracker
@@ -381,10 +386,14 @@ func TestApproveCreatesTheProposedItemWithItsOrigin(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	tracker := &fakeTracker{}
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.12":  {ID: "yoyodyne-ifd.12", Title: "Usage limits"},
+		"yoyodyne-ifd.4.4": {ID: "yoyodyne-ifd.4.4", Title: "Run state"},
+		"yoyodyne-ifd.15":  {ID: "yoyodyne-ifd.15", Title: "Conversation state"},
+	}}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
 		SessionID: "session-1",
-		FinalText: proposalReply("One item, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4","yoyodyne-ifd.15"]}`),
+		FinalText: proposalReply("One item, then.", `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"You said capacity is not failure.","goal":"Run development nearly autonomously.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4","yoyodyne-ifd.15"]}`),
 	}}})
 	options.Store = newTestStore(t, root)
 	options.Tracker = tracker
@@ -446,7 +455,7 @@ func TestRejectRecordsTheRefusalInsteadOfDroppingIt(t *testing.T) {
 	tracker := &fakeTracker{}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
 		SessionID: "session-1",
-		FinalText: proposalReply("A suggestion.", `{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster."}`),
+		FinalText: proposalReply("A suggestion.", `{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster.","goal":"Support development in any language."}`),
 	}}})
 	options.Store = newTestStore(t, root)
 	options.Tracker = tracker
@@ -479,7 +488,7 @@ func TestRejectRecordsTheRefusalInsteadOfDroppingIt(t *testing.T) {
 func TestNothingIsCreatedWithoutAnApproval(t *testing.T) {
 	t.Parallel()
 
-	proposed := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`
+	proposed := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`
 
 	t.Run("an unapproved proposal is never created", func(t *testing.T) {
 		t.Parallel()
@@ -566,9 +575,9 @@ func TestConverseAsksBeforeCreatingAnythingAndRecordsEveryAnswer(t *testing.T) {
 		SessionID: "session-1",
 		FinalText: proposalReply(
 			"Three, and I would keep the third for later.",
-			`{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure."}`,
-			`{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster."}`,
-			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`,
+			`{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously."}`,
+			`{"title":"Rewrite the CLI in Rust","description":"Port everything.","rationale":"It would be faster.","goal":"Support development in any language."}`,
+			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`,
 		),
 	}}})
 	options.Store = newTestStore(t, root)
@@ -620,7 +629,7 @@ func TestConverseSurvivesAProposalItCannotRead(t *testing.T) {
 		// A block with an unknown field: the turn is fine, the proposals in it
 		// are not.
 		{SessionID: "session-1", FinalText: "Here is what I would do.\n\n" + proposalFence + "\n{\"items\":[{\"title\":\"t\",\"description\":\"d\",\"rationale\":\"r\",\"assignee\":\"me\"}]}\n```\n"},
-		{SessionID: "session-1", FinalText: proposalReply("Let me try that again.", `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`)},
+		{SessionID: "session-1", FinalText: proposalReply("Let me try that again.", `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`)},
 	}})
 	options.Tracker = tracker
 	session := openTestSession(t, options)
@@ -692,7 +701,7 @@ func TestSendCarriesOutTrackerActionsAndCarriesTheResultsBack(t *testing.T) {
 		{SessionID: "session-1", FinalText: trackerReply("Let me read ifd.22 before I answer.",
 			`{"action":"read","id":"yoyodyne-ifd.22"}`)},
 		{SessionID: "session-1", FinalText: trackerReply("It already covers the separation, so I filed the rest beside it and linked them.",
-			`{"action":"create","title":"Name the speaker on every line","description":"Prefix each line with who said it.","parent":"yoyodyne-ifd.22","reason":"ifd.22 covers separation but not attribution"}`,
+			`{"action":"create","title":"Name the speaker on every line","description":"Prefix each line with who said it.","goal":"Run development nearly autonomously.","parent":"yoyodyne-ifd.22","reason":"ifd.22 covers separation but not attribution"}`,
 			`{"action":"reprioritize","id":"yoyodyne-ifd.22","priority":1,"reason":"the operator is blocked on reading the transcript"}`)},
 		{SessionID: "session-1", FinalText: "Both are in the queue now."},
 	}}
@@ -1036,6 +1045,13 @@ func TestContractStatesTheProposalProtocolItEnforces(t *testing.T) {
 		"the harness creates only what they approve",
 		"Propose at most " + strconv.Itoa(MaxProposalsPerTurn) + " items",
 		`"rationale"`,
+		// A proposal says which goal it serves, and one that serves none is a
+		// question rather than a proposal with a blank in it.
+		`"goal" names the goal from the specifications that this work serves`,
+		"it is a concern you raise",
+		// What a proposal is placed against is looked up before the operator is
+		// asked, so an invented identifier never reaches them looking real.
+		"the harness looks each one up before the operator is asked",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("system prompt does not state %q", required)
@@ -1180,7 +1196,10 @@ func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (bac
 // only for the items it holds, so an unknown identifier fails the way bd fails
 // one; err fails every change, which is how a tracker that refuses is tested.
 type fakeTracker struct {
-	items   map[string]beads.WorkItem
+	items map[string]beads.WorkItem
+	// shown is every item it was asked to read, in order, so a turn that looks
+	// the same item up twice is visible rather than merely slow.
+	shown   []string
 	created []beads.NewWorkItem
 	updates []trackerUpdate
 	links   [][2]string
@@ -1196,6 +1215,7 @@ type trackerUpdate struct {
 }
 
 func (f *fakeTracker) Show(_ context.Context, id string) (beads.WorkItem, error) {
+	f.shown = append(f.shown, id)
 	item, held := f.items[id]
 	if !held {
 		return beads.WorkItem{}, fmt.Errorf("bd show failed: no work item %s", id)

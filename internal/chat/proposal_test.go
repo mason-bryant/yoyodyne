@@ -1,9 +1,14 @@
 package chat
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
+
+	backendapi "yoyodyne/internal/backend"
+	"yoyodyne/internal/beads"
 )
 
 func TestExtractProposalsSeparatesProseFromWhatWasProposed(t *testing.T) {
@@ -12,8 +17,8 @@ func TestExtractProposalsSeparatesProseFromWhatWasProposed(t *testing.T) {
 	reply := "Two things follow from that.\n\n" +
 		"```yoyodyne-proposal\n" +
 		`{"items":[
-		   {"title":"Pause a run on a usage limit","description":"Wait and resume rather than failing.","rationale":"You said a capacity problem is not a failure.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]},
-		   {"title":"Record the pause","description":"Note the deadline on the item.","rationale":"So a later process knows what it is waiting for."}
+		   {"title":"Pause a run on a usage limit","description":"Wait and resume rather than failing.","rationale":"You said a capacity problem is not a failure.","goal":"Run development nearly autonomously.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]},
+		   {"title":"Record the pause","description":"Note the deadline on the item.","rationale":"So a later process knows what it is waiting for.","goal":"Run development nearly autonomously."}
 		 ]}` + "\n```\n\nSay the word and I will refine either one.\n"
 
 	prose, proposals, err := extractProposals(reply)
@@ -51,7 +56,7 @@ func TestExtractProposalsSeparatesProseFromWhatWasProposed(t *testing.T) {
 func TestExtractProposalsRefusesWhatItCannotPutToTheOperator(t *testing.T) {
 	t.Parallel()
 
-	valid := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule."}`
+	valid := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`
 	for _, test := range []struct {
 		name  string
 		reply string
@@ -98,6 +103,13 @@ func TestExtractProposalsRefusesWhatItCannotPutToTheOperator(t *testing.T) {
 			name:  "too many items",
 			reply: "```yoyodyne-proposal\n{\"items\":[" + strings.Repeat(valid+",", MaxProposalsPerTurn) + valid + "]}\n```",
 			want:  "limit is " + strconv.Itoa(MaxProposalsPerTurn),
+		},
+		{
+			// Work that serves no goal is a question for the operator, not a
+			// proposal with the goal left blank.
+			name:  "missing goal",
+			reply: "```yoyodyne-proposal\n{\"items\":[{\"title\":\"t\",\"description\":\"d\",\"rationale\":\"r\"}]}\n```",
+			want:  "goal is required",
 		},
 		{
 			name:  "missing rationale",
@@ -154,6 +166,7 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 			Title:        "Pause a run on a usage limit",
 			Description:  "Wait for the reset\nand resume.",
 			Rationale:    "You said capacity is not failure.",
+			Goal:         "Run development nearly autonomously.",
 			Parent:       "yoyodyne-ifd.12",
 			Dependencies: []string{"yoyodyne-ifd.4.4"},
 		},
@@ -162,6 +175,9 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 	for _, required := range []string{
 		"[3.1] Pause a run on a usage limit",
 		"why: You said capacity is not failure.",
+		// What the operator decides is whether the work serves the product, so the
+		// goal it is claimed to serve is in front of them when they decide.
+		"goal: Run development nearly autonomously.",
 		"parent: yoyodyne-ifd.12",
 		"depends on: yoyodyne-ifd.4.4",
 	} {
@@ -179,9 +195,151 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 
 	// A created item has to trace back to the turn that produced it.
 	notes := pending.provenanceNotes()
-	for _, required := range []string{"chat-0123456789abcdef0123456789abcdef", "turn 3", "proposal 3.1", "Rationale: You said capacity is not failure."} {
+	for _, required := range []string{
+		"chat-0123456789abcdef0123456789abcdef", "turn 3", "proposal 3.1",
+		"Rationale: You said capacity is not failure.",
+		// An item in the queue that does not say what it is for is exactly the work
+		// nobody can later decide to stop doing.
+		"Goal served: Run development nearly autonomously.",
+	} {
 		if !strings.Contains(notes, required) {
 			t.Fatalf("provenance notes = %q, want them to contain %q", notes, required)
 		}
+	}
+}
+
+func TestPlacedProposalsAreCheckedAgainstTheTrackerBeforeTheOperatorIsAsked(t *testing.T) {
+	t.Parallel()
+
+	// A well-formed identifier is not an existing item. Checking that at approval
+	// would spend the operator's decision before finding out, so it is checked
+	// before they are asked at all.
+	proposed := `{"title":"Pause on a usage limit","description":"Wait and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously.","parent":"yoyodyne-ifd.12","dependencies":["yoyodyne-ifd.4.4"]}`
+
+	t.Run("an item nobody created proposes nothing", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.12": {ID: "yoyodyne-ifd.12", Title: "Usage limits"},
+		}}
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+			SessionID: "session-1", FinalText: proposalReply("Here it is.", proposed),
+		}}})
+		options.Tracker = tracker
+		session := openTestSession(t, options)
+
+		reply, err := session.Send(context.Background(), "what follows?")
+		var unplaced *ProposalPlacementError
+		if !errors.As(err, &unplaced) {
+			t.Fatalf("Send() error = %v, want a placement failure", err)
+		}
+		if !strings.Contains(err.Error(), "yoyodyne-ifd.4.4") {
+			t.Fatalf("Send() error = %v, want it to name the missing dependency", err)
+		}
+		// The answer is still the operator's to read, and nothing was recorded as
+		// awaiting a decision they were never asked for.
+		if !strings.Contains(reply.Text, "Here it is.") || len(reply.Proposals) != 0 {
+			t.Fatalf("reply = %#v", reply)
+		}
+		if len(session.Proposals()) != 0 || len(tracker.created) != 0 {
+			t.Fatalf("an unplaceable proposal became %#v and %#v", session.Proposals(), tracker.created)
+		}
+	})
+
+	t.Run("every named item is confirmed once", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &fakeTracker{items: map[string]beads.WorkItem{
+			"yoyodyne-ifd.12":  {ID: "yoyodyne-ifd.12", Title: "Usage limits"},
+			"yoyodyne-ifd.4.4": {ID: "yoyodyne-ifd.4.4", Title: "Run state"},
+		}}
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+			SessionID: "session-1", FinalText: proposalReply("Two of them, then.", proposed, proposed),
+		}}})
+		options.Tracker = tracker
+		session := openTestSession(t, options)
+
+		reply, err := session.Send(context.Background(), "what follows?")
+		if err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if len(reply.Proposals) != 2 {
+			t.Fatalf("reply proposals = %#v", reply.Proposals)
+		}
+		// Two proposals placed against the same items ask the tracker about each
+		// one once, so a turn that places a whole group costs one lookup per item.
+		if len(tracker.shown) != 2 {
+			t.Fatalf("tracker lookups = %#v, want one per named item", tracker.shown)
+		}
+	})
+
+	t.Run("a conversation with no tracker cannot confirm anything", func(t *testing.T) {
+		t.Parallel()
+
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+			SessionID: "session-1", FinalText: proposalReply("Here it is.", proposed),
+		}}})
+		session := openTestSession(t, options)
+
+		if _, err := session.Send(context.Background(), "what follows?"); err == nil ||
+			!strings.Contains(err.Error(), "no work tracker is configured") {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if len(session.Proposals()) != 0 {
+			t.Fatalf("an unconfirmed proposal is awaiting a decision: %#v", session.Proposals())
+		}
+	})
+
+	t.Run("a proposal placed against nothing needs no tracker", func(t *testing.T) {
+		t.Parallel()
+
+		unplaced := `{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"You asked for a stopping rule.","goal":"Run development nearly autonomously."}`
+		options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+			SessionID: "session-1", FinalText: proposalReply("One item.", unplaced),
+		}}})
+		session := openTestSession(t, options)
+
+		reply, err := session.Send(context.Background(), "what follows?")
+		if err != nil {
+			t.Fatalf("Send() error = %v", err)
+		}
+		if len(reply.Proposals) != 1 {
+			t.Fatalf("reply proposals = %#v", reply.Proposals)
+		}
+	})
+}
+
+func TestConverseSurvivesAProposalPlacedAgainstNothing(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: proposalReply("Here is what I would do.",
+			`{"title":"t","description":"d","rationale":"r","goal":"g","parent":"yoyodyne-ifd.99"}`)},
+		{SessionID: "session-1", FinalText: proposalReply("Without the parent, then.",
+			`{"title":"Add a retry budget","description":"Bound repair attempts.","rationale":"r","goal":"g"}`)},
+	}})
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what next?\ntry again\ny\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	for _, required := range []string{
+		"Here is what I would do.",
+		"do not exist",
+		"yoyodyne-ifd.99",
+		"Nothing was proposed and nothing was created",
+		"created yoyodyne-1",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	if len(tracker.created) != 1 || tracker.created[0].Title != "Add a retry budget" {
+		t.Fatalf("created work items = %#v", tracker.created)
 	}
 }

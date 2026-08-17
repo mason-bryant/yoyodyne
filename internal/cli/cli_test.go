@@ -329,6 +329,56 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	}
 }
 
+// A question the product manager stopped to ask has nobody to answer it in a
+// one-shot message, and a conversation can end with one unanswered. Both say so:
+// silence about a concern reads as agreement, which is the thing it exists to
+// prevent.
+func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
+	t.Parallel()
+
+	concerns := []chat.PendingConcern{{
+		ID:             "c1.1",
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		Turn:           1,
+		Concern: chat.Concern{
+			Kind:     chat.ConcernConflict,
+			Subject:  "Let an agent merge its own work",
+			Goal:     "No agent pushes or merges.",
+			Detail:   "It is the thing that goal exists to prevent.",
+			Question: "Do you want that goal changed?",
+		},
+	}}
+	var oneShot bytes.Buffer
+	printChatConcerns(&oneShot, concerns)
+	for _, required := range []string{
+		"Nothing was proposed or created",
+		"yoyodyne chat",
+		"[c1.1] " + chat.ConcernConflict.Headline(),
+		"Do you want that goal changed?",
+	} {
+		if !strings.Contains(oneShot.String(), required) {
+			t.Fatalf("one-shot output = %q, want it to contain %q", oneShot.String(), required)
+		}
+	}
+
+	// The theme a stream gets dresses nothing, so what is printed here is the
+	// text and only the text.
+	var open bytes.Buffer
+	printOpenConcerns(&open, console.Theme{}, concerns)
+	for _, required := range []string{"unanswered", "[c1.1]", "Do you want that goal changed?"} {
+		if !strings.Contains(open.String(), required) {
+			t.Fatalf("open-concern output = %q, want it to contain %q", open.String(), required)
+		}
+	}
+
+	var quiet bytes.Buffer
+	printChatConcerns(&quiet, nil)
+	printOpenConcerns(&quiet, console.Theme{}, nil)
+	if quiet.Len() != 0 {
+		t.Fatalf("a turn with no concerns printed %q", quiet.String())
+	}
+}
+
 func TestChatReportsConfigurationFailureAsJSON(t *testing.T) {
 	t.Parallel()
 

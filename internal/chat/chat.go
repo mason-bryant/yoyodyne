@@ -145,6 +145,10 @@ type Session struct {
 	// is durable in the conversation's event log; this is the pending set a
 	// decision can still name.
 	proposals []*proposalRecord
+	// concerns is what the product manager has raised instead of proposing, and
+	// whether the operator has answered it. It is kept the same way and for the
+	// same reason: a question nobody answered is a loose end, not silence.
+	concerns []*concernRecord
 	// active is the run this conversation started and has not collected yet.
 	// There is at most one: concurrency belongs to the scheduler, and a
 	// conversation is not the place to invent it.
@@ -170,6 +174,12 @@ type Session struct {
 type proposalRecord struct {
 	pending PendingProposal
 	decided bool
+}
+
+// concernRecord is one raised concern and whether the operator has answered it.
+type concernRecord struct {
+	pending  PendingConcern
+	answered bool
 }
 
 // activeRun is a run started from this conversation. The goroutine that runs it
@@ -205,6 +215,12 @@ type Reply struct {
 	// decision. They are recorded, not created: a reply that carries proposals
 	// has changed nothing.
 	Proposals []PendingProposal `json:"proposals,omitempty"`
+	// Concerns are the things this turn would not propose until the operator
+	// answers: work it could not place under a goal, work it says would cut
+	// against one, and work it judges to be against the product's intent. They
+	// are questions rather than offers, so unlike a proposal there is nothing
+	// here to approve.
+	Concerns []PendingConcern `json:"concerns,omitempty"`
 	// Actions are the tracker operations the product manager took while
 	// answering, in the order it took them, with what each one actually did.
 	// Unlike proposals these already happened, which is why they are reported to
@@ -321,6 +337,20 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 			return reply, err
 		}
 
+		// A concern is recorded before anything else is decided about the turn: it
+		// is the product manager declining to propose, and what it declined to
+		// propose is evidence whether or not the rest of the turn holds together.
+		raised, err := s.recordConcerns(parsed.Concerns)
+		reply.Concerns = append(reply.Concerns, raised...)
+		if err != nil {
+			return reply, err
+		}
+		// What a proposal is placed against is confirmed to exist before the
+		// operator is asked about any of it. A block naming an item nobody created
+		// proposes nothing, exactly as an unreadable one does.
+		if err := s.verifyProposalReferences(ctx, parsed.Proposals); err != nil {
+			return reply, &ProposalPlacementError{Err: err}
+		}
 		pending, err := s.recordProposals(parsed.Proposals)
 		reply.Proposals = append(reply.Proposals, pending...)
 		if err != nil {
@@ -457,6 +487,7 @@ type parsedReply struct {
 	Prose         string
 	Actions       []TrackerAction
 	Proposals     []Proposal
+	Concerns      []Concern
 	Reports       []report.Entry
 	ReportProblem error
 }
@@ -482,9 +513,15 @@ func splitReply(answer string) (parsedReply, error) {
 		parsed.Prose = rest
 		return parsed, &ProposalError{Err: err}
 	}
+	prose, concerns, err := extractConcerns(prose)
+	if err != nil {
+		parsed.Prose = rest
+		return parsed, &ConcernError{Err: err}
+	}
 	parsed.Prose = prose
 	parsed.Actions = actions
 	parsed.Proposals = proposals
+	parsed.Concerns = concerns
 	return parsed, nil
 }
 
@@ -554,6 +591,77 @@ func (s *Session) Proposals() []PendingProposal {
 		}
 	}
 	return pending
+}
+
+// Concerns returns the concerns from this conversation the operator has not
+// answered yet.
+func (s *Session) Concerns() []PendingConcern {
+	open := make([]PendingConcern, 0, len(s.concerns))
+	for _, record := range s.concerns {
+		if !record.answered {
+			open = append(open, record.pending)
+		}
+	}
+	return open
+}
+
+// Answer records what the operator said about one raised concern and carries it
+// into the product manager's next turn. Nothing about the work changes here:
+// the concern was the product manager declining to propose, and an answer is
+// the instruction it asked for rather than an approval of anything.
+func (s *Session) Answer(concernID, answer string) error {
+	record, err := s.awaitingAnswer(concernID)
+	if err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(answer)
+	if trimmed == "" {
+		return fmt.Errorf("concern %s needs an answer; an empty one leaves the question open", record.pending.ID)
+	}
+	if len(trimmed) > MaxOperatorMessageBytes {
+		return fmt.Errorf("answer is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
+	}
+	if err := s.emit(execution.EventConcernAnswered, answeredConcern{PendingConcern: record.pending, Answer: trimmed}); err != nil {
+		return fmt.Errorf("record the answer to concern %s: %w", record.pending.ID, err)
+	}
+	record.answered = true
+	s.notice("the operator answered concern %s (%s), saying: %s", record.pending.ID, record.pending.Concern.Subject, trimmed)
+	return nil
+}
+
+func (s *Session) awaitingAnswer(concernID string) (*concernRecord, error) {
+	trimmed := strings.TrimSpace(concernID)
+	for _, record := range s.concerns {
+		if record.pending.ID != trimmed {
+			continue
+		}
+		if record.answered {
+			return nil, fmt.Errorf("concern %s has already been answered", trimmed)
+		}
+		return record, nil
+	}
+	return nil, fmt.Errorf("no concern %q is awaiting an answer in this conversation", concernID)
+}
+
+// recordConcerns gives each concern an identity within the conversation and
+// makes it durable before the operator is asked, so a question they answer is
+// always one that was written down first.
+func (s *Session) recordConcerns(concerns []Concern) ([]PendingConcern, error) {
+	raised := make([]PendingConcern, 0, len(concerns))
+	for i, concern := range concerns {
+		record := &concernRecord{pending: PendingConcern{
+			ID:             fmt.Sprintf("c%d.%d", s.state.Turns, i+1),
+			ConversationID: s.state.ConversationID,
+			Turn:           s.state.Turns,
+			Concern:        concern,
+		}}
+		if err := s.emit(execution.EventConcernRaised, record.pending); err != nil {
+			return raised, fmt.Errorf("record a raised concern: %w", err)
+		}
+		s.concerns = append(s.concerns, record)
+		raised = append(raised, record.pending)
+	}
+	return raised, nil
 }
 
 // Approve creates the work item a proposal describes. It is the only path from
@@ -695,6 +803,10 @@ func (s *Session) emit(eventType execution.EventType, payload any) error {
 const (
 	operatorPrompt = "you> "
 	decisionPrompt = "create %s? [y or yes creates it; anything else declines, and is kept as the reason] "
+	// A concern is not a decision, so its prompt asks for words rather than a
+	// yes: there is nothing here to create, and what the operator says is the
+	// instruction the product manager stopped to ask for.
+	answerPrompt = "answer %s? [what you say reaches the product manager; empty leaves the question open] "
 )
 
 // Converse runs the interactive loop: one line in, one answer out, until the
@@ -772,6 +884,13 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// /reports afterwards.
 		s.reportTrackerActions(out, reply)
 		reportFiled(out, reply)
+		// What the product manager would not propose is put to the operator before
+		// anything else about the turn is settled, including a turn that went on to
+		// fail: a question it declined to answer for itself is the one thing here
+		// that is waiting on a person.
+		if err := s.raise(ctx, reply.Concerns, screen); err != nil {
+			return err
+		}
 		// A turn whose proposal or tracker block could not be read is not a broken
 		// conversation: the answer above is real and the turn is recorded, so
 		// the operator is told what was lost and the conversation continues.
@@ -780,6 +899,16 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		var unreadable *ProposalError
 		if errors.As(err, &unreadable) {
 			fmt.Fprintf(out, "%v\nNothing was proposed as far as the harness is concerned; ask again if you want those items.\n\n", unreadable)
+			continue
+		}
+		var unplaced *ProposalPlacementError
+		if errors.As(err, &unplaced) {
+			fmt.Fprintf(out, "%v\nNothing was proposed and nothing was created; ask it which items it meant.\n\n", unplaced)
+			continue
+		}
+		var unreadableConcern *ConcernError
+		if errors.As(err, &unreadableConcern) {
+			fmt.Fprintf(out, "%v\nWhatever it was about to ask you never reached the harness; ask it what the concern was.\n\n", unreadableConcern)
 			continue
 		}
 		var unreadableActions *TrackerError
@@ -845,6 +974,48 @@ func (s *Session) reportTrackerActions(out io.Writer, reply Reply) {
 		fmt.Fprintf(out, "it stopped after %d rounds of actions; what they returned is recorded with the conversation and reaches it when you next say something.\n", maxTrackerRounds)
 	}
 	fmt.Fprintln(out)
+}
+
+// raise puts every concern from a turn to the operator, one at a time, and
+// waits. That waiting is the point: the failure this is designed against is a
+// worry mentioned in passing inside a paragraph, which reads as assent and
+// carries the work on regardless. Nothing here is proposed and nothing is
+// created, so there is no decision to make — only an answer to give, and an
+// answer nobody gives leaves the question open rather than settling it.
+func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen console.Console) error {
+	if len(concerns) == 0 {
+		return nil
+	}
+	// Everything below writes to the console as an ordinary writer: on a terminal
+	// that puts it above the composing region, and anywhere else it is the stream
+	// it always was.
+	var out io.Writer = screen
+	fmt.Fprintf(out, "The product manager will not propose %d thing(s) until you answer. Nothing here was proposed or created.\n\n", len(concerns))
+	for _, concern := range concerns {
+		// A concern is dressed as what it is: the question in it gets the colour
+		// questions get, and the text says what kind of concern it is without the
+		// colour.
+		fmt.Fprint(out, s.theme.Questions(concern.Render()))
+		fmt.Fprintln(out)
+		line, err := s.ask(ctx, screen, fmt.Sprintf(answerPrompt, concern.ID))
+		if errors.Is(err, io.EOF) {
+			fmt.Fprintln(out, "input ended before you answered; the question is still open.")
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read the answer to a concern: %w", err)
+		}
+		answer := strings.TrimSpace(line)
+		if answer == "" {
+			fmt.Fprintf(out, "%s is still open; the product manager has not been answered.\n\n", concern.ID)
+			continue
+		}
+		if err := s.Answer(concern.ID, answer); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "answered %s; what you said reaches the product manager when you next say something.\n\n", concern.ID)
+	}
+	return nil
 }
 
 // decide puts every proposal from a turn to the operator, one at a time.
@@ -1082,12 +1253,27 @@ Some turns also carry an account of what the operator has had the harness do sin
 
 Discuss product intent with the operator: turn vague intent into something specific enough to design against, ask about genuine ambiguity rather than guessing, and be clear about what is decided, what is still open, and what you are unsure of. Reply in plain prose, and prefer a short honest answer to a confident one.
 
+Every piece of work you admit or propose serves a goal, and you check that before the operator is asked rather than after. Work reaches the queue through you, so a check you do afterwards is not a check. There are four cases and they are not the same thing:
+
+- It serves a goal. Name that goal as you admit or propose it, in the words the specifications use, so the item says what it is for.
+- It serves no goal you can find. Do not propose it, and do not quietly drop it: raise it as a concern and ask. Work nobody can attribute is usually a sign the goals are incomplete rather than that the operator asked for the wrong thing, and the answer may well be a new goal.
+- It would cut against a goal. Do not propose it. Put the conflict to the operator as a question and wait for their answer, rather than proposing it with a caveat attached.
+- It is consistent with the goals as written and you judge it to be against what the product is for. Say so, and say it as a question that stops. This is the one you can be wrong about, and you say it anyway: the operator can overrule an opinion you stated, and cannot overrule one you never voiced.
+
+A concern mentioned in passing inside a paragraph is not a concern; it reads as agreement and the work carries on. To raise one, end your reply with exactly one block, after the prose:
+
+` + "```" + `yoyodyne-concern
+{"concerns":[{"kind":"unplaceable|conflict|judgement","subject":"the work this is about, in one line","goal":"the goal at issue","detail":"what you see","question":"what you need the operator to decide?"}]}
+` + "```" + `
+
+"kind" says which case this is: "unplaceable" is work you can attach to no goal, "conflict" is work that would cut against one, and "judgement" is work that fits the goals and that you think is against the product's intent. "goal" names the goal at issue — the one the work would cut against, or the one it fits on paper — and is required on "conflict" and "judgement" and refused on "unplaceable", which is exactly the case with no goal to name. "subject", "detail", and "question" are required, and "question" ends in a question mark because it is a question. Raise at most ` + maxConcernsPerTurnText + ` concerns in one reply. The harness puts each one to the operator, waits for their answer, and tells you what they said on your next turn. Nothing you raise this way is proposed, admitted, or created, so raise a concern instead of proposing the work rather than as well as.
+
 Keeping the queue coherent is yours to do, not to ask for. To act on the work tracker, end your reply with exactly one block, after the prose:
 
 ` + "```" + `yoyodyne-tracker
 {"actions":[
   {"action":"read","id":"beads-id"},
-  {"action":"create","title":"one line","description":"what the work is and what done means","parent":"beads-id","priority":2,"reason":"why you are doing this"},
+  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"reason":"why you are doing this"},
   {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
   {"action":"reprioritize","id":"beads-id","priority":2,"reason":"why"},
@@ -1098,7 +1284,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 ]}
 ` + "```" + `
 
-That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "close" and "retire" are the two ways work leaves it. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read", and it is what the operator reads afterwards to understand what you did. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
+That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "close" and "retire" are the two ways work leaves it. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and taken by nothing else: it names the goal the admitted work serves, it is recorded on the item, and work you cannot name a goal for is raised as a concern instead of admitted. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
 
 The state you were given lists items by title only. When a title is not enough to judge whether proposed work belongs inside an existing item or beside it, read the item instead of guessing or asking the operator to paste it: "read" returns one in full, and its results come back to you before you finish answering.
 
@@ -1109,10 +1295,10 @@ You may also propose a work item rather than creating one, when what to do is th
 To propose, end your reply with exactly one block, after the prose:
 
 ` + "```" + `yoyodyne-proposal
-{"items":[{"title":"one line","description":"what the work is and what done means","rationale":"why this follows from what the operator said","parent":"beads-id","dependencies":["beads-id"]}]}
+{"items":[{"title":"one line","description":"what the work is and what done means","rationale":"why this follows from what the operator said","goal":"the goal this work serves","parent":"beads-id","dependencies":["beads-id"]}]}
 ` + "```" + `
 
-"title", "description", and "rationale" are required on every item. "parent" and "dependencies" are optional and must name Beads items that already exist in the supplied state; never invent an identifier. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.
+"title", "description", "rationale", and "goal" are required on every item. "goal" names the goal from the specifications that this work serves; a proposal that serves no goal is not a proposal you make, it is a concern you raise. "parent" and "dependencies" are optional and must name Beads items that already exist; never invent an identifier, because the harness looks each one up before the operator is asked and a block naming an item that does not exist proposes nothing at all. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.
 
 ` + report.Contract + `
 
