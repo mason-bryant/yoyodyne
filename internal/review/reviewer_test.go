@@ -178,6 +178,69 @@ func TestReviewAsksForDocumentationTheChangeContradicts(t *testing.T) {
 	}
 }
 
+// A change that violates a delivered architectural invariant has to draw a
+// finding. As with documentation, the judgement is the model's, so what is
+// deterministic here is the contract that asks for it, the invariant reaching
+// the reviewer as harness evidence rather than as something the developer
+// supplied, and the resulting finding surviving the verdict contract.
+// TestLocalInvariantReviewConformance exercises the judgement itself.
+func TestReviewAsksForAFindingWhenAChangeViolatesADeliveredInvariant(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the change adds a second resume path","findings":[{"severity":"major","message":"one-resume-path: resumeAgain bypasses the lease every entry into an in-flight run takes","location":{"file":"resume.go","line":12}}]}`}
+	request := newRequest(nil)
+	request.Invariants = "# Architectural invariants\n\n## one-resume-path: One resume path per run\n\n" +
+		"Scope: the whole repository\nEstablished by: yoyodyne-ifd.2.7\n\n" +
+		"Must hold:\n\nA run is resumed through the path the harness already has.\n\n" +
+		"Why:\n\nA second path breaks the first one's contract without appearing to.\n"
+	request.Changes = gitworktree.ChangeDiff{
+		Status: " A resume.go",
+		Patch:  "diff --git a/resume.go b/resume.go\n+func resumeAgain(run Run) error { return run.start() }\n",
+	}
+
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		"A change that violates a delivered invariant is not approvable",
+		"names the invariant by its id, at major severity or higher",
+		// Only the architect owns them, so a change that rewrote one instead of
+		// satisfying it is a finding rather than a resolution.
+		"creates, amends, retires, or edits an invariant is a finding",
+		// The reviewer's view is selected, so it must not report the whole set as
+		// satisfied any more than it reports the documentation as consistent.
+		"never report the invariants as a whole as satisfied",
+	} {
+		if !strings.Contains(provider.request.SystemPrompt, want) {
+			t.Errorf("review contract is missing %q: %q", want, provider.request.SystemPrompt)
+		}
+	}
+	// The invariants are the harness's own and are presented ahead of everything
+	// the developer produced, so a change cannot supply its own constraints.
+	invariants := strings.Index(provider.request.Prompt, "one-resume-path")
+	untrusted := strings.Index(provider.request.Prompt, "# Untrusted review evidence")
+	if invariants < 0 || untrusted < 0 || invariants > untrusted {
+		t.Fatalf("invariants = %d, untrusted evidence = %d: %q", invariants, untrusted, provider.request.Prompt)
+	}
+	if result.Decision != DecisionRepair || len(result.Verdict.Findings) != 1 {
+		t.Fatalf("Review() = %#v, want a repair verdict with the invariant finding", result)
+	}
+	if finding := result.Verdict.Findings[0]; finding.Severity != SeverityMajor || !strings.Contains(finding.Message, "one-resume-path") {
+		t.Fatalf("finding = %#v, want a major finding naming the invariant", finding)
+	}
+
+	// A repository that records no invariant gets no section at all rather than
+	// an empty heading to skim past.
+	plain := &fakeBackend{finalText: `{"decision":"approve","summary":"fine"}`}
+	if _, err := (Reviewer{Backend: plain, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), newRequest(nil)); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !strings.HasPrefix(plain.request.Prompt, "# Untrusted review evidence") {
+		t.Fatalf("an absent invariant set produced a section: %q", plain.request.Prompt)
+	}
+}
+
 func TestReviewRunsAsAnIndependentReadOnlyReviewer(t *testing.T) {
 	t.Parallel()
 

@@ -167,11 +167,11 @@ type personaReference struct {
 func newResolution() *resolution {
 	return &resolution{
 		config: Config{
-			// The specifications directory is a harness default rather than a
-			// bundle value for the same reason the rest of `product` is absent
-			// from the bundle: it describes the project. A project that follows
-			// the recommended layout never writes it down.
-			Product: Product{Specifications: DefaultSpecifications},
+			// The specifications and invariants directories are harness defaults
+			// rather than bundle values for the same reason the rest of `product`
+			// is absent from the bundle: they describe the project. A project that
+			// follows the recommended layout never writes either one down.
+			Product: Product{Specifications: DefaultSpecifications, Invariants: DefaultInvariants},
 			Execution: Execution{
 				MaxConcurrentDevelopers:     1,
 				RepairAttemptsBeforeReplan:  2,
@@ -190,6 +190,7 @@ func newResolution() *resolution {
 		},
 		origins: map[string]string{
 			"product.specifications":                  OriginDefault,
+			"product.invariants":                      OriginDefault,
 			"approvals.publishing":                    OriginDefault,
 			"execution.max_concurrent_developers":     OriginDefault,
 			"execution.repair_attempts_before_replan": OriginDefault,
@@ -212,6 +213,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "product.repository_id", product.RepositoryID, &r.config.Product.RepositoryID, applied.origin)
 		setValue(r.origins, "product.repository", product.Repository, &r.config.Product.Repository, applied.origin)
 		setValue(r.origins, "product.specifications", product.Specifications, &r.config.Product.Specifications, applied.origin)
+		setValue(r.origins, "product.invariants", product.Invariants, &r.config.Product.Invariants, applied.origin)
 	}
 	if execution := document.Execution; execution != nil {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)

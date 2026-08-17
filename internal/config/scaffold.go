@@ -148,6 +148,11 @@ product:
   # nothing else in the repository -- not this file, not the README, not the
   # design document. It must stay inside the repository.
   specifications: %s
+  # The architect's durable architectural invariants: one Markdown file per
+  # constraint, named by its id. The harness delivers the ones relevant to a
+  # work item into the developer's context and the reviewer's evidence. A
+  # project with no such directory simply has no invariants yet.
+  invariants: %s
 
 execution:
   max_concurrent_developers: %d
@@ -178,6 +183,7 @@ approvals:
   publishing: %s
 `,
 		effective.Product.Specifications,
+		effective.Product.Invariants,
 		effective.Execution.MaxConcurrentDevelopers,
 		effective.Execution.RepairAttemptsBeforeReplan,
 		effective.Execution.WorktreeRoot,

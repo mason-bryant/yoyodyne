@@ -19,6 +19,7 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/invariant"
 	"yoyodyne/internal/publish"
 	"yoyodyne/internal/report"
 	"yoyodyne/internal/review"
@@ -144,8 +145,18 @@ type Outcome struct {
 	// on it, so nothing here decided anything about what the run did.
 	// ReportProblem names a report that could not be read or could not be kept,
 	// because a report nobody collected would otherwise leave no trace at all.
-	Reports             []report.Report  `json:"reports,omitempty"`
-	ReportProblem       string           `json:"report_problem,omitempty"`
+	Reports       []report.Report `json:"reports,omitempty"`
+	ReportProblem string          `json:"report_problem,omitempty"`
+	// Invariants names the architectural invariants this run delivered to its
+	// developer and to its reviewer. It is the audit record of which durable
+	// constraints the change was actually held to, which is the thing a
+	// transcribed constraint in a bead could never say afterwards.
+	// InvariantProblems names what the delivered set was missing: a file in the
+	// invariants directory that could not be read as one, or an invariant that
+	// matched and did not fit the prompt's bound. Both mean the set the agents saw
+	// was incomplete, which is a fact for the operator rather than a run failure.
+	Invariants          []string         `json:"invariants,omitempty"`
+	InvariantProblems   []string         `json:"invariant_problems,omitempty"`
 	ReviewSessionID     string           `json:"review_session_id,omitempty"`
 	ReviewModel         string           `json:"review_model,omitempty"`
 	ReviewResolvedModel string           `json:"review_resolved_model,omitempty"`
@@ -298,6 +309,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if _, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: p.Repository, WorkItem: item}); err != nil {
 		return Outcome{}, fmt.Errorf("validate work item context: %w", err)
 	}
+	// The invariants are read before anything is claimed. A directory that cannot
+	// be read at all is refused here rather than delivering nothing, because a
+	// repository whose constraints silently failed to load looks exactly like one
+	// that has none.
+	invariants, err := p.loadInvariants()
+	if err != nil {
+		return Outcome{}, err
+	}
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("repository is not ready for an isolated run: %w", err)
 	}
@@ -346,6 +365,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		outcome:    Outcome{RunID: runID, WorkItemID: workItemID, Status: runstate.StatusPending, PublishSkipped: skipped},
 		item:       item,
 		publishing: publishing,
+		invariants: invariants,
 	}
 
 	item, err = p.Tracker.Claim(ctx, workItemID)
@@ -384,7 +404,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, bundle.Text), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
@@ -412,6 +432,13 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
 		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
 	}
+	// The invariants are re-read rather than carried in run state: they are the
+	// repository's current constraints, and a resumed attempt must be held to what
+	// holds now rather than to what held when the interrupted process started.
+	invariants, err := p.loadInvariants()
+	if err != nil {
+		return Outcome{}, err
+	}
 	run := &activeRun{
 		pipeline:   p,
 		state:      state,
@@ -419,6 +446,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		context:    bundle.Text,
 		claimed:    true,
 		publishing: publishing,
+		invariants: invariants,
 		// The worktree is reconstructed from what was recorded when it was
 		// created, never from what the repository looks like now. The manager
 		// revalidates ownership of every field before it acts on them.
@@ -465,7 +493,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, bundle.Text, p.Config.Execution.RepairAttemptsBeforeReplan)
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, p.Config.Execution.RepairAttemptsBeforeReplan)
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -483,14 +511,14 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // beside a failing check describe a change the gate has already moved past. A
 // run that recorded neither never had a failure returned to it — it paused
 // before or during its first attempt — so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, bundle string, limit int) (string, error) {
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, limit int) (string, error) {
 	switch {
 	case state.CheckFailure != nil:
-		return checkRepairPrompt(*state.CheckFailure, state.RepairAttempts, limit), nil
+		return checkRepairPrompt(invariants, *state.CheckFailure, state.RepairAttempts, limit), nil
 	case len(state.ReviewFindingDetails) > 0:
-		return repairPrompt(state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
+		return repairPrompt(invariants, state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
-		return developerPrompt(persona, bundle), nil
+		return developerPrompt(persona, invariants, bundle), nil
 	}
 }
 
@@ -512,6 +540,79 @@ type activeRun struct {
 	// and the repository has a remote to publish to. It is decided once, before
 	// the item is claimed, so no step has to re-derive it.
 	publishing bool
+	// invariants is every architectural invariant the repository records. The set
+	// is kept rather than one selection of it because the two roles are selected
+	// for differently: the developer's set is what the work item names, and the
+	// reviewer's adds what the change turned out to touch.
+	invariants invariant.Set
+}
+
+// loadInvariants reads the architect's durable constraints. It is a hard failure
+// rather than an empty set, because delivering nothing is what an unconstrained
+// repository looks like and the whole point of an invariant is that a developer
+// whose own work looks correct is stopped by it.
+func (p Pipeline) loadInvariants() (invariant.Set, error) {
+	store := invariant.Store{RepositoryRoot: p.Repository, Directory: p.Config.Product.Invariants}
+	set, err := store.Load()
+	if err != nil {
+		return invariant.Set{}, fmt.Errorf("load architectural invariants: %w", err)
+	}
+	return set, nil
+}
+
+// deliveredInvariants selects the invariants relevant to this run's work item and
+// records what was delivered. It is what reaches the developer, and it depends on
+// nothing anybody wrote into the bead by hand: the work item's own prose is the
+// evidence, and every repository-wide invariant reaches every item regardless.
+func (a *activeRun) deliveredInvariants() invariant.Delivery {
+	delivery := a.invariants.Select(workItemEvidence(a.item)...)
+	a.recordDeliveredInvariants(delivery)
+	return delivery
+}
+
+// reviewedInvariants selects the invariants for the reviewer. The change itself
+// is added to the evidence, so an invariant scoped to code the work item never
+// mentioned still reaches the gate that judges the change that touched it —
+// which is exactly the case a developer's own reading of its work cannot catch.
+func (a *activeRun) reviewedInvariants(changes gitworktree.ChangeDiff) invariant.Delivery {
+	evidence := append(workItemEvidence(a.item), changes.Status, changes.DiffStat)
+	delivery := a.invariants.Select(evidence...)
+	a.recordDeliveredInvariants(delivery)
+	return delivery
+}
+
+// workItemEvidence is what the harness knows about the code a work item concerns
+// before any of it exists: the item's own prose. Scope selection is textual over
+// this, so an item that names the package it is about pulls in the invariants
+// that constrain it.
+func workItemEvidence(item beads.WorkItem) []string {
+	return []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria, item.Notes}
+}
+
+// recordDeliveredInvariants keeps the run's account of which constraints its
+// change was held to. It merges rather than replaces, because a run delivers
+// twice — once to the developer and once to the reviewer — and the second
+// selection can legitimately be wider than the first.
+func (a *activeRun) recordDeliveredInvariants(delivery invariant.Delivery) {
+	for _, id := range delivery.IDs() {
+		a.outcome.Invariants = appendUnique(a.outcome.Invariants, id)
+	}
+	for _, problem := range delivery.Problems {
+		a.outcome.InvariantProblems = appendUnique(a.outcome.InvariantProblems, problem.String())
+	}
+	for _, id := range delivery.Omitted {
+		a.outcome.InvariantProblems = appendUnique(a.outcome.InvariantProblems,
+			id+": it matched this work item and did not fit the delivered context")
+	}
+}
+
+func appendUnique(values []string, value string) []string {
+	for _, existing := range values {
+		if existing == value {
+			return values
+		}
+	}
+	return append(values, value)
 }
 
 // verifyReviewAndFinish is the gated half of a run: the deterministic checks,
@@ -569,7 +670,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if a.state.RepairAttempts >= limit {
 				return a.blockOnFailingCheck(ctx, limit)
 			}
-			if err := a.repair(ctx, checkRepairPrompt(*a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
+			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
 			}
 			continue
@@ -584,7 +685,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		if a.state.RepairAttempts >= limit {
 			return a.blockOnUnresolvedFindings(ctx, limit)
 		}
-		prompt, err := repairPrompt(a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
+		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
 			return err
 		}
@@ -1480,9 +1581,13 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		return "", providerEvidence{}, fmt.Errorf("assemble reviewed change: %w", err)
 	}
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
-		RunID:        a.state.RunID,
-		WorkItemID:   a.state.WorkItemID,
-		Context:      a.context,
+		RunID:      a.state.RunID,
+		WorkItemID: a.state.WorkItemID,
+		Context:    a.context,
+		// The invariants reach the reviewer's evidence by the same delivery that
+		// reached the developer's context, so a change that violates one is judged
+		// against it whether or not the work item ever mentioned it.
+		Invariants:   a.reviewedInvariants(changes).Text(),
 		WorktreePath: a.worktree.Path,
 		Changes:      changes,
 		Checks:       a.outcome.Checks,
@@ -1759,13 +1864,16 @@ The work backlog is upstream in the same way. The product manager decides what i
 
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.
 
+Any architectural invariant delivered with this work item is a constraint on your change rather than advice. Invariants exist because a change whose own work is correct can still break something the work item never mentioned, so each one holds even where nothing else you were given refers to it. They belong to the architect: do not create, amend, retire, or edit one. If your work cannot satisfy an invariant, or you believe one is wrong, leave it in force and put the amendment you would propose in your summary for the architect to decide.
+
 ` + report.Contract + `
 
 Your summary and a report do different jobs, and something can need both. The summary is your account of this work item, read by whoever looks at this run, and it is still where discovered work goes for the product manager to admit. A report outlives the run, so it is what you use for something that will still matter once this item is closed and nobody is reading its summary any more.`
 
 // developerPrompt places the immutable contract first, the configured persona
-// second as guidance subordinate to it, and the work item context last.
-func developerPrompt(persona, bundle string) string {
+// second as guidance subordinate to it, then the architectural invariants that
+// constrain the change, and the work item context last.
+func developerPrompt(persona, invariants, bundle string) string {
 	var prompt strings.Builder
 	prompt.WriteString(developerContract)
 	prompt.WriteString("\n\n")
@@ -1774,8 +1882,20 @@ func developerPrompt(persona, bundle string) string {
 		prompt.WriteString(trimmed)
 		prompt.WriteString("\n\n")
 	}
+	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString(bundle)
 	return prompt.String()
+}
+
+// deliveredInvariantSection is how the invariants enter a developer prompt. It is
+// one helper because every prompt a developer receives carries them — the first
+// attempt and both kinds of repair — and a repair attempt that lost the
+// constraints would be an attempt free to break one while fixing something else.
+func deliveredInvariantSection(invariants string) string {
+	if strings.TrimSpace(invariants) == "" {
+		return ""
+	}
+	return invariants + "\n"
 }
 
 // repairPrompt hands one attempt's findings back to the developer that produced
@@ -1784,14 +1904,16 @@ func developerPrompt(persona, bundle string) string {
 // between the reviewer and the developer that must act on it. The harness
 // contract is repeated because it bounds the attempt whether or not the provider
 // actually restored the session it was asked to resume.
-func repairPrompt(summary string, findings []runstate.Finding, attempt, limit int) (string, error) {
+func repairPrompt(invariants, summary string, findings []runstate.Finding, attempt, limit int) (string, error) {
 	encoded, err := json.MarshalIndent(findings, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("encode review findings for repair attempt %d: %w", attempt, err)
 	}
 	var prompt strings.Builder
 	prompt.WriteString(developerContract)
-	prompt.WriteString("\n\n# Independent review: repair required\n\n")
+	prompt.WriteString("\n\n")
+	prompt.WriteString(deliveredInvariantSection(invariants))
+	prompt.WriteString("# Independent review: repair required\n\n")
 	fmt.Fprintf(&prompt, "An independent reviewer examined your change and did not approve it. This is repair attempt %d of %d. Continue the change already in your worktree instead of starting over, and resolve every finding below.\n\n", attempt, limit)
 	if trimmed := strings.TrimSpace(summary); trimmed != "" {
 		prompt.WriteString("Reviewer summary: " + trimmed + "\n\n")
@@ -1809,10 +1931,12 @@ func repairPrompt(summary string, findings []runstate.Finding, attempt, limit in
 // The harness contract is repeated for the same reason the review repair repeats
 // it: it bounds the attempt whether or not the provider actually restored the
 // session it was asked to resume.
-func checkRepairPrompt(failure runstate.CheckFailure, attempt, limit int) string {
+func checkRepairPrompt(invariants string, failure runstate.CheckFailure, attempt, limit int) string {
 	var prompt strings.Builder
 	prompt.WriteString(developerContract)
-	prompt.WriteString("\n\n# Failing check: repair required\n\n")
+	prompt.WriteString("\n\n")
+	prompt.WriteString(deliveredInvariantSection(invariants))
+	prompt.WriteString("# Failing check: repair required\n\n")
 	fmt.Fprintf(&prompt, "A configured check failed on your change. This is repair attempt %d of %d. Continue the change already in your worktree instead of starting over, and make this check pass.\n\n", attempt, limit)
 	fmt.Fprintf(&prompt, "Command: %s\nExit code: %d\n\n", failure.Command, failure.ExitCode)
 	if failure.Output != "" {
@@ -2018,6 +2142,22 @@ func renderOutcomeNotes(outcome Outcome) string {
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
+// renderInvariantNotes records which durable constraints this change was held to,
+// and what the delivered set was missing. The tracker is where that outlives the
+// run: an operator asking later what constrained a change gets an answer, and one
+// asking why an invariant did not stop something sees whether it was delivered at
+// all.
+func renderInvariantNotes(outcome Outcome) []string {
+	var lines []string
+	if len(outcome.Invariants) > 0 {
+		lines = append(lines, "Invariants delivered: "+strings.Join(outcome.Invariants, ", "))
+	}
+	for _, problem := range outcome.InvariantProblems {
+		lines = append(lines, "Invariant not delivered: "+problem)
+	}
+	return lines
+}
+
 func renderFailureNotes(outcome Outcome) string {
 	headline := "Yoyodyne bootstrap run failed; branch and worktree are preserved when present."
 	switch {
@@ -2064,11 +2204,13 @@ func renderFailureNotes(outcome Outcome) string {
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
-// renderReviewNotes carries the review and integration evidence into the
-// tracker, so an operator reconciling an item never has to reconstruct which
-// reviewer decided what or which commit carried the work.
+// renderReviewNotes carries the invariant, review, and integration evidence into
+// the tracker, so an operator reconciling an item never has to reconstruct which
+// constraints applied, which reviewer decided what, or which commit carried the
+// work. Every kind of recorded note ends with this, so a run that succeeded, one
+// that failed, and one that was blocked all say the same things about themselves.
 func renderReviewNotes(outcome Outcome) []string {
-	var lines []string
+	lines := renderInvariantNotes(outcome)
 	if outcome.ReviewSessionID != "" {
 		lines = append(lines, "Reviewer session: "+outcome.ReviewSessionID)
 	}

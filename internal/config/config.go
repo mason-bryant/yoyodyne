@@ -30,6 +30,13 @@ const CurrentVersion = 1
 // needs no setting at all.
 const DefaultSpecifications = "docs/product"
 
+// DefaultInvariants is where the architect's durable invariants live when
+// nothing names another directory. It is the recommended layout for the same
+// reason the specifications default is: a project that followed it writes
+// nothing down, and a project with no such directory simply has no invariants
+// yet rather than a broken configuration.
+const DefaultInvariants = "docs/decisions/invariants"
+
 type Config struct {
 	Version int `yaml:"version" json:"version"`
 	// Extends names the built-in bundle this configuration inherits from, and
@@ -52,6 +59,13 @@ type Product struct {
 	// that escapes it would put arbitrary text in front of the role that decides
 	// what the product is for.
 	Specifications string `yaml:"specifications" json:"specifications"`
+	// Invariants is the directory of durable architectural invariants the
+	// architect owns, relative to the repository root. The harness reads it to
+	// deliver the ones relevant to a work item into the developer's context and
+	// the reviewer's evidence, so it is confined to the repository for the same
+	// reason the specifications are: a path that escaped it would put arbitrary
+	// text in front of every developer as a constraint on their change.
+	Invariants string `yaml:"invariants" json:"invariants"`
 }
 
 type Execution struct {
@@ -176,6 +190,9 @@ func (c Config) Validate() error {
 		problems = append(problems, "product repository is required")
 	}
 	if err := validateSpecificationsDirectory(c.Product.Specifications); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if err := validateRepositoryDirectory("product invariants", c.Product.Invariants); err != nil {
 		problems = append(problems, err.Error())
 	}
 	if c.Execution.MaxConcurrentDevelopers < 1 {
@@ -316,13 +333,21 @@ func (p Persona) problems(agentName string) []string {
 // path or one that climbs out of it names something the repository does not
 // contain and is refused rather than read.
 func validateSpecificationsDirectory(directory string) error {
+	return validateRepositoryDirectory("product specifications", directory)
+}
+
+// validateRepositoryDirectory holds one configured directory inside the
+// repository. Every such setting names artifacts an agent is shown, so the rule
+// is stated once here rather than once per setting: a path that climbs out of
+// the repository names text nobody reviewed with the code.
+func validateRepositoryDirectory(setting, directory string) error {
 	trimmed := strings.TrimSpace(directory)
 	if trimmed == "" {
-		return errors.New("product specifications directory is required")
+		return fmt.Errorf("%s directory is required", setting)
 	}
 	clean := filepath.Clean(trimmed)
 	if filepath.IsAbs(trimmed) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("product specifications %q must be a directory inside the repository", directory)
+		return fmt.Errorf("%s %q must be a directory inside the repository", setting, directory)
 	}
 	return nil
 }

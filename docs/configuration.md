@@ -75,6 +75,7 @@ product:
   id: example
   repository: .
   specifications: docs/product
+  invariants: docs/decisions/invariants
 
 execution:
   max_concurrent_developers: 1
@@ -129,10 +130,10 @@ old file.
 Relative paths inside the configuration — `product.repository` and a non-`auto`
 `execution.worktree_root` — resolve against the project directory, which is the
 parent of `.yoyodyne`, not the `.yoyodyne` directory itself. `repository: .`
-therefore keeps meaning the project root. `product.specifications` is the one
-exception, and deliberately: it names a directory *inside the repository being
-worked on*, so it resolves against `product.repository` and is refused if it
-leaves it.
+therefore keeps meaning the project root. `product.specifications` and
+`product.invariants` are the exceptions, and deliberately: each names a directory
+*inside the repository being worked on*, so both resolve against
+`product.repository` and are refused if they leave it.
 
 ## Precedence
 
@@ -149,8 +150,8 @@ and what the harness still fills in when a file leaves something out.
 Up to three layers produce the effective configuration, later ones winning:
 
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
-   them: `product.specifications` (`docs/product`),
-   `execution.max_concurrent_developers` (1),
+   them: `product.specifications` (`docs/product`), `product.invariants`
+   (`docs/decisions/invariants`), `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -244,6 +245,68 @@ do that. Reconciling accumulated documentation against the code belongs to a
 role that reads the code, and the harness does not have one yet. Point
 `specifications` at a wider directory if you would rather have the breadth than
 the authority; the confinement rule is the only limit on where it points.
+
+## Architectural invariants
+
+The architect's durable constraints live in a second configured directory:
+
+```yaml
+product:
+  id: example
+  repository: .
+  invariants: docs/decisions/invariants   # the default; nothing to write down if you use it
+```
+
+An **invariant** is a cross-cutting constraint that outlives the work item that
+established it — the kind a later change breaks while its own work looks
+correct. One Markdown file per constraint, named by its id, with the metadata in
+frontmatter and the constraint itself in two required sections:
+
+```markdown
+---
+id: one-writer-per-item
+title: One process at a time acts on an in-flight work item
+status: active
+established_by:
+    - yoyodyne-ifd.2.7
+scope:
+    - internal/runstate
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-17T12:00:00Z
+      reason: extracted from the decision that added the reservation
+---
+
+## Must hold
+
+Every entry into an in-flight run takes the run's exclusive lease first.
+
+## Why
+
+The lease is the only thing keeping two processes off one in-flight item.
+```
+
+Only files directly in this directory are read, because the file name is the
+identity; a `.md` filed in a subdirectory is reported rather than read. `scope`
+is optional: an invariant without one is repository-wide and reaches every work
+item, and a scoped one is delivered when the work item's prose — or, for the
+reviewer, the change itself — names a path it constrains. A missing directory is
+not an error; the project simply records no invariants.
+
+Writing these by hand works, and `yoyo invariant create|amend|retire` is the
+supported path: it validates the constraint, records who changed it and why, and
+refuses every role but the architect. Retirement sets `status: retired` and
+records the reason. The file stays and stops being delivered, because an
+invariant that vanished leaves whoever read it last month with no way to find out
+it was lifted.
+
+A file in this directory that cannot be read as an invariant is **reported and
+not delivered**, which is the opposite of how a malformed specification is
+handled and deliberately so: half a constraint is not one a developer can be held
+to. `yoyo invariant list` names it on stderr, the gap is stated in the prompts
+the harness builds, and it is recorded on the work item, so a set that is missing
+something never looks complete.
 
 ## Checks
 
