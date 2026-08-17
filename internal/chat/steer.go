@@ -25,6 +25,7 @@ import (
 const commandHelp = `Commands the harness carries out for you:
   /status                     what is in flight, claimed, blocked, available, and done
   /backlog                    the admitted work in the product manager's order, and what is next
+  /reports                    what agents have reported without it stopping their work
   /work <beads-id>            run one work item now, while you keep talking
   /wait                       wait for the run this conversation started and report it
   /stop [reason]              stop the run this conversation started and settle what it left
@@ -72,6 +73,14 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 			return false, err
 		}
 		fmt.Fprint(out, queue.Render())
+		fmt.Fprintln(out)
+		return false, nil
+	case "/reports":
+		reports, err := s.ReadReports()
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprint(out, renderCollectedReports(reports))
 		fmt.Fprintln(out)
 		return false, nil
 	case "/work":

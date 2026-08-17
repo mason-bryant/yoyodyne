@@ -22,6 +22,7 @@ import (
 	"yoyodyne/internal/console"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
+	"yoyodyne/internal/report"
 	"yoyodyne/internal/runstate"
 )
 
@@ -94,6 +95,11 @@ type Options struct {
 	// conversation without one still discusses the product, and the commands that
 	// would need it say plainly that there is no harness behind them.
 	Work Work
+	// Reports is the pile every role's reports are collected in, which the
+	// operator reads from here because this conversation is the path they are
+	// already on. It is optional like the rest, and a conversation without one
+	// says so rather than showing an empty pile.
+	Reports Reports
 	// Model is required. A conversation is evidence like any other provider
 	// invocation, and evidence produced by whatever model the provider happened
 	// to default to is not auditable.
@@ -102,6 +108,10 @@ type Options struct {
 	// may specialize how the product manager works; it is placed after the
 	// immutable contract and can never replace or weaken it.
 	Persona string
+	// Agent is the configured agent name filling the role, recorded on anything
+	// this conversation reports so a project with more than one agent per role
+	// can tell which of them said it.
+	Agent string
 	// Provider names the backend for the durable record.
 	Provider domain.Backend
 	// Repository is the working directory the provider is started in. Nothing
@@ -205,8 +215,15 @@ type Reply struct {
 	// with the conversation and given to its next turn rather than dropped, so
 	// the operator knows the exchange stopped where it did because the budget ran
 	// out rather than because the product manager was finished.
-	ResultsCarriedOver bool     `json:"results_carried_over,omitempty"`
-	Evidence           Evidence `json:"evidence"`
+	ResultsCarriedOver bool `json:"results_carried_over,omitempty"`
+	// Reports are what the product manager noticed and filed for the operator
+	// while it answered. They are collected rather than acted on: a report
+	// changes nothing about the turn that carried it, exactly as it changes
+	// nothing about a run. ReportProblem names one that could not be read or
+	// could not be kept, because a lost report would otherwise be silence.
+	Reports       []report.Report `json:"reports,omitempty"`
+	ReportProblem string          `json:"report_problem,omitempty"`
+	Evidence      Evidence        `json:"evidence"`
 }
 
 // Open loads or starts the product manager's conversation. A recorded
@@ -294,25 +311,29 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 			reply.Text = appendProse(reply.Text, answer)
 			return reply, err
 		}
-		prose, actions, proposals, err := splitReply(answer)
-		reply.Text = appendProse(reply.Text, prose)
+		parsed, err := splitReply(answer)
+		reply.Text = appendProse(reply.Text, parsed.Prose)
+		// What was reported is collected before anything else is decided about
+		// the turn, and a report that could not be read is noted rather than
+		// returned: the rest of the answer is unaffected by either.
+		s.collectReply(&reply, parsed)
 		if err != nil {
 			return reply, err
 		}
 
-		pending, err := s.recordProposals(proposals)
+		pending, err := s.recordProposals(parsed.Proposals)
 		reply.Proposals = append(reply.Proposals, pending...)
 		if err != nil {
 			return reply, err
 		}
-		if len(actions) == 0 {
+		if len(parsed.Actions) == 0 {
 			break
 		}
 		// The harness now goes to the tracker on the product manager's behalf,
 		// which emits no provider events, so the display is told directly rather
 		// than left saying the provider is still writing.
 		s.activity.doing(phaseTracker)
-		outcomes, err := s.performTrackerActions(ctx, actions)
+		outcomes, err := s.performTrackerActions(ctx, parsed.Actions)
 		reply.Actions = append(reply.Actions, outcomes...)
 		if err != nil {
 			return reply, err
@@ -427,21 +448,70 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	return result.FinalText, nil
 }
 
+// parsedReply is one answer taken apart: the prose the operator reads, the
+// tracker actions it asked for, the work it proposed, and what it reported. The
+// report block is kept apart from the rest because it is the one thing that
+// decides nothing — a report the harness could not read costs the turn nothing,
+// so it travels as its own problem rather than as the turn's error.
+type parsedReply struct {
+	Prose         string
+	Actions       []TrackerAction
+	Proposals     []Proposal
+	Reports       []report.Entry
+	ReportProblem error
+}
+
 // splitReply separates one answer into the prose the operator reads, the tracker
-// actions it asked for, and the work items it proposed. A block the harness
-// cannot read leaves the whole answer as prose and reports a typed failure:
-// nothing in an unreadable block is carried out or recorded, and the answer
-// itself is still the operator's to read.
-func splitReply(answer string) (string, []TrackerAction, []Proposal, error) {
-	prose, actions, err := extractTrackerActions(answer)
+// actions it asked for, the work items it proposed, and the reports it filed. A
+// tracker or proposal block the harness cannot read leaves the rest of the
+// answer as prose and reports a typed failure: nothing in an unreadable block is
+// carried out or recorded, and the answer itself is still the operator's to
+// read. The report block is the exception at both ends: it is taken out first,
+// and one that cannot be read leaves everything else to be taken apart exactly
+// as it would have been.
+func splitReply(answer string) (parsedReply, error) {
+	rest, reports, reportErr := report.Extract(answer)
+	parsed := parsedReply{Reports: reports, ReportProblem: reportErr}
+	prose, actions, err := extractTrackerActions(rest)
 	if err != nil {
-		return answer, nil, nil, &TrackerError{Err: err}
+		parsed.Prose = rest
+		return parsed, &TrackerError{Err: err}
 	}
 	prose, proposals, err := extractProposals(prose)
 	if err != nil {
-		return answer, nil, nil, &ProposalError{Err: err}
+		parsed.Prose = rest
+		return parsed, &ProposalError{Err: err}
 	}
-	return prose, actions, proposals, nil
+	parsed.Prose = prose
+	parsed.Actions = actions
+	parsed.Proposals = proposals
+	return parsed, nil
+}
+
+// collectReply records what one round of an answer reported and carries the
+// result into the reply. It is separate from the rest of the turn on purpose:
+// nothing it does can change what the turn did.
+func (s *Session) collectReply(reply *Reply, parsed parsedReply) {
+	if parsed.ReportProblem != nil {
+		reply.ReportProblem = appendProblem(reply.ReportProblem, s.noteUnreadableReport(parsed.ReportProblem))
+		return
+	}
+	recorded, problem := s.recordReports(parsed.Reports)
+	reply.Reports = append(reply.Reports, recorded...)
+	reply.ReportProblem = appendProblem(reply.ReportProblem, problem)
+}
+
+// appendProblem joins what went wrong with reports across the rounds of one
+// answer, so a second lost report never overwrites the first.
+func appendProblem(existing, addition string) string {
+	switch {
+	case strings.TrimSpace(addition) == "":
+		return existing
+	case existing == "":
+		return addition
+	default:
+		return existing + "; " + addition
+	}
 }
 
 // appendProse joins what the product manager said across the rounds of one
@@ -697,8 +767,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		}
 		// What the product manager did to the tracker is reported whether or not
 		// the turn ended well: the changes are already made, and an operator who
-		// is not told about them is reading a queue that moved without them.
+		// is not told about them is reading a queue that moved without them. What
+		// it reported is shown for the same reason, and stays in the pile for
+		// /reports afterwards.
 		s.reportTrackerActions(out, reply)
+		reportFiled(out, reply)
 		// A turn whose proposal or tracker block could not be read is not a broken
 		// conversation: the answer above is real and the turn is recorded, so
 		// the operator is told what was lost and the conversation continues.
@@ -1039,7 +1112,11 @@ To propose, end your reply with exactly one block, after the prose:
 {"items":[{"title":"one line","description":"what the work is and what done means","rationale":"why this follows from what the operator said","parent":"beads-id","dependencies":["beads-id"]}]}
 ` + "```" + `
 
-"title", "description", and "rationale" are required on every item. "parent" and "dependencies" are optional and must name Beads items that already exist in the supplied state; never invent an identifier. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.`
+"title", "description", and "rationale" are required on every item. "parent" and "dependencies" are optional and must name Beads items that already exist in the supplied state; never invent an identifier. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.
+
+` + report.Contract + `
+
+You reach the operator by talking to them, so most of what you notice belongs in your prose rather than in a report. Report instead when what you noticed should outlive this conversation and reach whoever is reading later: it will still matter after this exchange is over, or after the record you are speaking from has been replaced. A report is also not a work item — work goes to the backlog through the actions above, or to the operator as a proposal.`
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {

@@ -135,6 +135,13 @@ type RunReport struct {
 	// continuable straight away rather than waiting on a deadline.
 	ProviderStop string `json:"provider_stop,omitempty"`
 	Failure      string `json:"failure,omitempty"`
+	// Reported counts what this run's agents reported while their work carried
+	// on, and ReportProblem names one the run could not keep. The reports
+	// themselves are in the collected pile that /reports shows; the count is
+	// here because a run finishing is when the operator finds out there is
+	// something new in it.
+	Reported      int    `json:"reported,omitempty"`
+	ReportProblem string `json:"report_problem,omitempty"`
 }
 
 // Settlement is what settling did with one run.
@@ -300,6 +307,12 @@ func (r RunReport) Render() string {
 	}
 	if r.RepairAttempts > 0 {
 		fmt.Fprintf(&rendered, "  repair attempts: %d\n", r.RepairAttempts)
+	}
+	if r.Reported > 0 {
+		fmt.Fprintf(&rendered, "  reported %d thing(s) without stopping; /reports shows them\n", r.Reported)
+	}
+	if r.ReportProblem != "" {
+		fmt.Fprintf(&rendered, "  %s\n", singleLine(r.ReportProblem, MaxOperatorMessageBytes))
 	}
 	if r.Failure != "" {
 		fmt.Fprintf(&rendered, "  failure: %s\n", singleLine(r.Failure, MaxOperatorMessageBytes))

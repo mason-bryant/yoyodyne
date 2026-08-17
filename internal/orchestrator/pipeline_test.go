@@ -2081,6 +2081,9 @@ type fakeBackend struct {
 	// reused provider identity never reaches integration.
 	developerSession string
 	reviewerSession  string
+	// developerFinalText replaces what a served developer attempt says about its
+	// work, which is what a test that cares about the summary itself sets.
+	developerFinalText string
 }
 
 func (f *fakeBackend) CheckAvailability(context.Context) (backend.Availability, error) {
@@ -2173,11 +2176,15 @@ func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fa
 			if err := develop(request); err != nil {
 				return backend.RunResult{}, err
 			}
+			finalText := "implemented the work item"
+			if provider.developerFinalText != "" {
+				finalText = provider.developerFinalText
+			}
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
 				SessionID:     provider.developerSession,
 				ResolvedModel: developerResolved,
-				FinalText:     "implemented the work item",
+				FinalText:     finalText,
 				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
 				LastEvent:     request.LastSequence,
 			}, nil

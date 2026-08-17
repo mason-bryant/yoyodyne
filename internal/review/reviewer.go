@@ -12,6 +12,7 @@ import (
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
+	"yoyodyne/internal/report"
 )
 
 // MaxReviewInputBytes bounds the system contract and evidence handed to a
@@ -69,6 +70,13 @@ type Result struct {
 	// on time. A stopped review was never made either, and the change it was
 	// going to judge is untouched by it.
 	ProcessStatus execution.ProcessStatus
+	// Reports are what the reviewer noticed beside its verdict and asked to have
+	// carried to the operator. They are returned rather than acted on: a report
+	// is not a finding, it decides nothing about the change, and the caller
+	// collects it wherever collected reports live. ReportProblem names a report
+	// block that could not be read, which costs the verdict nothing.
+	Reports       []report.Entry
+	ReportProblem string
 }
 
 // Reviewer runs one independent review of a developer's change. It owns the
@@ -158,10 +166,21 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	}
 	sequence = execution.NewSequence(lastSequence)
 
+	// Anything the reviewer reported is taken out of its answer before the answer
+	// is read as a verdict, and what is left is decoded exactly as it always was.
+	// A block that could not be read changes nothing about the review: the reply
+	// is decoded as it arrived, and the lost report is named instead.
+	answer, reported, reportErr := report.Extract(providerResult.FinalText)
+	reportProblem := ""
+	if reportErr != nil {
+		reportProblem = reportErr.Error()
+	}
+
 	// Every outcome from here on carries the same provider identity evidence, so
 	// a rejected review is as auditable as an accepted one. An exhausted usage
 	// limit travels with it, because a review the provider declined has to be
-	// told apart from one it answered badly.
+	// told apart from one it answered badly. What the reviewer reported travels
+	// with it too, because a report survives a verdict the harness rejected.
 	evidence := func() Result {
 		return Result{
 			RequestedModel: r.Model,
@@ -170,6 +189,8 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			LastSequence:   lastSequence,
 			UsageLimit:     providerResult.UsageLimit,
 			ProcessStatus:  providerResult.Process.Status,
+			Reports:        reported,
+			ReportProblem:  reportProblem,
 		}
 	}
 	if providerResult.IsError {
@@ -183,7 +204,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		}
 		return evidence(), fmt.Errorf("reviewer reported failure: %s", firstNonEmpty(providerResult.StopReason, providerResult.FinalText, "unknown provider failure"))
 	}
-	verdict, err := Decode([]byte(strings.TrimSpace(providerResult.FinalText)))
+	verdict, err := Decode([]byte(strings.TrimSpace(answer)))
 	if err != nil {
 		return evidence(), err
 	}
@@ -291,11 +312,15 @@ Reconcile the change against the documentation you can see, in the patch and in 
 
 Decide approve or repair. Approve only when the change is correct, complete against the acceptance criteria, and free of blocker or major problems; a purely minor observation may accompany an approval. Choose repair when any blocker or major problem remains, and give the developer a specific, actionable finding for each one.
 
-Reply with a single JSON object and nothing else. No prose, no Markdown, no code fence:
+Reply with a single JSON object and nothing else, except the one report block described below. No prose, no Markdown, no code fence:
 
 {"decision":"approve|repair","summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}
 
-"findings" may be omitted when approving with no observations. "location" is optional. Any other field is rejected.`
+"findings" may be omitted when approving with no observations. "location" is optional. Any other field is rejected.
+
+` + report.Contract + `
+
+A finding and a report are different things and must not be swapped. A finding is what this change has to do before it is approved, and it goes in the verdict above. A report is something outside this change that a person should know, and it decides nothing about the verdict: reporting it never turns an approval into a repair, and something that does need repairing is a finding rather than a report.`
 }
 
 func reviewEvidencePrompt(request Request) string {

@@ -61,9 +61,10 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 ```
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version
-control. Run state, provider event streams, locks, and worktrees live outside the
-repository under an operating-system state directory, so nothing there depends on
-where the project is checked out.
+control. Run state, provider event streams, locks, worktrees, and the reports
+agents file while their work carries on live outside the repository under an
+operating-system state directory, so nothing there depends on where the project
+is checked out.
 
 What `init` writes looks like this, with the explanatory comments trimmed:
 

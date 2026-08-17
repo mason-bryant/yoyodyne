@@ -107,6 +107,7 @@ A line that begins with a slash is a command the harness carries out for you; ev
 ```text
 /status                  what is in flight, claimed, blocked, available, and done
 /backlog                 the admitted work in order, and what would be pulled next
+/reports                 what agents reported without it stopping their work
 /work <beads-id>         run one work item now, while you keep talking
 /wait                    wait for the run this conversation started and report it
 /stop [reason]           stop that run and settle what it left behind
@@ -130,6 +131,20 @@ Either way the conversation's own log says what happened rather than only what w
 Only you reach any of this. The product manager owns what the queue says and the order it is in; running, stopping, and redirecting the work itself stays yours, so nothing it writes starts or stops anything — a reply that contains `/work` is prose. What it does get is an account of what you had the harness do, carried into its next turn as evidence, so the conversation keeps discussing the product as it now is rather than as it was when the conversation opened.
 
 A conversation is durable. It is recorded outside the repository under the operating system's state directory, so leaving and running `yoyo chat` again resumes the same conversation; `--new` starts a fresh one instead. The record keeps the requested model selector, the model the provider reported serving, the provider session identifier, and any action results the product manager has not been told about yet, and the normalized event stream is stored beside it — including what the operator asked the harness to do, which is recorded in the conversation's own log beside the runs' logs.
+
+### What agents report, and where it reaches you
+
+Until now an agent could only reach you by failing. A spent repair budget becomes a durable blocker, a failed run is reported where you are already looking — and everything an agent noticed while its work *succeeded* survived only as prose in a run summary copied into an item's notes, where nothing surfaces it. Two real examples from a single session reached the operator only because a person happened to be reading: a reviewer's observation that the built-in bundle's declared version had gone inert, and a developer's report that `bd lint` could not run in its sandbox.
+
+Every role can now say such a thing without stopping: the developer, the reviewer, and the product manager each end what they say with one small block, and the harness collects it. `/reports` shows you the pile, newest last, with the twenty most recent listed and the rest counted.
+
+A report is deliberately not a blocker, and nothing about it behaves like one. The run carries on exactly as it would have: an approving verdict that mentions something still approves, a developer that reports something still finishes, and a report the harness cannot read or cannot store costs its run nothing at all — it is named on the outcome instead, because a report nobody kept would otherwise be silence. That is the property worth relying on, since a channel that could cost an agent its run is one agents learn not to use.
+
+Each collected report carries the role and the configured agent that made it, the run or conversation it came from, the work item where there is one, a severity — `critical`, `warning`, or `note` — and the text. That is enough structure to filter the pile later without deciding now how it should be filtered; an agent that judges which of its own observations are worth your attention is a later question, and nothing here does it. The severities are deliberately not the reviewer's `blocker`/`major`/`minor`: a finding decides whether a change is repaired, and a report decides nothing.
+
+Volume is the risk this design has, and the answer to it is in the role contracts rather than in a filter. Every contract says what merits a report — a risk worked around, an assumption that may not hold, a defect or a stale document outside the assigned work, something in the environment that stopped a check being run — and says plainly that most replies should carry none, because a channel full of routine observations is worse than nothing: it looks like coverage. That guidance is in Go, alongside the rest of each contract, so no persona can loosen it.
+
+The pile lives outside the repository under the operating system's state directory, beside the run and conversation records rather than among them. It outlives them: a run is settled and its worktree and branch are removed, and what it reported is still there for you to read.
 
 ### What a resumed conversation knows, and when to start a new one
 
