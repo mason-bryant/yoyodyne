@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"yoyodyne/internal/domain"
 )
@@ -22,7 +23,9 @@ import (
 // triggers the same loop, and the published pull request is absent entirely
 // from a run that never published one — as is the queued merge inside it, whose
 // absence means what it meant before queued merges existed: no merge is waiting
-// on the forge.
+// on the forge. The recorded account of what a run changed is the same kind of
+// addition: a state file written before it decodes unchanged, and its absence
+// means what it always meant, which is that nothing summarized the change.
 const StateSchemaVersion = 1
 
 type Status string
@@ -185,6 +188,70 @@ func (p PullRequest) Validate() error {
 	return errors.Join(problems...)
 }
 
+// MaxChangeRecordBytes bounds each half of the recorded account of what a run
+// changed. A run that touched two hundred files must not be able to fill the
+// state file with its own listing, and what the bound cuts is the tail of a
+// summary rather than any part of the run's evidence: the change itself is in
+// the commit.
+const MaxChangeRecordBytes = 8 << 10
+
+// Changes is what a run's worktree held when the harness last summarized it:
+// the files it had touched and how much of each. It is recorded because it is
+// the only account of what a run changed that outlives the worktree — cleanup
+// removes the tree and the branch, and a diff nobody can take any more is a
+// diff nobody can be shown.
+type Changes struct {
+	// Files is the name-status listing, and DiffStat is Git's own summary of how
+	// much each file changed. Both are Git's words, kept as they were produced.
+	Files    string `json:"files,omitempty"`
+	DiffStat string `json:"diff_stat,omitempty"`
+}
+
+// RecordChanges makes a bounded record of a summarized change, or nothing at
+// all when the summary is empty. A summary too long to keep is cut rather than
+// refused: losing a run's state file over a verbose listing would cost far more
+// than the tail of one.
+func RecordChanges(files, diffStat string) *Changes {
+	files = boundChangeRecord(files)
+	diffStat = boundChangeRecord(diffStat)
+	if files == "" && diffStat == "" {
+		return nil
+	}
+	return &Changes{Files: files, DiffStat: diffStat}
+}
+
+// Validate rejects a recorded change that could not have been produced within
+// the bounds the harness records under.
+func (c Changes) Validate() error {
+	var problems []error
+	if len(c.Files) > MaxChangeRecordBytes {
+		problems = append(problems, fmt.Errorf("changes files is %d bytes, which exceeds the %d byte bound", len(c.Files), MaxChangeRecordBytes))
+	}
+	if len(c.DiffStat) > MaxChangeRecordBytes {
+		problems = append(problems, fmt.Errorf("changes diff_stat is %d bytes, which exceeds the %d byte bound", len(c.DiffStat), MaxChangeRecordBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// boundChangeRecord cuts one half of a change record to its bound and says that
+// it was cut, so nobody reads a clamped listing as a complete one.
+func boundChangeRecord(text string) string {
+	if strings.TrimSpace(text) == "" {
+		return ""
+	}
+	trimmed := strings.TrimRight(text, "\n")
+	if len(trimmed) <= MaxChangeRecordBytes {
+		return trimmed
+	}
+	cut := MaxChangeRecordBytes - len(changeRecordCutNote)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], "\n") + changeRecordCutNote
+}
+
+const changeRecordCutNote = "\n[cut; the rest of this summary was not recorded]"
+
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
 type Integration struct {
@@ -288,8 +355,13 @@ type State struct {
 	// invocation leaves behind can still be continued, so a run carrying one is
 	// a run owed a continuation, exactly as a recorded usage-limit deadline is.
 	// It is cleared by the next attempt, whichever way that one goes.
-	ProviderStop string       `json:"provider_stop,omitempty"`
-	Integration  *Integration `json:"integration,omitempty"`
+	ProviderStop string `json:"provider_stop,omitempty"`
+	// Changes is what the run's worktree held when it was last summarized. It is
+	// absent from a run that never got as far as producing one, and it outlives
+	// the worktree it describes, which is the whole reason it is here rather than
+	// only in the outcome the run returned.
+	Changes     *Changes     `json:"changes,omitempty"`
+	Integration *Integration `json:"integration,omitempty"`
 	// PullRequest records the published pull request when the project opted in
 	// to publishing and the repository had a remote to publish to. It is absent
 	// for a purely local run, which is what a project gets by default.
@@ -424,6 +496,11 @@ func (s State) Validate() error {
 	if s.CheckFailure != nil {
 		if err := s.CheckFailure.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("check_failure: %w", err))
+		}
+	}
+	if s.Changes != nil {
+		if err := s.Changes.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("changes: %w", err))
 		}
 	}
 	if s.RepairAttempts < 0 {

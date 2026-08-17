@@ -1352,3 +1352,98 @@ func TestStoreRoundTripsAStoppedProviderAndRefusesItOnATerminalRun(t *testing.T)
 		t.Fatalf("Validate() error = %v, want an unknown stop reason to be refused", err)
 	}
 }
+
+// What a run changed has to outlive the worktree it changed it in: cleanup
+// removes the tree and the branch, so a summary nobody recorded is one nobody
+// can be shown afterwards.
+func TestStoreRoundTripsWhatARunChanged(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.Changes = RecordChanges("M internal/chat/chat.go\nA internal/chat/decision.go", " 2 files changed, 40 insertions(+)")
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.Changes == nil || loaded.Changes.Files != state.Changes.Files || loaded.Changes.DiffStat != state.Changes.DiffStat {
+		t.Fatalf("recorded changes = %#v, want %#v", loaded.Changes, state.Changes)
+	}
+	// A run that summarized nothing records nothing, so an absent account is
+	// never mistaken for an empty change.
+	if empty := RecordChanges("", "   "); empty != nil {
+		t.Fatalf("RecordChanges() = %#v, want nothing recorded", empty)
+	}
+}
+
+// A very large change must not be able to fill the state file with its own
+// listing. What the bound cuts is the tail of a summary, and it says that it
+// cut it rather than leaving a clamped listing looking complete.
+func TestRecordedChangesAreBoundedAndSayWhenTheyWereCut(t *testing.T) {
+	t.Parallel()
+
+	changes := RecordChanges(strings.Repeat("M some/long/path/to/a/file.go\n", 2000), "")
+	if changes == nil {
+		t.Fatal("RecordChanges() recorded nothing at all")
+	}
+	if len(changes.Files) > MaxChangeRecordBytes {
+		t.Fatalf("recorded %d bytes, limit is %d", len(changes.Files), MaxChangeRecordBytes)
+	}
+	if !strings.HasSuffix(changes.Files, changeRecordCutNote) {
+		t.Fatalf("a cut listing does not say it was cut: %q", changes.Files[len(changes.Files)-80:])
+	}
+	if err := changes.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	// The bound is enforced on the way in as well, so a record assembled by hand
+	// cannot smuggle an unbounded listing into the state file.
+	oversized := Changes{DiffStat: strings.Repeat("x", MaxChangeRecordBytes+1)}
+	if err := oversized.Validate(); err == nil {
+		t.Fatal("Validate() accepted a summary past the bound")
+	}
+}
+
+// Asking what the harness last did to a work item is a read. It answers for a
+// terminal run as readily as an in-flight one, and it decides nothing about
+// either: nothing is held, adopted, or claimed by looking.
+func TestLatestReportsTheMostRecentRunOfAWorkItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	older := testState(t, StatusSucceeded)
+	older.WorkItemID = "yoyodyne-ifd.39"
+	newer := testState(t, StatusRunning)
+	newer.WorkItemID = "yoyodyne-ifd.39"
+	newer.StartedAt = older.StartedAt.Add(time.Hour)
+	newer.UpdatedAt = newer.StartedAt
+	other := testState(t, StatusSucceeded)
+	other.WorkItemID = "yoyodyne-ifd.38"
+	other.StartedAt = newer.StartedAt.Add(time.Hour)
+	other.UpdatedAt = other.StartedAt
+	other.CompletedAt = &other.StartedAt
+	for _, state := range []State{older, newer, other} {
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+
+	latest, err := store.Latest("yoyodyne-ifd.39")
+	if err != nil {
+		t.Fatalf("Latest() error = %v", err)
+	}
+	if latest.RunID != newer.RunID {
+		t.Fatalf("Latest() = %s, want the most recently started run %s", latest.RunID, newer.RunID)
+	}
+	if _, err := store.Latest("yoyodyne-ifd.99"); !errors.Is(err, ErrNoRecordedRun) {
+		t.Fatalf("Latest() error = %v, want a plain answer that there is no run", err)
+	}
+	if _, err := store.Latest("  "); err == nil {
+		t.Fatal("Latest() accepted no work item at all")
+	}
+}

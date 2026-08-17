@@ -25,6 +25,8 @@ import (
 const commandHelp = `Commands the harness carries out for you:
   /status                     what is in flight, claimed, blocked, available, and done
   /backlog                    the admitted work in the product manager's order, and what is next
+  /show <beads-id>            one work item in full, as the tracker holds it
+  /diff [beads-id]            what a run changed, from the run's own record
   /reports                    what agents have reported without it stopping their work
   /refresh                    re-read the repository and tracker into this conversation
   /work <beads-id>            run one work item now, while you keep talking
@@ -87,6 +89,27 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 			return false, err
 		}
 		fmt.Fprint(out, queue.Render())
+		fmt.Fprintln(out)
+		return false, nil
+	case "/show":
+		if argument == "" {
+			return false, errors.New("name the work item to show, as /show <beads-id>; /status and /backlog list what there is")
+		}
+		item, err := s.ShowWorkItem(ctx, argument)
+		if err != nil {
+			return false, err
+		}
+		// It is the same rendering the product manager is given when it reads an
+		// item, so what the operator sees here is what the agent could see.
+		fmt.Fprint(out, renderWorkItemEvidence(item))
+		fmt.Fprintln(out)
+		return false, nil
+	case "/diff":
+		changes, err := s.RunChanges(ctx, argument)
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprint(out, changes.Render())
 		fmt.Fprintln(out)
 		return false, nil
 	case "/reports":
@@ -247,6 +270,58 @@ func (s *Session) ReadBacklog(ctx context.Context) (backlog.Queue, error) {
 	return queue, nil
 }
 
+// ShowWorkItem reads one work item in full. It goes through the same tracker
+// capability the product manager reads items with, deliberately: the operator
+// asking what something is gets exactly what the agent discussing it could
+// have, rather than a second account of the item assembled somewhere else. It
+// is read-only, and it is the operator's own command, so nothing the product
+// manager says can reach it.
+func (s *Session) ShowWorkItem(ctx context.Context, workItemID string) (beads.WorkItem, error) {
+	if s.options.Tracker == nil {
+		return beads.WorkItem{}, errors.New("no work tracker is wired to this conversation, so it cannot read an item")
+	}
+	id := strings.TrimSpace(workItemID)
+	if err := beads.ValidateIssueID(id); err != nil {
+		return beads.WorkItem{}, err
+	}
+	item, err := s.options.Tracker.Show(ctx, id)
+	if err != nil {
+		return beads.WorkItem{}, fmt.Errorf("read work item %s: %w", id, err)
+	}
+	return item, nil
+}
+
+// RunChanges reports what the harness's most recent run of a work item changed.
+// Naming nothing asks about the run this conversation is watching: the one it
+// started and has not collected, or the last one it did, because that is the
+// run an operator asking "what did that change" almost always means.
+//
+// It answers from the durable run record rather than from the repository. A run
+// is cleaned up after it integrates — its worktree removed and its branch
+// deleted — so a question answered by diffing a worktree would stop having an
+// answer exactly when the work succeeded. What the record kept is what it
+// changed, and, where the project publishes, the pull request it changed it in.
+func (s *Session) RunChanges(ctx context.Context, workItemID string) (RunChanges, error) {
+	if s.options.Work == nil {
+		return RunChanges{}, errNoWork
+	}
+	id := strings.TrimSpace(workItemID)
+	if id == "" {
+		id = s.lastRun
+	}
+	if id == "" {
+		return RunChanges{}, errors.New("this conversation has not run anything, so name the work item, as /diff <beads-id>")
+	}
+	if err := beads.ValidateIssueID(id); err != nil {
+		return RunChanges{}, err
+	}
+	changes, err := s.options.Work.Changes(ctx, id)
+	if err != nil {
+		return RunChanges{}, fmt.Errorf("read what the last run of %s changed: %w", id, err)
+	}
+	return changes, nil
+}
+
 // StartWork has the harness run one work item. The run happens in the
 // background so the conversation stays a conversation: the operator keeps
 // talking while the harness works, and asks what became of it afterwards. One
@@ -281,6 +356,9 @@ func (s *Session) StartWork(ctx context.Context, workItemID string) error {
 		run.report, run.err = work.Run(runContext, id)
 	}()
 	s.active = run
+	// The item stays named after the run is collected, so an operator asking
+	// what the run changed does not have to remember which item it was on.
+	s.lastRun = id
 	s.notice("the operator started work on %s, and the harness is running it now", id)
 	return nil
 }

@@ -128,6 +128,20 @@ func (w conversationWork) Run(ctx context.Context, workItemID string) (chat.RunR
 	return runReportOf(outcome), err
 }
 
+// Changes reports what the most recent recorded run of a work item changed. It
+// reads the durable run state and nothing else: no worktree is inspected and no
+// git command is run, so the answer is the same whether the run finished a
+// moment ago or was cleaned up weeks back and had its worktree and branch
+// removed. Reading a record decides nothing about the run, so a run another
+// process is executing is as readable here as a finished one.
+func (w conversationWork) Changes(_ context.Context, workItemID string) (chat.RunChanges, error) {
+	state, err := w.store.Latest(workItemID)
+	if err != nil {
+		return chat.RunChanges{}, err
+	}
+	return changesOf(state), nil
+}
+
 // Direct appends the operator's direction to the item's notes, which is where
 // the next attempt at it reads it: the developer's context carries the item's
 // notes, so direction recorded here reaches whoever picks the work up. It
@@ -211,6 +225,44 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 		snapshot.Detail = "its provider ran out of total budget while still working; the run can be continued"
 	}
 	return snapshot
+}
+
+// changesOf projects one recorded run into the account of what it changed. It
+// claims nothing the record does not hold: the promotion comes from the
+// recorded integration, the preserved worktree from the cleanup markers rather
+// than from the path still being written down, and the change itself from the
+// summary the run recorded while its worktree existed.
+func changesOf(state runstate.State) chat.RunChanges {
+	changes := chat.RunChanges{
+		RunID:        state.RunID,
+		WorkItemID:   state.WorkItemID,
+		Status:       string(state.Status),
+		Phase:        string(state.Phase),
+		StartedAt:    state.StartedAt,
+		CompletedAt:  state.CompletedAt,
+		Branch:       state.Branch,
+		WorktreePath: state.WorktreePath,
+		Preserved:    state.WorktreePath != "" && !state.WorktreeRemoved,
+		Failure:      state.Failure,
+	}
+	if state.Changes != nil {
+		changes.Files = state.Changes.Files
+		changes.DiffStat = state.Changes.DiffStat
+	}
+	if state.Integration != nil {
+		changes.Integrated = true
+		changes.TargetBranch = state.Integration.TargetBranch
+		changes.Commit = state.Integration.TargetCommit
+	}
+	if state.PullRequest != nil {
+		changes.PullRequest = &chat.PublishedChange{
+			Number: state.PullRequest.Number,
+			URL:    state.PullRequest.URL,
+			State:  state.PullRequest.State,
+			Merged: state.PullRequest.Merged,
+		}
+	}
+	return changes
 }
 
 // runReportOf projects a pipeline outcome into what a conversation reports. It

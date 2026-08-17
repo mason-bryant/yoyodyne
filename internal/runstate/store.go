@@ -414,6 +414,36 @@ func (s *Store) Outstanding() ([]State, error) {
 	return s.scan("outstanding", func(state State) bool { return state.Outstanding() })
 }
 
+// Latest reports the most recently started run recorded for one work item,
+// whatever became of it. It is how somebody asks what the harness last did to a
+// piece of work without holding, adopting, or otherwise deciding anything about
+// the run: reading a record is not acting on it, so a run a live process owns is
+// as readable here as one that finished months ago.
+func (s *Store) Latest(workItemID string) (State, error) {
+	id := strings.TrimSpace(workItemID)
+	if id == "" {
+		return State{}, errors.New("a work item is required to find its latest run")
+	}
+	states, err := s.scan("recorded", func(state State) bool { return state.WorkItemID == id })
+	if err != nil {
+		return State{}, err
+	}
+	if len(states) == 0 {
+		return State{}, fmt.Errorf("%w: %s", ErrNoRecordedRun, id)
+	}
+	latest := states[0]
+	for _, state := range states[1:] {
+		if state.StartedAt.After(latest.StartedAt) {
+			latest = state
+		}
+	}
+	return latest, nil
+}
+
+// ErrNoRecordedRun reports a work item the harness has never run, which is a
+// plain answer rather than a failure to look.
+var ErrNoRecordedRun = errors.New("no run of this work item is recorded")
+
 func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 	entries, err := os.ReadDir(s.root)
 	if errors.Is(err, os.ErrNotExist) {

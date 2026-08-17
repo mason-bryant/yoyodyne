@@ -727,7 +727,10 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 		if summaryErr != nil {
 			cause = errors.Join(cause, fmt.Errorf("summarize changes after developer backend failure: %w", summaryErr))
 		} else {
-			a.outcome.Changes = changeSummary
+			// The record is left to the terminal save this failure is on its way
+			// to: the run is ending, and what it changed before it did is part of
+			// what the record has to say about it.
+			a.recordChanges(changeSummary)
 		}
 		return cause
 	}
@@ -751,7 +754,13 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	if err != nil {
 		return fmt.Errorf("summarize developer changes: %w", err)
 	}
-	a.outcome.Changes = changeSummary
+	a.recordChanges(changeSummary)
+	// The account of the change is saved as soon as it is taken rather than with
+	// whatever the run does next, because a process that dies here still leaves
+	// somebody able to say what the run had changed.
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save the account of what the developer changed: %w", err)
+	}
 	if !providerResult.IsError {
 		return nil
 	}
@@ -1341,6 +1350,16 @@ func (a *activeRun) recordWorktree(worktree gitworktree.Worktree) {
 	a.outcome.WorktreePath = worktree.Path
 	a.outcome.Branch = worktree.Branch
 	a.outcome.BaseCommit = worktree.BaseCommit
+}
+
+// recordChanges keeps the account of what the run has changed, in the outcome
+// its caller reads and in the durable record that outlives the worktree it
+// describes. The two are set together so they can never disagree, and the
+// durable one is what an operator is shown afterwards: cleanup removes the
+// worktree and the branch, and nothing can be diffed out of a tree that is gone.
+func (a *activeRun) recordChanges(summary gitworktree.ChangeSummary) {
+	a.outcome.Changes = summary
+	a.state.Changes = runstate.RecordChanges(summary.Status, summary.DiffStat)
 }
 
 // recordHarnessCommit names the commit the harness just made in the worktree.
