@@ -518,6 +518,7 @@ func protectBranch(t *testing.T, remote, branch string) {
 	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
 	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
 	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	disablePipelineMaintenance(t, clone)
 	runPipelineGit(t, clone, "commit", "--allow-empty", "-m", "a direct push")
 	if err := exec.Command("git", "-C", clone, "push", "origin", "HEAD:refs/heads/"+branch).Run(); err == nil {
 		t.Fatalf("the remote accepted a direct push to %s", branch)
@@ -533,6 +534,7 @@ func driftRemoteTarget(t *testing.T, remote, branch string) {
 	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
 	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
 	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	disablePipelineMaintenance(t, clone)
 	// Real content, not an empty commit: what makes this drift is that the remote
 	// target no longer carries what the promotion was written against.
 	if err := os.WriteFile(filepath.Join(clone, "elsewhere.txt"), []byte("someone else's work\n"), 0o600); err != nil {
@@ -575,6 +577,7 @@ func addBareRemote(t *testing.T, repository string) string {
 		t.Fatalf("MkdirAll() error = %v", err)
 	}
 	runPipelineGit(t, remote, "init", "--bare", "-b", "main")
+	disablePipelineMaintenance(t, remote)
 	runPipelineGit(t, repository, "remote", "add", "origin", remote)
 	runPipelineGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
 	return remote

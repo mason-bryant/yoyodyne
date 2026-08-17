@@ -2342,18 +2342,86 @@ func pipelineRepository(t *testing.T) string {
 	runPipelineGit(t, repository, "init", "-b", "main")
 	runPipelineGit(t, repository, "config", "user.name", "Yoyodyne Test")
 	runPipelineGit(t, repository, "config", "user.email", "yoyodyne@example.invalid")
+	disablePipelineMaintenance(t, repository)
+	// Registered after the first TempDir call above and therefore run before
+	// TempDir's removal, so the repository is idle by the time Go deletes it.
+	t.Cleanup(func() { removeLinkedPipelineWorktrees(t, repository) })
 	runPipelineGit(t, repository, "add", ".")
 	runPipelineGit(t, repository, "commit", "-m", "initial")
 	return repository
 }
 
+// disablePipelineMaintenance stops Git from handing this repository to a
+// process that outlives the command which started it. Writing commands
+// otherwise start "git maintenance run --auto --detach", which daemonizes into
+// its own session and is still working inside .git when a test's TempDir
+// cleanup deletes that directory. Nothing under test needs maintenance, so none
+// is started.
+func disablePipelineMaintenance(t *testing.T, repository string) {
+	t.Helper()
+	runPipelineGit(t, repository, "config", "maintenance.auto", "false")
+	runPipelineGit(t, repository, "config", "gc.auto", "0")
+}
+
+// removeLinkedPipelineWorktrees makes a test responsible for the worktrees its
+// run created. TempDir deletes directories and unregisters nothing, so a
+// registration inside .git outlives the checkout it names.
+func removeLinkedPipelineWorktrees(t *testing.T, repository string) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(repository, ".git")); err != nil {
+		return
+	}
+	for _, path := range linkedPipelineWorktreePaths(t, repository) {
+		// A worktree a run already removed is gone from the listing; one whose
+		// directory is missing can only be pruned, which the sweep below does.
+		if output, err := attemptPipelineGit(repository, "worktree", "remove", "--force", path); err != nil {
+			if _, statErr := os.Stat(path); statErr == nil {
+				t.Errorf("cleanup could not remove worktree %s: %v: %s", path, err, output)
+			}
+		}
+	}
+	if output, err := attemptPipelineGit(repository, "worktree", "prune"); err != nil {
+		t.Errorf("cleanup could not prune worktree registrations: %v: %s", err, output)
+	}
+	if remaining := linkedPipelineWorktreePaths(t, repository); len(remaining) > 0 {
+		t.Errorf("cleanup left worktree registrations behind: %v", remaining)
+	}
+}
+
+// linkedPipelineWorktreePaths names every worktree registered against
+// repository apart from the primary checkout, which git lists first.
+func linkedPipelineWorktreePaths(t *testing.T, repository string) []string {
+	t.Helper()
+	listing, err := attemptPipelineGit(repository, "worktree", "list", "--porcelain")
+	if err != nil {
+		t.Errorf("cleanup could not list worktrees: %v: %s", err, listing)
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(listing, "\n") {
+		if path, found := strings.CutPrefix(strings.TrimSpace(line), "worktree "); found {
+			paths = append(paths, path)
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths[1:]
+}
+
 func runPipelineGit(t *testing.T, repository string, args ...string) {
 	t.Helper()
-	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
-	output, err := command.CombinedOutput()
-	if err != nil {
+	if output, err := attemptPipelineGit(repository, args...); err != nil {
 		t.Fatalf("git %v error = %v: %s", args, err, output)
 	}
+}
+
+// attemptPipelineGit runs a Git command whose failure is the caller's to
+// interpret, rather than a test failure at the point of the call.
+func attemptPipelineGit(repository string, args ...string) (string, error) {
+	command := exec.Command("git", append([]string{"-C", repository}, args...)...)
+	output, err := command.CombinedOutput()
+	return string(output), err
 }
 
 func gitOutput(t *testing.T, repository string, args ...string) string {
