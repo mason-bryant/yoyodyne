@@ -53,6 +53,30 @@ A provider invocation is bounded by two separate questions, because one deadline
 
 Documentation counts as part of a work item rather than as follow-up: the developer contract makes updating the documents that describe changed behavior part of the assigned work, and the reviewer reports a change that leaves a document asserting something the change has made false. That reconciliation is diff-scoped, and the limit is worth stating plainly — the reviewer is given one change, not the repository, so it catches a contradiction with documentation it can see and misses a claim invalidated in a file the change never touches. Nothing in the harness yet compares the accumulated documentation against reality.
 
+## Architectural invariants
+
+Some constraints outlive the work item that established them: a contract one change created that later changes must not break. Those live under `product.invariants` — `docs/decisions/invariants` by default — as one Markdown file per constraint, named by its id, carrying what must hold, why, what established it, and a recorded revision history. They belong to the architect, and it is worth being precise about which half of that is enforced and which is not. Recording, amending, and retiring one goes through a single code path that refuses every role but the architect, so `yoyo invariant` and any future architect agent are bound by it and no other role has an authorized way to write one. A developer, though, has a shell in its worktree, exactly as it does for the [pushes and merges the harness never routes through an agent](docs/v1-harness-design.md#what-is-enforced-and-what-is-not): what stands in the way of it editing an invariant is its contract, which forbids it and tells it to propose the amendment instead, and the reviewer, which is told that a change creating, amending, retiring, or editing one is a finding. Treat "only the architect changes an invariant" as the authorized path plus a caught one rather than as something the harness makes impossible.
+
+They exist because a change whose own work is correct can still break something outside its scope, and they are only worth having if they reach the people doing the work. The harness selects the ones relevant to a work item and delivers them into the developer's context and the reviewer's evidence, so nothing depends on whoever wrote the bead having remembered the constraint. Selection is what keeps that affordable: an invariant with no declared scope is repository-wide and reaches every item, and a scoped one is delivered when the evidence names a path it constrains. The developer's evidence is the work item's own prose; the reviewer's adds the change itself, so an invariant scoped to code the item never mentioned still reaches the gate that judges the change that touched it. The reviewer is told that a change violating a delivered invariant draws a finding naming it, and that editing one is a finding of its own. The limits are stated where they apply: the delivered set is never presented as the whole set, an invariant the harness could not read is named as a gap rather than dropped silently, and what was delivered is recorded on the work item so an operator can see afterwards which constraints applied.
+
+The architect agent does not execute yet, so the lifecycle is reachable from the command line, acting with the architect's authority and recording that it did:
+
+```sh
+./bin/yoyo invariant list
+./bin/yoyo invariant create \
+  --title "One process at a time acts on an in-flight work item" \
+  --statement "Every entry into an in-flight run takes the run's exclusive lease first." \
+  --rationale "The lease is the only thing keeping two developers off one item." \
+  --established-by yoyodyne-ifd.2.7 \
+  --scope internal/runstate,internal/orchestrator \
+  --reason "extracted from the decision that added the reservation" \
+  one-writer-per-item
+./bin/yoyo invariant show one-writer-per-item
+./bin/yoyo invariant retire --reason "the reservation moved into the store" one-writer-per-item
+```
+
+Retirement is explicit and recorded rather than a deletion: the file stays, the constraint stops being delivered, and the reason it was lifted is readable by whoever read the invariant last month. A repository with no invariants directory simply has none, and runs are unaffected.
+
 ## Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got to. `yoyo reconcile` settles what it left behind:
@@ -220,6 +244,7 @@ product:
   id: example
   repository: .
   specifications: docs/product
+  invariants: docs/decisions/invariants
 
 checks: []          # yours to write; a run with none is refused
 

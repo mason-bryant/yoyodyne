@@ -30,6 +30,7 @@ type productDocument struct {
 	RepositoryID   *domain.RepositoryID `yaml:"repository_id"`
 	Repository     *string              `yaml:"repository"`
 	Specifications *string              `yaml:"specifications"`
+	Invariants     *string              `yaml:"invariants"`
 }
 
 type executionDocument struct {
