@@ -190,14 +190,12 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 	// A run whose merge the forge queued is not an interrupted run: it finished,
 	// and what it still owes is the forge's answer about a merge that lands
 	// minutes after the run was over. Asking for that answer is the whole of
-	// reconciliation's part in it.
+	// reconciliation's part in it, and it is asked before the repository is
+	// consulted at all: the local promotion such a run recorded is not a claim
+	// about anything a later sweep can observe, and a merge nobody has answered
+	// for yet must never be settled as a disagreement.
 	if queuedMerge(state) {
 		return r.settleQueuedMerge(ctx, state)
-	}
-	// Recorded integration means the work is already promoted, whatever else
-	// was interrupted afterwards.
-	if state.Integration != nil {
-		return r.completeIntegrated(ctx, state, false)
 	}
 	observation := gitworktree.Observation{}
 	if state.WorktreePath != "" {
@@ -206,6 +204,16 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 		if err != nil {
 			return reconciliationOf(state, ActionUnsettled), fmt.Errorf("observe run %s artifacts: %w", state.RunID, err)
 		}
+	}
+	// Recorded integration means the work is already promoted, whatever else
+	// was interrupted afterwards. It is still only a claim a process wrote down,
+	// and reconciliation exists for state a process that died wrote, so it is
+	// reconciled against what the repository shows rather than trusted.
+	if state.Integration != nil {
+		if disagreement := contradictedIntegration(state, observation); disagreement != "" {
+			return r.blockContradictedIntegration(ctx, state, observation, disagreement)
+		}
+		return r.completeIntegrated(ctx, state, false)
 	}
 	// An interruption inside the integration step is the one boundary durable
 	// state cannot describe: the promotion either landed or it did not, and
@@ -222,6 +230,81 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 // only ever owed by a run that recorded the promotion the merge carries.
 func queuedMerge(state runstate.State) bool {
 	return state.Integration != nil && state.PullRequest != nil && state.PullRequest.MergeQueued
+}
+
+// contradictedIntegration reports what the repository says that a recorded
+// integration does not, and nothing at all when the two agree or when the
+// repository cannot answer. A record is only ever contradicted on positive
+// evidence: the artifacts of a run that got far enough are legitimately gone,
+// and their absence must never read as a promotion that never happened.
+func contradictedIntegration(state runstate.State, observation gitworktree.Observation) string {
+	integration := *state.Integration
+	// Nothing was observed of the target, so there is nothing to reconcile the
+	// record against.
+	if state.WorktreePath == "" || state.TargetBranch == "" {
+		return ""
+	}
+	// Removing either artifact required proving this exact commit had reached
+	// this exact target, so a run that got that far is corroborated by a proof
+	// the harness already made rather than by the target as it stands now.
+	if state.WorktreeRemoved || state.BranchRemoved {
+		return ""
+	}
+	// A merge the forge performed carried the same promotion onto the remote
+	// target, which is corroboration from outside this record. A merge the forge
+	// has not answered for never reaches here at all: settle asks the forge about
+	// one before it observes anything.
+	if state.PullRequest != nil && state.PullRequest.Merged {
+		return ""
+	}
+	if !observation.TargetExists {
+		return fmt.Sprintf("the run recorded commit %s as integrated into %s, but that branch does not exist",
+			integration.SourceCommit, integration.TargetBranch)
+	}
+	// Integration only ever fast-forwards the target onto the promoted commit,
+	// so a target still standing where the promotion left it carries it.
+	if observation.TargetCommit == integration.TargetCommit {
+		return ""
+	}
+	// Past that, only the branch that carried the commit answers containment,
+	// and only while it still exists and still points at the recorded commit.
+	// The base commit is in the target by construction and proves nothing.
+	answered := observation.BranchExists &&
+		observation.BranchCommit == integration.SourceCommit &&
+		observation.BranchCommit != state.BaseCommit
+	if !answered || observation.BranchIntegrated {
+		return ""
+	}
+	return fmt.Sprintf("the run recorded commit %s as integrated into %s, but %s does not contain it",
+		integration.SourceCommit, integration.TargetBranch, integration.TargetBranch)
+}
+
+// blockContradictedIntegration hands a promotion the repository does not carry
+// to a person rather than completing the run on it, and clears the record that
+// claimed it: a run that keeps a promotion nothing can prove owes a cleanup that
+// can never prove itself, so every later sweep would decide it again. The commit
+// and the target it named survive in the blocker on the item.
+//
+// It writes that record itself rather than through recordTerminalFailure,
+// because clearing the promotion has to reach disk even for a run that was
+// already terminal, and a run that is already terminal keeps the status it
+// recorded for itself.
+func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runstate.State, observation gitworktree.Observation, reason string) (Reconciliation, error) {
+	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+	if err != nil {
+		return reconciliationOf(state, ActionBlocked), err
+	}
+	// The blocker reaches the item before the record is disturbed, so an
+	// interruption here leaves the run outstanding with the blocker already
+	// recorded rather than a settled run nobody was told about.
+	if err := r.recordBlocker(ctx, state, itemStatus, observation, reason); err != nil {
+		return reconciliationOf(state, ActionBlocked), err
+	}
+	state.Integration = nil
+	settled, err := r.saveTerminalFailure(state, reason)
+	result := reconciliationOf(settled, ActionBlocked)
+	result.Detail = reason
+	return result, err
 }
 
 // settleQueuedMerge asks the forge what became of a merge it queued, and
@@ -454,17 +537,8 @@ func (r Reconciler) abandon(ctx context.Context, state runstate.State, observati
 // interruption here leaves the run outstanding and the blocker recorded rather
 // than a settled run nobody was told about.
 func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) (Reconciliation, error) {
-	notes := renderReconcileBlockerNotes(state, observation, reason)
-	var err error
-	// An item already blocked keeps the status it has; the reason is still
-	// recorded, because this run's evidence is what a replan needs.
-	if itemStatus == "blocked" {
-		_, err = r.Tracker.RecordOutcome(ctx, state.WorkItemID, notes)
-	} else {
-		_, err = r.Tracker.Block(ctx, state.WorkItemID, notes)
-	}
-	if err != nil {
-		return reconciliationOf(state, ActionBlocked), fmt.Errorf("record blocker for run %s: %w", state.RunID, err)
+	if err := r.recordBlocker(ctx, state, itemStatus, observation, reason); err != nil {
+		return reconciliationOf(state, ActionBlocked), err
 	}
 	settled, err := r.recordTerminalFailure(state, reason)
 	result := reconciliationOf(settled, ActionBlocked)
@@ -472,17 +546,45 @@ func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStat
 	return result, err
 }
 
+// recordBlocker puts this run's evidence on the work item. An item already
+// blocked keeps the status it has; the reason is still recorded, because this
+// run's evidence is what a replan needs.
+func (r Reconciler) recordBlocker(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) error {
+	notes := renderReconcileBlockerNotes(state, observation, reason)
+	var err error
+	if itemStatus == "blocked" {
+		_, err = r.Tracker.RecordOutcome(ctx, state.WorkItemID, notes)
+	} else {
+		_, err = r.Tracker.Block(ctx, state.WorkItemID, notes)
+	}
+	if err != nil {
+		return fmt.Errorf("record blocker for run %s: %w", state.RunID, err)
+	}
+	return nil
+}
+
 // recordTerminalFailure makes an unfinishable run durably terminal in the phase
-// it stopped in, so the record still says where it got to.
+// it stopped in, so the record still says where it got to. A run that is already
+// terminal carries its own record of how it ended and is left exactly as it is.
 func (r Reconciler) recordTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
 	if state.Status.Terminal() {
 		return state, nil
 	}
-	completedAt := r.clock().Now()
-	state.Status = runstate.StatusFailed
-	state.UpdatedAt = completedAt
-	state.CompletedAt = &completedAt
-	state.Failure = "reconciled after an interrupted run: " + reason
+	return r.saveTerminalFailure(state, reason)
+}
+
+// saveTerminalFailure writes the terminal record. It is separate from
+// recordTerminalFailure because settling can change durable state that has to
+// reach disk even when the run was already terminal, and a caller with such a
+// change needs the write rather than the skip.
+func (r Reconciler) saveTerminalFailure(state runstate.State, reason string) (runstate.State, error) {
+	if !state.Status.Terminal() {
+		completedAt := r.clock().Now()
+		state.Status = runstate.StatusFailed
+		state.UpdatedAt = completedAt
+		state.CompletedAt = &completedAt
+		state.Failure = "reconciled after an interrupted run: " + reason
+	}
 	if err := r.Store.Save(state); err != nil {
 		return state, fmt.Errorf("save reconciled run state for %s: %w", state.RunID, err)
 	}
