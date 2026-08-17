@@ -482,6 +482,112 @@ func TestReconcileBlocksAPromotionItCannotRecord(t *testing.T) {
 	}
 }
 
+// A recorded integration is a claim a process wrote down, and reconciliation
+// exists for state a process that died wrote. A promotion the target does not
+// carry has to reach a person rather than close an item over work that is not
+// there.
+func TestReconcileBlocksARecordedIntegrationTheTargetDoesNotCarry(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+	interrupted, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if interrupted.Integration == nil {
+		t.Fatalf("interrupted state = %#v, want the recorded integration this test contradicts", interrupted)
+	}
+	// Put the target back where it was before the promotion, which is what the
+	// repository looks like when the record outran what actually landed.
+	gitOutput(t, repository, "update-ref", "refs/heads/main", interrupted.BaseCommit)
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the uncarried promotion blocked", results)
+	}
+	// The run itself closed the item when it recorded the promotion, so the
+	// blocker is what reopens the question rather than a note beside it.
+	if !tracker.blocked || tracker.item.Status != "blocked" {
+		t.Fatalf("tracker = %#v, want the item blocked for a person", tracker)
+	}
+	if !strings.Contains(tracker.blockReason, "does not contain it") ||
+		!strings.Contains(tracker.blockReason, interrupted.Integration.SourceCommit) {
+		t.Fatalf("blocker reason = %q, want the recorded commit and the target that lacks it", tracker.blockReason)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Status != runstate.StatusFailed || settled.Integration != nil {
+		t.Fatalf("settled state = %#v, want a failed run claiming no promotion", settled)
+	}
+	// Nothing the run built was swept away on the strength of a record the
+	// repository denies, and the target was not moved to make the record true.
+	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("blocked run lost its preserved change: %v", err)
+	}
+	if branches := gitOutput(t, repository, "branch", "--list", settled.Branch); strings.TrimSpace(branches) == "" {
+		t.Fatal("blocked run lost its preserved branch")
+	}
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != settled.BaseCommit {
+		t.Fatalf("main = %q, want the untouched base %q", head, settled.BaseCommit)
+	}
+	// The blocked run keeps nothing that would make it owe cleanup, so the next
+	// sweep leaves it alone instead of deciding it over again.
+	if again := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(again) != 0 {
+		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
+	}
+}
+
+// Observing the target must not turn every target that moved on into a
+// disagreement. A promotion other work was committed on top of is still in the
+// target, and the run that made it is owed its completion.
+func TestReconcileCompletesARecordedIntegrationTheTargetMovedPast(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseCleaningUp}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("interrupted Run() error = nil")
+	}
+	// Somebody else's commit lands on the target, so it no longer stands where
+	// this run's promotion left it.
+	if err := os.WriteFile(filepath.Join(repository, "later.txt"), []byte("later work\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, repository, "add", "later.txt")
+	runPipelineGit(t, repository, "commit", "-m", "later work")
+
+	results := reconcileSweep(t, repository, worktreeRoot, store, tracker)
+	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the promotion the target still carries completed", results)
+	}
+	if tracker.blocked {
+		t.Fatalf("reconciliation blocked a promotion the target carries: %q", tracker.blockReason)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if settled.Phase != runstate.PhaseComplete || !settled.WorktreeRemoved || !settled.BranchRemoved {
+		t.Fatalf("settled state = %#v, want a completed run with its artifacts removed", settled)
+	}
+}
+
 // A sweep that cannot finish must settle nothing and hide nothing. The run
 // stays outstanding and a later sweep completes it, which is what makes
 // reconciliation safe to simply run again.
