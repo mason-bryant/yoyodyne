@@ -158,10 +158,6 @@ type Session struct {
 	// There is at most one: concurrency belongs to the scheduler, and a
 	// conversation is not the place to invent it.
 	active *activeRun
-	// lastRun is the work item of the run this conversation started most
-	// recently, whether it is still going or already collected. It is what an
-	// operator asking what a run changed means when they name nothing.
-	lastRun string
 	// notices are the harness actions the operator has taken since the product
 	// manager last answered, waiting to be carried into its next turn.
 	notices []string

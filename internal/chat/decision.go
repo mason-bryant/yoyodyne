@@ -82,7 +82,9 @@ var errNotADecision = errors.New("that answer does not decide anything")
 // acting on half of a misread answer would create work nobody asked for.
 func readDecisions(answer string, cards []card) ([]decision, error) {
 	rest := strings.TrimSpace(answer)
-	if rest == "" {
+	// Nothing on the table is nothing to decide, and saying so here is what lets
+	// everything below assume there is at least one card to name.
+	if rest == "" || len(cards) == 0 {
 		return nil, errNotADecision
 	}
 	var decisions []decision
@@ -97,7 +99,10 @@ func readDecisions(answer string, cards []card) ([]decision, error) {
 			}
 			return nil, fmt.Errorf("%q is not part of a decision; say approve or decline before the proposals you mean", verb)
 		}
-		selectors, remainder := takeSelectors(after)
+		// An approval is followed only by more clauses, so spaces separate the
+		// proposals it names. A decline is followed by the operator's words, so
+		// they do not.
+		selectors, remainder := takeSelectors(after, approve)
 		if approve {
 			chosen, err := resolveApproved(selectors, cards, named)
 			if err != nil {
@@ -147,7 +152,7 @@ func readDecisions(answer string, cards []card) ([]decision, error) {
 func resolveApproved(selectors []string, cards []card, named map[string]bool) ([]string, error) {
 	if len(selectors) == 0 {
 		if len(cards) != 1 {
-			return nil, fmt.Errorf("say which of the %d proposals to approve, as approve 1,3; an approval has to name what it creates", len(cards))
+			return nil, fmt.Errorf("say which of the %d proposals to approve, as %s; an approval has to name what it creates", len(cards), approveExample(cards))
 		}
 		// The card in front of the operator is taken directly rather than by the
 		// number it happens to carry. A batch decided down to its last proposal
@@ -163,7 +168,7 @@ func resolveApproved(selectors []string, cards []card, named map[string]bool) ([
 	var chosen []string
 	for _, selector := range selectors {
 		if strings.EqualFold(selector, allSelector) {
-			return nil, errors.New("an approval names the proposals it creates rather than all of them; say approve 1,3")
+			return nil, fmt.Errorf("an approval names the proposals it creates rather than all of them; say %s", approveExample(cards))
 		}
 		found, err := resolve(selector, cards, named)
 		if err != nil {
@@ -172,6 +177,17 @@ func resolveApproved(selectors []string, cards []card, named map[string]bool) ([
 		chosen = append(chosen, found)
 	}
 	return chosen, nil
+}
+
+// approveExample shows how an approval names what it creates, using numbers
+// that are on the table. A refusal that told the operator to "say approve 1,3"
+// when the cards in front of them are 4 and 5 would be telling them to type
+// something the harness refuses for naming proposals that are not there.
+func approveExample(cards []card) string {
+	if len(cards) == 1 {
+		return fmt.Sprintf("approve %d", cards[0].number)
+	}
+	return fmt.Sprintf("approve %d,%d", cards[0].number, cards[len(cards)-1].number)
 }
 
 // resolveDeclined names the proposals a decline clause turns down. Unlike an
@@ -271,12 +287,24 @@ func declineAll(cards []card, reason string) []decision {
 }
 
 // takeSelectors consumes the proposals a clause names, and returns what is left
-// of the answer. Commas, spaces, and a joining word between two selectors all
-// separate them, because an operator writes "1,3", "1, 3", and "1 and 3" and
-// means the same thing by all three.
-func takeSelectors(text string) ([]string, string) {
+// of the answer. Commas and a joining word both separate them, because an
+// operator writes "1,3", "1, 3", and "1 and 3" and means the same thing by all
+// three.
+//
+// A bare space separates them only where whatever follows the clause cannot be
+// prose, which is to say on an approval. A decline is followed by the operator's
+// own words, and those words start with a number often enough to matter:
+// "decline 2 3 weeks out" is one proposal turned down for being three weeks
+// out, not two proposals turned down for being "weeks out". Reading it the
+// second way would record a decision about a proposal nobody named and never
+// put that proposal to them again, so the ambiguity is resolved towards the
+// reason and the unnamed proposal is asked about again.
+func takeSelectors(text string, spaceSeparates bool) ([]string, string) {
 	var selectors []string
 	rest := text
+	// The first selector needs no separator before it; every later one does,
+	// unless bare spaces are separators in this clause.
+	separated := true
 	for rest != "" {
 		word, after := nextWord(rest)
 		if matches(word, connectorWords) && len(selectors) > 0 {
@@ -287,15 +315,31 @@ func takeSelectors(text string) ([]string, string) {
 				break
 			}
 			rest = after
+			separated = true
 			continue
+		}
+		if !separated && !spaceSeparates && !startsSeparated(word) {
+			break
 		}
 		if !isSelectorList(word) {
 			break
 		}
 		selectors = append(selectors, splitSelectors(word)...)
+		separated = endsSeparated(word)
 		rest = after
 	}
 	return selectors, rest
+}
+
+// startsSeparated and endsSeparated report the punctuation that joins one
+// selector to the next across a space, so "1, 2" and "1 ,2" are the one list an
+// operator wrote and "1 2" is a selector followed by something else.
+func startsSeparated(word string) bool {
+	return strings.HasPrefix(word, ",") || strings.HasPrefix(word, ";")
+}
+
+func endsSeparated(word string) bool {
+	return strings.HasSuffix(word, ",") || strings.HasSuffix(word, ";")
 }
 
 // isSelectorList reports a word that is nothing but proposals, so a clause

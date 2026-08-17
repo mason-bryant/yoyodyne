@@ -105,6 +105,29 @@ func TestOnlyAnApprovalThatNamesItsItemsCreatesAnything(t *testing.T) {
 	})
 }
 
+// A refusal tells the operator what to type instead, so what it names has to be
+// on the table: a batch decided down to its last two proposals is showing cards
+// 4 and 5, and "say approve 1,3" there is an instruction to type something the
+// harness refuses.
+func TestARefusalOnlyNamesProposalsThatAreThere(t *testing.T) {
+	t.Parallel()
+
+	remaining := testCards(5)[3:]
+	for _, answer := range []string{"y", "approve all"} {
+		_, err := readDecisions(answer, remaining)
+		if err == nil {
+			t.Fatalf("readDecisions(%q) was accepted, want a refusal", answer)
+		}
+		if !strings.Contains(err.Error(), "approve 4,5") {
+			t.Fatalf("readDecisions(%q) error = %v, want it to name the cards on the table", answer, err)
+		}
+	}
+	// One card left is one number to name.
+	if _, err := readDecisions("approve all", testCards(3)[2:]); err == nil || !strings.Contains(err.Error(), "approve 3") {
+		t.Fatalf("readDecisions() error = %v, want it to name the one card on the table", err)
+	}
+}
+
 func TestOneAnswerDecidesSeveralProposals(t *testing.T) {
 	t.Parallel()
 
@@ -182,6 +205,30 @@ func TestOneAnswerDecidesSeveralProposals(t *testing.T) {
 				{proposalID: "2.1", reason: "n"},
 				{proposalID: "2.2", reason: "n"},
 				{proposalID: "2.3", reason: "n"},
+			},
+		},
+		{
+			// The words somebody declines work in start with a number often
+			// enough to matter, and reading one as a second proposal would decide
+			// something they never named.
+			name:   "a decline reason that begins with a number is a reason",
+			answer: "decline 2 3 weeks out",
+			want:   []decision{{proposalID: "2.2", reason: "3 weeks out"}},
+		},
+		{
+			name:   "a decline still names several proposals when they are separated",
+			answer: "decline 1,3 too speculative",
+			want: []decision{
+				{proposalID: "2.1", reason: "too speculative"},
+				{proposalID: "2.3", reason: "too speculative"},
+			},
+		},
+		{
+			name:   "a decline names several joined by a word",
+			answer: "decline 1 and 3 too speculative",
+			want: []decision{
+				{proposalID: "2.1", reason: "too speculative"},
+				{proposalID: "2.3", reason: "too speculative"},
 			},
 		},
 		{

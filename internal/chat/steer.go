@@ -292,9 +292,10 @@ func (s *Session) ShowWorkItem(ctx context.Context, workItemID string) (beads.Wo
 }
 
 // RunChanges reports what the harness's most recent run of a work item changed.
-// Naming nothing asks about the run this conversation is watching: the one it
-// started and has not collected, or the last one it did, because that is the
-// run an operator asking "what did that change" almost always means.
+// Naming nothing asks about the run this conversation last started, whether it
+// is still going, already collected, or was started by an earlier process this
+// conversation was resumed from, because that is the run an operator asking
+// "what did that change" almost always means.
 //
 // It answers from the durable run record rather than from the repository. A run
 // is cleaned up after it integrates — its worktree removed and its branch
@@ -307,7 +308,7 @@ func (s *Session) RunChanges(ctx context.Context, workItemID string) (RunChanges
 	}
 	id := strings.TrimSpace(workItemID)
 	if id == "" {
-		id = s.lastRun
+		id = strings.TrimSpace(s.state.LastRunWorkItemID)
 	}
 	if id == "" {
 		return RunChanges{}, errors.New("this conversation has not run anything, so name the work item, as /diff <beads-id>")
@@ -339,7 +340,11 @@ func (s *Session) StartWork(ctx context.Context, workItemID string) error {
 		return fmt.Errorf("this conversation is already working on %s; stop it before starting another", running)
 	}
 	// The decision is recorded before the run starts, so a process that dies at
-	// the wrong moment still leaves evidence that work was asked for.
+	// the wrong moment still leaves evidence that work was asked for. The item
+	// goes into the conversation's own record at the same moment and for the
+	// same reason: the process that started a run is often not the one the
+	// operator comes back to ask what it changed.
+	s.state.LastRunWorkItemID = id
 	if err := s.emit(execution.EventWorkStarted, map[string]any{"work_item_id": id}); err != nil {
 		return fmt.Errorf("record the start of work on %s: %w", id, err)
 	}
@@ -356,9 +361,6 @@ func (s *Session) StartWork(ctx context.Context, workItemID string) error {
 		run.report, run.err = work.Run(runContext, id)
 	}()
 	s.active = run
-	// The item stays named after the run is collected, so an operator asking
-	// what the run changed does not have to remember which item it was on.
-	s.lastRun = id
 	s.notice("the operator started work on %s, and the harness is running it now", id)
 	return nil
 }

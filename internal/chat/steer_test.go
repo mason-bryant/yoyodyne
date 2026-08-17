@@ -1217,3 +1217,52 @@ func (f *fakeWork) changesAskedAbout() []string {
 	defer f.mu.Unlock()
 	return append([]string(nil), f.changesAsked...)
 }
+
+// The process that started a run is often not the one the operator comes back
+// to. "What did that change" is a question about the run they last watched, so
+// the item it was on is written into the conversation's record rather than kept
+// in the process that happened to start it.
+func TestABareDiffSurvivesTheProcessThatStartedTheRun(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Run it and we will see."},
+	}})
+	options.Store = newTestStore(t, root)
+	options.Work = &fakeWork{}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// A turn first, because a conversation with no provider session is one a
+	// later process starts again rather than resumes.
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what next?\n/work yoyodyne-ifd.39\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	// A second process sees only what was written down.
+	work := &fakeWork{changes: RunChanges{
+		RunID:     "run-0123456789abcdef0123456789abcdef",
+		Status:    "succeeded",
+		StartedAt: fixedClock{}.Now(),
+		Files:     "M internal/chat/chat.go",
+	}}
+	resumedOptions := testOptions(t, &fakeBackend{})
+	resumedOptions.Store = newTestStore(t, root)
+	resumedOptions.Work = work
+	resumed := openTestSession(t, resumedOptions)
+	if !resumed.Resumed() {
+		t.Fatal("the conversation was not resumed, so this proves nothing about resuming one")
+	}
+
+	var resumedOut strings.Builder
+	if err := resumed.Converse(context.Background(), testConsole(strings.NewReader("/diff\n/exit\n"), &resumedOut)); err != nil {
+		t.Fatalf("resumed Converse() error = %v", err)
+	}
+	if asked := work.changesAskedAbout(); len(asked) != 1 || asked[0] != "yoyodyne-ifd.39" {
+		t.Fatalf("diffs asked for = %#v, want the run the earlier process started", asked)
+	}
+	if !strings.Contains(resumedOut.String(), "M internal/chat/chat.go") {
+		t.Fatalf("transcript = %q", resumedOut.String())
+	}
+}
