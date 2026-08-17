@@ -447,6 +447,15 @@ func (c *scriptedConsole) Prompt(_ context.Context, prompt string, interrupt <-c
 	return step.line, nil
 }
 
+// Working and Theme are what a stream gets: the phases said once each, and
+// nothing dressed. This console exists to script prompts, and a test that reads
+// its transcript should read the same text a redirected conversation holds.
+func (c *scriptedConsole) Working(phase string) console.Activity {
+	return testConsole(strings.NewReader(""), c.out).Working(phase)
+}
+
+func (c *scriptedConsole) Theme() console.Theme { return console.Theme{} }
+
 func (c *scriptedConsole) Close() error { return nil }
 
 func (c *scriptedConsole) watched() []bool { return c.waiting }

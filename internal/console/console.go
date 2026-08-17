@@ -6,13 +6,15 @@
 // sentence. Nothing is drawn into the alternate screen and nothing already
 // written is redrawn, so the terminal's own scrollback, selection, copying, and
 // resizing keep working on the conversation exactly as they would on any other
-// command's output.
+// command's output. The same region carries the account of work in progress
+// while the operator is waiting for an answer, and the theme dresses what is
+// written above it so one kind of thing can be told from another.
 //
 // Anything that is not a terminal gets the same conversation as an ordinary
-// stream of text: no cursor control, and the same lines in the same order a
-// redirected conversation has always had. None of this reaches the recorded
-// reply, the event stream, or --json: what the product manager said is what was
-// said, and this is only how it is shown.
+// stream of text: no cursor control, no colour, no rules, and the same lines in
+// the same order a redirected conversation has always had. None of this reaches
+// the recorded reply, the event stream, or --json: what the product manager
+// said is what was said, and this is only how it is shown.
 package console
 
 import (
@@ -46,6 +48,12 @@ type Console interface {
 	// can write above the composing line and prompt again. A closed input
 	// returns io.EOF.
 	Prompt(ctx context.Context, prompt string, interrupt <-chan struct{}) (string, error)
+	// Working starts an account of something the operator is waiting for,
+	// beginning with the phase it is in now. It is closed by the caller once
+	// there is an answer to read.
+	Working(phase string) Activity
+	// Theme reports how much this console may dress what is written to it.
+	Theme() Theme
 	// Close restores the terminal and flushes anything held back. It is safe to
 	// call more than once.
 	Close() error
@@ -71,7 +79,7 @@ func Open(options Options) Console {
 	if !addressable(options.In, options.Out, env) {
 		return newPlain(options.In, options.Out)
 	}
-	terminal, err := openTerminal(options.In.(*os.File), options.Out.(*os.File))
+	terminal, err := openTerminal(options.In.(*os.File), options.Out.(*os.File), env)
 	if err != nil {
 		// The streams look like a terminal but will not behave as one. Degrading
 		// to the plain stream keeps the conversation working; pretending the

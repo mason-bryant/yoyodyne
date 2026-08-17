@@ -146,6 +146,14 @@ type Session struct {
 	// bounded, so the product manager is told its account is partial rather than
 	// being handed a complete-looking one.
 	noticesDropped bool
+	// activity is what the operator is shown while a turn is being answered. It
+	// is nil outside an interactive conversation: a one-shot message has nobody
+	// watching, and its events are recorded exactly as they always were.
+	activity *turnActivity
+	// theme is how much the console this conversation is held over permits it to
+	// be dressed. Its zero value dresses nothing, which is what everything but an
+	// interactive conversation on a colour terminal gets.
+	theme console.Theme
 }
 
 // proposalRecord is one proposal and whether the operator has finished with it.
@@ -300,6 +308,10 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		if len(actions) == 0 {
 			break
 		}
+		// The harness now goes to the tracker on the product manager's behalf,
+		// which emits no provider events, so the display is told directly rather
+		// than left saying the provider is still writing.
+		s.activity.doing(phaseTracker)
 		outcomes, err := s.performTrackerActions(ctx, actions)
 		reply.Actions = append(reply.Actions, outcomes...)
 		if err != nil {
@@ -355,6 +367,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		if event.Sequence > lastSequence {
 			lastSequence = event.Sequence
 		}
+		// The event is recorded first and shown second, so what the operator is
+		// told a turn is doing can never be more than what the record says it
+		// did. The display is told about every event, including the ones it has
+		// nothing to say about: an event arriving is itself the evidence that the
+		// turn has not stalled.
+		s.activity.observe(event)
 		return nil
 	}
 	// No tools at all and a read-only permission mode. The product manager's
@@ -627,7 +645,7 @@ func (s *Session) Converse(ctx context.Context, screen console.Console) error {
 	// A run this conversation started cannot outlive the process that owns it,
 	// so ending the conversation stops it deliberately rather than leaving an
 	// interruption for somebody to discover later.
-	s.finishActiveRun(ctx, screen)
+	s.finishActiveRun(ctx, s.theme.Harness(screen))
 	return err
 }
 
@@ -636,6 +654,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 	// that puts it above the composing region, and anywhere else it is the stream
 	// it always was.
 	var out io.Writer = screen
+	s.theme = screen.Theme()
+	// What the harness says in answer to a command is dressed as its own kind of
+	// thing, because it is something the operator asked for and has to act on
+	// rather than part of the conversation.
+	harness := s.theme.Harness(screen)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -651,22 +674,26 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		if message == "" {
 			continue
 		}
+		// The rule goes down as soon as the operator's turn is over, so it
+		// separates what they said from the answer while the answer is still
+		// being worked on rather than arriving with it.
+		fmt.Fprint(out, s.theme.Rule())
 		if strings.HasPrefix(message, "/") {
-			exit, err := s.command(ctx, message, out)
+			exit, err := s.command(ctx, message, harness)
 			// A command that failed is reported and the conversation carries
 			// on: an operator who mistyped an identifier or reached an
 			// unavailable tracker has not ended anything.
 			if err != nil {
-				fmt.Fprintf(out, "%v\n\n", err)
+				fmt.Fprintf(harness, "%v\n\n", err)
 			}
 			if exit {
 				return nil
 			}
 			continue
 		}
-		reply, err := s.Send(ctx, message)
+		reply, err := s.speak(ctx, screen, message)
 		if reply.Text != "" {
-			fmt.Fprintf(out, "\nproduct-manager> %s\n\n", reply.Text)
+			fmt.Fprintf(out, "\nproduct-manager> %s\n\n", s.theme.Questions(reply.Text))
 		}
 		// What the product manager did to the tracker is reported whether or not
 		// the turn ended well: the changes are already made, and an operator who
@@ -696,6 +723,21 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 	}
 }
 
+// speak says one thing to the product manager with an account of what the turn
+// is doing on screen until there is a reply to read. The account lasts for the
+// whole exchange, including the rounds of tracker actions inside it, because
+// what the operator is waiting for is the answer rather than any one turn of
+// it.
+func (s *Session) speak(ctx context.Context, screen console.Console, message string) (Reply, error) {
+	display := screen.Working(phaseSending)
+	s.activity = &turnActivity{display: display, phase: phaseSending}
+	defer func() {
+		display.Close()
+		s.activity = nil
+	}()
+	return s.Send(ctx, message)
+}
+
 // ask puts one question to the operator and waits for their answer. A run that
 // finishes while they are typing is reported the moment it does, rather than
 // waiting for them to press a key: what they have typed so far is kept, the
@@ -706,8 +748,9 @@ func (s *Session) ask(ctx context.Context, screen console.Console, prompt string
 	for {
 		// A run that finished while the operator was reading is reported before
 		// they are asked for the next line, so the prompt never sits above an
-		// outcome nobody has been told about.
-		s.reportFinishedWork(screen)
+		// outcome nobody has been told about. It is the harness's own report,
+		// and is dressed as one.
+		s.reportFinishedWork(s.theme.Harness(screen))
 		answer, err := screen.Prompt(ctx, prompt, s.workDone())
 		if errors.Is(err, console.ErrInterrupted) {
 			continue
@@ -743,9 +786,12 @@ func (s *Session) decide(ctx context.Context, proposals []PendingProposal, scree
 	// that puts it above the composing region, and anywhere else it is the stream
 	// it always was.
 	var out io.Writer = screen
-	fmt.Fprintf(out, "The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))
+	// A proposal is dressed as its own kind of thing until it has been decided:
+	// it is not the conversation, it is something waiting on the operator, and
+	// what says so when the colour is gone is the text itself.
+	fmt.Fprint(out, s.theme.Proposal(fmt.Sprintf("The product manager proposes %d work item(s). Nothing is created unless you approve it.\n\n", len(proposals))))
 	for _, proposal := range proposals {
-		fmt.Fprint(out, proposal.Render())
+		fmt.Fprint(out, s.theme.Proposal(proposal.Render()))
 		fmt.Fprintln(out)
 		line, err := s.ask(ctx, screen, fmt.Sprintf(decisionPrompt, proposal.ID))
 		if errors.Is(err, io.EOF) {
