@@ -142,6 +142,19 @@ func (w conversationWork) Progress(_ context.Context, workItemID string) (chat.R
 	return progressOf(state), nil
 }
 
+// Price reports what one work item cost, broken down by the runs made for it.
+// Like Progress and Changes it reads the durable run records and nothing else,
+// which is what makes it answerable for an item closed long ago: the run state
+// and the event logs those runs wrote are still here, and the cost in them is
+// what the provider reported rather than an estimate from a price table.
+func (w conversationWork) Price(_ context.Context, workItemID string) (chat.ItemPrice, error) {
+	price, err := w.store.Price(workItemID)
+	if err != nil {
+		return chat.ItemPrice{}, err
+	}
+	return priceOf(price), nil
+}
+
 // Changes reports what the most recent recorded run of a work item changed. It
 // reads the durable run state and nothing else: no worktree is inspected and no
 // git command is run, so the answer is the same whether the run finished a
@@ -195,12 +208,23 @@ func (w conversationWork) list(ctx context.Context, status string) ([]chat.WorkI
 	}
 	summaries := make([]chat.WorkItemSummary, 0, len(items))
 	for _, item := range items {
-		summaries = append(summaries, chat.WorkItemSummary{
+		summary := chat.WorkItemSummary{
 			ID:       item.ID,
 			Title:    item.Title,
 			Status:   item.Status,
 			Priority: item.Priority,
-		})
+		}
+		// The price comes from the tracker along with everything else about the
+		// item, because the tracker is where a completed run put it. An item
+		// nothing has priced carries none, and none is shown rather than a zero.
+		if item.Cost != nil {
+			summary.Cost = &chat.ItemCost{
+				TotalUSD:    item.Cost.TotalUSD,
+				Runs:        item.Cost.Runs,
+				UnknownRuns: item.Cost.UnknownRuns,
+			}
+		}
+		summaries = append(summaries, summary)
 	}
 	return summaries, nil
 }
@@ -277,6 +301,31 @@ func changesOf(state runstate.State) chat.RunChanges {
 		}
 	}
 	return changes
+}
+
+// priceOf projects the recorded price of one item's runs into what a
+// conversation reports. It claims nothing the records do not hold: a run whose
+// evidence is gone is carried through as unknown rather than as a run that cost
+// nothing, and the total is the sum of the runs that could actually be priced.
+func priceOf(price runstate.ItemPrice) chat.ItemPrice {
+	projected := chat.ItemPrice{
+		WorkItemID:  price.WorkItemID,
+		TotalUSD:    price.TotalUSD,
+		UnknownRuns: price.UnknownRuns,
+	}
+	for _, run := range price.Runs {
+		projected.Runs = append(projected.Runs, chat.RunPrice{
+			RunID:       run.RunID,
+			Status:      string(run.Status),
+			Phase:       string(run.Phase),
+			StartedAt:   run.StartedAt,
+			Integrated:  run.Integrated,
+			Invocations: run.Invocations,
+			CostUSD:     run.CostUSD,
+			Unknown:     run.Unknown,
+		})
+	}
+	return projected
 }
 
 // progressOf projects one recorded run into where it has got to. Like the

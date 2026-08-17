@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,7 +36,61 @@ type WorkItem struct {
 	Assignee           string
 	Parent             string
 	Dependencies       []Dependency
+	// Cost is what the runs made for this item have cost, as the tracker holds
+	// it. It is absent from an item nothing has ever priced, which is a different
+	// fact from an item that cost nothing.
+	Cost *Cost
 }
+
+// Cost is the provider-reported price of every run made for one work item. It
+// is carried by the tracker itself rather than assembled beside it, so the
+// briefing, the conversation, and bd all read one number from one place.
+//
+// UnknownRuns is what keeps that number honest. A run whose evidence no longer
+// survives cannot be priced, and pricing it as nothing would understate every
+// total it entered; while it is non-zero, TotalUSD is a floor on what the item
+// cost rather than what it cost.
+type Cost struct {
+	TotalUSD    float64 `json:"total_usd"`
+	Runs        int     `json:"runs"`
+	UnknownRuns int     `json:"unknown_runs,omitempty"`
+}
+
+// The tracker metadata keys the price is carried in. They are namespaced
+// because the metadata is the project's own and Yoyodyne is a guest in it.
+const (
+	costTotalKey   = "yoyodyne_cost_usd"
+	costRunsKey    = "yoyodyne_cost_runs"
+	costUnknownKey = "yoyodyne_cost_unknown_runs"
+)
+
+// costPrecision is how many decimal places a recorded price keeps. A single
+// invocation can cost fractions of a cent, and a ledger that rounded each item
+// to the cent would drift from the invocations it was summed from.
+const costPrecision = 6
+
+// Validate rejects a price that could not describe real spending.
+func (c Cost) Validate() error {
+	var problems []error
+	if math.IsNaN(c.TotalUSD) || math.IsInf(c.TotalUSD, 0) {
+		problems = append(problems, errors.New("total cost is not a number"))
+	} else if c.TotalUSD < 0 {
+		problems = append(problems, fmt.Errorf("total cost %v cannot be negative", c.TotalUSD))
+	}
+	if c.Runs < 1 {
+		problems = append(problems, errors.New("a recorded price must cover at least one run"))
+	}
+	if c.UnknownRuns < 0 {
+		problems = append(problems, errors.New("unknown runs cannot be negative"))
+	}
+	if c.UnknownRuns > c.Runs {
+		problems = append(problems, fmt.Errorf("%d of %d runs cannot be unknown", c.UnknownRuns, c.Runs))
+	}
+	return errors.Join(problems...)
+}
+
+// Complete reports a price no unpriceable run is missing from.
+func (c Cost) Complete() bool { return c.UnknownRuns == 0 }
 
 type Dependency struct {
 	ID     string
@@ -321,6 +376,50 @@ func (c Client) changeBlocker(ctx context.Context, command, applied, id, blocker
 	return nil
 }
 
+// RecordCost stores what the runs made for one work item have cost, so the
+// tracker itself carries the price and everything that reads the tracker sees
+// it without a second data source. Like every other write here it is the
+// mechanism rather than the authority: the caller is responsible for the price
+// being the provider's own report and not an estimate.
+//
+// What bd echoes back is verified, for the reason an edit is: a price that was
+// not actually stored would leave the item looking unpriced while the caller
+// believed the ledger had been written.
+func (c Client) RecordCost(ctx context.Context, id string, cost Cost) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if err := cost.Validate(); err != nil {
+		return WorkItem{}, fmt.Errorf("invalid work item cost: %w", err)
+	}
+	data, err := c.run(ctx, "update", id,
+		"--set-metadata="+costTotalKey+"="+formatCost(cost.TotalUSD),
+		"--set-metadata="+costRunsKey+"="+strconv.Itoa(cost.Runs),
+		"--set-metadata="+costUnknownKey+"="+strconv.Itoa(cost.UnknownRuns),
+		"--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if item.Cost == nil {
+		return WorkItem{}, fmt.Errorf("work item %s carries no cost after being priced", item.ID)
+	}
+	// The stored total is compared at the precision it was written with, because
+	// bd stores it as a number and returns whatever that number renders as.
+	if formatCost(item.Cost.TotalUSD) != formatCost(cost.TotalUSD) ||
+		item.Cost.Runs != cost.Runs || item.Cost.UnknownRuns != cost.UnknownRuns {
+		return WorkItem{}, fmt.Errorf("work item %s cost is %#v after being priced, want %#v", item.ID, *item.Cost, cost)
+	}
+	return item, nil
+}
+
+func formatCost(total float64) string {
+	return strconv.FormatFloat(total, 'f', costPrecision, 64)
+}
+
 func (c Client) Complete(ctx context.Context, id, reason string) (WorkItem, error) {
 	if err := validateIssueID(id); err != nil {
 		return WorkItem{}, err
@@ -380,6 +479,10 @@ type rawWorkItem struct {
 	Assignee           string          `json:"assignee"`
 	Parent             string          `json:"parent"`
 	Dependencies       []rawDependency `json:"dependencies"`
+	// Metadata is the tracker's own key-value store on an item. Only the keys
+	// the harness writes are read out of it; everything else in there belongs to
+	// whoever put it there.
+	Metadata map[string]json.RawMessage `json:"metadata"`
 }
 
 type rawDependency struct {
@@ -455,7 +558,48 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 			item.Dependencies = append(item.Dependencies, Dependency{ID: id, Type: dependencyType, Status: dependency.Status})
 		}
 	}
+	item.Cost = costFromMetadata(raw.Metadata)
 	return item, nil
+}
+
+// costFromMetadata reads the price the tracker carries, or nothing at all when
+// it carries none. A partial record is read as no price rather than as a cheap
+// one: the total alone would not say how many runs it covers or whether any of
+// them went unpriced, and a floor presented as a price is worse than silence.
+func costFromMetadata(metadata map[string]json.RawMessage) *Cost {
+	if len(metadata) == 0 {
+		return nil
+	}
+	total, ok := metadataNumber(metadata, costTotalKey)
+	if !ok {
+		return nil
+	}
+	runs, ok := metadataNumber(metadata, costRunsKey)
+	if !ok {
+		return nil
+	}
+	// The unknown count is absent from an item all of whose runs were priced,
+	// because bd drops a key it was never given rather than storing a zero.
+	unknown, _ := metadataNumber(metadata, costUnknownKey)
+	cost := Cost{TotalUSD: total, Runs: int(runs), UnknownRuns: int(unknown)}
+	if cost.Validate() != nil {
+		return nil
+	}
+	return &cost
+}
+
+func metadataNumber(metadata map[string]json.RawMessage, key string) (float64, bool) {
+	raw, present := metadata[key]
+	if !present {
+		return 0, false
+	}
+	var value float64
+	if err := json.Unmarshal(raw, &value); err != nil {
+		// A metadata value that is not a number was not written by the harness,
+		// or was written over by hand. Either way it is not a price to report.
+		return 0, false
+	}
+	return value, true
 }
 
 func decodeJSON(data []byte, target any) error {

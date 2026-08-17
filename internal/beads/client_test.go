@@ -3,6 +3,7 @@ package beads
 import (
 	"context"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -381,6 +382,123 @@ func TestClientReportsProcessAndMalformedJSONErrors(t *testing.T) {
 	}
 }
 
+// The tracker is where a work item's price lives, so what is written has to be
+// exactly what was priced and has to be verified against what bd echoes back.
+func TestClientRecordsAndReadsBackAWorkItemPrice(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{responses: []string{costJSON(27.93, 2, 1)}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+	item, err := client.RecordCost(context.Background(), "yoyodyne-1", Cost{TotalUSD: 27.93, Runs: 2, UnknownRuns: 1})
+	if err != nil {
+		t.Fatalf("RecordCost() error = %v", err)
+	}
+	if item.Cost == nil || item.Cost.TotalUSD != 27.93 || item.Cost.Runs != 2 || item.Cost.UnknownRuns != 1 {
+		t.Fatalf("RecordCost() = %#v", item.Cost)
+	}
+	if item.Cost.Complete() {
+		t.Fatal("a price with an unpriced run behind it must not read as complete")
+	}
+	wantArgs := [][]string{{
+		"update", "yoyodyne-1",
+		"--set-metadata=yoyodyne_cost_usd=27.930000",
+		"--set-metadata=yoyodyne_cost_runs=2",
+		"--set-metadata=yoyodyne_cost_unknown_runs=1",
+		"--json",
+	}}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
+	}
+
+	// A price bd did not actually store must not read as recorded: an item that
+	// looks priced and is not is how a ledger silently goes wrong.
+	unstored := &fakeRunner{responses: []string{costJSON(3.5, 2, 1)}}
+	if _, err := (Client{Runner: unstored}).RecordCost(context.Background(), "yoyodyne-1", Cost{TotalUSD: 27.93, Runs: 2, UnknownRuns: 1}); err == nil ||
+		!strings.Contains(err.Error(), "after being priced") {
+		t.Fatalf("RecordCost() unstored error = %v", err)
+	}
+	unpriced := &fakeRunner{responses: []string{workItemJSON("closed", "")}}
+	if _, err := (Client{Runner: unpriced}).RecordCost(context.Background(), "yoyodyne-1", Cost{TotalUSD: 1, Runs: 1}); err == nil ||
+		!strings.Contains(err.Error(), "carries no cost") {
+		t.Fatalf("RecordCost() unpriced error = %v", err)
+	}
+}
+
+func TestClientRefusesPricesItCannotMean(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name string
+		cost Cost
+		want string
+	}{
+		{name: "no runs", cost: Cost{TotalUSD: 1}, want: "at least one run"},
+		{name: "negative", cost: Cost{TotalUSD: -1, Runs: 1}, want: "cannot be negative"},
+		{name: "not a number", cost: Cost{TotalUSD: math.NaN(), Runs: 1}, want: "not a number"},
+		{name: "more unknown than run", cost: Cost{TotalUSD: 1, Runs: 1, UnknownRuns: 2}, want: "cannot be unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{}
+			if _, err := (Client{Runner: runner}).RecordCost(context.Background(), "yoyodyne-1", test.cost); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RecordCost() error = %v, want it to contain %q", err, test.want)
+			}
+			if len(runner.args) != 0 {
+				t.Fatalf("a refused price still ran bd %#v", runner.args)
+			}
+		})
+	}
+	if _, err := (Client{Runner: &fakeRunner{}}).RecordCost(context.Background(), "../escape", Cost{TotalUSD: 1, Runs: 1}); err == nil {
+		t.Fatal("RecordCost() invalid id error = nil")
+	}
+}
+
+// Metadata the harness did not write, or wrote only half of, is not a price. An
+// item with a total and nothing saying what it covers is reported as unpriced
+// rather than as cheap.
+func TestClientReadsOnlyACompleteRecordedPrice(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name     string
+		metadata string
+	}{
+		{name: "no metadata", metadata: ""},
+		{name: "somebody else's metadata", metadata: `,"metadata":{"team":"platform"}`},
+		{name: "total without the runs it covers", metadata: `,"metadata":{"yoyodyne_cost_usd":12.5}`},
+		{name: "a total that is not a number", metadata: `,"metadata":{"yoyodyne_cost_usd":"free","yoyodyne_cost_runs":1}`},
+		{name: "a price no run could have produced", metadata: `,"metadata":{"yoyodyne_cost_usd":12.5,"yoyodyne_cost_runs":0}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{responses: []string{
+				fmt.Sprintf(`[{"id":"yoyodyne-1","title":"t","status":"closed","priority":1,"issue_type":"task"%s}]`, test.metadata),
+			}}
+			item, err := (Client{Runner: runner}).Show(context.Background(), "yoyodyne-1")
+			if err != nil {
+				t.Fatalf("Show() error = %v", err)
+			}
+			if item.Cost != nil {
+				t.Fatalf("Show() cost = %#v, want none", item.Cost)
+			}
+		})
+	}
+
+	// The unknown count is absent from an item all of whose runs were priced,
+	// because bd stores no key it was never given.
+	runner := &fakeRunner{responses: []string{`[{"id":"yoyodyne-1","title":"t","status":"closed","priority":1,"issue_type":"task","metadata":{"yoyodyne_cost_usd":12.5,"yoyodyne_cost_runs":2}}]`}}
+	item, err := (Client{Runner: runner}).Show(context.Background(), "yoyodyne-1")
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if item.Cost == nil || !item.Cost.Complete() || item.Cost.TotalUSD != 12.5 || item.Cost.Runs != 2 {
+		t.Fatalf("Show() cost = %#v", item.Cost)
+	}
+}
+
 type fakeRunner struct {
 	responses []string
 	results   []execution.ProcessResult
@@ -397,6 +515,19 @@ func (f *fakeRunner) Run(_ context.Context, command execution.Command, _ executi
 		return execution.ProcessResult{}, fmt.Errorf("unexpected command %v", command.Args)
 	}
 	return execution.ProcessResult{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: f.responses[index]}, nil
+}
+
+// costJSON is what bd echoes back after a price is stored: the item, with the
+// price among whatever else the project keeps in its metadata.
+func costJSON(total float64, runs, unknown int) string {
+	return fmt.Sprintf(`[{
+  "id":"yoyodyne-1",
+  "title":"Implement feature",
+  "status":"closed",
+  "priority":1,
+  "issue_type":"task",
+  "metadata":{"team":"platform","yoyodyne_cost_usd":%v,"yoyodyne_cost_runs":%d,"yoyodyne_cost_unknown_runs":%d}
+}]`, total, runs, unknown)
 }
 
 func workItemJSON(status, notes string) string {

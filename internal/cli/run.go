@@ -16,6 +16,7 @@ import (
 	"yoyodyne/internal/beads"
 	"yoyodyne/internal/checks"
 	"yoyodyne/internal/config"
+	"yoyodyne/internal/cost"
 	"yoyodyne/internal/domain"
 	"yoyodyne/internal/execution"
 	"yoyodyne/internal/gitworktree"
@@ -191,12 +192,24 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// run state, because a report outlives the run that made it: the run is
 		// settled and its artifacts are removed, and what it reported is still
 		// waiting for somebody to read.
-		Reports:      parts.reports,
+		Reports: parts.reports,
+		// What a run costs is already recorded in its event log, and the item it
+		// served is already recorded beside it. This is the join: as a run ends,
+		// the item it was for is priced across every run ever made for it, and the
+		// price is put where the tracker carries it.
+		Prices:       ledgerFrom(parts),
 		NewRunID:     runstate.NewRunID,
 		Repository:   parts.repository,
 		Config:       cfg,
 		RedactValues: redactValues,
 	}
+}
+
+// ledgerFrom wires the ledger that prices work items over parts that are
+// already built, so the price a run records and the price `yoyo cost` reports
+// are read from one set of records and written to one tracker.
+func ledgerFrom(parts components) cost.Ledger {
+	return cost.Ledger{Prices: parts.store, Tracker: parts.tracker()}
 }
 
 func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
@@ -407,6 +420,9 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// What the run's agents reported is collected whichever way the run went,
 		// so it is named whichever way this reports.
 		reportCollectedReports(stdout, outcome)
+		// So is what the work item has cost: a failed attempt spent money too, and
+		// the price is of the item rather than of this run.
+		reportItemCost(stdout, stderr, outcome)
 	}
 	if err != nil {
 		return 1
@@ -424,6 +440,25 @@ func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
 	}
 	if outcome.ReportProblem != "" {
 		fmt.Fprintln(writer, outcome.ReportProblem)
+	}
+}
+
+// reportItemCost names what the work item has cost across every run made for
+// it, which is what the run just added to. A price that could not be recorded is
+// named too: the spending happened either way, and an operator reading a ledger
+// has to know where it stopped being written down.
+func reportItemCost(stdout, stderr io.Writer, outcome orchestrator.Outcome) {
+	if outcome.Cost != nil {
+		total := fmt.Sprintf("$%.2f", outcome.Cost.TotalUSD)
+		if !outcome.Cost.Complete() {
+			// A run nothing survives to price is left out of the total rather than
+			// added as a zero, so the number is the least the item can have cost.
+			total = fmt.Sprintf("at least $%.2f (%d run(s) left no record to price)", outcome.Cost.TotalUSD, outcome.Cost.UnknownRuns)
+		}
+		fmt.Fprintf(stdout, "%s has cost %s across %d run(s)\n", outcome.WorkItemID, total, outcome.Cost.Runs)
+	}
+	if outcome.CostProblem != "" {
+		fmt.Fprintf(stderr, "the price of %s was not recorded: %s\n", outcome.WorkItemID, outcome.CostProblem)
 	}
 }
 

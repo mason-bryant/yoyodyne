@@ -41,6 +41,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runInvariant(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
+	case "cost":
+		return reportCosts(ctx, args[1:], stdout, stderr)
 	case "reconcile":
 		return reconcileRuns(ctx, args[1:], stdout, stderr)
 	default:
@@ -250,6 +252,7 @@ Commands:
   config show       print the effective configuration and value origins
   invariant         record, amend, retire, and read architectural invariants
   run               run one Beads work item in an isolated worktree
+  cost              price work items from the runs made for them, and record it
   reconcile         settle runs an interrupted process left behind
   version           print version information
   help              show this help`)

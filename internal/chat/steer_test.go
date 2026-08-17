@@ -917,6 +917,11 @@ type fakeWork struct {
 	// changesAsked records the work items /diff asked about, so what an operator
 	// gets when they name nothing is an assertion rather than a claim.
 	changesAsked []string
+	// price is what the recorded runs of an item cost, and pricesAsked is every
+	// item /show asked the price of.
+	price       ItemPrice
+	priceErr    error
+	pricesAsked []string
 	// progress is the readings a watcher gets from the run's record, in order,
 	// and progressAsked is every item it was asked about.
 	progress      []RunProgress
@@ -984,6 +989,21 @@ func (f *fakeWork) Changes(_ context.Context, workItemID string) (RunChanges, er
 	changes := f.changes
 	changes.WorkItemID = workItemID
 	return changes, nil
+}
+
+// Price reports what the recorded runs of an item cost, and records what it was
+// asked about, so an operator asking about one item is never answered with
+// another's spending.
+func (f *fakeWork) Price(_ context.Context, workItemID string) (ItemPrice, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pricesAsked = append(f.pricesAsked, workItemID)
+	if f.priceErr != nil {
+		return ItemPrice{}, f.priceErr
+	}
+	price := f.price
+	price.WorkItemID = workItemID
+	return price, nil
 }
 
 func (f *fakeWork) Direct(_ context.Context, workItemID, note string) error {
@@ -1054,6 +1074,144 @@ func (f *fakeWork) wasCancelled() bool {
 }
 
 var _ Work = (*fakeWork)(nil)
+
+// Asking what is done is asking what it cost, so a completed item comes back
+// with its price beside it rather than sending the operator to another tool.
+func TestStatusPutsAPriceOnCompletedWork(t *testing.T) {
+	t.Parallel()
+
+	work := &fakeWork{survey: Survey{
+		Completed: []WorkItemSummary{
+			{ID: "yoyodyne-ifd.2.7", Title: "Resume an interrupted run", Status: "closed", Priority: 1,
+				Cost: &ItemCost{TotalUSD: 27.93, Runs: 2}},
+			{ID: "yoyodyne-ifd.12", Title: "Pause on a usage limit", Status: "closed", Priority: 2,
+				Cost: &ItemCost{TotalUSD: 4.5, Runs: 3, UnknownRuns: 1}},
+			// An item nothing has priced carries no price at all, which must not
+			// read as work that was free.
+			{ID: "yoyodyne-ifd.13", Title: "Publish a pull request", Status: "closed", Priority: 2},
+		},
+	}}
+	options := testOptions(t, &fakeBackend{})
+	options.Work = work
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/status\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	for _, required := range []string{
+		"[yoyodyne-ifd.2.7] p1  $27.93 Resume an interrupted run",
+		"[yoyodyne-ifd.12]  p2 ≥ $4.50 Pause on a usage limit",
+		"[yoyodyne-ifd.13]  p2         Publish a pull request",
+		"≥ marks a floor",
+		// Finished work with no price says so, and says where a price would come
+		// from, rather than leaving a blank the operator has to interpret.
+		"1 completed item(s) carry no price",
+		"yoyo cost --record",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	if strings.Contains(transcript, "$0.00") {
+		t.Fatalf("an unpriced item was priced at nothing: %q", transcript)
+	}
+}
+
+// One total answers what an item cost; only the breakdown says what the harness
+// spent it on, which is what makes a rejected first attempt visible.
+func TestShowBreaksAnItemsCostDownByRun(t *testing.T) {
+	t.Parallel()
+
+	work := &fakeWork{price: ItemPrice{
+		Runs: []RunPrice{
+			{RunID: "run-1", Status: "failed", Phase: "reviewing", StartedAt: fixedClock{}.Now(), Invocations: 3, CostUSD: 8.91},
+			{RunID: "run-2", Status: "succeeded", Phase: "complete", StartedAt: fixedClock{}.Now(), Integrated: true, Invocations: 2, CostUSD: 19.02},
+			{RunID: "run-3", Status: "failed", StartedAt: fixedClock{}.Now(), Unknown: "the run's event log is no longer recorded"},
+		},
+		TotalUSD:    27.93,
+		UnknownRuns: 1,
+	}}
+	options := testOptions(t, &fakeBackend{})
+	options.Tracker = &fakeTracker{items: map[string]beads.WorkItem{"yoyodyne-ifd.2.7": {
+		ID: "yoyodyne-ifd.2.7", Title: "Resume an interrupted run", Status: "closed", Priority: 1, IssueType: "task",
+	}}}
+	options.Work = work
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/show yoyodyne-ifd.2.7\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	for _, required := range []string{
+		"cost: at least $27.93 across 3 run(s)",
+		"[failed, reviewing] $8.91 from 3 invocation(s)",
+		"[succeeded, complete, integrated] $19.02 from 2 invocation(s)",
+		"unknown: the run's event log is no longer recorded",
+		"1 of those run(s) left no record to price",
+		"not priced against any item",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	if len(work.pricesAsked) != 1 || work.pricesAsked[0] != "yoyodyne-ifd.2.7" {
+		t.Fatalf("priced %#v, want the item the operator named", work.pricesAsked)
+	}
+}
+
+// A price nobody could read must not cost the operator the item they asked for,
+// and it must not read as an item that was free.
+func TestShowReportsAPriceItCouldNotReadWithoutLosingTheItem(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{})
+	options.Tracker = &fakeTracker{items: map[string]beads.WorkItem{"yoyodyne-ifd.41": {
+		ID: "yoyodyne-ifd.41", Title: "Put a price tag on completed work", Status: "open", Priority: 1, IssueType: "task",
+	}}}
+	options.Work = &fakeWork{priceErr: errors.New("the run state directory could not be read")}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/show yoyodyne-ifd.41\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	transcript := out.String()
+	for _, required := range []string{
+		"id: yoyodyne-ifd.41",
+		"cost: could not be read, so treat it as unknown rather than nothing",
+		"the run state directory could not be read",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+}
+
+// An item the harness has never run has no price rather than a price of
+// nothing, and says which of the two it is.
+func TestShowSaysWhenNothingHasBeenRunToPrice(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{})
+	options.Tracker = &fakeTracker{items: map[string]beads.WorkItem{"yoyodyne-ifd.41": {
+		ID: "yoyodyne-ifd.41", Title: "Put a price tag on completed work", Status: "open", Priority: 1, IssueType: "task",
+	}}}
+	options.Work = &fakeWork{}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/show yoyodyne-ifd.41\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "no recorded run of yoyodyne-ifd.41, so it has no price rather than a price of nothing") {
+		t.Fatalf("transcript = %q", out.String())
+	}
+}
 
 // Reading a work item in full and seeing what a run changed are the two things
 // an operator used to have to leave the conversation for. Both are commands the
