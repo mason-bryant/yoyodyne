@@ -77,6 +77,7 @@ const (
 	actionLink         = "link"
 	actionUnlink       = "unlink"
 	actionClose        = "close"
+	actionRetire       = "retire"
 )
 
 // trackerActionArguments names the optional arguments each operation accepts.
@@ -85,20 +86,21 @@ const (
 // parsed would do something nobody asked for.
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
-	actionCreate:       {"title", "description", "parent"},
+	actionCreate:       {"title", "description", "parent", "priority"},
 	actionUpdate:       {"title", "description", "note"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
 	actionLink:         {"depends_on"},
 	actionUnlink:       {"depends_on"},
 	actionClose:        {},
+	actionRetire:       {},
 }
 
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
 	actionRead, actionCreate, actionUpdate, actionReparent,
-	actionReprioritize, actionLink, actionUnlink, actionClose,
+	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire,
 }
 
 // TrackerAction is one bounded operation on the work tracker. It carries
@@ -452,19 +454,30 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		outcome.Detail = renderWorkItemEvidence(item)
 		outcome.applied("read %s: %s", item.ID, singleLine(item.Title, maxSurveyTitleBytes))
 	case actionCreate:
+		// Admission carries the priority it is admitted at, because the item's
+		// identifier does not exist until this returns: an ordering left for a
+		// later action is an item that sits at whatever the tracker defaults to
+		// until somebody remembers it. A creation that says nothing about priority
+		// is still a creation, and the tracker's default then places it.
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
 			Type:        proposedIssueType,
-			Notes:       s.trackerProvenance("Created", action.Reason),
+			Notes:       s.trackerProvenance("Admitted to the backlog", action.Reason),
 			Parent:      action.parent(),
+			Priority:    action.Priority,
 		})
 		if err != nil {
 			outcome.fail(err)
 			return
 		}
 		outcome.WorkItemID = created.ID
-		outcome.applied("created %s: %s", created.ID, singleLine(created.Title, maxSurveyTitleBytes))
+		if action.Priority != nil {
+			outcome.applied("admitted %s to the backlog at priority %d: %s",
+				created.ID, *action.Priority, singleLine(created.Title, maxSurveyTitleBytes))
+			return
+		}
+		outcome.applied("admitted %s to the backlog: %s", created.ID, singleLine(created.Title, maxSurveyTitleBytes))
 	case actionUpdate:
 		change := beads.WorkItemChange{Title: strings.TrimSpace(action.Title), Description: strings.TrimSpace(action.Description)}
 		if note := strings.TrimSpace(action.Note); note != "" {
@@ -487,6 +500,10 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		}
 		outcome.applied("reparented %s under %s", id, parent)
 	case actionReprioritize:
+		// This and the admission above are the only places anything in the harness
+		// writes a work item's priority. Everything else reads it, which is what
+		// makes "the product manager owns the order" a property of the code rather
+		// than only of the contract the product manager is given.
 		priority := *action.Priority
 		if _, err := s.options.Tracker.Update(ctx, id, beads.WorkItemChange{Priority: &priority}); err != nil {
 			outcome.fail(err)
@@ -508,11 +525,23 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		}
 		outcome.applied("unlinked %s from %s", id, dependsOn)
 	case actionClose:
-		if _, err := s.options.Tracker.Complete(ctx, id, s.trackerProvenance("Closed", action.Reason)); err != nil {
+		if _, err := s.options.Tracker.Complete(ctx, id, s.trackerProvenance("Closed as done", action.Reason)); err != nil {
 			outcome.fail(err)
 			return
 		}
-		outcome.applied("closed %s", id)
+		outcome.applied("closed %s as done", id)
+	case actionRetire:
+		// Retiring is how admitted work leaves the backlog without being done. The
+		// tracker has one mechanism for taking an item out of the queue, so what
+		// separates this from closing is not what it runs but what it records: the
+		// item says the work was withdrawn rather than finished, and the operator
+		// is told in those words. Nothing here deletes anything, because scope the
+		// operator asked for is never dropped quietly.
+		if _, err := s.options.Tracker.Complete(ctx, id, s.trackerProvenance(retiredWithoutBeingDone, action.Reason)); err != nil {
+			outcome.fail(err)
+			return
+		}
+		outcome.applied("retired %s from the backlog without it being done", id)
 	default:
 		// Validation admits nothing else, so reaching this is a harness bug rather
 		// than a badly formed request; it is reported as a failure all the same.
@@ -529,6 +558,12 @@ func (o *TrackerOutcome) fail(err error) {
 	o.Applied = false
 	o.Failure = singleLine(err.Error(), maxTrackerFailureBytes)
 }
+
+// retiredWithoutBeingDone is what a retired item records about itself. It is
+// stated in full on the item because the tracker holds retired and finished work
+// in the same closed state, and an item that does not say which it was is one
+// nobody can tell apart from work that landed.
+const retiredWithoutBeingDone = "Retired from the backlog without being done"
 
 // trackerProvenance is what an item records about a change the product manager
 // made to it. The conversation and the turn are named for the same reason an

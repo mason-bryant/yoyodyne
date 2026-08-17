@@ -283,12 +283,14 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence) {
 		state = fmt.Sprintf("resumed conversation after %d turn(s)", evidence.Turns)
 	}
 	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
+	fmt.Fprintln(writer, "It owns the backlog: what is admitted to it, and the order work is pulled in.")
 	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, update, reparent,")
-	fmt.Fprintln(writer, "reprioritize, link, unlink, and close items, and every change it makes is")
-	fmt.Fprintln(writer, "reported to you here. It has no files, commands, or network, and it proposes")
+	fmt.Fprintln(writer, "reprioritize, link, unlink, close, and retire items, and every change it makes")
+	fmt.Fprintln(writer, "is reported to you here. It has no files, commands, or network, and it proposes")
 	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
 	fmt.Fprintln(writer, "It may also propose work items; one of those is created only if you approve it.")
-	fmt.Fprintln(writer, "You steer the work yourself: /status, /work, /stop, /redirect. /help lists them.")
+	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect.")
+	fmt.Fprintln(writer, "/help lists them.")
 	fmt.Fprintln(writer, "End with /exit.")
 	fmt.Fprintln(writer)
 }
@@ -370,6 +372,6 @@ Options:
   --new              start a new conversation instead of resuming the recorded one
   --json             emit machine-readable JSON (requires --message)
 
-An interactive conversation also carries out operator commands: /status, /work,
-/wait, /stop, and /redirect. Ask it for /help once it is open.`)
+An interactive conversation also carries out operator commands: /backlog,
+/status, /work, /wait, /stop, and /redirect. Ask it for /help once it is open.`)
 }

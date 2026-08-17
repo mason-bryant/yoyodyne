@@ -79,6 +79,50 @@ func TestAssembleProductReadsSpecificationsAndTrackerState(t *testing.T) {
 	}
 }
 
+// The product manager sets the order work is pulled in, so the state it reasons
+// over is listed in that order. A queue shown in some other order would have it
+// reasoning about a sequence nobody works in.
+func TestAssembleProductListsWorkInBacklogOrder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		WorkItems: []beads.WorkItem{
+			{ID: "yoyodyne-ifd.26", Title: "See and stop what is pulled", Status: "open", Priority: 3, IssueType: "task"},
+			{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: "open", Priority: 0, IssueType: "task"},
+			{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: "open", Priority: 1, IssueType: "task"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+
+	positions := make([]int, 0, 3)
+	for _, id := range []string{"yoyodyne-ifd.3", "yoyodyne-ifd.4", "yoyodyne-ifd.26"} {
+		at := strings.Index(bundle.Text, "- "+id+" ")
+		if at < 0 {
+			t.Fatalf("product context is missing %s:\n%s", id, bundle.Text)
+		}
+		positions = append(positions, at)
+	}
+	if positions[0] > positions[1] || positions[1] > positions[2] {
+		t.Fatalf("work items are not in backlog order (positions %v):\n%s", positions, bundle.Text)
+	}
+	// What the order means is stated, including the part of it nobody decided.
+	for _, required := range []string{
+		"These are in backlog order: highest priority first",
+		"nothing has decided which of those comes first",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("product context does not say %q:\n%s", required, bundle.Text)
+		}
+	}
+}
+
 func TestAssembleProductReadsTheConfiguredDirectory(t *testing.T) {
 	t.Parallel()
 

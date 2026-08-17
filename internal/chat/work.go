@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"yoyodyne/internal/backlog"
 )
 
 // maxSurveyItems bounds how many items of one kind a survey lists. What an
@@ -42,6 +44,11 @@ type Work interface {
 	// flight and the tracker's own view of what is blocked, claimed, available,
 	// and done.
 	Survey(ctx context.Context) (Survey, error)
+	// Backlog reports the admitted work in the product manager's order, which is
+	// the order a development manager pulls in. It is the same queue read from
+	// the same tracker rather than a second account of it, so what the operator
+	// sees here is what is actually pulled from.
+	Backlog(ctx context.Context) (backlog.Queue, error)
 	// Run carries one work item through the harness pipeline: worktree,
 	// developer, checks, review, and integration under the project's configured
 	// policy. It returns what the run reported even when it failed, because a

@@ -212,6 +212,42 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	}
 }
 
+// What can be pulled is a question the tracker answers from its own dependency
+// graph. The payload below is what bd actually returns, dependency shape and
+// all: the relation is recorded with no completion state on it, which is exactly
+// why readiness is asked for rather than worked out from a listing.
+func TestClientAsksTheTrackerWhatIsReadyRatherThanWorkingItOut(t *testing.T) {
+	t.Parallel()
+
+	ready := `[{"id":"bdprobe-uxm","title":"Waiting item","description":"d","status":"open","priority":0,
+	            "issue_type":"task","owner":"someone@example.com",
+	            "dependencies":[{"issue_id":"bdprobe-uxm","depends_on_id":"bdprobe-3kw","type":"blocks",
+	                             "created_by":"Someone","metadata":"{}"}],
+	            "dependency_count":1,"dependent_count":0,"comment_count":0}]`
+	runner := &fakeRunner{responses: []string{ready}}
+	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
+
+	items, err := client.Ready(context.Background())
+	if err != nil {
+		t.Fatalf("Ready() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != "bdprobe-uxm" {
+		t.Fatalf("Ready() = %#v", items)
+	}
+	// The dependency decodes from the spelling bd uses, and carries no status,
+	// which is the fact the backlog is built around.
+	if len(items[0].Dependencies) != 1 {
+		t.Fatalf("dependencies = %#v", items[0].Dependencies)
+	}
+	dependency := items[0].Dependencies[0]
+	if dependency.ID != "bdprobe-3kw" || dependency.Type != "blocks" || dependency.Status != "" {
+		t.Fatalf("dependency = %#v", dependency)
+	}
+	if !reflect.DeepEqual(runner.args, [][]string{{"ready", "--json"}}) {
+		t.Fatalf("bd args = %#v", runner.args)
+	}
+}
+
 func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 	t.Parallel()
 
@@ -246,6 +282,28 @@ func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 		t.Fatalf("bd args = %#v, want %#v", runner.args, wantArgs)
 	}
 
+	// Work is admitted at a place in the backlog's order, and the highest place is
+	// zero, so an unstated priority and the top of the queue cannot be the same
+	// request. A creation that says nothing about it asks bd for its default.
+	top := 0
+	placed := &fakeRunner{responses: []string{created}}
+	if _, err := (Client{Runner: placed}).Create(context.Background(), NewWorkItem{
+		Title: "Pause on a usage limit", Description: "Wait and resume.", Type: "task", Priority: &top,
+	}); err != nil {
+		t.Fatalf("Create() with a priority error = %v", err)
+	}
+	wantPlaced := [][]string{{
+		"create",
+		"--title=Pause on a usage limit",
+		"--description=Wait and resume.",
+		"--type=task",
+		"--priority=0",
+		"--json",
+	}}
+	if !reflect.DeepEqual(placed.args, wantPlaced) {
+		t.Fatalf("bd args = %#v, want %#v", placed.args, wantPlaced)
+	}
+
 	// An item created as something other than what was asked for is a failure:
 	// the caller approved the item it described, not whatever bd produced.
 	mismatched := &fakeRunner{responses: []string{`{"id":"yoyodyne-9","title":"Something else","issue_type":"task"}`}}
@@ -264,6 +322,7 @@ func TestClientCreatesAWorkItemAndReportsTheIdentifierItGot(t *testing.T) {
 func TestClientRefusesToCreateAnUnusableWorkItem(t *testing.T) {
 	t.Parallel()
 
+	outsideScale := MaxPriority + 1
 	for _, test := range []struct {
 		name string
 		item NewWorkItem
@@ -274,6 +333,7 @@ func TestClientRefusesToCreateAnUnusableWorkItem(t *testing.T) {
 		{name: "no type", item: NewWorkItem{Title: "t", Description: "d"}, want: "invalid Beads issue type"},
 		{name: "smuggled type", item: NewWorkItem{Title: "t", Description: "d", Type: "task --force"}, want: "invalid Beads issue type"},
 		{name: "invented parent", item: NewWorkItem{Title: "t", Description: "d", Type: "task", Parent: "../etc"}, want: "invalid parent"},
+		{name: "priority outside the scale", item: NewWorkItem{Title: "t", Description: "d", Type: "task", Priority: &outsideScale}, want: "outside 0..4"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

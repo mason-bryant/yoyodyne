@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"reflect"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	backendapi "yoyodyne/internal/backend"
+	"yoyodyne/internal/backlog"
+	"yoyodyne/internal/beads"
 	"yoyodyne/internal/console"
 	"yoyodyne/internal/execution"
 )
@@ -150,6 +153,72 @@ func TestStatusShowsWhatIsInFlightBlockedAndDone(t *testing.T) {
 		if !strings.Contains(transcript, required) {
 			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
 		}
+	}
+}
+
+// The product manager decides the order work is pulled in, and the operator did
+// not. That makes the ordering something they have to be able to see from the
+// conversation that sets it rather than only in the tracker.
+func TestBacklogShowsTheOperatorTheOrderWorkIsPulledIn(t *testing.T) {
+	t.Parallel()
+
+	work := &fakeWork{queue: backlog.Order([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.4", Title: "The development manager that pulls", Status: "open", Priority: 1},
+		{ID: "yoyodyne-ifd.3", Title: "The scheduler that runs it", Status: "open", Priority: 0,
+			Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: "blocks", Status: "open"}}},
+		{ID: "yoyodyne-ifd.26", Title: "See and stop what is pulled", Status: "open", Priority: 3},
+	}, []string{"yoyodyne-ifd.4", "yoyodyne-ifd.26"})}
+	options := testOptions(t, &fakeBackend{})
+	options.Work = work
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/backlog\n/help\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	for _, required := range []string{
+		"backlog (3 admitted, 2 ready to pull):",
+		"1. [yoyodyne-ifd.3] p0 The scheduler that runs it",
+		"waiting on yoyodyne-ifd.4",
+		"2. [yoyodyne-ifd.4] p1 The development manager that pulls",
+		"3. [yoyodyne-ifd.26] p3 See and stop what is pulled",
+		// The highest-priority item is waiting, so what is pulled next is the one
+		// after it rather than the top of the list.
+		"next to be pulled: yoyodyne-ifd.4",
+		// A command nobody is told about is one nobody uses.
+		"/backlog",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+}
+
+// A conversation with no harness behind it can still discuss the product. It
+// says the backlog is out of reach rather than rendering an empty one, because
+// "nothing is admitted" and "nothing could be read" are different answers.
+func TestBacklogSaysWhenThereIsNoHarnessBehindIt(t *testing.T) {
+	t.Parallel()
+
+	session := openTestSession(t, testOptions(t, &fakeBackend{}))
+	if _, err := session.ReadBacklog(context.Background()); !errors.Is(err, errNoWork) {
+		t.Fatalf("ReadBacklog() error = %v, want %v", err, errNoWork)
+	}
+
+	// A tracker that cannot be read fails the whole answer rather than being
+	// reported as an empty queue: half a backlog answers "what is next" wrongly.
+	work := &fakeWork{backlogErr: errors.New("bd list failed")}
+	options := testOptions(t, &fakeBackend{})
+	options.Work = work
+	withWork := openTestSession(t, options)
+	queue, err := withWork.ReadBacklog(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bd list failed") {
+		t.Fatalf("ReadBacklog() error = %v", err)
+	}
+	if len(queue.Entries) != 0 {
+		t.Fatalf("a backlog that could not be read still returned %#v", queue.Entries)
 	}
 }
 
@@ -767,6 +836,8 @@ type fakeWork struct {
 	mu          sync.Mutex
 	survey      Survey
 	surveyErr   error
+	queue       backlog.Queue
+	backlogErr  error
 	started     []string
 	report      RunReport
 	runErr      error
@@ -788,6 +859,12 @@ func (f *fakeWork) Survey(context.Context) (Survey, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.survey, f.surveyErr
+}
+
+func (f *fakeWork) Backlog(context.Context) (backlog.Queue, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queue, f.backlogErr
 }
 
 func (f *fakeWork) Run(ctx context.Context, workItemID string) (RunReport, error) {
