@@ -214,7 +214,8 @@ That shape is checked rather than merely described, because the goals are what
 downstream work is kept consistent with and goals with nothing behind them are
 not traceable to anything. A specification that does not follow it — no goals, no
 introduction before them, or an empty goals section — is **reported and still
-read**. `yoyo chat` names it on stderr when the conversation opens, and it is
+read**. `yoyo chat` names it on stderr when the conversation opens — and in the
+conversation itself when `/refresh` reads the specifications again — and it is
 listed for the product manager alongside the specifications themselves. Refusing
 to load it would silently lose intent somebody wrote down, which is worse than
 loading intent in the wrong shape and saying so.

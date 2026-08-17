@@ -320,7 +320,7 @@ func TestOpenRejectsAnUnusableConversation(t *testing.T) {
 		{name: "no backend", mutate: func(o *Options) { o.Backend = nil }, want: "backend is required"},
 		{name: "no store", mutate: func(o *Options) { o.Store = nil }, want: "store is required"},
 		{name: "no model", mutate: func(o *Options) { o.Model = "" }, want: "model selector is required"},
-		{name: "no product context", mutate: func(o *Options) { o.Briefing = "" }, want: "product context is required"},
+		{name: "no product context", mutate: func(o *Options) { o.Briefing = Briefing{} }, want: "product context is required"},
 		{name: "unknown provider", mutate: func(o *Options) { o.Provider = "carrier-pigeon" }, want: "unsupported backend"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -1124,7 +1124,7 @@ func testOptions(t *testing.T, provider Backend) Options {
 		Repository:   t.TempDir(),
 		ProductID:    "yoyodyne",
 		RepositoryID: "yoyodyne",
-		Briefing:     testBriefing,
+		Briefing:     Briefing{Text: testBriefing, GatheredAt: fixedClock{}.Now()},
 		Clock:        fixedClock{},
 	}
 }

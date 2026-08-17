@@ -54,10 +54,21 @@ type Conversation struct {
 	// given. It is durable for the same reason the provider session is: the agent
 	// acted, the process that watched it act may be gone, and an agent that never
 	// learns what its own actions did is one that will describe them wrongly.
-	PendingTrackerResults string    `json:"pending_tracker_results,omitempty"`
-	LastSequence          uint64    `json:"last_sequence"`
-	StartedAt             time.Time `json:"started_at"`
-	UpdatedAt             time.Time `json:"updated_at"`
+	PendingTrackerResults string `json:"pending_tracker_results,omitempty"`
+	// ContextGatheredAt is when the picture of the product the agent is working
+	// from was assembled, and ContextCommit is the repository commit it was
+	// assembled against. They are durable because the process that briefed the
+	// agent is usually not the one that resumes it, and a resumed conversation
+	// that cannot say how old its picture is will describe a repository as it
+	// was hours ago and sound exactly as certain about it. They are empty on a
+	// conversation recorded before the harness wrote them down, and on one whose
+	// first turn has not completed: the picture is recorded when it is
+	// delivered, never when it is merely taken.
+	ContextGatheredAt time.Time `json:"context_gathered_at,omitempty"`
+	ContextCommit     string    `json:"context_commit,omitempty"`
+	LastSequence      uint64    `json:"last_sequence"`
+	StartedAt         time.Time `json:"started_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 // MaxPendingTrackerResultBytes bounds the results a conversation may carry
@@ -106,6 +117,13 @@ func (c Conversation) Validate() error {
 	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
 		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",
 			len(c.PendingTrackerResults), MaxPendingTrackerResultBytes))
+	}
+	// A picture is deliberately allowed to predate the conversation that carries
+	// it: it is assembled before the record exists, and a refresh moves it
+	// forward afterwards. What it may not do is claim to be from the future,
+	// which would make every comparison against it read as fresher than it is.
+	if !c.ContextGatheredAt.IsZero() && !c.UpdatedAt.IsZero() && c.ContextGatheredAt.After(c.UpdatedAt) {
+		problems = append(problems, errors.New("context_gathered_at cannot be after updated_at"))
 	}
 	if c.StartedAt.IsZero() || c.UpdatedAt.IsZero() {
 		problems = append(problems, errors.New("started_at and updated_at are required"))

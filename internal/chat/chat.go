@@ -119,10 +119,15 @@ type Options struct {
 	Repository   string
 	ProductID    domain.ProductID
 	RepositoryID string
-	// Briefing is the assembled product context. It is sent once, with the
-	// first turn, because every later turn resumes a session that already has
-	// it.
-	Briefing     string
+	// Briefing is the assembled product context, with when it was assembled and
+	// what the repository was on at the time. It is sent once, with the first
+	// turn, because every later turn resumes a session that already has it —
+	// which is exactly why the conversation has to say how old it is.
+	Briefing Briefing
+	// Ground is the repository and the tracker the picture came from, kept so
+	// the conversation can say what has moved since and take a new picture when
+	// the operator asks. It is optional like the rest.
+	Ground       Ground
 	RedactValues []string
 	Timeout      time.Duration
 	// StopGrace bounds how long stopping waits for a cancelled run to give up
@@ -160,6 +165,15 @@ type Session struct {
 	// bounded, so the product manager is told its account is partial rather than
 	// being handed a complete-looking one.
 	noticesDropped bool
+	// refresh is a new picture of the repository and the tracker the operator
+	// asked for, waiting to be carried into the product manager's next turn.
+	// It waits rather than replacing anything: a conversation is refreshed by
+	// telling it what moved, not by editing what it believes.
+	refresh *pendingRefresh
+	// carried is the picture the turn being taken is delivering, adopted into
+	// the durable record once that turn succeeds. A picture that never reached
+	// the product manager is never recorded as the one it is working from.
+	carried *Briefing
 	// activity is what the operator is shown while a turn is being answered. It
 	// is nil outside an interactive conversation: a one-shot message has nobody
 	// watching, and its events are recorded exactly as they always were.
@@ -472,6 +486,16 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	s.notices = nil
 	s.noticesDropped = false
 	s.state.PendingTrackerResults = ""
+	// The same is true of the picture: the conversation is recorded as working
+	// from one only once the turn that delivered it succeeded, so a refresh
+	// nobody was told about never makes the record claim the conversation is
+	// current.
+	if s.carried != nil {
+		s.state.ContextGatheredAt = s.carried.GatheredAt
+		s.state.ContextCommit = s.carried.Commit
+		s.carried = nil
+		s.refresh = nil
+	}
 	if err := s.record(); err != nil {
 		return result.FinalText, err
 	}
@@ -875,7 +899,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		}
 		reply, err := s.speak(ctx, screen, message)
 		if reply.Text != "" {
-			fmt.Fprintf(out, "\nproduct-manager> %s\n\n", s.theme.Questions(reply.Text))
+			// The reply is Markdown, and on a terminal it is shown as Markdown
+			// rather than as its source. Nothing about the recorded reply
+			// changes: the dressing is inserted between characters that were
+			// already there.
+			fmt.Fprintf(out, "\nproduct-manager> %s\n\n", s.theme.Reply(reply.Text))
 		}
 		// What the product manager did to the tracker is reported whether or not
 		// the turn ended well: the changes are already made, and an operator who
@@ -1093,10 +1121,26 @@ func isApproval(answer string) bool {
 // carry every turn is the harness activity since the last one and the results of
 // any actions it has not been shown, because those are exactly what the resumed
 // session cannot know.
+//
+// A refresh the operator asked for is the one thing that puts the product
+// context back into a later turn, and it goes in framed as what it is: a new
+// picture, with what moved since the old one, for the product manager to
+// reconcile against what it already believes.
 func (s *Session) turnPrompt(message string) string {
 	var prompt strings.Builder
-	if s.state.Turns == 0 {
-		prompt.WriteString(s.options.Briefing)
+	switch {
+	case s.refresh != nil && s.state.Turns == 0:
+		// Nothing has been said yet, so the refreshed picture is simply the
+		// briefing: there is no earlier one for it to be reconciled against.
+		s.carried = &s.refresh.briefing
+		prompt.WriteString(s.refresh.briefing.Text)
+		prompt.WriteString("\n")
+	case s.refresh != nil:
+		s.carried = &s.refresh.briefing
+		prompt.WriteString(s.refresh.prompt())
+	case s.state.Turns == 0:
+		s.carried = &s.options.Briefing
+		prompt.WriteString(s.options.Briefing.Text)
 		prompt.WriteString("\n")
 	}
 	prompt.WriteString(s.renderNotices())
@@ -1166,7 +1210,7 @@ func (o Options) validate() error {
 	if strings.TrimSpace(o.Repository) == "" {
 		problems = append(problems, errors.New("repository is required"))
 	}
-	if strings.TrimSpace(o.Briefing) == "" {
+	if strings.TrimSpace(o.Briefing.Text) == "" {
 		problems = append(problems, errors.New("product context is required"))
 	}
 	if err := domain.ValidateIdentifier("product id", string(o.ProductID)); err != nil {

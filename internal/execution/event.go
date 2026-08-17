@@ -55,6 +55,11 @@ const (
 	EventWorkFinished EventType = "work.finished"
 	EventWorkStopped  EventType = "work.stopped"
 	EventWorkDirected EventType = "work.directed"
+	// A conversation's picture of the repository and the tracker is taken once
+	// and can be taken again on the operator's instruction. The refresh is
+	// recorded because it changes what the agent is reasoning from, which is
+	// otherwise the one thing about a conversation its log would not say.
+	EventContextRefreshed EventType = "context.refreshed"
 )
 
 type Event struct {

@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	"yoyodyne/internal/backlog"
+	"yoyodyne/internal/console"
 )
 
 // maxSurveyItems bounds how many items of one kind a survey lists. What an
@@ -179,33 +180,44 @@ type Stopped struct {
 
 // Render describes the survey for an operator. Every group is named even when
 // it is empty: "blocked: none" is an answer, and a missing heading is not.
-func (s Survey) Render() string {
+//
+// The theme decides how much of it may be dressed. Each group is coloured for
+// the state it reports — running, blocked, and done have the same colour here
+// as anywhere else — and the identifiers are aligned so a column of them can be
+// read down rather than picked out of ragged prose. Both are additions: every
+// group says its state in words, so a survey read with the colour stripped, or
+// read where colour was never permitted, loses nothing.
+func (s Survey) Render(theme console.Theme) string {
 	var rendered strings.Builder
 	if reason, unread := s.unread(inFlightGroup); unread {
-		rendered.WriteString(renderUnread(inFlightGroup, reason))
+		rendered.WriteString(renderUnread(theme, inFlightGroup, reason))
 	} else {
-		rendered.WriteString(renderRunSnapshots(s.InFlight))
+		rendered.WriteString(renderRunSnapshots(theme, s.InFlight))
 	}
 	for _, group := range []struct {
 		label string
+		state console.State
 		items []WorkItemSummary
 	}{
-		{"claimed", s.Claimed},
-		{"blocked", s.Blocked},
-		{"available", s.Available},
-		{"completed", s.Completed},
+		// Available work is in no state of its own: nothing is running it,
+		// nothing is holding it, and it is not done. It is left undressed rather
+		// than given a colour that would mean something it does not.
+		{"claimed", console.StateRunning, s.Claimed},
+		{"blocked", console.StateBlocked, s.Blocked},
+		{"available", "", s.Available},
+		{"completed", console.StateDone, s.Completed},
 	} {
 		if reason, unread := s.unread(group.label); unread {
-			rendered.WriteString(renderUnread(group.label, reason))
+			rendered.WriteString(renderUnread(theme, group.label, reason))
 			continue
 		}
-		rendered.WriteString(renderWorkItemGroup(group.label, group.items))
+		rendered.WriteString(renderWorkItemGroup(theme, group.label, group.state, group.items))
 	}
 	// Anything unread that does not belong to a group above is still reported;
 	// a part nobody could read is never dropped for not fitting the listing.
 	for _, unavailable := range s.Unavailable {
 		if !knownSurveyGroup(unavailable.Group) {
-			rendered.WriteString(renderUnread(unavailable.Group, unavailable.Reason))
+			rendered.WriteString(renderUnread(theme, unavailable.Group, unavailable.Reason))
 		}
 	}
 	return rendered.String()
@@ -237,19 +249,27 @@ func (s Survey) unread(group string) (string, bool) {
 	return "", false
 }
 
-func renderUnread(group, reason string) string {
-	return fmt.Sprintf("%s: could not be read, so treat it as unknown rather than empty: %s\n",
-		group, singleLine(reason, maxSurveyTitleBytes*2))
+// renderUnread reports a part of the survey nobody could read. It wears the
+// failed colour because that is what it is: not an empty group, but a question
+// the harness could not answer.
+func renderUnread(theme console.Theme, group, reason string) string {
+	return theme.State(console.StateFailed, fmt.Sprintf("%s: could not be read, so treat it as unknown rather than empty: %s\n",
+		group, singleLine(reason, maxSurveyTitleBytes*2)))
 }
 
-func renderRunSnapshots(runs []RunSnapshot) string {
+func renderRunSnapshots(theme console.Theme, runs []RunSnapshot) string {
 	if len(runs) == 0 {
 		return "in flight: none\n"
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "in flight (%d):\n", len(runs))
+	fmt.Fprint(&rendered, theme.State(console.StateRunning, fmt.Sprintf("in flight (%d):\n", len(runs))))
+	width := runIDWidth(runs)
 	for _, run := range runs {
-		fmt.Fprintf(&rendered, "  %s on %s [%s]\n", run.RunID, run.WorkItemID, run.state())
+		// Each run is coloured for what it is doing rather than for the group it
+		// is in: a run that failed or is waiting is in flight as far as the
+		// record is concerned, and reads nothing like one that is working.
+		fmt.Fprintf(&rendered, "  %s on %s [%s]\n",
+			theme.State(run.dressing(), pad(run.RunID, width)), run.WorkItemID, run.state())
 		if run.Branch != "" {
 			fmt.Fprintf(&rendered, "    branch %s, started %s\n", run.Branch, run.StartedAt.UTC().Format(time.RFC3339))
 		} else {
@@ -271,7 +291,22 @@ func (r RunSnapshot) state() string {
 	return r.Status + ", " + r.Phase
 }
 
-func renderWorkItemGroup(label string, items []WorkItemSummary) string {
+// dressing is the state this run is coloured for. A status the harness does not
+// recognize is left undressed rather than guessed at.
+func (r RunSnapshot) dressing() console.State {
+	switch r.Status {
+	case "running", "pending":
+		return console.StateRunning
+	case "succeeded":
+		return console.StateDone
+	case "failed", "timed_out", "cancelled":
+		return console.StateFailed
+	default:
+		return ""
+	}
+}
+
+func renderWorkItemGroup(theme console.Theme, label string, state console.State, items []WorkItemSummary) string {
 	if len(items) == 0 {
 		return label + ": none\n"
 	}
@@ -280,14 +315,50 @@ func renderWorkItemGroup(label string, items []WorkItemSummary) string {
 		listed = listed[:maxSurveyItems]
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "%s (%d):\n", label, len(items))
+	fmt.Fprint(&rendered, theme.State(state, fmt.Sprintf("%s (%d):\n", label, len(items))))
+	// The identifiers are padded to the widest in the group, so the priorities
+	// and titles beside them line up in columns rather than starting wherever
+	// the tracker's identifiers happen to end.
+	width := itemIDWidth(listed)
 	for _, item := range listed {
-		fmt.Fprintf(&rendered, "  [%s] p%d %s\n", item.ID, item.Priority, singleLine(item.Title, maxSurveyTitleBytes))
+		fmt.Fprintf(&rendered, "  %s p%d %s\n",
+			theme.State(state, pad("["+item.ID+"]", width)), item.Priority, singleLine(item.Title, maxSurveyTitleBytes))
 	}
 	if len(items) > len(listed) {
 		fmt.Fprintf(&rendered, "  %d further %s item(s) are not listed here.\n", len(items)-len(listed), label)
 	}
 	return rendered.String()
+}
+
+func itemIDWidth(items []WorkItemSummary) int {
+	width := 0
+	for _, item := range items {
+		if measured := utf8.RuneCountInString(item.ID) + 2; measured > width {
+			width = measured
+		}
+	}
+	return width
+}
+
+func runIDWidth(runs []RunSnapshot) int {
+	width := 0
+	for _, run := range runs {
+		if measured := utf8.RuneCountInString(run.RunID); measured > width {
+			width = measured
+		}
+	}
+	return width
+}
+
+// pad widens one column entry to the width its group needs. It counts runes
+// rather than bytes: a tracker identifier is ASCII in practice, and a column
+// measured in bytes would still be a column that does not line up when it is
+// not.
+func pad(value string, width int) string {
+	if missing := width - utf8.RuneCountInString(value); missing > 0 {
+		return value + strings.Repeat(" ", missing)
+	}
+	return value
 }
 
 // Render describes a finished run to the operator. It reports the artifacts a
