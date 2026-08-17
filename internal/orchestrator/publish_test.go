@@ -1102,6 +1102,90 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	}
 }
 
+// Settling a queued merge is a question for the forge, and reconciliation asks
+// it before it observes the repository at all. A local target that moved on
+// since the run finished says nothing about a merge nobody has answered for
+// yet, and must never settle one as a disagreement.
+func TestReconcileAsksTheForgeAboutAQueuedMergeWhateverTheLocalTargetShows(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	// Unrelated work lands on the local target, so it no longer stands where
+	// this run's promotion left it.
+	if err := os.WriteFile(filepath.Join(fixture.repository, "later.txt"), []byte("later work\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, fixture.repository, "add", "later.txt")
+	runPipelineGit(t, fixture.repository, "commit", "-m", "later work")
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the forge asked and the run reported as queued", results)
+	}
+	if fixture.tracker.blocked {
+		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.blockReason)
+	}
+	held, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if held.Integration == nil || !held.PullRequest.MergeQueued {
+		t.Fatalf("held state = %#v, want the queued merge and its promotion untouched", held)
+	}
+
+	// The forge merges it, and the next sweep settles the run on that answer
+	// rather than on what the local target happens to show.
+	fixture.forge.performQueuedMerge(t)
+	settled := fixture.reconcile(t)
+	if len(settled) != 1 || settled[0].Action != ActionCompleted || settled[0].Failure != "" {
+		t.Fatalf("reconciliation after the merge = %#v, want it completed", settled)
+	}
+	if local := publishedCommit(t, fixture.repository, "main"); local == outcome.Integration.TargetCommit {
+		t.Fatalf("local main = %q, want the target this test moved on", local)
+	}
+}
+
+// The forge is asked before the repository is observed at all, so a local
+// target that does not carry the promotion cannot settle a merge nobody has
+// answered for yet. This builds the one repository the two orderings disagree
+// about — the run's branch back at its promoted commit, the local target back
+// where it started, and the artifacts recorded as still present — because the
+// pipeline's own queued run cleans up locally and never produces it.
+func TestReconcileAsksTheForgeAboutAQueuedMergeBeforeObservingTheRepository(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	outcome := fixture.run(t)
+	runPipelineGit(t, fixture.repository, "branch", outcome.Branch, outcome.Integration.SourceCommit)
+	runPipelineGit(t, fixture.repository, "update-ref", "refs/heads/main", outcome.BaseCommit)
+	queued, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	queued.Phase = runstate.PhaseCleaningUp
+	queued.WorktreeRemoved = false
+	queued.BranchRemoved = false
+	if err := fixture.store.Save(queued); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 || results[0].Action != ActionQueued || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the forge asked rather than the repository believed", results)
+	}
+	if fixture.tracker.blocked {
+		t.Fatalf("reconciliation blocked a run whose merge the forge still holds: %q", fixture.tracker.blockReason)
+	}
+	held, err := fixture.store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if held.Integration == nil || !held.PullRequest.MergeQueued {
+		t.Fatalf("held state = %#v, want the queued merge and its promotion untouched", held)
+	}
+}
+
 // queuedFixture is a publishing run whose forge queues the merge, built over
 // artifacts a second process can also see. Reconciliation is that second
 // process: it settles a queued merge from the repository, the worktree root, and
