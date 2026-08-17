@@ -484,6 +484,115 @@ func contains(values []string, want string) bool {
 // is what makes the answer survive success: a run is cleaned up once it
 // integrates — worktree removed, branch deleted — so anything that answered by
 // diffing a tree would stop having an answer exactly when the work landed.
+// The price a completed run recorded is carried by the tracker, so a survey
+// reads it beside everything else about the item rather than from a second
+// place that could disagree with it.
+func TestSurveyCarriesThePriceTheTrackerHolds(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	runner := &recordingRunner{stdout: `[
+	  {"id":"yoyodyne-ifd.2.7","title":"Resume an interrupted run","status":"closed","priority":1,"issue_type":"task",
+	   "metadata":{"yoyodyne_cost_usd":27.93,"yoyodyne_cost_runs":2}},
+	  {"id":"yoyodyne-ifd.13","title":"Publish a pull request","status":"closed","priority":2,"issue_type":"task"}
+	]`}
+	work := conversationWork{tracker: chatTracker(runner, "/repo"), store: store, timeout: chatTrackerTimeout}
+	survey, err := work.Survey(context.Background())
+	if err != nil {
+		t.Fatalf("Survey() error = %v", err)
+	}
+	if len(survey.Completed) != 2 {
+		t.Fatalf("completed = %#v", survey.Completed)
+	}
+	priced := survey.Completed[0]
+	if priced.Cost == nil || priced.Cost.TotalUSD != 27.93 || priced.Cost.Runs != 2 || priced.Cost.UnknownRuns != 0 {
+		t.Fatalf("priced item = %#v", priced.Cost)
+	}
+	// An item nothing has priced carries no price, which is not the same fact as
+	// an item that cost nothing.
+	if survey.Completed[1].Cost != nil {
+		t.Fatalf("unpriced item = %#v, want no price", survey.Completed[1].Cost)
+	}
+}
+
+// An item's price comes from the runs recorded for it, which is what lets an
+// item closed long before anything recorded a price still be priced.
+func TestPriceReadsEveryRecordedRunOfAnItem(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	for index, run := range []struct {
+		runID     string
+		status    runstate.Status
+		startedAt time.Time
+		cost      float64
+	}{
+		{runID: "run-fedcba9876543210fedcba9876543210", status: runstate.StatusFailed, startedAt: started.Add(-2 * time.Hour), cost: 8.91},
+		{runID: "run-0123456789abcdef0123456789abcdef", status: runstate.StatusSucceeded, startedAt: started, cost: 19.02},
+	} {
+		completed := run.startedAt.Add(time.Hour)
+		if err := store.Create(runstate.State{
+			SchemaVersion:     runstate.StateSchemaVersion,
+			RunID:             run.runID,
+			ProductID:         "yoyodyne",
+			RepositoryID:      "yoyodyne",
+			WorkItemID:        "yoyodyne-ifd.2.7",
+			Backend:           domain.BackendClaudeCode,
+			Status:            run.status,
+			Phase:             runstate.PhaseReviewing,
+			StartedAt:         run.startedAt,
+			UpdatedAt:         completed,
+			CompletedAt:       &completed,
+			ProviderSessionID: "session-1",
+		}); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+		event, err := execution.NewEvent(run.runID, uint64(index+1), completed, execution.EventRunCompleted, "claude-code",
+			map[string]any{"session_id": "session-1", "total_cost_usd": run.cost})
+		if err != nil {
+			t.Fatalf("NewEvent() error = %v", err)
+		}
+		if err := store.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+
+	work := conversationWork{store: store, timeout: chatTrackerTimeout}
+	price, err := work.Price(context.Background(), "yoyodyne-ifd.2.7")
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	if price.TotalUSD != 27.93 || len(price.Runs) != 2 || price.UnknownRuns != 0 {
+		t.Fatalf("Price() = %#v", price)
+	}
+	// Oldest first: the rejected attempt, then the one that finished the work.
+	if price.Runs[0].Status != "failed" || price.Runs[0].CostUSD != 8.91 || price.Runs[1].CostUSD != 19.02 {
+		t.Fatalf("Price() runs = %#v", price.Runs)
+	}
+	rendered := price.Render()
+	for _, required := range []string{"cost: $27.93 across 2 run(s)", "$8.91 from 1 invocation(s)"} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered price = %q, want it to contain %q", rendered, required)
+		}
+	}
+
+	// An item nothing has run has no price rather than a price of nothing.
+	unrun, err := work.Price(context.Background(), "yoyodyne-ifd.99")
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	if len(unrun.Runs) != 0 || unrun.TotalUSD != 0 {
+		t.Fatalf("Price() = %#v, want nothing recorded", unrun)
+	}
+}
+
 func TestChangesAnswerFromTheRecordEvenAfterCleanup(t *testing.T) {
 	t.Parallel()
 

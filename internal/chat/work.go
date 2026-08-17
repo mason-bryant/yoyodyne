@@ -70,6 +70,13 @@ type Work interface {
 	// run is cleaned up, and the branch with it, so a change nobody recorded is a
 	// change nobody can be shown afterwards.
 	Changes(ctx context.Context, workItemID string) (RunChanges, error)
+	// Price reports what one work item has cost, broken down by the runs it
+	// took, read from the durable run records. It is the same evidence the
+	// tracker's own price was summed from, so a breakdown and the total beside an
+	// item in a survey can never be two different accounts of the spending; and
+	// because it is read rather than stored, it prices an item whose runs
+	// happened before anything was recording prices at all.
+	Price(ctx context.Context, workItemID string) (ItemPrice, error)
 	// Direct records durable operator direction on a work item, where the next
 	// attempt at it reads it. It never changes the item's status: redirecting
 	// work says what to do differently, it does not decide the work is done.
@@ -86,6 +93,61 @@ type WorkItemSummary struct {
 	Title    string `json:"title"`
 	Status   string `json:"status"`
 	Priority int    `json:"priority"`
+	// Cost is what the runs made for this item have cost, as the tracker carries
+	// it. It is absent from an item nothing has priced yet, which is not the same
+	// as an item that cost nothing.
+	Cost *ItemCost `json:"cost,omitempty"`
+}
+
+// ItemCost is the provider-reported price of one work item, summed over every
+// run made for it. UnknownRuns is what keeps it honest: a run whose record is
+// gone cannot be priced, and while any are unpriced the total is a floor on what
+// the item cost rather than what it cost.
+type ItemCost struct {
+	TotalUSD    float64 `json:"total_usd"`
+	Runs        int     `json:"runs"`
+	UnknownRuns int     `json:"unknown_runs,omitempty"`
+}
+
+// Render is the price as a survey shows it: money, and a mark saying the number
+// is a floor when some of the work behind it could not be priced.
+func (c ItemCost) Render() string {
+	if c.UnknownRuns > 0 {
+		return fmt.Sprintf("≥ $%.2f", c.TotalUSD)
+	}
+	return fmt.Sprintf("$%.2f", c.TotalUSD)
+}
+
+// ItemPrice is what one work item cost, broken down by the runs it took. It is
+// read from the durable run records rather than from the tracker, so it prices
+// an item whose price nobody has recorded yet and says which attempt spent what.
+type ItemPrice struct {
+	WorkItemID string     `json:"work_item_id"`
+	Runs       []RunPrice `json:"runs,omitempty"`
+	TotalUSD   float64    `json:"total_usd"`
+	// UnknownRuns counts the runs whose recorded evidence is gone, and is what
+	// makes the total a floor rather than a price.
+	UnknownRuns int `json:"unknown_runs,omitempty"`
+}
+
+// RunPrice is what one run of a work item cost: which attempt it was, how it
+// went, and what the provider charged for the invocations inside it.
+type RunPrice struct {
+	RunID     string    `json:"run_id"`
+	Status    string    `json:"status"`
+	Phase     string    `json:"phase,omitempty"`
+	StartedAt time.Time `json:"started_at"`
+	// Integrated reports the attempt that promoted its work, which is what
+	// separates the run that finished the item from the ones that did not.
+	Integrated bool `json:"integrated,omitempty"`
+	// Invocations counts the provider invocations behind the cost: the
+	// developer's, the reviewer's, and one more for every repair attempt.
+	Invocations int     `json:"invocations,omitempty"`
+	CostUSD     float64 `json:"cost_usd"`
+	// Unknown says why this run could not be priced. A run carrying one is not a
+	// run that was free, and its cost is deliberately left out of the total
+	// rather than added to it as a zero.
+	Unknown string `json:"unknown,omitempty"`
 }
 
 // RunSnapshot is one run the harness has recorded and not finished. It is read
@@ -273,6 +335,11 @@ func (s Survey) Render(theme console.Theme) string {
 			continue
 		}
 		rendered.WriteString(renderWorkItemGroup(theme, group.label, group.state, group.items))
+		// Finished work is what somebody asks the price of, so the completed group
+		// is the one place worth saying that some of it carries none.
+		if group.label == "completed" {
+			rendered.WriteString(renderUnpricedNote(group.items))
+		}
 	}
 	// Anything unread that does not belong to a group above is still reported;
 	// a part nobody could read is never dropped for not fitting the listing.
@@ -379,16 +446,154 @@ func renderWorkItemGroup(theme console.Theme, label string, state console.State,
 	fmt.Fprint(&rendered, theme.State(state, fmt.Sprintf("%s (%d):\n", label, len(items))))
 	// The identifiers are padded to the widest in the group, so the priorities
 	// and titles beside them line up in columns rather than starting wherever
-	// the tracker's identifiers happen to end.
+	// the tracker's identifiers happen to end. The prices get a column of their
+	// own, right-aligned, so what the work cost can be read down the group
+	// instead of hunted for at the end of each title.
 	width := itemIDWidth(listed)
+	prices := itemCostWidth(listed)
+	floor := false
 	for _, item := range listed {
-		fmt.Fprintf(&rendered, "  %s p%d %s\n",
-			theme.State(state, pad("["+item.ID+"]", width)), item.Priority, singleLine(item.Title, maxSurveyTitleBytes))
+		identifier := theme.State(state, pad("["+item.ID+"]", width))
+		title := singleLine(item.Title, maxSurveyTitleBytes)
+		if prices == 0 {
+			fmt.Fprintf(&rendered, "  %s p%d %s\n", identifier, item.Priority, title)
+			continue
+		}
+		price := ""
+		if item.Cost != nil {
+			price = item.Cost.Render()
+			floor = floor || item.Cost.UnknownRuns > 0
+		}
+		// An item nothing has priced is left blank rather than shown as nothing:
+		// a zero there would read as work that was free.
+		fmt.Fprintf(&rendered, "  %s p%d %s %s\n", identifier, item.Priority, padLeft(price, prices), title)
+	}
+	if floor {
+		rendered.WriteString("  ≥ marks a floor: some runs of that item have no surviving record and could not be priced.\n")
 	}
 	if len(items) > len(listed) {
 		fmt.Fprintf(&rendered, "  %d further %s item(s) are not listed here.\n", len(items)-len(listed), label)
 	}
 	return rendered.String()
+}
+
+// renderUnpricedNote says how much finished work carries no price, and what the
+// two reasons for that are. It is the one place an operator notices the gap, so
+// it is also where the way to close it is named: an item the harness ran has a
+// price waiting in its run records whether or not anybody has recorded it yet,
+// and an item the harness never ran has none to find.
+func renderUnpricedNote(items []WorkItemSummary) string {
+	unpriced := 0
+	for _, item := range items {
+		if item.Cost == nil {
+			unpriced++
+		}
+	}
+	if unpriced == 0 {
+		return ""
+	}
+	return fmt.Sprintf("  %d completed item(s) carry no price: work the harness did not run has none, and work it did is priced by `yoyo cost --record`.\n", unpriced)
+}
+
+// Render breaks one work item's price down by the runs it took, which is the
+// question a single total invites: an item that cost twenty-eight dollars across
+// a rejected attempt and a successful one is a different story from one that
+// cost twenty-eight in a single pass.
+func (p ItemPrice) Render() string {
+	var rendered strings.Builder
+	if len(p.Runs) == 0 {
+		fmt.Fprintf(&rendered, "cost: the harness has no recorded run of %s, so it has no price rather than a price of nothing.\n", p.WorkItemID)
+		return rendered.String()
+	}
+	fmt.Fprintf(&rendered, "cost: %s across %d run(s)\n", p.total(), len(p.Runs))
+	width := runPriceIDWidth(p.Runs)
+	for _, run := range p.Runs {
+		fmt.Fprintf(&rendered, "  %s started %s [%s] %s\n",
+			pad(run.RunID, width), run.StartedAt.UTC().Format(time.RFC3339), run.outcome(), run.price())
+	}
+	if p.UnknownRuns > 0 {
+		fmt.Fprintf(&rendered, "  %d of those run(s) left no record to price, so the total is a floor rather than the price.\n", p.UnknownRuns)
+	}
+	// The gap is stated rather than closed. A conversation that discussed five
+	// items cannot be attributed to one of them without a judgement nobody asked
+	// this to make, so what is priced here is runs and says so.
+	rendered.WriteString("  This is what the runs cost; the conversations that steered them are recorded but not priced against any item.\n")
+	return rendered.String()
+}
+
+// total says whether the number is the price or the least it can have been.
+func (p ItemPrice) total() string {
+	if p.UnknownRuns > 0 {
+		return fmt.Sprintf("at least $%.2f", p.TotalUSD)
+	}
+	return fmt.Sprintf("$%.2f", p.TotalUSD)
+}
+
+// outcome names how the attempt went, the way a survey names a run: its status,
+// the phase it reached, and whether it was the attempt that promoted the work.
+func (r RunPrice) outcome() string {
+	outcome := r.Status
+	if r.Phase != "" {
+		outcome += ", " + r.Phase
+	}
+	if r.Integrated {
+		outcome += ", integrated"
+	}
+	return outcome
+}
+
+// price says what the attempt cost, or plainly that nothing survives to say. An
+// unpriced run never reads as a free one, and a run still going says its figure
+// is what it has spent so far rather than what it will have cost.
+func (r RunPrice) price() string {
+	if r.Unknown != "" {
+		return "unknown: " + singleLine(r.Unknown, maxSurveyTitleBytes*2)
+	}
+	if !r.finished() {
+		return fmt.Sprintf("$%.2f so far from %d invocation(s)", r.CostUSD, r.Invocations)
+	}
+	return fmt.Sprintf("$%.2f from %d invocation(s)", r.CostUSD, r.Invocations)
+}
+
+// finished reports a run that has stopped spending. The terminal statuses are
+// named here rather than imported, as the provider-stop reasons above are, so a
+// conversation stays independent of how a run is executed. Everything else is
+// treated as still spending — a run in flight, one paused and owed a
+// continuation, and any status this does not recognize — because a figure that
+// is still growing reads as final if this guesses the wrong way.
+func (r RunPrice) finished() bool {
+	switch r.Status {
+	case "succeeded", "failed", "cancelled", "timed_out":
+		return true
+	default:
+		return false
+	}
+}
+
+func runPriceIDWidth(runs []RunPrice) int {
+	width := 0
+	for _, run := range runs {
+		if measured := utf8.RuneCountInString(run.RunID); measured > width {
+			width = measured
+		}
+	}
+	return width
+}
+
+// itemCostWidth measures the price column a group needs, and reports zero when
+// nothing in the group is priced, which is what leaves an unpriced survey
+// looking exactly as it did before prices existed.
+func itemCostWidth(items []WorkItemSummary) int {
+	width := 0
+	for _, item := range items {
+		if item.Cost == nil {
+			continue
+		}
+		if measured := utf8.RuneCountInString(item.Cost.Render()); measured > width {
+			width = measured
+		}
+	}
+	return width
 }
 
 func itemIDWidth(items []WorkItemSummary) int {
@@ -418,6 +623,15 @@ func runIDWidth(runs []RunSnapshot) int {
 func pad(value string, width int) string {
 	if missing := width - utf8.RuneCountInString(value); missing > 0 {
 		return value + strings.Repeat(" ", missing)
+	}
+	return value
+}
+
+// padLeft is pad for a column of money, which reads down the page only when the
+// figures end in the same place rather than starting in it.
+func padLeft(value string, width int) string {
+	if missing := width - utf8.RuneCountInString(value); missing > 0 {
+		return strings.Repeat(" ", missing) + value
 	}
 	return value
 }

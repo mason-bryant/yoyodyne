@@ -163,6 +163,101 @@ func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	}
 }
 
+// A run ending is when the item it served gets its price, whichever way the run
+// went: a failed attempt spent real money, and an item priced only by the run
+// that finished it would be recorded at less than it cost.
+func TestPipelinePricesTheWorkItemWhenARunEnds(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		provide func(backend.RunRequest) (backend.RunResult, error)
+		failed  bool
+	}{
+		{
+			name: "a run that succeeded",
+			provide: func(request backend.RunRequest) (backend.RunResult, error) {
+				if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "done.txt"), []byte("done"), 0o600); err != nil {
+					return backend.RunResult{}, err
+				}
+				return backend.RunResult{
+					SessionID: "session-developer",
+					FinalText: "implemented the work item",
+					Process:   execution.ProcessResult{Status: execution.ProcessSucceeded},
+				}, nil
+			},
+		},
+		{
+			name: "a run that failed",
+			provide: func(backend.RunRequest) (backend.RunResult, error) {
+				return backend.RunResult{
+					SessionID:  "session-developer",
+					FinalText:  "provider failed",
+					IsError:    true,
+					StopReason: "provider_error",
+					Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				}, nil
+			},
+			failed: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := pipelineRepository(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Price it", Status: "open"}}
+			pipeline, _ := newPipeline(t, repository, tracker, &fakeBackend{run: test.provide}, []string{"exit 0"})
+			prices := &fakePricer{cost: beads.Cost{TotalUSD: 27.93, Runs: 2, UnknownRuns: 1}}
+			pipeline.Prices = prices
+
+			outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+			if test.failed == (err == nil) {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if len(prices.priced) != 1 || prices.priced[0] != tracker.item.ID {
+				t.Fatalf("priced %#v, want the item the run served", prices.priced)
+			}
+			// The price is of the item across every run made for it, not of this
+			// run, so what the outcome reports is what the ledger holds.
+			if outcome.Cost == nil || *outcome.Cost != prices.cost || outcome.CostProblem != "" {
+				t.Fatalf("Run() cost = %#v, problem = %q", outcome.Cost, outcome.CostProblem)
+			}
+		})
+	}
+}
+
+// The spending already happened and the run is already over, so a price nobody
+// could write down is reported rather than turned into a failed run.
+func TestPipelineReportsAPriceItCouldNotRecordWithoutFailingTheRun(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Price it", Status: "open"}}
+	provider := &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "done.txt"), []byte("done"), 0o600); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{
+			SessionID: "session-developer",
+			FinalText: "implemented the work item",
+			Process:   execution.ProcessResult{Status: execution.ProcessSucceeded},
+		}, nil
+	}}
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Prices = &fakePricer{err: errors.New("bd update failed")}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("Run() status = %q, want a run the price did not fail", outcome.Status)
+	}
+	if !strings.Contains(outcome.CostProblem, "bd update failed") {
+		t.Fatalf("Run() cost problem = %q", outcome.CostProblem)
+	}
+}
+
 func TestPipelineCapturesChangesWhenBackendReturnsInfrastructureError(t *testing.T) {
 	t.Parallel()
 
@@ -2085,6 +2180,24 @@ func (f *fakeTracker) Complete(_ context.Context, _ string, reason string) (bead
 	f.closeReason = reason
 	f.item.Status = "closed"
 	return f.item, nil
+}
+
+// fakePricer stands in for the ledger that prices work items. It records the
+// items it was asked about, which is what makes "a run prices the item it
+// served" an assertion rather than a claim.
+type fakePricer struct {
+	cost   beads.Cost
+	err    error
+	priced []string
+}
+
+func (f *fakePricer) Record(_ context.Context, workItemID string) (*beads.Cost, error) {
+	f.priced = append(f.priced, workItemID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	cost := f.cost
+	return &cost, nil
 }
 
 type fakeBackend struct {

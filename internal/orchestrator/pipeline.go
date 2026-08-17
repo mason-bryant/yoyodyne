@@ -40,6 +40,14 @@ type WorkTracker interface {
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
+// Pricer records what a work item has cost across every run made for it. The
+// pipeline never prices anything itself: it says when a run for an item has
+// ended, and what that is worth is read from the recorded evidence elsewhere. It
+// is satisfied by cost.Ledger.
+type Pricer interface {
+	Record(ctx context.Context, workItemID string) (*beads.Cost, error)
+}
+
 type WorktreeManager interface {
 	ValidateReady(ctx context.Context) error
 	CurrentBranch(ctx context.Context) (string, error)
@@ -111,7 +119,13 @@ type Pipeline struct {
 	// have, and a report it cannot keep is named on the outcome rather than
 	// disappearing quietly.
 	Reports ReportCollector
-	Clock   execution.Clock
+	// Prices puts the price of this work item on the item itself as a run for it
+	// ends. It is optional in the same way and for the same reason: a run is not
+	// worth failing over a number nobody could write down, so a pipeline wired
+	// without one runs exactly as it would have and one that could not record a
+	// price names that on the outcome.
+	Prices Pricer
+	Clock  execution.Clock
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
 	// by a cancelled context rather than holding the process past a shutdown.
@@ -147,6 +161,12 @@ type Outcome struct {
 	// because a report nobody collected would otherwise leave no trace at all.
 	Reports       []report.Report `json:"reports,omitempty"`
 	ReportProblem string          `json:"report_problem,omitempty"`
+	// Cost is what every run made for this work item has cost, as the provider
+	// reported it: this run and every earlier one, the attempts that failed as
+	// well as the one that finished. It is absent when nothing priced the item,
+	// and CostProblem names why when something tried and could not.
+	Cost        *beads.Cost `json:"cost,omitempty"`
+	CostProblem string      `json:"cost_problem,omitempty"`
 	// Invariants names the architectural invariants this run delivered to its
 	// developer and to its reviewer. It is the audit record of which durable
 	// constraints the change was actually held to, which is the thing a
@@ -1256,6 +1276,9 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		}
 		a.outcome.WorkItemClosed = true
 	}
+	// The item is priced once it is closed rather than before, so what the
+	// tracker carries beside a finished item is the price of finishing it.
+	a.recordPrice()
 
 	// The run becomes durably terminal before anything is destroyed. Cleanup is
 	// the only remaining step, it removes evidence, and it must never be able to
@@ -1426,7 +1449,39 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 			cause = errors.Join(cause, fmt.Errorf("record failed run outcome: %w", recordErr))
 		}
 	}
+	// A failed attempt spent real money, so it is priced exactly as a successful
+	// one is. An item priced only by the run that finished it would be recorded
+	// at less than it cost, which is the whole reason the price is per item.
+	a.recordPrice()
 	return a.outcome, cause
+}
+
+// maxCostProblemBytes keeps a price that could not be recorded to a readable
+// line of the outcome.
+const maxCostProblemBytes = 512
+
+// recordPrice puts what this work item has cost onto the item, aggregated
+// across every run made for it rather than only this one.
+//
+// Nothing here may fail the run. The spending already happened and the run is
+// already over; a price nobody could write down is a fact for the operator
+// rather than a reason to recast a finished run as a failed one. It is given its
+// own bounded context for the same reason recording a failure is: the run's
+// context is often already cancelled by the time it ends, and what it cost is
+// worth recording anyway.
+func (a *activeRun) recordPrice() {
+	if a.pipeline.Prices == nil || !a.claimed {
+		return
+	}
+	priceCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cost, err := a.pipeline.Prices.Record(priceCtx, a.state.WorkItemID)
+	if cost != nil {
+		a.outcome.Cost = cost
+	}
+	if err != nil {
+		a.outcome.CostProblem = singleLine(err.Error(), maxCostProblemBytes)
+	}
 }
 
 // sink persists one normalized event and the progress it represents.

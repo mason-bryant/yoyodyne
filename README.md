@@ -435,9 +435,9 @@ A line that begins with a slash is a command the harness carries out for you;
 everything else is said to the product manager:
 
 ```text
-/status                  what is in flight, claimed, blocked, available, and done
+/status                  what is in flight, claimed, blocked, available, and done, with prices
 /backlog                 the admitted work in order, and what would be pulled next
-/show <id>               one work item in full, as the tracker holds it
+/show <id>               one work item in full, and what each run for it cost
 /diff [id]               what a run changed, from the run's own record
 /reports                 what agents reported without it stopping their work
 /refresh                 re-read the repository and tracker into this conversation
@@ -530,7 +530,76 @@ is recorded once it is known.
 dependencies, description, design, acceptance criteria, and notes — through the
 same tracker capability the product manager reads items with. What you see is
 what the agent discussing it could see, which is the point: the two of you are
-reading the same item rather than two accounts of it.
+reading the same item rather than two accounts of it. Beneath the item it prints
+what the item cost, broken down by the runs it took.
+
+### What the work cost
+
+Ask what is done and the completed items come back with a price tag:
+
+```text
+completed (3):
+  [yoyodyne-ifd.2.7] p1  $27.93 Resume an interrupted run
+  [yoyodyne-ifd.12]  p2 ≥ $4.50 Pause on a provider usage limit
+  [yoyodyne-ifd.13]  p2         Publish a pull request
+  ≥ marks a floor: some runs of that item have no surviving record and could not be priced.
+  1 completed item(s) carry no price: work the harness did not run has none, and work it did is priced by `yoyo cost --record`.
+```
+
+The price is of the item rather than of a run, which is the only figure that
+answers what a piece of work cost: every run made for it counts, including the
+attempt that was rejected, the repair attempts, and the reviewer's invocation
+beside the developer's. One item in this repository cost roughly twenty-eight
+dollars across a rejected attempt and a successful one; a per-run view shows two
+numbers and this shows the truth.
+
+Every figure is the provider's own report of what an invocation cost, read from
+the run's event log, never an estimate from a price table that drifts the moment
+a provider changes what it charges.
+
+A run finishing writes the item's total onto the item in the tracker, and that
+recorded total is what travels with the work: `/status`, the product manager's
+briefing, and `bd` itself all read the one number the tracker holds, rather than
+each assembling a price of their own. `/show` is the exception, deliberately: it
+prices the item from the run records themselves every time it is asked. That is
+what lets it answer for an item nothing has recorded a price for yet — anything
+finished before this existed, or an item whose run could not write its price
+down — and it is why the two can differ. Where they do, `/show` is the current
+one and the tracker is what was last recorded; `yoyo cost --record` makes them
+agree.
+
+Three things it deliberately will not do. A run whose event log no longer
+survives is priced as unknown rather than as nothing — it is counted, left out
+of the total, and marked with `≥`, because a zero meaning "no record" would
+quietly understate every total it entered. An item the harness has never run
+carries no price at all rather than a price of nothing. And what is priced is
+runs: the conversations that steer them cost money too and are recorded just as
+durably, but attributing a conversation that discussed five items to any one of
+them is a judgement rather than a join, so it is left out and said to be left
+out.
+
+`/show` breaks one item's price down by attempt, which is what a single total
+invites:
+
+```text
+cost: at least $27.93 across 3 run(s)
+  run-0123…  started 2026-08-10T09:14:02Z [failed, reviewing] $8.91 from 3 invocation(s)
+  run-89ab…  started 2026-08-10T11:02:41Z [succeeded, complete, integrated] $19.02 from 2 invocation(s)
+  run-cdef…  started 2026-08-09T18:30:00Z [failed, developing] unknown: the run's event log is no longer recorded
+```
+
+From the command line, `yoyo cost` prices items from the same recorded runs —
+one line per item, or a run-by-run breakdown when you name one — and
+`yoyo cost --record` writes those prices onto the items. That is also the
+backfill: the run state and event logs of everything already finished are still
+under the state directory, so items closed before any of this existed can be
+priced retroactively rather than the ledger starting today.
+
+```sh
+./bin/yoyo cost                     # every item the harness has run, and the total
+./bin/yoyo cost yoyodyne-ifd.2.7    # one item, broken down by run
+./bin/yoyo cost --record            # write each price onto its work item
+```
 
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is
@@ -1089,7 +1158,9 @@ the closest thing there is to watching an agent work:
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it.
+reporting requires it. What it prices is runs, one row each;
+[`yoyo cost`](#what-the-work-cost) is the same spending grouped by the work item
+the runs were for, which is what answers "what did that piece of work cost".
 
 ## Further reading
 

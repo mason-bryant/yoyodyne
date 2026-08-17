@@ -23,9 +23,9 @@ import (
 // deliberately short: these are the verbs the product loop needs, and anything
 // else is still a sentence to the product manager.
 const commandHelp = `Commands the harness carries out for you:
-  /status                     what is in flight, claimed, blocked, available, and done
+  /status                     what is in flight, claimed, blocked, available, and done, with what the done work cost
   /backlog                    the admitted work in the product manager's order, and what is next
-  /show <beads-id>            one work item in full, as the tracker holds it
+  /show <beads-id>            one work item in full, as the tracker holds it, and what each run for it cost
   /diff [beads-id]            what a run changed, from the run's own record
   /reports                    what agents have reported without it stopping their work
   /refresh                    re-read the repository and tracker into this conversation
@@ -105,6 +105,11 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		// It is the same rendering the product manager is given when it reads an
 		// item, so what the operator sees here is what the agent could see.
 		fmt.Fprint(out, renderWorkItemEvidence(item))
+		// What it cost comes from the run records rather than the tracker, and it
+		// is broken down by attempt: a single total answers what an item cost, and
+		// only the breakdown says what the harness spent it on. A price nobody
+		// could read never withholds the item, which is what was asked for.
+		s.printWorkItemPrice(ctx, out, argument)
 		fmt.Fprintln(out)
 		return false, nil
 	case "/diff":
@@ -307,6 +312,38 @@ func (s *Session) ShowWorkItem(ctx context.Context, workItemID string) (beads.Wo
 		return beads.WorkItem{}, fmt.Errorf("read work item %s: %w", id, err)
 	}
 	return item, nil
+}
+
+// WorkItemPrice reports what one work item cost, broken down by the runs it
+// took. It reads the durable run records, which is what lets it price an item
+// whose runs were made before anything recorded a price and an item nobody has
+// closed yet. It is read-only: pricing work never changes it.
+func (s *Session) WorkItemPrice(ctx context.Context, workItemID string) (ItemPrice, error) {
+	if s.options.Work == nil {
+		return ItemPrice{}, errNoWork
+	}
+	id := strings.TrimSpace(workItemID)
+	if err := beads.ValidateIssueID(id); err != nil {
+		return ItemPrice{}, err
+	}
+	price, err := s.options.Work.Price(ctx, id)
+	if err != nil {
+		return ItemPrice{}, fmt.Errorf("price the runs made for %s: %w", id, err)
+	}
+	return price, nil
+}
+
+// printWorkItemPrice writes what an item cost beneath the item itself. A price
+// that could not be read is said in a line rather than raised as a failure: the
+// operator asked to see the item, and losing the item over its price tag would
+// be a worse answer than the item without one.
+func (s *Session) printWorkItemPrice(ctx context.Context, out io.Writer, workItemID string) {
+	price, err := s.WorkItemPrice(ctx, workItemID)
+	if err != nil {
+		fmt.Fprintf(out, "cost: could not be read, so treat it as unknown rather than nothing: %v\n", err)
+		return
+	}
+	fmt.Fprint(out, price.Render())
 }
 
 // RunChanges reports what the harness's most recent run of a work item changed.
