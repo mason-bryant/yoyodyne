@@ -446,10 +446,9 @@ func TestRepositoryUnderTestLeavesNothingForTempDirToRace(t *testing.T) {
 	}
 	writeFile(t, worktree.Path, "work.txt", "left behind\n")
 
-	// Running the cleanup here proves it removes a worktree the test never
-	// integrated, and leaves the registered one at teardown to prove it is
-	// idempotent. TempDir deletes directories and unregisters nothing, so a
-	// registration it never sees is the state this has to end in.
+	// Calling the cleanup here proves it removes a dirty worktree that was never
+	// integrated. TempDir deletes directories and unregisters nothing, so an
+	// unregistered repository is the state this has to reach.
 	removeLinkedWorktrees(t, repository)
 	if registrations := gitOutput(t, repository, "worktree", "list", "--porcelain"); strings.Contains(registrations, worktree.Path) {
 		t.Errorf("worktree registration survived cleanup: %q", registrations)
@@ -457,6 +456,17 @@ func TestRepositoryUnderTestLeavesNothingForTempDirToRace(t *testing.T) {
 	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
 		t.Errorf("worktree directory survived cleanup: %v", err)
 	}
+
+	// A second worktree is left registered on purpose, so the cleanup
+	// newRepository registered has something real to remove rather than an
+	// already-empty repository. Its own assertions fail this test if any
+	// registration survives into TempDir's removal, which is the case that
+	// every other test in this package relies on.
+	survivor, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-teardown-survivor", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() survivor error = %v", err)
+	}
+	writeFile(t, survivor.Path, "work.txt", "left for teardown\n")
 }
 
 func newManager(t *testing.T, repository, worktreeRoot string) *Manager {
