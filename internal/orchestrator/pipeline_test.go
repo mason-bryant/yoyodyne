@@ -2389,7 +2389,7 @@ func removeLinkedPipelineWorktrees(t *testing.T, repository string) {
 }
 
 // linkedPipelineWorktreePaths names every worktree registered against
-// repository apart from the primary checkout, which git lists first.
+// repository apart from the primary checkout, which is the repository itself.
 func linkedPipelineWorktreePaths(t *testing.T, repository string) []string {
 	t.Helper()
 	listing, err := attemptPipelineGit(repository, "worktree", "list", "--porcelain")
@@ -2399,14 +2399,31 @@ func linkedPipelineWorktreePaths(t *testing.T, repository string) []string {
 	}
 	var paths []string
 	for _, line := range strings.Split(listing, "\n") {
-		if path, found := strings.CutPrefix(strings.TrimSpace(line), "worktree "); found {
-			paths = append(paths, path)
+		path, found := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
+		if !found || sameWorktreePath(path, repository) {
+			continue
 		}
+		paths = append(paths, path)
 	}
-	if len(paths) == 0 {
-		return nil
+	return paths
+}
+
+// sameWorktreePath compares two checkout paths the way the worktree manager
+// does, tolerating symlinked ancestors: Git reports the resolved path, which on
+// macOS is not the temporary directory the test was handed.
+func sameWorktreePath(left, right string) bool {
+	if filepath.Clean(left) == filepath.Clean(right) {
+		return true
 	}
-	return paths[1:]
+	resolvedLeft, err := filepath.EvalSymlinks(left)
+	if err != nil {
+		return false
+	}
+	resolvedRight, err := filepath.EvalSymlinks(right)
+	if err != nil {
+		return false
+	}
+	return resolvedLeft == resolvedRight
 }
 
 func runPipelineGit(t *testing.T, repository string, args ...string) {
