@@ -16,6 +16,15 @@ const maxSurveyItems = 15
 // maxSurveyTitleBytes keeps one tracker-supplied title to one line of a survey.
 const maxSurveyTitleBytes = 120
 
+// The two reasons the harness stops a provider invocation on time, named here
+// rather than imported so a conversation stays independent of how a run is
+// executed. They read differently to an operator: a stall is worth looking into,
+// an exhausted budget is simply work that needs another pass.
+const (
+	ProviderStopStalled         = "stalled"
+	ProviderStopBudgetExhausted = "budget_exhausted"
+)
+
 // defaultStopGrace bounds how long stopping waits for a cancelled run to give
 // up. It is generous because a cancelled run still has to kill its provider and
 // check processes, and it is bounded because an operator who asked to stop must
@@ -114,7 +123,11 @@ type RunReport struct {
 	Paused             bool       `json:"paused,omitempty"`
 	UsageLimitKind     string     `json:"usage_limit_kind,omitempty"`
 	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
-	Failure            string     `json:"failure,omitempty"`
+	// ProviderStop is set instead of the usage-limit fields when what paused the
+	// run was the harness stopping a provider invocation on time. Such a run is
+	// continuable straight away rather than waiting on a deadline.
+	ProviderStop string `json:"provider_stop,omitempty"`
+	Failure      string `json:"failure,omitempty"`
 }
 
 // Settlement is what settling did with one run.
@@ -296,6 +309,12 @@ func (r RunReport) Headline() string {
 		item = "the work item"
 	}
 	switch {
+	case r.Paused && r.ProviderStop != "":
+		stopped := "its provider stopped emitting events and was stopped"
+		if r.ProviderStop == ProviderStopBudgetExhausted {
+			stopped = "its provider was still working when its total budget ran out"
+		}
+		return fmt.Sprintf("%s is still in flight: %s, and it reported no failure; /work %s continues the same run from where it stopped", item, stopped, item)
 	case r.Paused:
 		limit := r.UsageLimitKind
 		if strings.TrimSpace(limit) == "" {

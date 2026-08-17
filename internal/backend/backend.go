@@ -34,10 +34,16 @@ type RunRequest struct {
 	Model            string
 	PermissionMode   string
 	AllowedTools     []string
-	Timeout          time.Duration
-	LastSequence     uint64
-	RedactValues     []string
-	EventSink        func(execution.Event) error
+	// Timeout is the total budget for the invocation and IdleTimeout is how long
+	// it may go without emitting an event. They answer different questions -- is
+	// this run worth continuing, and is it doing anything at all -- so a backend
+	// applies both rather than letting either stand in for the other. Zero means
+	// the backend's default for each.
+	Timeout      time.Duration
+	IdleTimeout  time.Duration
+	LastSequence uint64
+	RedactValues []string
+	EventSink    func(execution.Event) error
 }
 
 // UsageLimit is a provider's report that a usage limit is exhausted. It is

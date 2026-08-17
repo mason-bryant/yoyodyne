@@ -321,6 +321,52 @@ func TestRunClassifiesCancellation(t *testing.T) {
 	}
 }
 
+// The two ways the harness stops a provider invocation on time are reported
+// apart, so nothing downstream has to guess whether the process was working.
+func TestRunClassifiesAStallApartFromAnExhaustedBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []execution.ProcessStatus{execution.ProcessStalled, execution.ProcessTimedOut} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Parallel()
+
+			result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: status, ExitCode: -1}}}}).Run(context.Background(), backendapi.RunRequest{
+				RunID: testRunID, Role: domain.RoleDeveloper, WorkingDirectory: "/worktree", Prompt: "implement",
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if !result.IsError || result.StopReason != string(status) {
+				t.Fatalf("Run() result = %#v, want the stop named as %q", result, status)
+			}
+		})
+	}
+}
+
+// A provider invocation is bounded by both questions: whether it is doing
+// anything, which the idle bound answers far sooner, and whether it is worth
+// continuing, which the total budget answers.
+func TestRunBoundsAProviderInvocationByActivityAndByTotalBudget(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0,
+		Stdout: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done"}` + "\n"}}}
+	if _, err := (Backend{Runner: runner}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: domain.RoleDeveloper, WorkingDirectory: "/worktree", Prompt: "implement",
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	command := runner.commands[0]
+	if command.IdleTimeout != defaultIdleTimeout || command.Timeout != defaultTimeout {
+		t.Fatalf("command bounds = idle %s, total %s; want %s and %s", command.IdleTimeout, command.Timeout, defaultIdleTimeout, defaultTimeout)
+	}
+	// The bound on being stuck has to be far shorter than the bound on being
+	// unproductive, or the first is answered by the second all over again.
+	if command.IdleTimeout >= command.Timeout {
+		t.Fatalf("idle bound %s is not shorter than the total budget %s", command.IdleTimeout, command.Timeout)
+	}
+}
+
 func TestRunReportsEventSinkFailure(t *testing.T) {
 	t.Parallel()
 

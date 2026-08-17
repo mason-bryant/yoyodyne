@@ -64,6 +64,11 @@ type Result struct {
 	// never made, so the caller can wait and ask again rather than treating the
 	// absent verdict as a reason to end the run.
 	UsageLimit *backend.UsageLimit
+	// ProcessStatus is how the reviewer's own process ended, carried so a caller
+	// can tell a review the provider answered badly from one the harness stopped
+	// on time. A stopped review was never made either, and the change it was
+	// going to judge is untouched by it.
+	ProcessStatus execution.ProcessStatus
 }
 
 // Reviewer runs one independent review of a developer's change. It owns the
@@ -148,6 +153,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			RequestedModel: r.Model,
 			LastSequence:   lastSequence,
 			UsageLimit:     providerResult.UsageLimit,
+			ProcessStatus:  providerResult.Process.Status,
 		}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
 	sequence = execution.NewSequence(lastSequence)
@@ -163,9 +169,18 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			SessionID:      providerResult.SessionID,
 			LastSequence:   lastSequence,
 			UsageLimit:     providerResult.UsageLimit,
+			ProcessStatus:  providerResult.Process.Status,
 		}
 	}
 	if providerResult.IsError {
+		// A reviewer the harness stopped on time reported nothing, so it is never
+		// described as having reported a failure.
+		switch providerResult.Process.Status {
+		case execution.ProcessStalled:
+			return evidence(), errors.New("the harness stopped the reviewer: it stopped emitting events")
+		case execution.ProcessTimedOut:
+			return evidence(), errors.New("the harness stopped the reviewer: it was still working when its total budget ran out")
+		}
 		return evidence(), fmt.Errorf("reviewer reported failure: %s", firstNonEmpty(providerResult.StopReason, providerResult.FinalText, "unknown provider failure"))
 	}
 	verdict, err := Decode([]byte(strings.TrimSpace(providerResult.FinalText)))

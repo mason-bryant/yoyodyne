@@ -1252,3 +1252,34 @@ type fixedClock struct{}
 func (fixedClock) Now() time.Time {
 	return time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 }
+
+// A run the harness stopped on time is owed a continuation, and the operator is
+// told which of the two things happened. Neither is the agent reporting a
+// failure, and neither reads as a wait on a provider deadline.
+func TestRunReportHeadlineDistinguishesAStallFromAnExhaustedBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		stop string
+		want string
+	}{
+		{name: "stalled", stop: ProviderStopStalled, want: "stopped emitting events"},
+		{name: "budget exhausted", stop: ProviderStopBudgetExhausted, want: "total budget ran out"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			headline := RunReport{WorkItemID: "yoyodyne-9", Paused: true, ProviderStop: testCase.stop}.Headline()
+			if !strings.Contains(headline, testCase.want) {
+				t.Fatalf("Headline() = %q, want it to say %q", headline, testCase.want)
+			}
+			if strings.Contains(headline, "usage limit") {
+				t.Fatalf("Headline() = %q, want a stop on time told apart from a usage limit", headline)
+			}
+			if !strings.Contains(headline, "reported no failure") || !strings.Contains(headline, "continues the same run") {
+				t.Fatalf("Headline() = %q, want it to say the agent failed at nothing and the run continues", headline)
+			}
+		})
+	}
+}

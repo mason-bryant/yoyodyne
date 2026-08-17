@@ -234,6 +234,16 @@ func TestRunReportClaimsIntegrationOnlyFromARecordedPromotion(t *testing.T) {
 				RunID: "run-3", WorkItemID: "yoyodyne-9", Status: "running", Paused: true, UsageLimitKind: "weekly",
 			},
 		},
+		{
+			name: "a run whose provider was stopped on time reports why, and no failure",
+			outcome: orchestrator.Outcome{
+				RunID: "run-4", WorkItemID: "yoyodyne-9", Status: runstate.StatusRunning,
+				Paused: true, ProviderStop: runstate.ProviderStopStalled,
+			},
+			want: chat.RunReport{
+				RunID: "run-4", WorkItemID: "yoyodyne-9", Status: "running", Paused: true, ProviderStop: "stalled",
+			},
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

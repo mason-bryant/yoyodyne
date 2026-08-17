@@ -77,6 +77,64 @@ func TestOSProcessRunnerTimeout(t *testing.T) {
 	}
 }
 
+// A process that says nothing for the whole idle bound is stopped as stalled,
+// long before a total budget it would otherwise have to exhaust.
+func TestOSProcessRunnerStopsASilentProcessAsStalled(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("sleep", "")
+	command.Timeout = 30 * time.Second
+	command.IdleTimeout = 50 * time.Millisecond
+	started := time.Now()
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessStalled {
+		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessStalled)
+	}
+	if elapsed := time.Since(started); elapsed >= 5*time.Second {
+		t.Fatalf("Run() waited %s; the stall was not detected on the idle bound", elapsed)
+	}
+}
+
+// A process that keeps producing output keeps proving it is working, so an idle
+// bound far shorter than its total runtime never stops it.
+func TestOSProcessRunnerLeavesAChattyProcessAlone(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("chatter", "")
+	command.Timeout = 30 * time.Second
+	command.IdleTimeout = 250 * time.Millisecond
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessSucceeded {
+		t.Fatalf("Run() status = %q, want %q for a process that never went quiet", result.Status, ProcessSucceeded)
+	}
+	if lines := strings.Count(result.Stdout, "\n"); lines < 2 {
+		t.Fatalf("Run() stdout = %q, want the chatter it kept producing", result.Stdout)
+	}
+}
+
+// The total budget still bounds a process that is alive and producing output,
+// and what stops it is reported as the budget rather than as a stall.
+func TestOSProcessRunnerTimesOutAChattyProcessOnItsTotalBudget(t *testing.T) {
+	t.Parallel()
+
+	command := helperCommand("endless-chatter", "")
+	command.Timeout = 150 * time.Millisecond
+	command.IdleTimeout = 30 * time.Second
+	result, err := (OSProcessRunner{}).Run(context.Background(), command, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Status != ProcessTimedOut {
+		t.Fatalf("Run() status = %q, want %q", result.Status, ProcessTimedOut)
+	}
+}
+
 func TestOSProcessRunnerCancellation(t *testing.T) {
 	t.Parallel()
 
@@ -185,6 +243,19 @@ func TestProcessHelper(t *testing.T) {
 	case "sleep":
 		time.Sleep(5 * time.Second)
 		os.Exit(0)
+	case "chatter":
+		// Long enough overall to trip a short idle bound several times over, and
+		// never quiet for long enough to trip it once.
+		for line := 0; line < 20; line++ {
+			fmt.Printf("working %d\n", line)
+			time.Sleep(25 * time.Millisecond)
+		}
+		os.Exit(0)
+	case "endless-chatter":
+		for {
+			fmt.Println("still working")
+			time.Sleep(10 * time.Millisecond)
+		}
 	case "oversized-line":
 		fmt.Print(strings.Repeat("x", 2<<20))
 		time.Sleep(5 * time.Second)

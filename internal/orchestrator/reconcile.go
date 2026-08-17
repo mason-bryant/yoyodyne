@@ -178,6 +178,15 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			nonEmpty(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 		return result, nil
 	}
+	// A run whose provider the harness stopped on time is not an interrupted run
+	// either: it recorded what stopped it and is owed the rest of the attempt it
+	// was making, in the worktree and session that attempt already established.
+	if stoppedProviderIsResumable(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run's provider was stopped because %s and it can continue from durable state",
+			describeProviderStop(state.ProviderStop))
+		return result, nil
+	}
 	// A run whose merge the forge queued is not an interrupted run: it finished,
 	// and what it still owes is the forge's answer about a merge that lands
 	// minutes after the run was over. Asking for that answer is the whole of

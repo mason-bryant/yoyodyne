@@ -2964,3 +2964,263 @@ func TestRunPollsAUsageLimitThatNamesNoResetTime(t *testing.T) {
 		t.Error("the poll did not spend the run's pause budget, so a refusing provider could poll forever")
 	}
 }
+
+// providerStopBackend stops the developer's first stops invocations the way the
+// harness stops one on time, and serves the work afterwards. A stop is shaped
+// like the real thing: an errored result whose process status says the harness
+// ended it, carrying the session the stopped attempt had already established and
+// leaving the partial work it had already written in the worktree.
+func providerStopBackend(stops int, status execution.ProcessStatus, verdicts ...string) *fakeBackend {
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	stopped, reviews := 0, 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		switch request.Role {
+		case domain.RoleDeveloper:
+			if stopped < stops {
+				stopped++
+				if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "partial.txt"), []byte("half done\n"), 0o600); err != nil {
+					return backend.RunResult{}, err
+				}
+				return backend.RunResult{
+					Backend:    domain.BackendClaudeCode,
+					SessionID:  provider.developerSession,
+					IsError:    true,
+					StopReason: string(status),
+					Process:    execution.ProcessResult{Status: status, ExitCode: -1},
+					LastEvent:  request.LastSequence,
+				}, nil
+			}
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     provider.developerSession,
+				ResolvedModel: developerResolved,
+				FinalText:     "implemented the work item",
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		case domain.RoleReviewer:
+			verdict := verdicts[len(verdicts)-1]
+			if reviews < len(verdicts) {
+				verdict = verdicts[reviews]
+			}
+			reviews++
+			return backend.RunResult{
+				Backend:       domain.BackendClaudeCode,
+				SessionID:     provider.reviewerSession,
+				ResolvedModel: reviewerResolved,
+				FinalText:     verdict,
+				Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+				LastEvent:     request.LastSequence,
+			}, nil
+		default:
+			return backend.RunResult{}, fmt.Errorf("unexpected role %q", request.Role)
+		}
+	}
+	return provider
+}
+
+// A developer the harness stopped on time reported nothing, and what it made is
+// still in the worktree. The run is left in flight and resumable rather than
+// failed, and a later invocation continues the same run, in the same worktree
+// and the same session, instead of spending a whole attempt over again.
+func TestRunLeavesAProviderStoppedOnTimeResumableRatherThanFailed(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		status execution.ProcessStatus
+		want   string
+	}{
+		{name: "stalled", status: execution.ProcessStalled, want: runstate.ProviderStopStalled},
+		{name: "total budget exhausted", status: execution.ProcessTimedOut, want: runstate.ProviderStopBudgetExhausted},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository, worktreeRoot, store := restartableFixture(t)
+			tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+			first := providerStopBackend(1, testCase.status, approveVerdict)
+			firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
+
+			paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+			if err != nil {
+				t.Fatalf("Run() error = %v, want a stopped provider reported as a pause rather than a failure", err)
+			}
+			if !paused.Paused || paused.Status != runstate.StatusRunning {
+				t.Fatalf("outcome = %#v, want a paused run still in flight", paused)
+			}
+			if paused.ProviderStop != testCase.want {
+				t.Fatalf("outcome reported stop %q, want %q", paused.ProviderStop, testCase.want)
+			}
+			if paused.Failure != "" {
+				t.Fatalf("a stopped provider was reported as a failure: %q", paused.Failure)
+			}
+			// The developer said nothing, so nothing may claim it did.
+			if strings.Contains(tracker.notes, "developer reported failure") {
+				t.Fatalf("the harness blamed the developer for its own stop:\n%s", tracker.notes)
+			}
+			if tracker.blocked || tracker.closed || !tracker.claimed {
+				t.Fatalf("the stop disturbed the work item: blocked=%t closed=%t claimed=%t", tracker.blocked, tracker.closed, tracker.claimed)
+			}
+			stoppedState, err := store.Load(paused.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if stoppedState.Status.Terminal() || stoppedState.ProviderStop != testCase.want {
+				t.Fatalf("stopped state = %#v, want a non-terminal run recording the stop", stoppedState)
+			}
+			// The worktree, branch, and developer session are what make the run
+			// continuable; the partial work is what continuing it saves.
+			if stoppedState.WorktreePath == "" || stoppedState.Branch == "" || stoppedState.ProviderSessionID != first.developerSession {
+				t.Fatalf("the stop did not preserve the run's artifacts or session: %#v", stoppedState)
+			}
+			if _, err := os.Stat(filepath.Join(stoppedState.WorktreePath, "partial.txt")); err != nil {
+				t.Fatalf("the stopped attempt's work did not survive: %v", err)
+			}
+
+			// A later invocation picks up the same run and finishes it.
+			second := providerStopBackend(0, testCase.status, approveVerdict)
+			secondPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+			outcome, err := secondPipeline.Run(context.Background(), tracker.item.ID)
+			if err != nil {
+				t.Fatalf("resumed Run() error = %v", err)
+			}
+			if outcome.RunID != paused.RunID || outcome.WorktreePath != paused.WorktreePath {
+				t.Fatalf("resumed run = %#v, want the stopped run %s in %s", outcome, paused.RunID, paused.WorktreePath)
+			}
+			if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+				t.Fatalf("the resumed run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+			}
+			if claims := countCalls(tracker.calls, "claim"); claims != 1 {
+				t.Fatalf("claims = %d, want the item claimed once across the stop", claims)
+			}
+			developerRequests := second.requestsForRole(domain.RoleDeveloper)
+			if len(developerRequests) != 1 {
+				t.Fatalf("resumed developer invocations = %d, want one", len(developerRequests))
+			}
+			// Continuing the stopped session is what makes this a continuation
+			// rather than a re-run.
+			if developerRequests[0].SessionID != first.developerSession {
+				t.Fatalf("the resumed attempt session = %q, want the stopped attempt's %q", developerRequests[0].SessionID, first.developerSession)
+			}
+			// The stop is spent once the attempt it owed has run.
+			finished, err := store.Load(outcome.RunID)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if finished.ProviderStop != "" {
+				t.Fatalf("a finished run still carries a provider stop: %q", finished.ProviderStop)
+			}
+		})
+	}
+}
+
+// A reviewer the harness stopped on time never judged anything either, and the
+// change waiting to be judged is untouched. The run keeps its change and is
+// asked for another review rather than losing the developer's work.
+func TestRunLeavesAStoppedReviewerResumableAndReviewsAgain(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	first := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	// The reviewer stalls; everything before it succeeded.
+	first.run = stoppingReviewer(first.run, first.reviewerSession)
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, first, []string{"exit 0"}), first)
+
+	paused, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a stopped reviewer reported as a pause", err)
+	}
+	if !paused.Paused || paused.ProviderStop != runstate.ProviderStopStalled {
+		t.Fatalf("outcome = %#v, want a run paused for a stalled reviewer", paused)
+	}
+	if tracker.blocked || tracker.closed {
+		t.Fatalf("the stopped review disturbed the work item: blocked=%t closed=%t", tracker.blocked, tracker.closed)
+	}
+	if strings.Contains(tracker.notes, "reviewer reported failure") {
+		t.Fatalf("the harness blamed the reviewer for its own stop:\n%s", tracker.notes)
+	}
+
+	second := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	secondPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+	outcome, err := secondPipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if outcome.RunID != paused.RunID || outcome.Integration == nil || !tracker.closed {
+		t.Fatalf("the resumed run did not finish the same change: %#v", outcome)
+	}
+	// The change was already made, so resuming re-reviews it rather than
+	// redeveloping it or spending a repair attempt on it.
+	if developers := second.requestsForRole(domain.RoleDeveloper); len(developers) != 0 {
+		t.Fatalf("resumed developer invocations = %d, want none for a stopped review", len(developers))
+	}
+	if outcome.RepairAttempts != 0 {
+		t.Fatalf("repair attempts = %d, want a stopped review to cost none", outcome.RepairAttempts)
+	}
+}
+
+// stoppingReviewer wraps a backend so its first review is stopped by the harness
+// on time rather than answered.
+func stoppingReviewer(inner func(backend.RunRequest) (backend.RunResult, error), session string) func(backend.RunRequest) (backend.RunResult, error) {
+	stopped := false
+	return func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleReviewer && !stopped {
+			stopped = true
+			return backend.RunResult{
+				Backend:    domain.BackendClaudeCode,
+				SessionID:  session,
+				IsError:    true,
+				StopReason: string(execution.ProcessStalled),
+				Process:    execution.ProcessResult{Status: execution.ProcessStalled, ExitCode: -1},
+				LastEvent:  request.LastSequence,
+			}, nil
+		}
+		return inner(request)
+	}
+}
+
+// A stop the run cannot be continued from is not recorded as resumable: a marker
+// nothing can act on would leave the run in flight with no way back into it. It
+// still says the harness stopped the provider rather than blaming the developer.
+func TestRunFailsAStoppedProviderItCannotContinueWithoutBlamingTheDeveloper(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := providerStopBackend(1, execution.ProcessStalled, approveVerdict)
+	// No session was ever established, so there is nothing for a later attempt
+	// to continue in.
+	provider.developerSession = ""
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline = automatic(pipeline, provider)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() error = nil, want a run that could not be continued to stop")
+	}
+	if outcome.Paused {
+		t.Fatalf("a run with nothing to continue from was reported as resumable: %#v", outcome)
+	}
+	if strings.Contains(err.Error(), "developer reported failure") {
+		t.Fatalf("the harness blamed the developer for its own stop: %v", err)
+	}
+	if !strings.Contains(err.Error(), "the harness stopped the developer") {
+		t.Fatalf("the failure did not name what stopped the run: %v", err)
+	}
+	state, loadErr := store.Load(outcome.RunID)
+	if loadErr != nil {
+		t.Fatalf("Load() error = %v", loadErr)
+	}
+	if state.ProviderStop != "" || !state.Status.Terminal() {
+		t.Fatalf("terminal state = %#v, want no resumption marker on a run that ended", state)
+	}
+}

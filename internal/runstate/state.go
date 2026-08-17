@@ -65,6 +65,16 @@ const (
 	SeverityMinor   = "minor"
 )
 
+// The two ways the harness itself stops a provider invocation on time. They are
+// recorded apart because they describe opposite things: a stalled invocation
+// stopped emitting events and was doing nothing, while one that exhausted its
+// budget was still emitting them and simply ran out of run. Neither is the
+// provider reporting a failure, and neither is stored as one.
+const (
+	ProviderStopStalled         = "stalled"
+	ProviderStopBudgetExhausted = "budget_exhausted"
+)
+
 // MaxCheckOutputBytes bounds the captured output a failing check may carry into
 // durable state and into the developer's next attempt. A verbose suite must not
 // be able to fill either with output that is mostly unrelated to the failure.
@@ -271,8 +281,15 @@ type State struct {
 	// seconds because the provider states reset times in whole seconds, and it is
 	// added to when a wait is committed rather than as it elapses, so a restart
 	// part-way through a wait cannot buy the run a fresh budget.
-	UsageLimitPausedSeconds int64        `json:"usage_limit_paused_seconds,omitempty"`
-	Integration             *Integration `json:"integration,omitempty"`
+	UsageLimitPausedSeconds int64 `json:"usage_limit_paused_seconds,omitempty"`
+	// ProviderStop records that the harness stopped a provider invocation on
+	// time -- because it stalled, or because it exhausted its total budget --
+	// rather than the provider ending it. It is written only when what the
+	// invocation leaves behind can still be continued, so a run carrying one is
+	// a run owed a continuation, exactly as a recorded usage-limit deadline is.
+	// It is cleared by the next attempt, whichever way that one goes.
+	ProviderStop string       `json:"provider_stop,omitempty"`
+	Integration  *Integration `json:"integration,omitempty"`
 	// PullRequest records the published pull request when the project opted in
 	// to publishing and the repository had a remote to publish to. It is absent
 	// for a purely local run, which is what a project gets by default.
@@ -424,6 +441,17 @@ func (s State) Validate() error {
 		}
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
+		}
+	}
+	if s.ProviderStop != "" {
+		if s.ProviderStop != ProviderStopStalled && s.ProviderStop != ProviderStopBudgetExhausted {
+			problems = append(problems, errors.New("provider_stop is invalid"))
+		}
+		// Like a recorded pause, a recorded stop is an instruction to continue
+		// later. On a terminal run it would promise a continuation nothing will
+		// ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("provider_stop requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

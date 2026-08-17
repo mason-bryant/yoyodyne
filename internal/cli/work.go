@@ -150,9 +150,14 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 		Branch:     state.Branch,
 		StartedAt:  state.StartedAt,
 	}
-	if state.UsageLimitResetsAt != nil {
+	switch {
+	case state.UsageLimitResetsAt != nil:
 		snapshot.Detail = fmt.Sprintf("paused for the %s usage limit until %s",
 			nonEmptyValue(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
+	case state.ProviderStop == runstate.ProviderStopStalled:
+		snapshot.Detail = "its provider stopped emitting events and was stopped; the run can be continued"
+	case state.ProviderStop == runstate.ProviderStopBudgetExhausted:
+		snapshot.Detail = "its provider ran out of total budget while still working; the run can be continued"
 	}
 	return snapshot
 }
@@ -173,6 +178,7 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		Paused:             outcome.Paused,
 		UsageLimitKind:     outcome.UsageLimitKind,
 		UsageLimitResetsAt: outcome.UsageLimitResetsAt,
+		ProviderStop:       outcome.ProviderStop,
 		Failure:            outcome.Failure,
 	}
 	if outcome.Integration != nil {

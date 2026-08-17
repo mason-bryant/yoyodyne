@@ -1307,3 +1307,48 @@ func TestStateHoldsTheHarnessCommitThatPermitsAMovedHead(t *testing.T) {
 		})
 	}
 }
+
+// A stopped provider has to survive the process that recorded it for the same
+// reason a pause deadline does: it is what tells the next invocation the run is
+// owed a continuation rather than a fresh start.
+func TestStoreRoundTripsAStoppedProviderAndRefusesItOnATerminalRun(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseDeveloping
+	state.ProviderSessionID = "developer-session"
+	state.ProviderStop = ProviderStopStalled
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if loaded.ProviderStop != ProviderStopStalled || !loaded.Outstanding() {
+		t.Fatalf("Load() = %#v, want the recorded stop on an outstanding run", loaded)
+	}
+
+	// A stop is an instruction to continue later, so a terminal run must not be
+	// able to carry one: it would promise a continuation nothing will make.
+	terminal := loaded
+	terminal.Status = StatusFailed
+	completedAt := terminal.UpdatedAt
+	terminal.CompletedAt = &completedAt
+	if err := terminal.Validate(); err == nil || !strings.Contains(err.Error(), "provider_stop requires a run that is still in flight") {
+		t.Fatalf("Validate() error = %v, want a terminal run carrying a stop to be refused", err)
+	}
+	unknown := loaded
+	unknown.ProviderStop = "wandered off"
+	if err := unknown.Validate(); err == nil || !strings.Contains(err.Error(), "provider_stop is invalid") {
+		t.Fatalf("Validate() error = %v, want an unknown stop reason to be refused", err)
+	}
+}
