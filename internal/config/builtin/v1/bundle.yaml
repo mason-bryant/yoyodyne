@@ -1,8 +1,10 @@
 # Yoyodyne built-in agent bundle, version 1.
 #
-# This bundle ships inside the executable and is read-only. A project inherits
-# it with "extends: builtin:v1" and overlays only the values it needs; nothing
-# here has to be copied into a project configuration to take effect.
+# This bundle ships inside the executable and is read-only. It is what
+# `yoyo init` generates a project's own complete configuration from, copying
+# the personas beside it into the project at the same time. A project may also
+# inherit it directly with "extends: builtin:v1" and overlay only the values it
+# needs, which is the shape that keeps receiving later changes to this file.
 #
 # The bundle deliberately omits "product" and "checks": both are properties of
 # the project being worked on rather than of the harness, so a project supplies

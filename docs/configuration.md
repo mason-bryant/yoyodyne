@@ -1,10 +1,49 @@
 # Yoyodyne configuration
 
-Yoyodyne ships its own agent defaults. The executable contains a versioned,
-read-only bundle of agent definitions and personas, so a project repository only
-records what is genuinely its own: its identity, its checks, its approval policy,
-and any deliberate deviation from the defaults. A project never needs access to
-the Yoyodyne source checkout to run Yoyodyne.
+**A Yoyodyne project owns its configuration outright.** `yoyo init` writes a
+complete `.yoyodyne/config.yaml` — every agent, backend, model selector,
+instance count, and persona reference stated in the file — and copies the
+personas themselves into `.yoyodyne/personas/`. Nothing is inherited at load
+time, so what the file says is what runs, and an edit to it is an edit to the
+harness's behavior with nothing in between.
+
+The executable still contains a versioned, read-only bundle of agent definitions
+and personas. It is the **template `init` generates from**, not a layer
+underneath your project. A project therefore never needs access to the Yoyodyne
+source checkout, and nobody reading its configuration has to be told where a
+value came from.
+
+**What owning your defaults costs.** A later Yoyodyne that improves a persona or
+corrects a model selector does not reach a project that already has its own
+copy. There is no mechanism that reconciles the two: re-run `yoyo init` in a
+scratch directory, diff it against yours, and merge what you want. That is a
+deliberate trade for a tool whose operator reads and edits the file often — the
+effect of an edit is obvious, which matters more here than shared improvement.
+Inheritance is still supported for projects that would rather have the other
+half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bundle).
+
+## Creating a project configuration
+
+```sh
+yoyo init                              # configure the current directory
+yoyo init --directory path/to/project  # configure another one
+yoyo init --product example            # name the product explicitly
+yoyo init --force                      # overwrite what is already there
+```
+
+`init` writes `.yoyodyne/config.yaml` and one Markdown file per persona under
+`.yoyodyne/personas/`, then loads what it wrote and fails if the result is not
+usable. Without `--product`, the product is named after the directory being
+configured; a directory name that is not a valid identifier is refused rather
+than mangled, and `--product` names one instead. Nothing is overwritten without
+`--force`, and a refusal happens before any file is written, so a project is
+never left half-configured.
+
+One thing the generated file deliberately leaves empty is `checks`. The harness
+cannot guess a project's toolchain, and a run with nothing to verify has no gate
+to integrate behind, so `yoyo run` refuses one. Fill the list in — the generated
+file carries commented examples for Go, TypeScript, Python, and Java — before
+running work.
 
 ## Layout
 
@@ -13,7 +52,11 @@ A project keeps its configuration in a `.yoyodyne` directory at its root:
 ```text
 .yoyodyne/
   config.yaml          # the project configuration
-  personas/            # optional persona overrides, Markdown only
+  personas/            # one Markdown file per agent persona
+    product-manager.md
+    architect.md
+    development-manager.md
+    developer.md
     reviewer.md
 ```
 
@@ -22,30 +65,51 @@ control. Run state, provider event streams, locks, and worktrees live outside th
 repository under an operating-system state directory, so nothing there depends on
 where the project is checked out.
 
-The smallest configuration that can run work is:
+What `init` writes looks like this, with the explanatory comments trimmed:
 
 ```yaml
 version: 1
-extends: builtin:v1
 
 product:
   id: example
   repository: .
+  specifications: docs/product
 
-checks:
-  - go test ./...
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+  remote: origin
+  usage_limit_max_pause: 6h
+  usage_limit_in_process_pause: 6h
+  usage_limit_unknown_reset_pause: 30m
+
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+  publishing: human
+
+checks: []          # yours to write; a run with none is refused
+
+agents:
+  product-manager:
+    role: product-manager
+    backend: claude-code
+    model: opus
+    instances: 1
+    persona:
+      version: v1
+      path: personas/product-manager.md
+  # ... architect, development-manager, developer, and reviewer, the same shape
 ```
 
-`product` and `checks` are the two things the bundle never supplies, because
-both describe the project rather than the harness. Omitting `checks` still
-validates — the schema does not require it — but `yoyo run` refuses to
-execute a work item with no configured check, so it is part of the smallest
-configuration that is actually usable rather than merely valid.
-
-Nothing else has to be written down. The five default agents — product manager,
-architect, development manager, developer, and reviewer — come from the bundle
-with a role, the Claude Code backend, a model selector, an instance count, and a
-versioned persona each.
+Five agents — product manager, architect, development manager, developer, and
+reviewer — each with a role, a backend, a model selector, an instance count, and
+a persona file that is in the repository beside the configuration. Change one by
+editing it. Remove one by deleting its block. Nothing has to be expressed as a
+deviation from something invisible.
 
 ## Discovery
 
@@ -71,7 +135,17 @@ leaves it.
 
 ## Precedence
 
-Three layers produce the effective configuration, later ones winning:
+A configuration `init` wrote has one layer: itself. Every configured value comes
+from the project file, and nothing is inherited from a bundle. One value is
+still reported as computed rather than written: `product.repository_id` has the
+origin `derived:product.id`, because the generated file states the product id
+and lets the repository id follow from it. That is a value derived from
+something in the same file, not something arriving from outside it.
+
+The rest of this section describes what happens when a project uses `extends`,
+and what the harness still fills in when a file leaves something out.
+
+Up to three layers produce the effective configuration, later ones winning:
 
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
    them: `product.specifications` (`docs/product`),
@@ -85,15 +159,16 @@ Three layers produce the effective configuration, later ones winning:
    it was added after configurations existed: a file written before it keeps the
    behavior it was written for — the harness publishes nothing — rather than
    failing to load for not mentioning a key that did not exist yet.
-2. **The built-in bundle**, named by `extends`. Today the only bundle is
-   `builtin:v1`. It supplies `execution`, `approvals`, and the five default
-   agents. It deliberately supplies no `product` and no `checks`, because those
-   describe the project rather than the harness.
+2. **The built-in bundle**, named by `extends`, and present only if a project
+   asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
+   `approvals`, and the five default agents. It deliberately supplies no
+   `product` and no `checks`, because those describe the project rather than the
+   harness.
 3. **The project configuration**, which overlays whatever it names.
 
-A configuration with no `extends` key is a complete standalone file: it inherits
-nothing but the harness defaults, and must declare everything it needs. This is
-the pre-directory shape, and it still loads unchanged.
+A configuration with no `extends` key — which is what `yoyo init` writes — is a
+complete standalone file: it inherits nothing but the harness defaults, and must
+declare everything it needs.
 
 `version` is the one field a project never inherits. It must be declared even
 when `extends` names a bundle that declares its own, because a version taken
@@ -434,6 +509,11 @@ itself, and the harness does not duplicate the wait.
 
 ## Merge and removal semantics
 
+These describe how a project that uses `extends` combines with the bundle
+beneath it. A configuration `init` wrote has no layer beneath it, so it is read
+as written: an agent is present because it is in the file, and absent because it
+is not.
+
 - A field a layer does not mention is **inherited** from the layer beneath it.
 - A field a layer does mention **replaces** the inherited value. This includes an
   explicit zero, such as `repair_attempts_before_replan: 0`.
@@ -518,39 +598,85 @@ Persona rules:
 - A persona is limited to 32 KiB. It is role guidance, not a document to paste
   into every prompt.
 
-To replace one persona and change nothing else:
+In a project `init` wrote, every persona is already a file in
+`.yoyodyne/personas/`: change how the reviewer works by editing
+`personas/reviewer.md`, and bump the `version` label beside it in the
+configuration so the change is visible in diagnostics.
 
 ```yaml
 agents:
   reviewer:
     persona:
-      version: house-1
+      version: house-1            # bumped from v1 after editing the file
       path: personas/reviewer.md
 ```
 
-## Portability
+In a project that uses `extends`, the same block is how one inherited persona is
+replaced without changing anything else.
 
-A project that extends `builtin:v1` carries no dependency on where Yoyodyne
-lives. Upgrading the executable upgrades the defaults and the personas the
-project did not override. A project that pins behavior it cares about — a model
-identifier, a persona, an approval policy — keeps that pinned across upgrades,
-because a project value always wins over the bundle.
+## Extending a built-in bundle
 
-New bundle versions are added under new names rather than by changing an existing
-one, so `builtin:v1` keeps meaning what it meant when a project adopted it.
+Inheritance is a supported capability, and a project that wants it writes
+`extends` instead of the agents:
+
+```yaml
+version: 1
+extends: builtin:v1
+
+product:
+  id: example
+  repository: .
+
+checks:
+  - go test ./...
+
+agents:
+  developer:
+    model: claude-opus-5-20260514
+```
+
+That file inherits the five agents and their personas from the bundle, overlays
+the one field it names, and is subject to the precedence and merge rules above.
+
+**What it buys, and what it costs.** Upgrading the executable upgrades the
+defaults and the personas the project did not override — which is exactly what
+an explicit configuration gives up. What the project pins, it keeps, because a
+project value always wins over the bundle. New bundle versions are added under
+new names rather than by changing an existing one, so `builtin:v1` keeps meaning
+what it meant when a project adopted it. Neither shape depends on where Yoyodyne
+lives: both travel with the repository, and neither needs the Yoyodyne source.
+
+Yoyodyne ships the explicit shape because its operator edits agent properties
+often and wants the effect of an edit obvious. A fleet of projects that should
+improve together is the case `extends` is for. A more portable configuration
+system than either is still wanted, and is not designed yet.
+
+### Converting an inheriting configuration to an explicit one
+
+1. Record what you have now:
+   `yoyo config show --effective --origins > before.txt`.
+2. Run `yoyo init --force`. This overwrites `.yoyodyne/config.yaml` and the
+   personas under `.yoyodyne/personas/`, so commit or stash first.
+3. Re-apply what was yours: `checks`, your approval policy, and any agent field
+   you had overridden. The generated file states each of them in place, so this
+   is editing values rather than re-expressing deviations.
+4. Run `yoyo config show --effective --origins` again and diff it against
+   `before.txt`. Every origin should now be the project file, and no effective
+   value should have moved except the persona sources, which are now paths
+   inside your repository.
 
 ## Migrating from `.yoyodyne.yaml`
 
-A `.yoyodyne.yaml` file still loads, so migration is optional and can be done in
-one step:
+A `.yoyodyne.yaml` file still loads, so migration is optional. The simplest
+route is to run `yoyo init` and re-apply what the old file said:
 
-1. `mkdir .yoyodyne`
-2. Move the file: `git mv .yoyodyne.yaml .yoyodyne/config.yaml`
-3. Add `extends: builtin:v1` near the top.
-4. Delete every agent field that now matches the bundle. In practice this is most
-   of the `agents` block; keep only genuine deviations.
-5. Run `yoyo config show --effective --origins` and confirm the effective
-   values still match what the old file produced.
+1. Run `yoyo init`, which writes `.yoyodyne/config.yaml` and the personas.
+2. Copy your `product`, `checks`, `approvals`, and any agent deviations from
+   `.yoyodyne.yaml` into the generated file, editing values in place.
+3. Run `yoyo config show --effective --origins` and confirm the effective values
+   match what the old file produced.
+4. `git rm .yoyodyne.yaml`. While both exist in one directory the directory form
+   wins, so a half-finished migration cannot silently keep using the old file.
 
 Personas move to `.yoyodyne/personas/` and are referenced relative to the
 `.yoyodyne` directory.
@@ -574,9 +700,17 @@ Origins use these values:
 | Origin | Meaning |
 | --- | --- |
 | `harness-default` | No layer supplied the value; the harness filled it in. |
-| `builtin:v1` | Inherited from the built-in bundle. |
+| `builtin:v1` | Inherited from the built-in bundle, by a project that uses `extends`. |
 | a file path | Supplied by that project configuration file. |
 | `derived:product.id` | Computed from another configured value. |
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.
+
+In a project `init` wrote, the answer is the project file for every configured
+value, and `derived:product.id` for `product.repository_id` alone — the one
+value the generated file computes rather than states. Nothing reports
+`builtin:v1`, and nothing reports `harness-default`, because the generated file
+writes down every value the harness would otherwise have filled in. So an origin
+that is neither the project file nor that one derivation means the
+configuration is inheriting something, which is worth looking at.

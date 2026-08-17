@@ -29,6 +29,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return 0
 	case "version":
 		return runVersion(args[1:], stdout, stderr, version)
+	case "init":
+		return runInit(args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
 	case "chat":
@@ -240,6 +242,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo <command> [options]
 
 Commands:
+  init              write a project its own complete configuration and personas
   chat              talk with the product manager and steer the work from there
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins

@@ -9,8 +9,10 @@ import (
 )
 
 // BuiltinV1 is the versioned agent bundle shipped inside the executable. It is
-// read-only: a project inherits it by name and overlays what it needs, so
-// Yoyodyne can run in a repository that never sees the Yoyodyne source.
+// read-only, and it is used two ways: `yoyo init` generates a project's own
+// complete configuration from it, and a project that would rather keep
+// receiving later improvements inherits it by name and overlays what it needs.
+// Either way Yoyodyne runs in a repository that never sees the Yoyodyne source.
 const BuiltinV1 = "builtin:v1"
 
 //go:embed builtin
