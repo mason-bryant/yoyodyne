@@ -20,7 +20,7 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 - Isolate implementation tasks in harness-managed Git worktrees and integrate successful work automatically.
 - Publish that work as pull requests the harness opens, and has the forge merge, on the roles' behalf, for projects that enable it, without letting any agent push or merge.
 - Use Beads as the durable workflow, dependency, blocker, directive, and handoff store.
-- Use repository Markdown as the human-readable source of truth for the brief, goals, designs, and specifications.
+- Use repository Markdown as the human-readable source of truth for the brief, goals, designs, specifications, decision records, and invariants.
 - Support Claude Code as the default backend and Codex as an optional developer/reviewer backend.
 - Reach a useful self-hosting threshold before implementing the entire v1 management hierarchy.
 - Keep roles, policies, and provider selection configurable without making safety invariants optional.
@@ -210,7 +210,9 @@ docs/
 
 These files are reviewable with the code and are the source of truth for their content. Beads records their workflow state and relationships but does not replace them with issue descriptions.
 
-`decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them beside it, kept separate because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work. The product manager's own directory is the one the harness already reads: `product.specifications` in [the configuration](configuration.md#product-specifications) points at `docs/product` by default, and nothing else in this layout is read by the harness yet.
+`decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them in `invariants/` beneath it, kept in their own directory because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work rather than Markdown.
+
+One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default, and it is the only part of this layout the harness reads today. [Configuration](configuration.md#product-specifications) is the reference for it.
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
