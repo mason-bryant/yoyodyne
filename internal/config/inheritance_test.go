@@ -465,6 +465,66 @@ func TestProjectOverridesOneUsageLimitPauseBound(t *testing.T) {
 	}
 }
 
+// The overload pause is configurable the same way, so the whole path from the
+// key an operator writes to the value a run waits is exercised: the yaml tag on
+// the document, the overlay that applies it, and the harness default underneath
+// them both. Setting the field on the struct in a pipeline test proves none of
+// that, and the documentation promises operators the key works.
+func TestServerOverloadPauseResolvesFromEveryLayer(t *testing.T) {
+	t.Parallel()
+
+	// The bundle supplies it, so a project that writes nothing down still waits a
+	// short interval on an overloaded provider rather than the half hour an
+	// exhausted limit gets.
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if got := inherited.Config.Execution.ServerOverloadPause; got != Duration(90*time.Second) {
+		t.Fatalf("inherited server_overload_pause = %s, want 90s", got)
+	}
+	if origin := inherited.Origins["execution.server_overload_pause"]; origin != BuiltinV1 {
+		t.Fatalf("server_overload_pause origin = %q, want %q", origin, BuiltinV1)
+	}
+
+	// A project that overrides it gets what it wrote, and its neighbours keep what
+	// they inherited.
+	overridden := loadProject(t, minimalProjectConfig+`execution:
+  server_overload_pause: 45s
+`, nil)
+	if got := overridden.Config.Execution.ServerOverloadPause; got != Duration(45*time.Second) {
+		t.Fatalf("overridden server_overload_pause = %s, want 45s", got)
+	}
+	if origin := overridden.Origins["execution.server_overload_pause"]; origin == BuiltinV1 {
+		t.Fatalf("an overridden key kept the bundle's origin %q", origin)
+	}
+	if got := overridden.Config.Execution.UsageLimitMaxPause; got != Duration(6*time.Hour) {
+		t.Fatalf("usage_limit_max_pause = %s, want the inherited 6h", got)
+	}
+
+	// A generated project inherits no bundle and writes every value down itself,
+	// so it is where a misplaced argument in the scaffold template would show up:
+	// both intervals are asserted, because swapping two adjacent durations leaves
+	// a file that still parses and still validates.
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	if got := generated.Execution.ServerOverloadPause; got != Duration(90*time.Second) {
+		t.Fatalf("generated server_overload_pause = %s, want 90s", got)
+	}
+	if got := generated.Execution.UsageLimitUnknownResetPause; got != Duration(30*time.Minute) {
+		t.Fatalf("generated usage_limit_unknown_reset_pause = %s, want 30m", got)
+	}
+}
+
+// A non-positive interval is refused, because the whole of an overload's wait is
+// this interval: there is no reset time underneath it to fall back on.
+func TestServerOverloadPauseMustBePositive(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"execution:\n  server_overload_pause: 0s\n", "execution:\n  server_overload_pause: -30s\n"} {
+		_, err := loadProjectError(t, minimalProjectConfig+body, nil)
+		if err == nil || !strings.Contains(err.Error(), "execution.server_overload_pause must be positive") {
+			t.Fatalf("LoadResolved() error = %v, want one refusing %q", err, strings.TrimSpace(body))
+		}
+	}
+}
+
 // A configured duration is round-tripped in the form it was written in, in both
 // renderings of the effective configuration. `config show` is where an operator
 // finds out how long a run is allowed to wait, and a nanosecond count is not an

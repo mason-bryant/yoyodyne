@@ -127,6 +127,14 @@ const overloadedStatus = "529"
 // the overloaded one becomes a waitable refusal, so a message this version does
 // not recognize fails the run exactly as it does today rather than becoming a
 // wait nobody can justify.
+//
+// All of this is Claude Code's dialect, and it is the third piece of it living
+// here rather than behind a contract. yoyodyne-ifd.32 is where that becomes a
+// plugin contract, and this shape is why it needs a fourth answer beside the
+// ordinary retry, the limit that will lift, and the refusal that will not: a
+// transient server refusal, which quotes no reset time at all and wants a short
+// interval rather than the unknown-reset one an exhausted limit gets. The two
+// run IDs above are the evidence that answer is real rather than anticipated.
 var apiErrorStatus = regexp.MustCompile(`(?i)\bapi error\b\D{0,4}(\d{3})\b`)
 
 // transientServerOverload reports an invocation the provider ended because its

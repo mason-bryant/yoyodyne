@@ -1492,7 +1492,7 @@ simply has none, and runs are unaffected.
 
 ## Operations and recovery
 
-### Waiting out an exhausted provider usage limit
+### Waiting out a provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
 instead of failing — for either provider invocation a run makes, the developer

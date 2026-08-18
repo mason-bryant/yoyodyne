@@ -81,6 +81,12 @@ type UsageLimit struct {
 // temporary. It names no reset time, because a server under load never quotes
 // one, so what it calls for is a short wait and another attempt rather than a
 // deadline to sleep on.
+//
+// It is the third kind of answer a backend gives about why an invocation
+// produced nothing, and yoyodyne-ifd.32 is where those answers become a plugin
+// contract rather than two structs and an adapter that knows one provider's
+// dialect. The Claude Code shape this was derived from — a terminal api_error
+// reporting HTTP 529 — is recorded in that adapter's parser.
 type ServerOverload struct {
 	// Detail is the provider's own message, carried as evidence rather than
 	// interpreted by the harness.
