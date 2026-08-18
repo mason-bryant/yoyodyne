@@ -516,12 +516,14 @@ tracker does not hold proposes nothing at all, rather than becoming an approval
 that fails after you have given it.
 
 Work admitted before that check existed names no goal, and it is grandfathered
-rather than backfilled or blocked: nothing refuses to run it, and it is reported
-as unattributed wherever the queue is read, because a rule that failed every
-item admitted before attributions were checked would stop all work to close a
-gap that has cost nothing yet. Attributing one is a judgement about what the
-work is for, so the product manager makes it in the conversation and the harness
-never guesses: `attribute` records a goal on an item already in the backlog,
+rather than blocked or backfilled by the harness itself: nothing refuses to run
+it, and it is reported as unattributed wherever the queue is read, because a
+rule that failed every item admitted before attributions were checked would stop
+all work to close a gap that has cost nothing yet. Grandfathering keeps that
+work running until it is attributed; it does not mean it stays unattributed.
+Attributing one is a judgement about what the work is for, so the product
+manager makes it in the conversation and the harness never guesses: `attribute`
+records a goal on an item already in the backlog,
 appended to what the item records rather than replacing it, so the goal an item
 was admitted under is never rewritten. An item that names no goal and one whose
 goal your goals do not state are reported apart, because the first is work to

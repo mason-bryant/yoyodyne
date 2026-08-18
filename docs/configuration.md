@@ -471,14 +471,15 @@ nothing yet. Attributing one is a judgement about what the work is for, so it is
 the product manager's to make in conversation and there is no command here that
 makes it.
 
-That leaves a pass still to be made. When this arrived, Yoyodyne's own backlog
-carried one attribution across seventeen open items, and **attributing the rest
-is deliberately not part of the change that added the check**: it is a
-conversation with the product manager, working from `yoyo goals attribution`,
-not a migration the harness ran. The work is deferred rather than dropped, and
-until it is done that command is expected to report most of the queue as naming
-no goal. Nothing is blocked in the meantime, which is the whole point of
-grandfathering it.
+That leaves a pass still owed. When the check arrived, Yoyodyne's own backlog
+carried one attribution across seventeen open items, and **the rest are still to
+be attributed**: until they are, `yoyo goals attribution` reports most of the
+queue as naming no goal, and that is the queue's real state rather than a
+reporting artefact. Grandfathering is what keeps the work running while the pass
+is outstanding; it is not a substitute for making it. The pass is made by the
+product manager in conversation, working from `yoyo goals attribution` and using
+the `attribute` action on each item — which appends, so nothing already recorded
+is lost.
 
 ## Architectural invariants
 
