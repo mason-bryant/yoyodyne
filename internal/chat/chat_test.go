@@ -806,7 +806,7 @@ func TestAFailedTrackerActionIsReportedAsFailed(t *testing.T) {
 
 	root := t.TempDir()
 	tracker := &fakeTracker{
-		items: map[string]beads.WorkItem{"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations"}},
+		items: map[string]beads.WorkItem{"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Status: "open"}},
 		err:   errors.New("bd close failed: item is claimed"),
 	}
 	provider := &fakeBackend{results: []backendapi.RunResult{
@@ -893,7 +893,7 @@ func TestTrackerActionsAreBoundedAndTheirResultsAreNotLost(t *testing.T) {
 	)
 	root := t.TempDir()
 	tracker := &fakeTracker{items: map[string]beads.WorkItem{
-		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Description: "Say who is speaking."},
+		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Description: "Say who is speaking.", Status: "open"},
 	}}
 	provider := &fakeBackend{results: results}
 	options := testOptions(t, provider)
@@ -965,7 +965,7 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 	t.Parallel()
 
 	tracker := &fakeTracker{items: map[string]beads.WorkItem{
-		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations"},
+		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Status: "open"},
 	}}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Unlinking the dependency you asked about.",
@@ -1189,6 +1189,12 @@ func (f *fakeBackend) Run(_ context.Context, request backendapi.RunRequest) (bac
 // one; err fails every change, which is how a tracker that refuses is tested.
 type fakeTracker struct {
 	items map[string]beads.WorkItem
+	// open is what a survey of the open queue answers with, and listed is the
+	// status each survey asked for, so a survey that read the wrong slice of the
+	// tracker is visible rather than merely plausible.
+	open    []beads.WorkItem
+	listed  []string
+	listErr error
 	// shown is every item it was asked to read, in order, so a turn that looks
 	// the same item up twice is visible rather than merely slow.
 	shown   []string
@@ -1213,6 +1219,14 @@ func (f *fakeTracker) Show(_ context.Context, id string) (beads.WorkItem, error)
 		return beads.WorkItem{}, fmt.Errorf("bd show failed: no work item %s", id)
 	}
 	return item, nil
+}
+
+func (f *fakeTracker) List(_ context.Context, status string) ([]beads.WorkItem, error) {
+	f.listed = append(f.listed, status)
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	return f.open, nil
 }
 
 func (f *fakeTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {

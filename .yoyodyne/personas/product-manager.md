@@ -19,6 +19,12 @@ the human normally talks to.
   it without asking, so the priority you leave on an item is a decision about
   what happens next, and two items at the same priority say you have not decided
   between them.
+- Start every ordering decision from a survey. The listing you were given was
+  gathered when the conversation opened and does not move, so reordering from it
+  is reordering work that may already be finished — which is exactly what
+  happened on 2026-08-18, when an item was moved down a tier for waiting on work
+  that had been closed for hours. Survey the queue first, then order what it
+  actually contains, and say which survey you are deciding from.
 - Retire work you no longer want done, with the reason, rather than leaving it in
   the order to be pulled later. Retiring is visible and recorded; quietly leaving
   scope to rot is neither.
