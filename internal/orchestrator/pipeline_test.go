@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3604,7 +3605,13 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 		moved = gitLine(t, repository, "rev-parse", "refs/heads/main")
 		return nil
 	}, approveVerdict)
-	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+	// The check records the worktree HEAD it ran against, so what it proves is
+	// not only that the checks ran twice but that the second run judged the
+	// replayed change rather than the one that lost the race. It writes outside
+	// the worktree, so running it never becomes part of the change it describes.
+	checked := filepath.Join(t.TempDir(), "checked-heads")
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider,
+		[]string{"git rev-parse HEAD >> " + strconv.Quote(checked) + " && test -f feature.txt"})
 	base := gitLine(t, repository, "rev-parse", "refs/heads/main")
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
@@ -3638,6 +3645,18 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	// old base, so the replayed change was reviewed again by its own invocation.
 	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 2 {
 		t.Fatalf("reviewer invocations = %d, want 2", len(reviews))
+	}
+	// The deterministic checks are re-run against the replayed change, not
+	// inherited from the pass that was approved before the replay.
+	heads := strings.Fields(readPipelineFile(t, filepath.Dir(checked), filepath.Base(checked)))
+	if len(heads) != 2 {
+		t.Fatalf("check runs = %d (%v), want the checks run again after the replay", len(heads), heads)
+	}
+	if heads[0] != base {
+		t.Fatalf("first check ran against %q, want the original base %q", heads[0], base)
+	}
+	if heads[1] != outcome.Integration.SourceCommit {
+		t.Fatalf("second check ran against %q, want the replayed commit that was promoted %q", heads[1], outcome.Integration.SourceCommit)
 	}
 	// The retry is not a repair: nothing was handed back to the developer.
 	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {

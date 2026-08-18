@@ -1368,3 +1368,74 @@ func (r *heldRunner) Run(ctx context.Context, command execution.Command, observe
 	}
 	return result, err
 }
+
+// A rebase Git refuses outright is not a conflict. It exits exactly as a
+// conflicted one does, and calling it a conflict would send somebody to settle
+// a disagreement that does not exist — on a worktree where nothing was applied
+// and nothing needs settling.
+func TestManagerRebaseOntoTargetReportsARefusalThatIsNotAConflict(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	refusing := &refusingRebaseRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{Runner: refusing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID: testRunID, WorkItemID: "yoyodyne-refused", BaseRef: "main", TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "work.txt", "developer work\n")
+	writeFile(t, repository, "concurrent.txt", "somebody else's work\n")
+	runGit(t, repository, "add", "concurrent.txt")
+	runGit(t, repository, "commit", "-m", "concurrent target change")
+
+	refusing.armed = true
+	replay, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+	if err == nil || !strings.Contains(err.Error(), "invalid upstream") {
+		t.Fatalf("RebaseOntoTarget() error = %v, want the refusal Git reported", err)
+	}
+	if errors.Is(err, ErrRebaseConflict) {
+		t.Fatalf("a rebase that never started was reported as a conflict: %v", err)
+	}
+	// The commit the harness made before the refusal is still reported, and the
+	// worktree is exactly where that commit left it.
+	if replay.HeadCommit == "" || replay.Moved() {
+		t.Fatalf("refused replay = %#v", replay)
+	}
+	if head := gitLine(t, worktree.Path, "rev-parse", "HEAD"); head != replay.HeadCommit {
+		t.Fatalf("worktree HEAD = %q, want the reported commit %q", head, replay.HeadCommit)
+	}
+	if status := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+		t.Fatalf("worktree is dirty after the refusal: %q", status)
+	}
+	if state := gitLine(t, worktree.Path, "rev-parse", "--git-path", "rebase-merge"); dirExists(state) {
+		t.Fatalf("a replay state directory survived a rebase that never started: %q", state)
+	}
+}
+
+// refusingRebaseRunner makes `git rebase` refuse the way an unusable revision
+// does: a non-zero exit with nothing half-applied behind it.
+type refusingRebaseRunner struct {
+	delegate execution.ProcessRunner
+	armed    bool
+}
+
+func (r *refusingRebaseRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if r.armed && hasArgument(command.Args, "rebase") && !hasArgument(command.Args, "--abort") {
+		return execution.ProcessResult{
+			Status:   execution.ProcessFailed,
+			ExitCode: 128,
+			Stderr:   "fatal: invalid upstream\n",
+		}, nil
+	}
+	return r.delegate.Run(ctx, command, observer)
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}

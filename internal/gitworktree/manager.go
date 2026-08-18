@@ -1056,6 +1056,15 @@ func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, messa
 // The commits it writes carry the harness identity for the same reason every
 // other commit the harness makes does, and the abort is what keeps a conflict
 // from becoming a worktree nobody can promote or inspect afterwards.
+//
+// Only a replay that actually began and was then abandoned is reported as a
+// conflict. Git refuses a rebase it never started with the same exit code — an
+// unusable revision or an unusable worktree looks exactly like a conflict from
+// the outside — and reporting one of those as a conflict would send a person to
+// settle a disagreement that does not exist. An abort that fails is not
+// reported as a conflict either, for the other half of the same reason: what
+// makes a conflict safe to hand over is that the branch and the worktree were
+// put back, and that is precisely what did not happen.
 func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, targetCommit string) error {
 	rebased, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
 		"-c", "core.hooksPath="+os.DevNull,
@@ -1068,16 +1077,59 @@ func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, ta
 	if rebased.Status == execution.ProcessSucceeded {
 		return nil
 	}
-	refused := fmt.Errorf("%w: replay %s onto %s at %s failed with exit code %d: %s",
-		ErrRebaseConflict, worktree.Branch, worktree.TargetBranch, targetCommit, rebased.ExitCode, strings.TrimSpace(rebased.Stderr))
+	failed := fmt.Errorf("replay %s onto %s at %s failed with exit code %d: %s",
+		worktree.Branch, worktree.TargetBranch, targetCommit, rebased.ExitCode, strings.TrimSpace(rebased.Stderr))
+	started, err := m.replayInProgress(ctx, path)
+	if err != nil {
+		return errors.Join(failed, err)
+	}
+	if !started {
+		// Nothing was applied, so there is nothing to abandon and nothing anybody
+		// has to choose between: the branch is where it was, and the failure is
+		// Git's own.
+		return failed
+	}
 	aborted, err := m.run(ctx, "-C", path, "rebase", "--abort")
 	if err != nil {
-		return errors.Join(refused, err)
+		return errors.Join(failed, err)
 	}
 	if aborted.Status != execution.ProcessSucceeded {
-		return errors.Join(refused, fmt.Errorf("abandon the replay failed with exit code %d: %s", aborted.ExitCode, strings.TrimSpace(aborted.Stderr)))
+		return errors.Join(failed, fmt.Errorf("abandon the replay failed with exit code %d: %s; the worktree is left part-way through it",
+			aborted.ExitCode, strings.TrimSpace(aborted.Stderr)))
 	}
-	return refused
+	return fmt.Errorf("%w: %w", ErrRebaseConflict, failed)
+}
+
+// replayInProgress reports whether Git left a rebase half-applied in this
+// worktree. It is what tells a conflict from a rebase that never started, which
+// the exit code alone cannot: Git keeps the state of an interrupted rebase in
+// one of two directories under the worktree's Git directory, and a rebase it
+// refused outright leaves neither.
+func (m *Manager) replayInProgress(ctx context.Context, path string) (bool, error) {
+	for _, state := range []string{"rebase-merge", "rebase-apply"} {
+		result, err := m.run(ctx, "-C", path, "rev-parse", "--git-path", state)
+		if err != nil {
+			return false, err
+		}
+		if result.Status != execution.ProcessSucceeded {
+			return false, fmt.Errorf("resolve the %s state directory failed with exit code %d: %s", state, result.ExitCode, strings.TrimSpace(result.Stderr))
+		}
+		directory := strings.TrimSpace(result.Stdout)
+		if directory == "" {
+			return false, fmt.Errorf("resolved %s state directory is empty", state)
+		}
+		if !filepath.IsAbs(directory) {
+			directory = filepath.Join(path, directory)
+		}
+		switch _, err := os.Stat(directory); {
+		case err == nil:
+			return true, nil
+		case errors.Is(err, os.ErrNotExist):
+		default:
+			return false, fmt.Errorf("inspect the %s state directory: %w", state, err)
+		}
+	}
+	return false, nil
 }
 
 // resolveWorktreeHead reads a worktree's HEAD without judging it, which is what

@@ -746,7 +746,14 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	}
 	// The approval that was granted described the change on its old base. It is
 	// discarded rather than carried over, so the next pass through the gate gets
-	// its own checks and its own independent verdict on the replayed diff.
+	// its own independent verdict on the replayed diff.
+	//
+	// The deterministic checks need no equivalent, and the asymmetry is not an
+	// omission: a verdict is a recorded fact that would otherwise still be
+	// standing, while the checks are simply run again. verify() executes every
+	// configured command on every pass and records what they did, so the replayed
+	// change is judged by checks that ran against it rather than by a result from
+	// before it was replayed.
 	a.clearReviewEvidence()
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
