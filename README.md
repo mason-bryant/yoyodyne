@@ -42,7 +42,7 @@ into your target branch, and — [where you have asked for it](#optional-publish
 `yoyo review`, `yoyo reconcile`, and `yoyo resume` sit beside that conversation
 as administrative and recovery entry points — one named item, one branch judged
 as a whole, settling what a killed process left behind, and releasing a run
-waiting on a usage limit the provider no longer imposes — rather than as the way
+waiting on a refusal the provider no longer makes — rather than as the way
 work normally happens.
 
 **Quick start.** With [Beads](https://github.com/gastownhall/beads) and
@@ -1492,7 +1492,7 @@ simply has none, and runs are unaffected.
 
 ## Operations and recovery
 
-### Waiting out a provider usage limit
+### Waiting out an exhausted provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
 instead of failing — for either provider invocation a run makes, the developer
@@ -1528,10 +1528,29 @@ interval and asks again. Unifying the two was the point — one polling
 discipline, whether or not a deadline was quoted. A limit the harness genuinely
 cannot wait for — a reset that is not in the future, or one that no longer fits
 the run's remaining budget — stops the run and records a blocker rather than
-guessing a wait. Transient throttling is not this: the provider CLI retries that
-itself, and the harness does not duplicate it.
+guessing a wait.
 
-### Releasing a usage-limit wait early
+### Waiting out an overloaded provider
+
+A provider whose own servers are transiently overloaded refuses the same way an
+exhausted limit does — the work is never judged, only declined — so it takes the
+same machinery rather than a second one of its own. The difference is the clock.
+An overload quotes no reset time and lifts in seconds rather than hours, so a run
+waits `execution.server_overload_pause` — ninety seconds by default — and
+reissues, instead of parking for the half-hour probe interval a usage limit uses.
+Everything else is shared: the deadline is durable before the wait starts, the
+wait spends the same `execution.usage_limit_max_pause` budget, and an overload
+that never lifts therefore walks into that maximum and stops with a blocker
+rather than reissuing forever. `yoyo resume` releases one of these waits exactly
+as it releases a usage-limit wait.
+
+Ordinary transient throttling still never reaches any of this: the provider CLI
+retries that on its own, and the harness does not duplicate the wait. What it
+does act on is the terminal result the CLI ends on once its own retries are
+spent — an `api_error` reporting HTTP 529 — because at that point the provider
+has stopped retrying and somebody has to.
+
+### Releasing a wait early
 
 Everything above honors the recorded deadline as an upper bound, and a restart
 mid-wait serves the rest of it rather than asking again, which is what keeps a
@@ -1555,8 +1574,8 @@ keeps its claim, its branch, its worktree, and its developer session, and a
 process already asleep on the wait acts on the release within seconds. If the
 provider still refuses, the run records the new report and waits again, so the
 worst a premature release costs is one refused request. It is refused when the
-named item has no run in flight, or has one that is not waiting on a usage
-limit, because a release recorded against a run that is not waiting would be
+named item has no run in flight, or has one that is not waiting on the provider
+at all, because a release recorded against a run that is not waiting would be
 acted on by whatever pause that run took next.
 
 ### When a provider stalls or runs out of budget

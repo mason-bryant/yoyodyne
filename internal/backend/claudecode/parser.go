@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -96,6 +97,51 @@ type rateLimitInfo struct {
 	// noticing the refusal.
 	ResetsAt       json.RawMessage `json:"resetsAt"`
 	IsUsingOverage bool            `json:"isUsingOverage"`
+}
+
+// terminalAPIError is the provider's own terminal reason for an invocation that
+// ended on an error from the API rather than on anything the agent did or the
+// harness decided.
+const terminalAPIError = "api_error"
+
+// overloadedStatus is the HTTP status the provider's API answers with when it is
+// transiently unable to serve a request at all.
+const overloadedStatus = "529"
+
+// apiErrorStatus reads the status out of the message the provider CLI writes on
+// a terminal API error, which it puts at the front, before its own prose.
+//
+// Provenance. Two runs on 2026-08-18 — run-ff3c59bff086d6ac16dbf5101778843d and
+// run-19dc9dff153e1eb89a2470f78f02f240 — recorded a terminal result byte for
+// byte identical apart from the session, with terminal_reason "api_error" and
+// this result text:
+//
+//	API Error: 529 Overloaded. This is a server-side issue, usually temporary —
+//	try again in a moment. If it persists, check https://status.claude.com.
+//
+// Both had already exhausted the CLI's own ten api_retry attempts on the same
+// condition, so a terminal result in this shape is what the provider says after
+// it has finished retrying rather than instead of retrying.
+//
+// The match is deliberately narrow: only a terminal API error whose status is
+// the overloaded one becomes a waitable refusal, so a message this version does
+// not recognize fails the run exactly as it does today rather than becoming a
+// wait nobody can justify.
+var apiErrorStatus = regexp.MustCompile(`(?i)\bapi error\b\D{0,4}(\d{3})\b`)
+
+// transientServerOverload reports an invocation the provider ended because its
+// own servers could not serve it. It is not a usage limit — nothing about the
+// account is exhausted, and no reset time is quoted — but it asks for the same
+// answer: wait briefly and ask again.
+func transientServerOverload(result backend.RunResult) *backend.ServerOverload {
+	if !result.IsError || result.StopReason != terminalAPIError {
+		return nil
+	}
+	status := apiErrorStatus.FindStringSubmatch(result.FinalText)
+	if status == nil || status[1] != overloadedStatus {
+		return nil
+	}
+	return &backend.ServerOverload{Detail: result.FinalText}
 }
 
 // rateLimitRejected is the provider's name for a limit that is refusing work.
@@ -398,6 +444,7 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	if p.result.StopReason == "" {
 		p.result.StopReason = envelope.StopReason
 	}
+	p.result.ServerOverload = transientServerOverload(p.result)
 	eventType := execution.EventRunCompleted
 	if envelope.IsError {
 		eventType = execution.EventRunFailed

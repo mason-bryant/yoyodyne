@@ -28,6 +28,15 @@ const (
 	ProviderStopBudgetExhausted = "budget_exhausted"
 )
 
+// The two ways a provider refuses an attempt without judging the work, named
+// here for the same reason. They read differently to an operator too: an
+// exhausted limit is the account's own capacity and may need a decision, while
+// an overloaded server is weather and needs nothing.
+const (
+	PauseUsageLimit     = "usage_limit"
+	PauseServerOverload = "server_overload"
+)
+
 // defaultStopGrace bounds how long stopping waits for a cancelled run to give
 // up. It is generous because a cancelled run still has to kill its provider and
 // check processes, and it is bounded because an operator who asked to stop must
@@ -208,6 +217,10 @@ type RunReport struct {
 	Paused             bool       `json:"paused,omitempty"`
 	UsageLimitKind     string     `json:"usage_limit_kind,omitempty"`
 	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
+	// PauseCause is which refusal the run is waiting out, one of the Pause
+	// constants above. Both refusals park a run on a deadline, so the deadline
+	// alone cannot say which of them a conversation is reporting.
+	PauseCause string `json:"pause_cause,omitempty"`
 	// ProviderStop is set instead of the usage-limit fields when what paused the
 	// run was the harness stopping a provider invocation on time. Such a run is
 	// continuable straight away rather than waiting on a deadline.
@@ -694,15 +707,19 @@ func (r RunReport) Headline() string {
 		}
 		return fmt.Sprintf("%s is still in flight: %s, and it reported no failure; /work %s continues the same run from where it stopped", item, stopped, item)
 	case r.Paused:
-		limit := r.UsageLimitKind
-		if strings.TrimSpace(limit) == "" {
-			limit = "provider"
+		refusal := "a transient provider server overload"
+		if r.PauseCause != PauseServerOverload {
+			limit := r.UsageLimitKind
+			if strings.TrimSpace(limit) == "" {
+				limit = "provider"
+			}
+			refusal = "an exhausted " + limit + " usage limit"
 		}
-		resets := "an unstated time"
+		asks := "an unstated time"
 		if r.UsageLimitResetsAt != nil {
-			resets = r.UsageLimitResetsAt.UTC().Format(time.RFC3339)
+			asks = r.UsageLimitResetsAt.UTC().Format(time.RFC3339)
 		}
-		return fmt.Sprintf("%s is paused for the %s usage limit and is still in flight; it resets at %s at the latest, the run asks again at its probe interval before then, and /work %s continues the same run", item, limit, resets, item)
+		return fmt.Sprintf("%s is paused for %s and is still in flight; it asks again by %s at the latest, sooner at its probe interval, and /work %s continues the same run", item, refusal, asks, item)
 	case r.Integrated:
 		closed := ""
 		if r.WorkItemClosed {

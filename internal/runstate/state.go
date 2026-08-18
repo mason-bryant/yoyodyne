@@ -83,6 +83,30 @@ const (
 	ProviderStopBudgetExhausted = "budget_exhausted"
 )
 
+// The two ways a provider refuses an attempt without judging the work, and so
+// the two things a paused run can be waiting on. They share one deadline, one
+// budget, and one polling discipline; what differs is the words an operator
+// reads and the clock the wait is set by, and neither can be recovered from a
+// deadline on its own. The empty cause reads as an exhausted usage limit, so a
+// record written before an overload was waitable still describes itself.
+const (
+	PauseUsageLimit     = "usage_limit"
+	PauseServerOverload = "server_overload"
+)
+
+// DescribePause names what a paused run is waiting on, as the object of "paused
+// for" or "waiting out". kind is the provider's own name for an exhausted usage
+// limit and says nothing about any other cause.
+func DescribePause(cause, kind string) string {
+	if cause == PauseServerOverload {
+		return "a transient provider server overload"
+	}
+	if strings.TrimSpace(kind) == "" {
+		kind = "provider"
+	}
+	return "an exhausted " + kind + " usage limit"
+}
+
 // MaxCheckOutputBytes bounds the captured output a failing check may carry into
 // durable state and into the developer's next attempt. A verbose suite must not
 // be able to fill either with output that is mostly unrelated to the failure.
@@ -396,6 +420,13 @@ type State struct {
 	// added to when a wait is committed rather than as it elapses, so a restart
 	// part-way through a wait cannot buy the run a fresh budget.
 	UsageLimitPausedSeconds int64 `json:"usage_limit_paused_seconds,omitempty"`
+	// PauseCause is which refusal the recorded deadline is being waited out for.
+	// The deadline and the budget are shared by both, so without this a run
+	// waiting out a transiently overloaded server would be described to its
+	// operator as one waiting out an exhausted account. It is empty on a run that
+	// is not waiting, and an empty value alongside a deadline reads as a usage
+	// limit, which is what every record written before this field described.
+	PauseCause string `json:"pause_cause,omitempty"`
 	// ProviderStop records that the harness stopped a provider invocation on
 	// time -- because it stalled, or because it exhausted its total budget --
 	// rather than the provider ending it. It is written only when what the
@@ -577,6 +608,9 @@ func (s State) Validate() error {
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
 		}
+	}
+	if s.PauseCause != "" && s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload {
+		problems = append(problems, errors.New("pause_cause is invalid"))
 	}
 	if s.ProviderStop != "" {
 		if s.ProviderStop != ProviderStopStalled && s.ProviderStop != ProviderStopBudgetExhausted {

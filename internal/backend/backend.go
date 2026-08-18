@@ -75,6 +75,18 @@ type UsageLimit struct {
 	ResetsAt time.Time
 }
 
+// ServerOverload is a provider's report that its own servers could not serve the
+// attempt. Like UsageLimit it is deliberately not a failure: the work was never
+// judged, only refused, and the provider's own message says the condition is
+// temporary. It names no reset time, because a server under load never quotes
+// one, so what it calls for is a short wait and another attempt rather than a
+// deadline to sleep on.
+type ServerOverload struct {
+	// Detail is the provider's own message, carried as evidence rather than
+	// interpreted by the harness.
+	Detail string
+}
+
 type RunResult struct {
 	Backend   domain.Backend
 	SessionID string
@@ -94,6 +106,12 @@ type RunResult struct {
 	// for opposite responses: a failure ends the run, an exhausted limit asks
 	// the caller to wait and ask again.
 	UsageLimit *UsageLimit
+	// ServerOverload is set when the invocation ended because the provider's
+	// servers were transiently unable to serve it. It travels beside IsError
+	// rather than instead of it — the provider does report this as a terminal
+	// error — and it asks the same thing of the caller an exhausted limit does:
+	// wait and ask again rather than end the run.
+	ServerOverload *ServerOverload
 }
 
 type Backend interface {

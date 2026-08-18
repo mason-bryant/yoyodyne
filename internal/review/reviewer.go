@@ -118,6 +118,11 @@ type Result struct {
 	// never made, so the caller can wait and ask again rather than treating the
 	// absent verdict as a reason to end the run.
 	UsageLimit *backend.UsageLimit
+	// ServerOverload is set when the invocation ended because the provider's own
+	// servers could not serve it. It is carried for the same reason UsageLimit
+	// is: a review that was refused was never made, and the caller can wait and
+	// ask again rather than ending the run over an absent verdict.
+	ServerOverload *backend.ServerOverload
 	// ProcessStatus is how the reviewer's own process ended, carried so a caller
 	// can tell a review the provider answered badly from one the harness stopped
 	// on time. A stopped review was never made either, and the change it was
@@ -213,6 +218,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			RequestedModel: r.Model,
 			LastSequence:   lastSequence,
 			UsageLimit:     providerResult.UsageLimit,
+			ServerOverload: providerResult.ServerOverload,
 			ProcessStatus:  providerResult.Process.Status,
 		}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
@@ -229,9 +235,9 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	}
 
 	// Every outcome from here on carries the same provider identity evidence, so
-	// a rejected review is as auditable as an accepted one. An exhausted usage
-	// limit travels with it, because a review the provider declined has to be
-	// told apart from one it answered badly. What the reviewer reported travels
+	// a rejected review is as auditable as an accepted one. Whatever the provider
+	// refused it for travels with it, because a review the provider declined has
+	// to be told apart from one it answered badly. What the reviewer reported travels
 	// with it too, because a report survives a verdict the harness rejected.
 	evidence := func() Result {
 		return Result{
@@ -240,6 +246,7 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 			SessionID:      providerResult.SessionID,
 			LastSequence:   lastSequence,
 			UsageLimit:     providerResult.UsageLimit,
+			ServerOverload: providerResult.ServerOverload,
 			ProcessStatus:  providerResult.Process.Status,
 			Reports:        reported,
 			ReportProblem:  reportProblem,

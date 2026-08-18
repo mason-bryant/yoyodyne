@@ -2413,6 +2413,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			WorktreeRoot:                           "auto",
 			Remote:                                 "origin",
 			UsageLimitUnknownResetPause:            config.Duration(30 * time.Minute),
+			ServerOverloadPause:                    config.Duration(90 * time.Second),
 		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
@@ -2826,6 +2827,38 @@ func waiting(pipeline Pipeline, clock *pausingClock, maximum, inProcess time.Dur
 // the provider actually returns: an errored result that carries the limit and
 // the session the refused attempt had already established.
 func usageLimitBackend(refusals int, limit *backend.UsageLimit, verdicts ...string) *fakeBackend {
+	return refusingBackend(refusals, func(result backend.RunResult) backend.RunResult {
+		result.StopReason = "usage_limit"
+		result.UsageLimit = limit
+		return result
+	}, verdicts...)
+}
+
+// serverOverloadBackend refuses the developer's first refusals invocations the
+// way a transiently overloaded provider does and serves the work afterwards. The
+// refusal carries the terminal reason and the message the provider CLI actually
+// wrote on the runs this behavior exists for, so a test states the same shape
+// the recognizer reads rather than a category the harness invented.
+func serverOverloadBackend(refusals int, verdicts ...string) *fakeBackend {
+	return refusingBackend(refusals, func(result backend.RunResult) backend.RunResult {
+		result.StopReason = "api_error"
+		result.FinalText = overloadedMessage
+		result.ServerOverload = &backend.ServerOverload{Detail: overloadedMessage}
+		return result
+	}, verdicts...)
+}
+
+// overloadedMessage is what the provider wrote on the runs that failed instantly
+// to a 529, kept whole so the pause a test observes is the pause that message
+// earns.
+const overloadedMessage = "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com."
+
+// refusingBackend refuses the developer's first refusals invocations and serves
+// the work afterwards. refuse decorates the errored result the provider returns,
+// which is what distinguishes one kind of refusal from another; everything else
+// about a refused attempt — the error, the failed process, and the session it
+// had already established — is the same whichever refused it.
+func refusingBackend(refusals int, refuse func(backend.RunResult) backend.RunResult, verdicts ...string) *fakeBackend {
 	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
 	refused, reviews := 0, 0
 	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
@@ -2833,15 +2866,13 @@ func usageLimitBackend(refusals int, limit *backend.UsageLimit, verdicts ...stri
 		case domain.RoleDeveloper:
 			if refused < refusals {
 				refused++
-				return backend.RunResult{
-					Backend:    domain.BackendClaudeCode,
-					SessionID:  provider.developerSession,
-					IsError:    true,
-					StopReason: "usage_limit",
-					UsageLimit: limit,
-					Process:    execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
-					LastEvent:  request.LastSequence,
-				}, nil
+				return refuse(backend.RunResult{
+					Backend:   domain.BackendClaudeCode,
+					SessionID: provider.developerSession,
+					IsError:   true,
+					Process:   execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+					LastEvent: request.LastSequence,
+				}), nil
 			}
 			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
 				return backend.RunResult{}, err
@@ -2873,6 +2904,200 @@ func usageLimitBackend(refusals int, limit *backend.UsageLimit, verdicts ...stri
 		}
 	}
 	return provider
+}
+
+// A transiently overloaded provider is the most retryable refusal there is, and
+// the harness used to fail a run on it outright. It waits the short configured
+// interval and reissues, on the same budget every other wait spends.
+func TestRunPausesForATransientServerOverloadAndReissues(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := serverOverloadBackend(1, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+	pipeline.Config.Execution.ServerOverloadPause = config.Duration(90 * time.Second)
+
+	// The deadline has to be on disk before the wait starts, for the same reason
+	// an exhausted limit's is: a process that dies mid-wait must lose nothing.
+	var pausedState runstate.State
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		pausedState = loaded
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if pausedState.UsageLimitResetsAt == nil || !pausedState.UsageLimitResetsAt.Equal(baseTime.Add(90*time.Second)) {
+		t.Fatalf("the overload deadline was not durable before the wait began: %#v", pausedState.UsageLimitResetsAt)
+	}
+	// What the run is waiting on has to be recorded, because the deadline alone
+	// would describe an overload as an exhausted account to everyone who reads it.
+	if pausedState.PauseCause != runstate.PauseServerOverload || pausedState.UsageLimitKind != "" {
+		t.Fatalf("paused state = %#v, want a run recorded as waiting out a server overload", pausedState)
+	}
+	if clock.waited() != 90*time.Second {
+		t.Fatalf("waited %s in total, want the configured 90s overload pause", clock.waited())
+	}
+	// The wait spends the aggregate budget, which is what stops an overload that
+	// never lifts from reissuing forever.
+	if pausedState.UsageLimitPaused() != 90*time.Second {
+		t.Fatalf("committed %s to the pause budget, want the 90s it waited", pausedState.UsageLimitPaused())
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the reissued run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the refused attempt and its reissue", len(developerRequests))
+	}
+	// The reissue continues the session the refused attempt established rather
+	// than starting the work over.
+	if developerRequests[1].SessionID != provider.developerSession {
+		t.Fatalf("reissued attempt session = %q, want %q", developerRequests[1].SessionID, provider.developerSession)
+	}
+	finished, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if finished.UsageLimitResetsAt != nil || finished.PauseCause != "" {
+		t.Fatalf("a finished run is still recorded as waiting: %#v", finished)
+	}
+}
+
+// An overload that never lifts must not become a run that reissues forever. Each
+// wait spends the same aggregate budget, so the run walks into the configured
+// maximum and stops with a blocker naming what refused it.
+func TestRunWalksRepeatedServerOverloadsIntoThePauseBudget(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// More refusals than the budget can pay for, so what stops the run is the
+	// budget rather than the provider relenting.
+	provider := serverOverloadBackend(10, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 4*time.Minute, 4*time.Minute)
+	pipeline.Config.Execution.ServerOverloadPause = config.Duration(90 * time.Second)
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatalf("Run() error = nil, want the run to stop once its budget was spent")
+	}
+	// Two waits fit in four minutes and a third does not, so the run takes the two
+	// it can afford and refuses the one it cannot.
+	if clock.waited() != 3*time.Minute {
+		t.Fatalf("waited %s in total, want the two 90s waits the 4m budget covers", clock.waited())
+	}
+	if attempts := len(provider.requestsForRole(domain.RoleDeveloper)); attempts != 3 {
+		t.Fatalf("developer invocations = %d, want the refused attempt and the two reissues it paid for", attempts)
+	}
+	if !tracker.blocked || !outcome.Blocked {
+		t.Fatalf("the spent budget left no blocker: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	}
+	if !strings.Contains(tracker.blockReason, "past the 4m0s maximum pause") {
+		t.Fatalf("blocker did not name the budget that stopped the run:\n%s", tracker.blockReason)
+	}
+	// The operator has to be able to tell an overloaded provider from an exhausted
+	// account: one is weather, the other may be a decision about capacity.
+	if !strings.Contains(tracker.blockReason, "transient provider server overload") {
+		t.Fatalf("blocker did not name what refused the run:\n%s", tracker.blockReason)
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !stopped.Status.Terminal() || stopped.UsageLimitResetsAt != nil {
+		t.Fatalf("stopped state = %#v, want a terminal run carrying no deadline", stopped)
+	}
+	// The change is preserved for whoever picks the item up.
+	if _, statErr := os.Stat(stopped.WorktreePath); statErr != nil {
+		t.Fatalf("the stopped run's worktree did not survive: %v", statErr)
+	}
+}
+
+// A review the provider's servers could not serve was never made either, so it
+// is waited out and asked for again rather than ending the run or redeveloping
+// the change.
+func TestRunPausesForAnOverloadedReviewAndAsksAgain(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	reviews := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleDeveloper {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				ResolvedModel: developerResolved, FinalText: "implemented the work item",
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		reviews++
+		if reviews == 1 {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				IsError: true, StopReason: "api_error", FinalText: overloadedMessage,
+				ServerOverload: &backend.ServerOverload{Detail: overloadedMessage},
+				Process:        execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:      request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(automatic(pipeline, provider), clock, 6*time.Hour, 6*time.Hour)
+	pipeline.Config.Execution.ServerOverloadPause = config.Duration(90 * time.Second)
+
+	var pausedState runstate.State
+	clock.onSleep = func() {
+		loaded, err := store.Load(pipelineRunID)
+		if err != nil {
+			t.Errorf("Load() during the pause error = %v", err)
+			return
+		}
+		pausedState = loaded
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if clock.waited() != 90*time.Second {
+		t.Fatalf("waited %s, want the configured 90s overload pause", clock.waited())
+	}
+	// The pause is recorded in the phase it happened in, which is what makes a
+	// review-time pause resumable as a review rather than as a fresh attempt.
+	if pausedState.Phase != runstate.PhaseReviewing || !pausedForUsageLimit(pausedState) {
+		t.Fatalf("paused state = %#v, want a resumable reviewing run", pausedState)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the run did not complete after the overload lifted: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	if developerRuns := len(provider.requestsForRole(domain.RoleDeveloper)); developerRuns != 1 {
+		t.Fatalf("developer invocations = %d, want the review retried without redeveloping", developerRuns)
+	}
+	if reviews != 2 {
+		t.Fatalf("reviews = %d, want the refused review asked for again", reviews)
+	}
 }
 
 // A hard usage limit pauses the run instead of failing it: the deadline is

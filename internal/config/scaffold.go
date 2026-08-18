@@ -191,6 +191,11 @@ execution:
   usage_limit_max_pause: %s
   usage_limit_in_process_pause: %s
   usage_limit_unknown_reset_pause: %s
+  # A provider whose own servers are transiently overloaded refuses without
+  # naming any reset at all, so a run waits this much shorter interval and asks
+  # again. It spends the same maximum above, so an overload that never lifts
+  # reaches that bound rather than reissuing forever.
+  server_overload_pause: %s
 
 # Conservative by default: integration and publishing are opted in to
 # separately. Automatic integration is refused unless it is actually gated by
@@ -215,6 +220,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.UsageLimitMaxPause),
 		renderScaffoldDuration(effective.Execution.UsageLimitInProcessPause),
 		renderScaffoldDuration(effective.Execution.UsageLimitUnknownResetPause),
+		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,

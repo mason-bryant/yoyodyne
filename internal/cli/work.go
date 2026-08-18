@@ -307,8 +307,8 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 		snapshot.Detail = fmt.Sprintf("paused for unresolved directive %s: %s",
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
 	case state.UsageLimitResetsAt != nil:
-		snapshot.Detail = fmt.Sprintf("paused for the %s usage limit until %s",
-			nonEmptyValue(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
+		snapshot.Detail = fmt.Sprintf("paused for %s until %s",
+			runstate.DescribePause(state.PauseCause, state.UsageLimitKind), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 	case state.ProviderStop == runstate.ProviderStopStalled:
 		snapshot.Detail = "its provider stopped emitting events and was stopped; the run can be continued"
 	case state.ProviderStop == runstate.ProviderStopBudgetExhausted:
@@ -437,6 +437,7 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		Paused:             outcome.Paused,
 		UsageLimitKind:     outcome.UsageLimitKind,
 		UsageLimitResetsAt: outcome.UsageLimitResetsAt,
+		PauseCause:         outcome.PauseCause,
 		ProviderStop:       outcome.ProviderStop,
 		Failure:            outcome.Failure,
 		Reported:           len(outcome.Reports),

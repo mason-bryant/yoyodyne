@@ -281,6 +281,11 @@ type Outcome struct {
 	// a paused run and on a run that stopped because the reset was unusable.
 	UsageLimitResetsAt *time.Time `json:"usage_limit_resets_at,omitempty"`
 	UsageLimitKind     string     `json:"usage_limit_kind,omitempty"`
+	// PauseCause is which refusal that deadline is being waited out for, one of
+	// the runstate.Pause constants. A transiently overloaded server and an
+	// exhausted account both park a run on a deadline, and only this tells a
+	// reader which of them they are looking at.
+	PauseCause string `json:"pause_cause,omitempty"`
 	// ProviderStop names why the harness stopped a provider invocation on time
 	// rather than the provider ending it: runstate.ProviderStopStalled when it
 	// stopped emitting events, runstate.ProviderStopBudgetExhausted when it was
@@ -589,6 +594,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			ProviderResolvedModel: state.ProviderResolvedModel,
 			RepairAttempts:        state.RepairAttempts,
 			UsageLimitKind:        state.UsageLimitKind,
+			PauseCause:            state.PauseCause,
 			// A resumed run keeps the pull request the interrupted process
 			// published, so the attempt it is owed updates that request rather than
 			// opening a second one for the same branch. It reports a skipped
@@ -1069,16 +1075,18 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // provider reported. A repair attempt passes the recorded session so the
 // developer continues the change it already made instead of re-deriving it.
 //
-// A provider that refuses the attempt because a usage limit is exhausted does
-// not end the run. The work was never judged, only declined for want of
-// capacity, so the attempt is waited out and reissued in the same worktree and
-// the same session. Only a wait the harness cannot take — an unusable reset
-// time, or one beyond the configured maximum — stops the run.
+// A provider that refuses the attempt does not end the run, whether it refused
+// for want of capacity on the account or because its own servers could not serve
+// it. The work was never judged in either case, so the attempt is waited out and
+// reissued in the same worktree and the same session. Only a wait the harness
+// cannot take — an unusable reset time, or one beyond the configured maximum —
+// stops the run.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
 	for {
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
-		limit, refused := refusedForUsageLimit(providerResult, err)
-		if !refused {
+		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
+		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
+		if !refusedForLimit && !refusedForOverload {
 			if err := a.recordDevelopment(ctx, providerResult, err); err != nil {
 				return err
 			}
@@ -1096,7 +1104,17 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			a.state.ProviderSessionID = providerResult.SessionID
 			a.outcome.ProviderSessionID = providerResult.SessionID
 		}
-		if err := a.pauseForUsageLimit(ctx, limit); err != nil {
+		// An exhausted limit is answered first when a refused attempt somehow
+		// reports both: it is the longer wait of the two, and waiting an overload's
+		// interval into a limit that has hours left would spend the budget on
+		// attempts the account cannot serve.
+		if refusedForLimit {
+			if err := a.pauseForUsageLimit(ctx, limit); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := a.pauseForServerOverload(ctx, overload); err != nil {
 			return err
 		}
 	}
@@ -1207,6 +1225,19 @@ func refusedForUsageLimit(result backend.RunResult, err error) (backend.UsageLim
 	return *result.UsageLimit, true
 }
 
+// refusedForServerOverload reports an attempt the provider could not serve
+// because its own servers were transiently overloaded. An overload is reported
+// as the terminal error that ended the invocation rather than beside a result,
+// so in practice an attempt carrying one produced nothing to keep; the guard on
+// a finished attempt is kept regardless, so no backend can park a run that
+// already has its answer.
+func refusedForServerOverload(result backend.RunResult, err error) (backend.ServerOverload, bool) {
+	if result.ServerOverload == nil || (err == nil && !result.IsError) {
+		return backend.ServerOverload{}, false
+	}
+	return *result.ServerOverload, true
+}
+
 // providerStopReason names the harness's reason for stopping a provider
 // invocation, and reports whether it stopped one at all. Only these two process
 // statuses are the harness acting on time; every other way a process ends is the
@@ -1298,6 +1329,8 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	p := a.pipeline
 	a.state.UsageLimitKind = limit.Kind
 	a.outcome.UsageLimitKind = limit.Kind
+	a.state.PauseCause = runstate.PauseUsageLimit
+	a.outcome.PauseCause = runstate.PauseUsageLimit
 	maximum := p.Config.Execution.UsageLimitMaxPause
 	spent := a.state.UsageLimitPaused()
 	wait := limit.ResetsAt.Sub(p.clock().Now())
@@ -1357,6 +1390,50 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	return a.awaitRecordedUsageLimit(ctx)
 }
 
+// pauseForServerOverload records a transiently overloaded provider and waits it
+// out. It is the usage-limit pause with a different clock and nothing else: an
+// overload quotes no reset time and lifts in seconds rather than hours, so the
+// run sets its own short deadline instead of honoring one, and everything after
+// that is shared. The deadline is durable before the wait starts, the wait
+// spends the same aggregate budget, and a provider that stays overloaded walks
+// into the same configured maximum rather than reissuing forever.
+//
+// The provider CLI has already spent its own retries on this condition before it
+// reports it, so the overload the harness sees is one that outlasted them.
+func (a *activeRun) pauseForServerOverload(ctx context.Context, overload backend.ServerOverload) error {
+	p := a.pipeline
+	// An overload is the provider's own state rather than the account's, so
+	// nothing names a limit here. The kind is cleared for that reason: a limit
+	// left over from an earlier pause would describe this one as an exhaustion it
+	// is not.
+	a.state.UsageLimitKind = ""
+	a.outcome.UsageLimitKind = ""
+	a.state.PauseCause = runstate.PauseServerOverload
+	a.outcome.PauseCause = runstate.PauseServerOverload
+	maximum := p.Config.Execution.UsageLimitMaxPause
+	spent := a.state.UsageLimitPaused()
+	wait := p.Config.Execution.ServerOverloadPause.Duration()
+	if wait > maximum.Duration()-spent {
+		// The budget covers the run rather than one pause, exactly as it does for a
+		// limit. A provider that keeps refusing therefore reaches the maximum an
+		// operator configured instead of reissuing a short attempt forever.
+		reason := fmt.Sprintf("waiting %s to ask again would take this run past the %s maximum pause",
+			p.Config.Execution.ServerOverloadPause, maximum)
+		if spent > 0 {
+			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
+		}
+		return a.blockOnUsageLimit(ctx, reason)
+	}
+	resetsAt := p.clock().Now().Add(wait).UTC()
+	a.state.UsageLimitResetsAt = &resetsAt
+	a.state.UpdatedAt = p.clock().Now()
+	a.pausedAt = p.clock().Now()
+	if err := p.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record server overload pause: %w", err)
+	}
+	return a.awaitRecordedUsageLimit(ctx)
+}
+
 // awaitRecordedUsageLimit serves the deadline already in durable state. It is
 // the whole of a resumed pause and the tail of a fresh one, so a restart during
 // a wait takes exactly the path the interrupted process was on.
@@ -1370,11 +1447,15 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 // re-parks on whatever the provider now reports, which is the same price a wrong
 // release costs. This is also what unifies the two cases: a limit that named no
 // reset time already polled at this interval, and one that named a distant reset
-// now polls at it too, under one discipline rather than two.
+// now polls at it too, under one discipline rather than two. A server overload
+// falls out of the same rule without a case of its own: the deadline it sets is
+// already shorter than the probe interval, so the shorter of the two is the
+// whole of its wait.
 func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 	p := a.pipeline
 	deadline := a.state.UsageLimitResetsAt.UTC()
 	a.outcome.UsageLimitKind = a.state.UsageLimitKind
+	a.outcome.PauseCause = a.state.PauseCause
 	a.outcome.UsageLimitResetsAt = &deadline
 	// A committed wait that no longer fits the bound — because the bound was
 	// lowered, or because a differently configured process wrote it — is refused
@@ -1410,7 +1491,7 @@ func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 		// anything: an hour's worth of it would hold a process open for a whole
 		// six-hour deadline, half an hour at a time. The deadline is durable, so
 		// the run is left in flight for a later invocation to continue.
-		return usageLimitPause{kind: a.state.UsageLimitKind, resetsAt: deadline}
+		return usageLimitPause{cause: a.state.PauseCause, kind: a.state.UsageLimitKind, resetsAt: deadline}
 	default:
 		// What this probe will spend is committed before it is spent, so a process
 		// that dies mid-sleep cannot buy the run a fresh budget by forgetting it.
@@ -1503,6 +1584,10 @@ func (a *activeRun) clearUsageLimitPause() error {
 		return err
 	}
 	a.state.UsageLimitResetsAt = nil
+	// The cause goes with the deadline it described. What refused the run is kept
+	// on the outcome for the record, but a cause left in durable state beside no
+	// deadline would describe a wait this run is no longer taking.
+	a.state.PauseCause = ""
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		return fmt.Errorf("clear usage limit pause: %w", err)
@@ -1512,36 +1597,39 @@ func (a *activeRun) clearUsageLimitPause() error {
 }
 
 // blockOnUsageLimit ends a run the provider refused and whose wait the harness
-// will not take: no reset time, or one beyond the configured maximum. Guessing a
-// wait is the one thing that must not happen here, so what stopped the run is
-// recorded on the work item and a person decides what to do about it.
+// will not take: an unusable reset time, or a wait beyond the configured
+// maximum. Guessing a wait is the one thing that must not happen here, so what
+// stopped the run is recorded on the work item and a person decides what to do
+// about it. It serves both refusals, because what is undecidable about them is
+// the same thing — how long to wait — whichever one asked.
 func (a *activeRun) blockOnUsageLimit(ctx context.Context, reason string) error {
-	kind := nonEmpty(a.state.UsageLimitKind, "provider")
-	cause := fmt.Errorf("the %s usage limit is exhausted and this run cannot wait for it: %s", kind, reason)
+	cause := fmt.Errorf("this run was refused by %s and cannot wait for it: %s",
+		runstate.DescribePause(a.state.PauseCause, a.state.UsageLimitKind), reason)
 	// The blocker is what a person acts on, so it is recorded on its own deadline
 	// rather than on a context this run may have exhausted.
 	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderUsageLimitBlockerNotes(a.outcome, reason)); err != nil {
-		return errors.Join(cause, fmt.Errorf("record the exhausted usage limit as a blocker: %w", err))
+		return errors.Join(cause, fmt.Errorf("record the provider's refusal as a blocker: %w", err))
 	}
 	a.outcome.Blocked = true
 	return cause
 }
 
 // usageLimitPause reports a run that stopped short of finishing because it is
-// waiting out an exhausted provider usage limit for longer than this process
-// will stay open. It is an error only so that it travels the path a stopped step
-// already travels; it is deliberately not a failure, and the run it leaves
-// behind is still in flight and still resumable.
+// waiting out a provider that refused it for longer than this process will stay
+// open. It is an error only so that it travels the path a stopped step already
+// travels; it is deliberately not a failure, and the run it leaves behind is
+// still in flight and still resumable.
 type usageLimitPause struct {
+	cause    string
 	kind     string
 	resetsAt time.Time
 }
 
 func (e usageLimitPause) Error() string {
-	return fmt.Sprintf("paused until %s for an exhausted %s usage limit",
-		e.resetsAt.Format(time.RFC3339), nonEmpty(e.kind, "provider"))
+	return fmt.Sprintf("paused until %s for %s",
+		e.resetsAt.Format(time.RFC3339), runstate.DescribePause(e.cause, e.kind))
 }
 
 // pausedForUsageLimit reports a run waiting out an exhausted provider usage
@@ -1912,6 +2000,7 @@ func (a *activeRun) pause(paused usageLimitPause) (Outcome, error) {
 	a.outcome.Phase = a.state.Phase
 	a.outcome.Paused = true
 	a.outcome.UsageLimitKind = paused.kind
+	a.outcome.PauseCause = paused.cause
 	resetsAt := paused.resetsAt
 	a.outcome.UsageLimitResetsAt = &resetsAt
 	a.outcome.Branch = a.state.Branch
@@ -1928,7 +2017,7 @@ func (a *activeRun) pause(paused usageLimitPause) (Outcome, error) {
 		// written costs the run nothing: it stays claimed and resumable either
 		// way. It is still reported, because an operator watching the tracker
 		// would otherwise see the item simply stop moving.
-		return a.outcome, fmt.Errorf("record the usage limit pause on the work item: %w", err)
+		return a.outcome, fmt.Errorf("record the pause on the work item: %w", err)
 	}
 	return a.outcome, nil
 }
@@ -2000,6 +2089,7 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	// ending now. Clearing all three keeps the terminal record coherent; what
 	// stopped the run is still named by the recorded limit kind and by the failure.
 	a.state.UsageLimitResetsAt = nil
+	a.state.PauseCause = ""
 	a.state.ProviderStop = ""
 	a.state.DirectivePause = nil
 	a.state.Status = status
@@ -2154,6 +2244,14 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			}
 			continue
 		}
+		// A review the provider's own servers could not serve was never made
+		// either, and is waited out for the same reason and on the same budget.
+		if overload, refused := refusedReviewForServerOverload(reported.serverOverload, err); refused {
+			if pauseErr := a.pauseForServerOverload(ctx, overload); pauseErr != nil {
+				return "", pauseErr
+			}
+			continue
+		}
 		// A review the harness stopped on time was never made either, and the
 		// change waiting to be judged is untouched by it. Continuing that run
 		// costs one more review; failing it would cost the whole change.
@@ -2183,11 +2281,13 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 
 // providerEvidence is what an attempted invocation says about why it produced no
 // answer, separately from the error it returned: a usage limit the provider
-// refused it for, or the way its own process ended. Both decide whether the run
-// continues, and neither is legible from the error alone.
+// refused it for, an overload of the provider's own servers, or the way its own
+// process ended. Each decides whether the run continues, and none is legible
+// from the error alone.
 type providerEvidence struct {
-	usageLimit    *backend.UsageLimit
-	processStatus execution.ProcessStatus
+	usageLimit     *backend.UsageLimit
+	serverOverload *backend.ServerOverload
+	processStatus  execution.ProcessStatus
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of
@@ -2198,6 +2298,16 @@ func refusedReviewForUsageLimit(limit *backend.UsageLimit, err error) (backend.U
 		return backend.UsageLimit{}, false
 	}
 	return *limit, true
+}
+
+// refusedReviewForServerOverload reports a review the provider's own servers
+// could not serve, on the same rule: a review that still produced a verdict is
+// evidence rather than a refusal.
+func refusedReviewForServerOverload(overload *backend.ServerOverload, err error) (backend.ServerOverload, bool) {
+	if overload == nil || err == nil {
+		return backend.ServerOverload{}, false
+	}
+	return *overload, true
 }
 
 // attemptReview runs the configured independent reviewer once and records
@@ -2267,7 +2377,11 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		a.outcome.ReviewDecision = result.Decision
 	}
 	if reviewErr != nil {
-		return "", providerEvidence{usageLimit: result.UsageLimit, processStatus: result.ProcessStatus}, fmt.Errorf("independent review failed: %w", reviewErr)
+		return "", providerEvidence{
+			usageLimit:     result.UsageLimit,
+			serverOverload: result.ServerOverload,
+			processStatus:  result.ProcessStatus,
+		}, fmt.Errorf("independent review failed: %w", reviewErr)
 	}
 	// The reviewer reports the selector it actually ran with. Auditing that
 	// against configuration here keeps the recorded evidence a fact rather than
@@ -2719,12 +2833,12 @@ func renderRebaseConflictNotes(outcome Outcome, failure string) string {
 // between work in progress and work that needs them.
 func renderUsageLimitPauseNotes(outcome Outcome) string {
 	lines := []string{
-		"Yoyodyne paused this run: the provider reported an exhausted usage limit, so the run is waiting for it to reset rather than failing.",
+		"Yoyodyne paused this run: the provider refused the attempt without judging the work, so the run is waiting rather than failing.",
 		"Run: " + outcome.RunID,
-		"Usage limit: " + nonEmpty(outcome.UsageLimitKind, "unnamed"),
+		"Waiting out: " + runstate.DescribePause(outcome.PauseCause, outcome.UsageLimitKind),
 	}
 	if outcome.UsageLimitResetsAt != nil {
-		lines = append(lines, "Resets at: "+outcome.UsageLimitResetsAt.Format(time.RFC3339))
+		lines = append(lines, "Asks again by: "+outcome.UsageLimitResetsAt.Format(time.RFC3339))
 	}
 	lines = append(lines,
 		"Branch: "+outcome.Branch,
@@ -2735,7 +2849,7 @@ func renderUsageLimitPauseNotes(outcome Outcome) string {
 	}
 	lines = append(lines,
 		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
-		"Running Yoyodyne on this item again continues the same run; nothing needs to be restarted. The reset above bounds the wait rather than gating it: the run asks the provider again at its configured probe interval, and `yoyo resume` moves the next probe to now if that reset has stopped being true.",
+		"Running Yoyodyne on this item again continues the same run; nothing needs to be restarted. The time above bounds the wait rather than gating it: the run asks the provider again at its configured probe interval, and `yoyo resume` moves the next probe to now if what refused it has stopped being true.",
 	)
 	return strings.Join(lines, "\n")
 }
@@ -2799,16 +2913,16 @@ func renderDirectivePauseNotes(outcome Outcome, held directive.Directive) string
 	return strings.Join(lines, "\n")
 }
 
-// renderUsageLimitBlockerNotes describes a run stopped by a limit it could not
+// renderUsageLimitBlockerNotes describes a run stopped by a refusal it could not
 // wait out. It names the reason the wait was refused, because the alternative to
 // a stated deadline is a guessed one, and that is the decision being handed to a
 // person.
 func renderUsageLimitBlockerNotes(outcome Outcome, reason string) string {
 	lines := []string{
-		"Yoyodyne stopped this item: the provider reported an exhausted usage limit that this run could not wait out.",
+		"Yoyodyne stopped this item: the provider refused it in a way this run could not wait out.",
 		"Reason: " + reason,
 		"Run: " + outcome.RunID,
-		"Usage limit: " + nonEmpty(outcome.UsageLimitKind, "unnamed"),
+		"Refused by: " + runstate.DescribePause(outcome.PauseCause, outcome.UsageLimitKind),
 	}
 	if outcome.UsageLimitResetsAt != nil {
 		lines = append(lines, "Reported reset: "+outcome.UsageLimitResetsAt.Format(time.RFC3339))

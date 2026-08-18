@@ -189,6 +189,7 @@ func newResolution() *resolution {
 				UsageLimitMaxPause:                     defaultUsageLimitMaxPause,
 				UsageLimitInProcessPause:               defaultUsageLimitInProcessPause,
 				UsageLimitUnknownResetPause:            defaultUsageLimitUnknownResetPause,
+				ServerOverloadPause:                    defaultServerOverloadPause,
 			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
@@ -238,6 +239,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
 		setValue(r.origins, "execution.usage_limit_in_process_pause", execution.UsageLimitInProcessPause, &r.config.Execution.UsageLimitInProcessPause, applied.origin)
 		setValue(r.origins, "execution.usage_limit_unknown_reset_pause", execution.UsageLimitUnknownResetPause, &r.config.Execution.UsageLimitUnknownResetPause, applied.origin)
+		setValue(r.origins, "execution.server_overload_pause", execution.ServerOverloadPause, &r.config.Execution.ServerOverloadPause, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)

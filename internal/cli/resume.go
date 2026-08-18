@@ -1,9 +1,9 @@
 package cli
 
-// Releasing a run's usage-limit wait early.
+// Releasing a run's wait on the provider early.
 //
-// A run paused on an exhausted usage limit waits against a deadline the provider
-// named, and every other path honors that deadline strictly: a restart mid-wait
+// A run the provider refused waits against a recorded deadline, and every other
+// path honors that deadline strictly: a restart mid-wait
 // serves the rest of it rather than asking again, because retrying into a window
 // that is still closed is how a crash turns into a refusal loop. This is the one
 // verb that overrides it, and it overrides nothing else.
@@ -69,18 +69,18 @@ func resumeWorkItem(args []string, stdout, stderr io.Writer) int {
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, resumeOutput{Release: &released})
 	}
-	fmt.Fprintf(stdout, "released the %s usage limit wait on %s\n",
-		nonEmptyValue(waiting.UsageLimitKind, "provider"), waiting.WorkItemID)
+	fmt.Fprintf(stdout, "released the wait on %s for %s\n",
+		waiting.WorkItemID, runstate.DescribePause(waiting.PauseCause, waiting.UsageLimitKind))
 	fmt.Fprintf(stdout, "run: %s\n", waiting.RunID)
-	fmt.Fprintf(stdout, "recorded reset: %s\n", waiting.UsageLimitResetsAt.Format(time.RFC3339))
+	fmt.Fprintf(stdout, "recorded deadline: %s\n", waiting.UsageLimitResetsAt.Format(time.RFC3339))
 	fmt.Fprintln(stdout, "a process still serving that wait reissues the attempt within seconds; nothing was cancelled")
-	fmt.Fprintf(stdout, "if no process is serving it, `yoyo run %s` continues that run now instead of waiting for the reset\n",
+	fmt.Fprintf(stdout, "if no process is serving it, `yoyo run %s` continues that run now instead of waiting out the rest\n",
 		waiting.WorkItemID)
 	fmt.Fprintln(stdout, "if the provider still refuses, the run records what it reports and waits again")
 	return 0
 }
 
-// pausedRunFor finds the run waiting out a usage limit for one work item. It
+// pausedRunFor finds the run waiting out a provider refusal for one work item. It
 // refuses anything else by name rather than releasing it anyway: a release
 // recorded against a run that is not waiting would be acted on by whatever pause
 // that run takes next, which is a pause nobody has said anything about.
@@ -94,12 +94,12 @@ func pausedRunFor(store *runstate.Store, workItemID string) (runstate.State, err
 			continue
 		}
 		if candidate.UsageLimitResetsAt == nil {
-			return runstate.State{}, fmt.Errorf("run %s for %s is in flight but is not waiting on a usage limit; there is nothing to release",
+			return runstate.State{}, fmt.Errorf("run %s for %s is in flight but is not waiting on the provider; there is nothing to release",
 				candidate.RunID, workItemID)
 		}
 		return candidate, nil
 	}
-	return runstate.State{}, fmt.Errorf("no run is in flight for %s, so nothing is waiting on a usage limit", workItemID)
+	return runstate.State{}, fmt.Errorf("no run is in flight for %s, so nothing is waiting on the provider", workItemID)
 }
 
 func reportResumeError(stdout, stderr io.Writer, jsonOutput bool, err error) int {
@@ -116,10 +116,11 @@ func reportResumeError(stdout, stderr io.Writer, jsonOutput bool, err error) int
 func printResumeUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo resume [options] <beads-id>
 
-Release a run that is waiting out an exhausted provider usage limit, so it asks
-again now rather than at the reset the provider named. Use it when that reset
-has stopped being true — you raised the account's capacity, say — because the
-deadline is a claim about the provider and you are the one who can change it.
+Release a run that is waiting out a provider refusal — an exhausted usage limit
+or an overloaded server — so it asks again now rather than at its recorded
+deadline. Use it when that deadline has stopped being true — you raised the
+account's capacity, say, or the provider's status page went green — because it is
+a claim about the provider and you are the one who can find out otherwise.
 
 Nothing else bypasses a recorded deadline, and this bypasses nothing else. The
 run keeps its claim, its branch, its worktree, and its developer session; a
