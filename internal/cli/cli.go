@@ -37,6 +37,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		// A conversation is the one command that reads from the operator, so
 		// this is where the process's own input is bound to it.
 		return runChat(ctx, args[1:], os.Stdin, stdout, stderr)
+	case "artifact":
+		return runArtifact(args[1:], stdout, stderr)
 	case "invariant":
 		return runInvariant(args[1:], stdout, stderr)
 	case "run":
@@ -252,6 +254,7 @@ Commands:
   chat              talk with the product manager and steer the work from there
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
+  artifact          read the canonical artifacts and their identity metadata
   invariant         record, amend, retire, and read architectural invariants
   run               run one Beads work item in an isolated worktree
   review            review what a branch accumulated over a base, as one change

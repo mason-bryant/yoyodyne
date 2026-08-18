@@ -1,3 +1,15 @@
+---
+id: claude-code-default-backend
+kind: decision
+title: Claude Code is the default backend; Codex is an optional alternative
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the record itself is unchanged
+---
+
 # Claude Code is the default backend; Codex is an optional alternative
 
 **Status:** Accepted. Recorded by the operator, ratifiable by the architect when

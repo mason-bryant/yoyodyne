@@ -76,6 +76,8 @@ product:
   repository: .
   specifications: docs/product
   invariants: docs/decisions/invariants
+  designs: docs/designs
+  decisions: docs/decisions
 
 execution:
   max_concurrent_developers: 1
@@ -130,9 +132,10 @@ old file.
 Relative paths inside the configuration — `product.repository` and a non-`auto`
 `execution.worktree_root` — resolve against the project directory, which is the
 parent of `.yoyodyne`, not the `.yoyodyne` directory itself. `repository: .`
-therefore keeps meaning the project root. `product.specifications` and
-`product.invariants` are the exceptions, and deliberately: each names a directory
-*inside the repository being worked on*, so both resolve against
+therefore keeps meaning the project root. The artifact directories —
+`product.specifications`, `product.invariants`, `product.designs`, and
+`product.decisions` — are the exceptions, and deliberately: each names a directory
+*inside the repository being worked on*, so all four resolve against
 `product.repository` and are refused if they leave it.
 
 ## Precedence
@@ -151,7 +154,8 @@ Up to three layers produce the effective configuration, later ones winning:
 
 1. **Harness defaults.** Values the harness fills in when nothing else supplies
    them: `product.specifications` (`docs/product`), `product.invariants`
-   (`docs/decisions/invariants`), `execution.max_concurrent_developers` (1),
+   (`docs/decisions/invariants`), `product.designs` (`docs/designs`),
+   `product.decisions` (`docs/decisions`), `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -207,9 +211,12 @@ review is not a change anybody can trust.
 ```
 
 The directory is walked to any depth, and every `.md` file inside it is a
-specification. Nothing else about it is prescribed: the harness does not yet
-carry artifact IDs or lifecycle metadata, so a specification is prose in this
-directory and the introduction-then-goals shape is the whole contract.
+specification. Its prose is checked for the introduction-then-goals shape above,
+and its identity — the frontmatter naming its id, kind, status, and what it
+supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
+The two are read by different things and reported differently, so a
+specification with a malformed id is still read as intent, and one with no goals
+still has an id everything downstream can refer to it by.
 
 That shape is checked rather than merely described, because the goals are what
 downstream work is kept consistent with and goals with nothing behind them are
@@ -245,6 +252,105 @@ do that. Reconciling accumulated documentation against the code belongs to a
 role that reads the code, and the harness does not have one yet. Point
 `specifications` at a wider directory if you would rather have the breadth than
 the authority; the confinement rule is the only limit on where it points.
+
+## Artifact identity and metadata
+
+The canonical documents upstream of a work item — the brief, the goals, the
+designs and specifications, and the decision records — each carry a stable
+identity in frontmatter, so something downstream can refer to one durably and
+the relationship can be checked rather than believed. They live in three
+configured homes:
+
+```yaml
+product:
+  id: example
+  repository: .
+  specifications: docs/product     # the brief and the goals: the defaults, so
+  designs: docs/designs            # nothing to write down if you use them
+  decisions: docs/decisions
+```
+
+Each home is walked to any depth, and every `.md` file inside one is an
+artifact. Two names are not: a `README.md`, which is a directory index rather
+than intent anything refers to, and everything inside the invariants directory,
+which sits inside the decisions home by default and carries
+[its own identity scheme](#architectural-invariants). A home that does not exist
+is not an error — a project that has not written its designs down yet records no
+design artifacts.
+
+The metadata is the model the invariants already use, deliberately rather than a
+second scheme beside it: **the file name is the id**, a frontmatter id that
+disagrees with it is refused, the status is stated rather than inferred, and
+every change appends to a revision log.
+
+```markdown
+---
+id: v1-goals
+kind: goals
+title: V1 goals
+supports:
+    - brief
+status: active
+revisions:
+    - action: created
+      by: product-manager
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema
+---
+
+# V1 goals
+
+The document itself, unchanged by any of the above.
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The stable identity, and the file's own name: `v1-goals` lives in `v1-goals.md`. Lower-case letters, digits, and hyphens. |
+| `kind` | `brief`, `goals`, `non-goals`, `design`, `specification`, or `decision`. |
+| `title` | One line naming what the document is. |
+| `supports` | The artifacts upstream of this one, by id: the goal a design serves, the brief a goal serves. Optional — the brief is the root and supports nothing. |
+| `status` | `draft` (written, not yet in force), `active` (what the product currently intends), `superseded` (replaced by a later artifact), or `retired` (stopped applying, not replaced). |
+| `revisions` | Append-only: what changed (`created`, `amended`, `superseded`, `retired`), the role it was recorded under, when, and why. At least the creation is required. |
+
+Everything below the frontmatter is the document, and nothing about it is
+prescribed here: a brief, a goals document, and a decision record have nothing in
+common structurally. A specification's own prose contract is the
+[introduction-then-goals shape](#product-specifications), which is checked
+separately.
+
+Status and revisions have to agree, the same way an invariant's retirement does.
+A `superseded` or `retired` artifact must record the revision that ended it, and
+one that is still in force cannot record one — an artifact whose status says it
+was replaced while nothing says when or why records no decision at all. Which
+artifact superseded it is not part of the schema yet; the revision's reason says
+so in prose.
+
+A file in an artifact home that cannot be read as an artifact is **refused and
+named**, which is how an invariant that cannot be read is handled and the
+opposite of how a malformed specification is: a document with no usable identity
+cannot be referred to, and admitting it under a guessed id would be worse than
+saying it is not there. That covers a file with no frontmatter, an unknown or
+mistyped field, a status or kind the harness does not know, a missing revision
+log, and an id that disagrees with the file name. Two files claiming one id
+refuse **both** — choosing between them would hand whatever refers to that id a
+document nobody decided on — and each refusal names the other file.
+
+```sh
+yoyo artifact list                  # the recorded artifacts; what is not one goes to stderr
+yoyo artifact list --kind decision  # one kind
+yoyo artifact show v1-goals         # one artifact and its revisions
+```
+
+There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
+artifact's content is written by the role that owns it, and its frontmatter is
+edited in the same file at the same time. What the harness owns is refusing a
+document whose identity is missing, malformed, or claimed by something else.
+
+What identity does not yet buy is validation of the relationships it makes
+expressible. `supports` is checked as a reference — an id shaped like one,
+naming something other than the artifact itself — and not as one that resolves.
+An artifact naming an upstream that does not exist, and a goal naming no
+upstream at all, both load today and are reported by nothing.
 
 ## Architectural invariants
 
@@ -627,7 +733,9 @@ These are all errors, reported before any work is claimed:
 - an `execution.remote` that is empty or is not a plain remote name, since it
   reaches a `git push` command line;
 - a `product.specifications` that is empty, absolute, or climbs out of the
-  repository, since it decides what the product manager reads;
+  repository, since it decides what the product manager reads; and the same of
+  `product.invariants`, `product.designs`, and `product.decisions`, since they
+  decide which documents the harness treats as canonical artifacts;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a role and backend combination the backend does not support, such as an

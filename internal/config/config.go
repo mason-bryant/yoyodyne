@@ -37,6 +37,19 @@ const DefaultSpecifications = "docs/product"
 // yet rather than a broken configuration.
 const DefaultInvariants = "docs/decisions/invariants"
 
+// DefaultDesigns and DefaultDecisions are the other two homes canonical
+// artifacts live in when nothing names another directory. Together with the
+// specifications directory they are what the harness reads artifact identity
+// and metadata from, and they follow the recommended layout for the same reason
+// the invariants default does: a project that followed it writes nothing down,
+// and a project with no such directory simply records no artifacts of that kind
+// yet. The decisions home contains the invariants one by default, and the
+// invariants keep their own identity scheme rather than being read twice.
+const (
+	DefaultDesigns   = "docs/designs"
+	DefaultDecisions = "docs/decisions"
+)
+
 type Config struct {
 	Version int `yaml:"version" json:"version"`
 	// Extends names the built-in bundle this configuration inherits from, and
@@ -66,6 +79,14 @@ type Product struct {
 	// reason the specifications are: a path that escaped it would put arbitrary
 	// text in front of every developer as a constraint on their change.
 	Invariants string `yaml:"invariants" json:"invariants"`
+	// Designs and Decisions are the architect's two artifact homes, relative to
+	// the repository root: the designs and specifications that serve the goals,
+	// and the decision records the invariants are extracted from. With
+	// Specifications they are the directories the harness reads canonical
+	// artifact identity and metadata from, so they are confined to the
+	// repository for the same reason the others are.
+	Designs   string `yaml:"designs" json:"designs"`
+	Decisions string `yaml:"decisions" json:"decisions"`
 }
 
 type Execution struct {
@@ -193,6 +214,12 @@ func (c Config) Validate() error {
 		problems = append(problems, err.Error())
 	}
 	if err := validateRepositoryDirectory("product invariants", c.Product.Invariants); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if err := validateRepositoryDirectory("product designs", c.Product.Designs); err != nil {
+		problems = append(problems, err.Error())
+	}
+	if err := validateRepositoryDirectory("product decisions", c.Product.Decisions); err != nil {
 		problems = append(problems, err.Error())
 	}
 	if c.Execution.MaxConcurrentDevelopers < 1 {

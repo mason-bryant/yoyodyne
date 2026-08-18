@@ -69,6 +69,8 @@ func newBranchReviewer(t *testing.T, repository string, provider *fakeBackend) (
 			ID: "yoyodyne", RepositoryID: "yoyodyne", Repository: repository,
 			Specifications: config.DefaultSpecifications,
 			Invariants:     config.DefaultInvariants,
+			Designs:        config.DefaultDesigns,
+			Decisions:      config.DefaultDecisions,
 		},
 		Agents: map[string]config.AgentConfig{
 			"reviewer": {Role: domain.RoleReviewer, Backend: domain.BackendClaudeCode, Model: testReviewerModel, Instances: 1},

@@ -1,3 +1,15 @@
+---
+id: beads-durable-workflow-store
+kind: decision
+title: Beads is the durable workflow store
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the record itself is unchanged
+---
+
 # Beads is the durable workflow store
 
 **Status:** Accepted. Recorded by the operator, ratifiable by the architect when

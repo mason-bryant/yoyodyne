@@ -1,3 +1,17 @@
+---
+id: v1-non-goals
+kind: non-goals
+title: V1 non-goals
+supports:
+    - v1-goals
+status: active
+revisions:
+    - action: created
+      by: product-manager
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the prose is unchanged
+---
+
 # V1 non-goals
 
 These are the things Yoyodyne's first version deliberately does not do. They

@@ -2377,6 +2377,8 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			ID: "yoyodyne", RepositoryID: "yoyodyne", Repository: repository,
 			Specifications: config.DefaultSpecifications,
 			Invariants:     config.DefaultInvariants,
+			Designs:        config.DefaultDesigns,
+			Decisions:      config.DefaultDecisions,
 		},
 		Execution: config.Execution{
 			MaxConcurrentDevelopers:     1,

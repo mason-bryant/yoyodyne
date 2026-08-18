@@ -153,6 +153,14 @@ product:
   # work item into the developer's context and the reviewer's evidence. A
   # project with no such directory simply has no invariants yet.
   invariants: %s
+  # The architect's two artifact homes: designs and specifications, and the
+  # decision records the invariants above are extracted from. Every Markdown
+  # file in these directories and in the specifications directory carries its
+  # identity and metadata in frontmatter -- id, kind, status, what it supports,
+  # and a revision log -- so downstream work can refer to one durably. A
+  # directory that does not exist simply records no artifacts of that kind yet.
+  designs: %s
+  decisions: %s
 
 execution:
   max_concurrent_developers: %d
@@ -184,6 +192,8 @@ approvals:
 `,
 		effective.Product.Specifications,
 		effective.Product.Invariants,
+		effective.Product.Designs,
+		effective.Product.Decisions,
 		effective.Execution.MaxConcurrentDevelopers,
 		effective.Execution.RepairAttemptsBeforeReplan,
 		effective.Execution.WorktreeRoot,
