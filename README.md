@@ -467,11 +467,14 @@ is for, and the goals that serve it — naming each with roughly how much prose 
 carries, and calling one that carries almost none a placeholder. That is what
 makes the first conversation on a fresh repository the intended opening move
 rather than a confusing silence: with no brief and no goals to read, the product
-manager says so, asks what only you can answer — what this is, who it is for,
-what finished looks like — and offers to draft both from your answers. It is a
-question and not a gate. Nothing is blocked, nothing is written, later means
-later, and a repository whose goals are already written gets no such prompt. The
-asking is persona guidance, so a project that wants a different opening
+manager says so, offers to draft both from your answers, and starts asking what
+only you can answer — what this is, who it is for, what finished looks like. It
+asks them one at a time. The opening reply says there are three, says which order
+they come in and why that order, and then asks the first, because a paragraph
+holding three questions gets one answer and loses the other two. It is a question
+and not a gate. Nothing is blocked, nothing is written, later means later, and a
+repository whose goals are already written gets no such prompt. The asking is
+persona guidance, so a project that wants a different opening
 [replaces it](docs/configuration.md#personas) like any other part of the
 persona.
 

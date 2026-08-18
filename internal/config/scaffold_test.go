@@ -311,6 +311,35 @@ func TestScaffoldKeepsThePlaceholderWhenNothingWasDetected(t *testing.T) {
 	}
 }
 
+// A new project's first contact with Yoyodyne is the product manager asking
+// what the product is, so the briefing discipline that opening obeys has to
+// survive into the generated project rather than staying in the bundle. What
+// init writes is the bundle's own persona text, so asserting on the generated
+// project asserts on the copy shipped inside the executable.
+func TestScaffoldCarriesTheBriefingDiscipline(t *testing.T) {
+	t.Parallel()
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	var persona string
+	for _, agent := range generated.Agents {
+		if agent.Role == domain.RoleProductManager {
+			persona = agent.Persona.Text
+		}
+	}
+	if persona == "" {
+		t.Fatal("the generated project has no product-manager persona")
+	}
+	for _, want := range []string{
+		"Ask exactly one question per reply",
+		"open with how many there are",
+		"say there are three, say the order you will ask them in",
+	} {
+		if !strings.Contains(persona, want) {
+			t.Errorf("generated product-manager persona does not carry %q", want)
+		}
+	}
+}
+
 func TestScaffoldRefusesAProductItCannotName(t *testing.T) {
 	t.Parallel()
 
