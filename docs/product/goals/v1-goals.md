@@ -10,6 +10,10 @@ revisions:
       by: product-manager
       at: 2026-08-17T00:00:00Z
       reason: identity added with the artifact metadata schema; the prose is unchanged
+    - action: amended
+      by: product-manager
+      at: 2026-08-18T00:00:00Z
+      reason: added the legibility goal, drafted by the product manager and approved by the operator verbatim; its statement was rejoined onto one line so the goal is recorded whole
 ---
 
 # V1 goals
@@ -61,9 +65,7 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
   *Supports: safety invariants hold whatever the configuration says.*
 - Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
   *Supports: the human's attention goes only where it is needed.*
-- The harness's surfaces read clearly: boundaries between topics and speakers
-  are visible, important findings stand out, and every distinction survives a
-  terminal that cannot render emphasis.
+- The harness's surfaces read clearly: boundaries between topics and speakers are visible, important findings stand out, and every distinction survives a terminal that cannot render emphasis.
   *Supports: the human's attention goes only where it is needed.*
 - The operator can see what the harness spends on their behalf: provider-reported cost, per work item, per run, and in total.
   *Supports: the operator can see what the system does on their behalf.*
