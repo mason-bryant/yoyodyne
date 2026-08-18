@@ -14,6 +14,10 @@ revisions:
       by: product-manager
       at: 2026-08-18T00:00:00Z
       reason: added the legibility goal, drafted by the product manager and approved by the operator verbatim; its statement was rejoined onto one line so the goal is recorded whole
+    - action: amended
+      by: product-manager
+      at: 2026-08-18T00:00:00Z
+      reason: added the adoption goal, drafted by the product manager and approved by the operator with one amendment - the readme alone, not the documentation, is what a newcomer needs; the intro now dates each new goal honestly
 ---
 
 # V1 goals
@@ -32,12 +36,15 @@ What v1 deliberately does not do is stated separately in
 Eight of these goals were agreed as part of the v1 design and stated in
 [the v1 harness design](../../v1-harness-design.md) until they were moved here;
 their wording is unchanged from that document, and what has changed is that each
-now names its link upstream. Three are new, and all were added when the brief was
-written and the backlog was checked against it. The goal on independent review
-was added because the brief requires that nothing lands unreviewed by someone
-other than its author, and no v1 goal reached that. The goal on cost was added
-because tracked work on reporting what the harness spends traced to no goal at
-all.
+now names its link upstream. Four are new. The goal on independent review was
+added when the brief was written and the backlog was checked against it, because
+the brief requires that nothing lands unreviewed by someone other than its
+author, and no v1 goal reached that. The goal on cost was added at the same
+time, because tracked work on reporting what the harness spends traced to no
+goal at all. The goal on legibility was added when the operator asked that clear
+reading be a stated outcome rather than a habit. The goal on adoption was added
+because tracked work on the install path traced to no goal that named a
+newcomer.
 
 Four entries that were not outcomes have left this list. Beads as the durable
 workflow store, repository Markdown as the human-readable source of truth, and
@@ -70,4 +77,6 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
 - The operator can see what the harness spends on their behalf: provider-reported cost, per work item, per run, and in total.
   *Supports: the operator can see what the system does on their behalf.*
 - Support development in any language. Yoyodyne is written in Go, but the projects it manages are not assumed to be: verification is whatever commands the project declares, and no language, build system, or test framework is built into the harness.
+  *Supports: it works on other people's projects.*
+- A newcomer can go from the documented install to a working first run on their own repository using the readme alone.
   *Supports: it works on other people's projects.*
