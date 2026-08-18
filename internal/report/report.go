@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/fenced"
 )
 
 // SchemaVersion is versioned independently of run and conversation state. A
@@ -189,66 +190,21 @@ func (r Report) Validate() error {
 // to read as prose. A report never costs its own reply, so the error is for
 // saying the report was lost rather than for abandoning anything.
 func Extract(reply string) (string, []Entry, error) {
-	before, rest, payload, found, err := splitBlock(reply)
+	// A second report block is refused by the split, because a reply reports what
+	// it has to report in one place and reading only the first would silently
+	// drop the rest.
+	block, err := fenced.Split(reply, Fence, "report")
 	if err != nil {
-		return before, nil, err
+		return block.Before, nil, err
 	}
-	if !found {
-		return strings.TrimSpace(reply), nil, nil
+	if !block.Found {
+		return block.Before, nil, nil
 	}
-	entries, err := Decode(payload)
+	entries, err := Decode(block.Payload)
 	if err != nil {
-		return before, nil, err
+		return block.Before, nil, err
 	}
-	return rest, entries, nil
-}
-
-// splitBlock takes the reply apart around its one report block: what came
-// before the block, everything but the block, and the payload inside it. A
-// second block is refused, because a reply reports what it has to report in one
-// place and reading only the first would silently drop the rest.
-func splitBlock(reply string) (before string, rest string, payload string, found bool, err error) {
-	opensAt := indexFence(reply)
-	if opensAt < 0 {
-		return strings.TrimSpace(reply), "", "", false, nil
-	}
-	before = strings.TrimSpace(reply[:opensAt])
-	tail := reply[opensAt+len(Fence):]
-	if line := tail[:lineEnd(tail)]; strings.TrimSpace(line) != "" {
-		return before, "", "", false, fmt.Errorf("report block opens with trailing text %q", strings.TrimSpace(line))
-	}
-	tail = tail[lineEnd(tail):]
-	closesAt := strings.Index(tail, "\n```")
-	if closesAt < 0 {
-		return before, "", "", false, errors.New("report block is not closed")
-	}
-	// Whatever shares the closing fence's line belongs to the fence; the reply
-	// resumes on the line after it.
-	after := tail[closesAt+len("\n```"):]
-	after = after[lineEnd(after):]
-	if indexFence(after) >= 0 {
-		return before, "", "", false, errors.New("a reply carries at most one report block")
-	}
-	return before, strings.TrimSpace(reply[:opensAt] + "\n" + after), tail[:closesAt], true, nil
-}
-
-// indexFence finds a fence that opens its own line, so a fence quoted inside
-// prose is text rather than a block boundary.
-func indexFence(text string) int {
-	if strings.HasPrefix(text, Fence) {
-		return 0
-	}
-	if at := strings.Index(text, "\n"+Fence); at >= 0 {
-		return at + 1
-	}
-	return -1
-}
-
-func lineEnd(text string) int {
-	if at := strings.IndexByte(text, '\n'); at >= 0 {
-		return at + 1
-	}
-	return len(text)
+	return block.Rest, entries, nil
 }
 
 // document is the payload shape of the fenced block. It always carries a list,

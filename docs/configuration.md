@@ -376,8 +376,8 @@ weaken.
 
 | Kind | Owner | Every other role |
 | --- | --- | --- |
-| `brief`, `goals`, `non-goals` | Product manager | Asks questions and proposes amendments |
-| `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and proposes amendments |
+| `brief`, `goals`, `non-goals` | Product manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
+| `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 
 The development manager appears in neither row, because it owns no repository
 document: its decomposition is Beads work rather than Markdown. Nothing here
@@ -412,6 +412,63 @@ What is still not enforced anywhere is an agent with an editor in its worktree
 changing a document without recording that it did — the same gap the design
 records for pushing and merging, where the contract in the prompt and the
 reviewer are what stand in the way.
+
+### Proposing a change to a document you do not own
+
+A role that may not edit a document and has no way to say it is wrong has two
+moves left, and both are bad: build against intent it believes is wrong, or edit
+the document anyway. So there is a third: one block, in the contract, carried by
+every role that has it. Today that is the developer, which is the role that meets
+the boundary while implementing against a document — a developer that finds the
+design contradicts the goal it serves ends its reply with it:
+
+````text
+```yoyodyne-amendment
+{"proposals":[{"artifact":"v1-design","change":"say which of the two orderings holds","why":"the work item cannot be implemented against both"}]}
+```
+````
+
+The harness resolves the document to its kind and its kind to its owner, so who
+is being asked follows from the document rather than from anything the agent
+claims. A proposal naming a document nobody records is refused where the
+proposer can still be told, because there is no owner to decide a change to a
+document that does not exist, and a proposal from the role that already owns the
+document is refused too: that role amends it.
+
+**Nothing an unapproved proposal contains reaches the document, and neither does
+anything an approved one contains.** A proposal carries what should become true
+and why, never replacement prose — the size bound on it is what keeps it an
+argument rather than an edit waiting to be pasted. Approving records that the
+owner's authority came down in favour of the change; the change itself is then
+made by the owner, in the document, in a revision recorded under that role.
+
+Like a report, a proposal costs its run nothing: the run integrates exactly as it
+would have, and a proposal the harness cannot read or cannot keep is named on the
+outcome rather than failing the attempt it arrived with. It is durable in the
+same place and for the same reason — the run that argued the design was wrong is
+finished and cleaned up long before anybody decides what to do about it.
+
+```sh
+yoyo amendment list                       # what is waiting to be decided
+yoyo amendment list --owner architect     # one owner's queue
+yoyo amendment show <id>                  # one proposal and what became of it
+yoyo amendment approve <id> --reason ...  # record the change as authorized
+yoyo amendment decline <id> --reason ...  # turn it down, keeping why
+```
+
+The owning role decides its own documents where it runs: proposals against the
+brief and the goals are carried into the product manager's conversation, where it
+argues for or against them. The architect agent does not execute yet, so you
+decide in its stead — the same override path `yoyo invariant` documents — and the
+record says you exercised its authority rather than that the architect answered.
+A decline keeps the reason it was turned down with, because a proposal refused
+silently is one the same argument arrives to make again.
+
+The reviewer is deliberately not given this block. What it finds wrong with a
+change is a finding, which decides whether the change is repaired; a reviewer
+that could also propose amendments would have two ways to say one thing. The
+product manager raises what it cannot place under a goal as a concern, which
+stops and asks you, for the same reason.
 
 ### Traceability: references and orphans
 

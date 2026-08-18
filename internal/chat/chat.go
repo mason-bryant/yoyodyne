@@ -115,6 +115,12 @@ type Options struct {
 	// process and in any other. It is optional like the rest, and a conversation
 	// without one says so rather than appearing to enforce something.
 	Directives Directives
+	// Amendments is the durable log of changes other roles have proposed to
+	// documents they do not own. It is read here so the ones this role owns reach
+	// it: an owner that never hears the argument cannot answer it. It is optional
+	// like the rest, and a conversation without one carries no proposals rather
+	// than reporting that none are waiting.
+	Amendments Amendments
 	// Goals are the goals the repository records, which is what work admitted
 	// here has to name. It is what makes traceability something the harness holds
 	// rather than something the product manager asserts: a goal named on an item
@@ -176,6 +182,14 @@ type Session struct {
 	// is durable in the conversation's event log; this is the pending set a
 	// decision can still name.
 	proposals []*proposalRecord
+	// deliveredAmendments is the proposals against this role's documents that
+	// this conversation has already carried into a turn. A pending proposal stays
+	// pending until somebody decides it, so without this the same list would be
+	// delivered every turn for as long as it went undecided. It is the durable
+	// record on the conversation read into a set to look up, so a conversation
+	// resumed by a later process does not deliver again what an earlier one
+	// already said.
+	deliveredAmendments map[string]bool
 	// concerns is what the product manager has raised instead of proposing, and
 	// whether the operator has answered it. It is kept the same way and for the
 	// same reason: a question nobody answered is a loose end, not silence.
@@ -358,13 +372,16 @@ func Open(options Options) (*Session, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
-	session := &Session{options: options}
+	session := &Session{options: options, deliveredAmendments: map[string]bool{}}
 	existing, err := options.Store.Load(domain.RoleProductManager)
 	switch {
 	case err == nil:
 		if !options.Fresh && existing.ProviderSessionID != "" {
 			session.state = existing
 			session.resumed = true
+			for _, id := range existing.DeliveredAmendmentIDs {
+				session.deliveredAmendments[id] = true
+			}
 			return session, nil
 		}
 	case errors.Is(err, runstate.ErrNoConversation):
@@ -1412,6 +1429,10 @@ func (s *Session) turnPrompt(message string) string {
 		prompt.WriteString("\n")
 	}
 	prompt.WriteString(s.renderNotices())
+	// What other roles have proposed changing in this role's own documents, which
+	// is the one part of the context addressed to it as an owner rather than as
+	// the product manager.
+	prompt.WriteString(s.renderProposedAmendments())
 	prompt.WriteString(s.state.PendingTrackerResults)
 	prompt.WriteString("# Operator message\n\n")
 	prompt.WriteString(message)
