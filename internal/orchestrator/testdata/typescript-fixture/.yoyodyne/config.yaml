@@ -1,0 +1,25 @@
+# Configuration for a TypeScript project the harness is pointed at. It is the
+# shape a project that inherits the built-in bundle actually has: a version, the
+# product it is, the approvals it opted in to, and its own checks.
+#
+# The checks are the whole of the harness's contact with this project's
+# toolchain. They are shell scripts in the project itself rather than `npx tsc`
+# or `npm test`, because what they are here to demonstrate is that the harness
+# needs no toolchain at all — a fixture that needed Node.js installed would be
+# verifying the test image instead.
+version: 1
+extends: builtin:v1
+
+product:
+  id: typescript-fixture
+  repository: .
+
+# The failing path is the one that gates integration, so this project reviews
+# and integrates automatically: a check that failed has to stop a run that would
+# otherwise have gone all the way through.
+approvals:
+  integration: automatic
+
+checks:
+  - sh scripts/check-exports.sh
+  - sh scripts/check-indentation.sh
