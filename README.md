@@ -50,6 +50,7 @@ work normally happens.
 
 ```sh
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+yoyo version           # not found? see Install for the one PATH line
 cd path/to/your/project
 bd init && yoyo init   # then review the checks it proposed in .yoyodyne/config.yaml
 yoyo chat
@@ -87,8 +88,23 @@ repository.
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
 ```
 
-That writes `yoyo` into `$(go env GOPATH)/bin`, which needs to be on your
-`PATH`. Replacing `@latest` with a version — `@v1.2.3` — pins that release
+That writes `yoyo` into `$GOBIN` if you have set one, and otherwise into
+`$(go env GOPATH)/bin`, which is `~/go/bin` unless you moved it. `go install`
+does not put that directory on your `PATH`, so an install that worked can still
+leave `which yoyo` finding nothing; add it once, in the shell you use:
+
+```sh
+echo 'export PATH="$PATH:$(go env GOPATH)/bin"' >> ~/.zshrc   # bash: ~/.bashrc
+```
+
+Then open a new shell and check what you got:
+
+```sh
+yoyo version   # v0.1.0, the release tag it was installed at
+```
+
+A tag rather than `dev` is also how you know the binary knows which release it
+came from. Replacing `@latest` with a version — `@v1.2.3` — pins that release
 rather than following the newest one.
 
 **From a release download**, if you would rather not have Go at all. Each tag on
@@ -104,7 +120,11 @@ curl -fsSLO "$base/yoyo_${tag}_${platform}.tar.gz"
 curl -fsSL "$base/checksums.txt" | shasum -a 256 -c --ignore-missing
 tar -xzf "yoyo_${tag}_${platform}.tar.gz"
 install -m 0755 yoyo /usr/local/bin/yoyo
+yoyo version   # the tag you downloaded
 ```
+
+`/usr/local/bin` is on most `PATH`s already; install somewhere else and the same
+`PATH` line above applies, with that directory in place of `$(go env GOPATH)/bin`.
 
 **From source**, which is also how you work on yoyo itself:
 
@@ -166,10 +186,13 @@ passing over it.
 
 ```sh
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+yoyo version
 ```
 
-[Install](#install) above has the release download and the from-source paths,
-and says which platforms are tested. Then change into your own project, since
+If `yoyo version` prints a tag you have it; if the command is not found, the
+install directory is not on your `PATH`, and [Install](#install) above has the
+one line that fixes that, along with the release download and the from-source
+paths and which platforms are tested. Then change into your own project, since
 everything after this runs there:
 
 ```sh
