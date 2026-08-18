@@ -209,8 +209,20 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	}
 	// The persona is guidance underneath the contract, never a replacement for
 	// it: the contract is what the conversation actually sends first.
-	if !strings.HasPrefix(chat.SystemPrompt(agent.Persona.Text), "You are the product manager for this product") {
+	prompt := chat.SystemPrompt(agent.Persona.Text)
+	if !strings.HasPrefix(prompt, "You are the product manager for this product") {
 		t.Fatal("the conversation prompt does not begin with the immutable contract")
+	}
+	// How the product manager briefs the operator -- one question a reply, and a
+	// count with a named ordering when it holds several -- is persona guidance,
+	// so it reaches the model only by riding under the contract in this prompt.
+	for _, want := range []string{
+		"Ask exactly one question per reply",
+		"open with how many there are",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("the conversation prompt does not carry %q", want)
+		}
 	}
 }
 
