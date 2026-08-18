@@ -180,7 +180,11 @@ func TestClientRefusesAnEditItCannotApply(t *testing.T) {
 func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	t.Parallel()
 
-	listed := `[{"id":"yoyodyne-1","title":"First","status":"open","priority":1,"issue_type":"task"},
+	// Notes ride along on a listing: every attribution-reporting path reads
+	// them off List results, so a List that dropped them would report the
+	// whole queue as naming no goal. The real bd emits notes in list --json;
+	// this pins that the client keeps them.
+	listed := `[{"id":"yoyodyne-1","title":"First","status":"open","priority":1,"issue_type":"task","notes":"Goal: maintain the traceable chain."},
 	            {"id":"yoyodyne-2","title":"Second","status":"open","priority":2,"issue_type":"feature"}]`
 	runner := &fakeRunner{responses: []string{listed, `[]`}}
 	client := Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}
@@ -191,6 +195,9 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].ID != "yoyodyne-1" || items[1].IssueType != "feature" {
 		t.Fatalf("List() = %#v", items)
+	}
+	if items[0].Notes != "Goal: maintain the traceable chain." {
+		t.Fatalf("List() dropped notes: %#v", items[0])
 	}
 	empty, err := client.List(context.Background(), "")
 	if err != nil {
