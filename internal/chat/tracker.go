@@ -21,6 +21,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 // trackerFence opens the one block a reply may carry tracker actions in. It is
@@ -97,8 +98,14 @@ const (
 	// listing is the one thing in the harness that must not be decided from a
 	// stale one: on 2026-08-18 the backlog was reordered around an item that had
 	// been closed for hours.
-	actionSurvey       = "survey"
-	actionCreate       = "create"
+	actionSurvey = "survey"
+	actionCreate = "create"
+	// actionAttribute records the goal an item already in the backlog serves. It
+	// exists because the goal a creation names is written onto the item as it is
+	// admitted and is never rewritten afterwards, so work admitted before goals
+	// were checked has no other way to acquire one: the attribution is appended,
+	// and the newest is the item's current claim.
+	actionAttribute    = "attribute"
 	actionUpdate       = "update"
 	actionReparent     = "reparent"
 	actionReprioritize = "reprioritize"
@@ -116,6 +123,7 @@ var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
 	actionCreate:       {"title", "description", "goal", "parent", "priority"},
+	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
@@ -128,7 +136,7 @@ var trackerActionArguments = map[string][]string{
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
-	actionRead, actionSurvey, actionCreate, actionUpdate, actionReparent,
+	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
 	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire,
 }
 
@@ -142,10 +150,12 @@ type TrackerAction struct {
 	ID          string `json:"id,omitempty"`
 	Title       string `json:"title,omitempty"`
 	Description string `json:"description,omitempty"`
-	// Goal is the goal admitted work serves. It is required on a creation and
-	// taken by nothing else: admitting work is how work reaches the queue, so it
-	// is where the queue's traceability to the goals is actually held rather than
-	// asserted.
+	// Goal is the goal the work serves, in the words the goals document states
+	// it in. It is required on a creation, because admitting work is how work
+	// reaches the queue and so is where traceability to the goals is actually
+	// held rather than asserted, and on an attribution, which is how work
+	// admitted before that check existed acquires one. Nothing else takes it: an
+	// item's goal is added to, never rewritten.
 	Goal string `json:"goal,omitempty"`
 	// Parent is a pointer so that detaching an item is expressible: an empty
 	// parent removes the one the tracker records, and an absent one leaves it
@@ -361,11 +371,10 @@ func (a TrackerAction) validateArguments() []error {
 		problems = append(problems,
 			boundTrackerText("title", a.Title, maxTrackerTitleBytes, true),
 			boundTrackerText("description", a.Description, maxTrackerTextBytes, true),
-			boundTrackerText("goal", a.Goal, maxTrackerTitleBytes, true),
 		)
-		if strings.ContainsAny(a.Goal, "\r\n") {
-			problems = append(problems, errors.New("goal cannot span lines"))
-		}
+		problems = append(problems, a.goalProblems()...)
+	case actionAttribute:
+		problems = append(problems, a.goalProblems()...)
 	case actionUpdate:
 		if strings.TrimSpace(a.Title) == "" && strings.TrimSpace(a.Description) == "" && strings.TrimSpace(a.Note) == "" {
 			problems = append(problems, errors.New("update must change the title, the description, or the notes"))
@@ -409,6 +418,18 @@ func (a TrackerAction) validateArguments() []error {
 		if err := beads.ValidateIssueID(dependsOn); err != nil {
 			problems = append(problems, fmt.Errorf("depends_on: %w", err))
 		}
+	}
+	return problems
+}
+
+// goalProblems checks the goal an action names as far as one action can be
+// checked: it is required, it is one line, and it is short enough to be a goal a
+// document states. Whether any document states it needs the goals rather than
+// the action, so it is judged where the action is carried out.
+func (a TrackerAction) goalProblems() []error {
+	problems := []error{boundTrackerText("goal", a.Goal, goal.MaxStatementBytes, true)}
+	if strings.ContainsAny(a.Goal, "\r\n") {
+		problems = append(problems, errors.New("goal cannot span lines"))
 	}
 	return problems
 }
@@ -536,6 +557,17 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		outcome.Failure = "no work tracker is configured for this conversation, so nothing was changed"
 		return
 	}
+	// An action that states a goal is judged against the goals the repository
+	// records before anything is written, because the whole value of the claim is
+	// that it resolves: an item admitted under a goal nothing states asserts a
+	// traceability that is not there, and the only moment refusing it costs
+	// nothing is before the item exists.
+	attribution := s.attributionFor(outcome.Action)
+	if attribution.State == goal.StateUnresolved {
+		outcome.Failure = fmt.Sprintf("it names the goal %q, and %s",
+			singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason)
+		return
+	}
 	if outcome.Action.readsTargetFirst() {
 		s.readActionTarget(ctx, outcome)
 		if refusal := refuseWhenClosed(outcome.Action.Action, strings.TrimSpace(outcome.Action.ID), outcome.TargetStatus); refusal != "" {
@@ -544,7 +576,19 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 		}
 	}
 	s.carryOutTrackerAction(ctx, outcome)
+	outcome.noteAttribution(attribution)
 	outcome.noteTarget()
+}
+
+// attributionFor judges the goal an action names against the goals the
+// repository records. An action that names no goal has nothing to judge, and is
+// deliberately not reported as unattributed: it is a reparenting or a note,
+// which says nothing about what the work is for.
+func (s *Session) attributionFor(action TrackerAction) goal.Attribution {
+	if strings.TrimSpace(action.Goal) == "" {
+		return goal.Attribution{}
+	}
+	return s.options.Goals.Attribute(action.Goal)
 }
 
 // readActionTarget records the state the tracker holds an action's item in, as
@@ -610,7 +654,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		}
 		outcome.WorkItemID = item.ID
 		outcome.recordTargetStatus(item)
-		outcome.Detail = renderWorkItemEvidence(item)
+		outcome.Detail = renderWorkItemEvidence(item, s.options.Goals)
 		outcome.applied("read %s: %s", item.ID, singleLine(item.Title, maxSurveyTitleBytes))
 	case actionSurvey:
 		// The one action about the queue rather than about an item in it. It is the
@@ -621,7 +665,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			outcome.fail(err)
 			return
 		}
-		outcome.Detail = renderOpenQueueEvidence(items)
+		outcome.Detail = renderOpenQueueEvidence(items, s.options.Goals)
 		outcome.applied("surveyed the queue: %d open item(s) as the tracker holds it now", len(items))
 	case actionCreate:
 		// Admission carries the priority it is admitted at, because the item's
@@ -636,7 +680,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// The goal is written onto the item rather than only checked as it goes
 			// past, because an item in the queue that does not say what it is for is
 			// exactly the work nobody can later decide to stop doing.
-			Notes:    s.trackerProvenance("Admitted to the backlog", action.Reason) + "\n\nGoal served: " + strings.TrimSpace(action.Goal),
+			Notes:    s.trackerProvenance("Admitted to the backlog", action.Reason) + "\n\n" + goal.Note(action.Goal),
 			Parent:   action.parent(),
 			Priority: action.Priority,
 		})
@@ -651,6 +695,21 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.applied("admitted %s to the backlog: %s", created.ID, singleLine(created.Title, maxSurveyTitleBytes))
+	case actionAttribute:
+		// The attribution is appended rather than written over what is there. The
+		// goal a creation recorded cannot be rewritten, and rewriting it is not
+		// what is wanted anyway: what an item was admitted under, and what it was
+		// later said to serve, are both part of how the queue came to be what it
+		// is.
+		attributed := strings.TrimSpace(action.Goal)
+		change := beads.WorkItemChange{
+			AppendNotes: s.trackerProvenance("Attributed to a goal", action.Reason) + "\n\n" + goal.Note(attributed),
+		}
+		if _, err := s.options.Tracker.Update(ctx, id, change); err != nil {
+			outcome.fail(err)
+			return
+		}
+		outcome.applied("attributed %s to the goal: %s", id, singleLine(attributed, maxTrackerFailureBytes))
 	case actionUpdate:
 		change := beads.WorkItemChange{Title: strings.TrimSpace(action.Title), Description: strings.TrimSpace(action.Description)}
 		if note := strings.TrimSpace(action.Note); note != "" {
@@ -745,6 +804,19 @@ func (o *TrackerOutcome) noteTarget() {
 	case o.TargetStatus != "" && o.TargetStatus != openWorkItemStatus:
 		o.Summary += fmt.Sprintf("; %s is %s as the tracker holds it now", o.WorkItemID, o.TargetStatus)
 	}
+}
+
+// noteAttribution says that a goal an action recorded was not checked against
+// anything. It is said exactly when there was nothing to check it against, for
+// the same reason the target's state is: an attribution the harness confirmed
+// and one it merely wrote down are different facts, and reporting the second as
+// the first would make traceability look enforced in the one situation where it
+// is not.
+func (o *TrackerOutcome) noteAttribution(attribution goal.Attribution) {
+	if !o.Applied || attribution.State != goal.StateUncheckable {
+		return
+	}
+	o.Summary += "; nothing checked the goal it names: " + attribution.Reason
 }
 
 func (o *TrackerOutcome) fail(err error) {
@@ -857,14 +929,20 @@ func (o TrackerOutcome) detailHeading() string {
 // that the product context carries, so a survey taken mid-conversation can be
 // read against the picture the conversation opened with rather than as a second,
 // differently shaped account of the same queue.
-func renderOpenQueueEvidence(items []beads.WorkItem) string {
+func renderOpenQueueEvidence(items []beads.WorkItem, goals goal.Set) string {
 	if len(items) == 0 {
 		return "The tracker holds no open work items. That is an answer about the queue, not a tracker that could not be read.\n"
 	}
 	ordered := append([]beads.WorkItem(nil), items...)
 	backlog.Sort(ordered)
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "%d open work item(s), in backlog order: highest priority first, which is the order work is pulled in. Items at the same priority are in the tracker's own order, and nothing has decided which of those comes first.\n\n", len(items))
+	fmt.Fprintf(&rendered, "%d open work item(s), in backlog order: highest priority first, which is the order work is pulled in. Items at the same priority are in the tracker's own order, and nothing has decided which of those comes first.\n", len(items))
+	// What the queue is for goes above the listing rather than after it, because
+	// a survey of a long queue is cut at its end: an account of the queue's
+	// traceability that the cut removed would be reported as a queue with nothing
+	// to say about it.
+	rendered.WriteString(renderQueueAttribution(ordered, goals))
+	rendered.WriteString("\n")
 	listed := ordered
 	if len(listed) > maxTrackerSurveyItems {
 		listed = listed[:maxTrackerSurveyItems]
@@ -879,14 +957,73 @@ func renderOpenQueueEvidence(items []beads.WorkItem) string {
 	return boundText(rendered.String(), maxTrackerSurveyBytes)
 }
 
+// renderQueueAttribution says what the queue's traceability to the goals
+// actually amounts to. It is a summary over the whole queue rather than a line
+// per item, because what somebody does about it is a pass over the items that
+// are not attributed rather than a fact about any one of them.
+//
+// The two ways an item fails to be attributed are counted apart and named apart.
+// Work admitted before attributions were checked says nothing about a goal, and
+// is grandfathered: it is somebody's to attribute, and nothing refuses to run
+// it. Work that names a goal the goals do not state is a claim that is wrong,
+// and it is a correction rather than a backfill.
+func renderQueueAttribution(items []beads.WorkItem, goals goal.Set) string {
+	// Nothing was checked, so nothing is counted. Saying how many items look
+	// attributed against goals nobody could read would report a traceability
+	// that was never confirmed.
+	if reason, uncheckable := goals.Uncheckable(); uncheckable {
+		return fmt.Sprintf("\nWhat the queue is for was not checked: %s\n", reason)
+	}
+	attributed := 0
+	var unattributed, unresolved []string
+	for _, item := range items {
+		switch attribution := goals.AttributionOf(item.Notes); attribution.State {
+		case goal.StateAttributed:
+			attributed++
+		case goal.StateUnresolved:
+			unresolved = append(unresolved, item.ID)
+		default:
+			unattributed = append(unattributed, item.ID)
+		}
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "\nWhat the queue is for, judged from the notes this listing carried: %d of %d name a goal the goals state, %d name none, and %d name a goal the goals do not state.\n",
+		attributed, len(items), len(unattributed), len(unresolved))
+	if len(unattributed) > 0 {
+		fmt.Fprintf(&rendered, "Naming no goal, which is what work admitted before goals were checked looks like: %s. \"attribute\" records a goal on one of these without rewriting anything already on it.\n",
+			namedItems(unattributed))
+	}
+	if len(unresolved) > 0 {
+		fmt.Fprintf(&rendered, "Naming a goal no goals document states, which is a claim to correct rather than work to attribute: %s.\n", namedItems(unresolved))
+	}
+	return rendered.String()
+}
+
+// maxAttributionNamedItems bounds how many items one attribution summary names.
+// The counts above it stay exact; this is what keeps a queue nobody has
+// attributed yet from becoming the whole of a survey.
+const maxAttributionNamedItems = 20
+
+func namedItems(ids []string) string {
+	if len(ids) <= maxAttributionNamedItems {
+		return strings.Join(ids, ", ")
+	}
+	return fmt.Sprintf("%s, and %d more", strings.Join(ids[:maxAttributionNamedItems], ", "), len(ids)-maxAttributionNamedItems)
+}
+
 // renderWorkItemEvidence is one work item in full, which is what the product
 // manager asked to read. A survey stays a summary; this is the detail that
 // judgement about a specific item actually needs.
-func renderWorkItemEvidence(item beads.WorkItem) string {
+func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "id: %s\n", item.ID)
 	fmt.Fprintf(&rendered, "title: %s\n", singleLine(item.Title, maxTrackerTitleBytes))
 	fmt.Fprintf(&rendered, "status: %s\npriority: %d\ntype: %s\n", item.Status, item.Priority, item.IssueType)
+	// What the item is for, judged rather than quoted. The notes below carry the
+	// words it recorded; this is whether any goal in force is stated in them, and
+	// it is the difference between an item that traces to intent somebody
+	// approved and one that says it does.
+	fmt.Fprintf(&rendered, "attribution: %s\n", describeAttribution(goals.AttributionOf(item.Notes)))
 	if item.Assignee != "" {
 		fmt.Fprintf(&rendered, "assignee: %s\n", singleLine(item.Assignee, maxSurveyTitleBytes))
 	}
@@ -911,6 +1048,26 @@ func renderWorkItemEvidence(item beads.WorkItem) string {
 		fmt.Fprintf(&rendered, "\n%s:\n%s\n", section.label, strings.TrimSpace(section.text))
 	}
 	return boundText(rendered.String(), maxTrackerItemBytes)
+}
+
+// describeAttribution says in one line what an item's goal amounts to. The four
+// answers are four different things to do about it, so none of them is folded
+// into "no": a resolved attribution names the document that states the goal, a
+// wrong one says what is wrong with it, an absent one says the item predates
+// the check, and an unchecked one says nothing was checked rather than pretending
+// either way.
+func describeAttribution(attribution goal.Attribution) string {
+	switch attribution.State {
+	case goal.StateAttributed:
+		return fmt.Sprintf("it serves a goal %s states: %s", attribution.Goal.ArtifactID,
+			singleLine(attribution.Goal.Statement, goal.MaxStatementBytes))
+	case goal.StateUnresolved:
+		return fmt.Sprintf("it names %q, and %s", singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason)
+	case goal.StateUncheckable:
+		return fmt.Sprintf("it names %q, unchecked: %s", singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason)
+	default:
+		return "none recorded: " + attribution.Reason
+	}
 }
 
 // boundText cuts text to a budget on a rune boundary and says that it was cut,

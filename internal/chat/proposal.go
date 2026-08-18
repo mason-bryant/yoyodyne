@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 // MaxProposalBytes bounds the untrusted proposal payload one turn may carry.
@@ -30,7 +31,6 @@ const (
 
 const (
 	maxProposalTitleBytes = 200
-	maxProposalGoalBytes  = 200
 	maxProposalTextBytes  = 8 << 10
 )
 
@@ -227,12 +227,12 @@ func (p Proposal) Validate() error {
 	}
 	problems = append(problems, validateProposalText("description", p.Description))
 	problems = append(problems, validateProposalText("rationale", p.Rationale))
-	switch goal := strings.TrimSpace(p.Goal); {
-	case goal == "":
+	switch named := strings.TrimSpace(p.Goal); {
+	case named == "":
 		problems = append(problems, errors.New("goal is required; work that serves no goal is raised as a concern rather than proposed"))
-	case len(goal) > maxProposalGoalBytes:
-		problems = append(problems, fmt.Errorf("goal is %d bytes, limit is %d", len(goal), maxProposalGoalBytes))
-	case strings.ContainsAny(goal, "\r\n"):
+	case len(named) > goal.MaxStatementBytes:
+		problems = append(problems, fmt.Errorf("goal is %d bytes, limit is %d", len(named), goal.MaxStatementBytes))
+	case strings.ContainsAny(named, "\r\n"):
 		problems = append(problems, errors.New("goal cannot span lines"))
 	}
 	if parent := strings.TrimSpace(p.Parent); parent != "" {
@@ -311,6 +311,48 @@ func (s *Session) verifyProposalReferences(ctx context.Context, proposals []Prop
 	return errors.Join(problems...)
 }
 
+// ProposalGoalError reports that a turn proposed work under a goal the
+// repository does not record. Like the errors beside it the conversation is
+// intact and nothing was created; what is wrong is the one thing the operator
+// would have been relying on, which is that approving the work approves
+// something that serves an agreed goal.
+type ProposalGoalError struct {
+	Err error
+}
+
+func (e *ProposalGoalError) Error() string {
+	return "the product manager proposed work under goals the repository does not record: " + e.Err.Error()
+}
+
+func (e *ProposalGoalError) Unwrap() error { return e.Err }
+
+// verifyProposalGoals checks that every proposal names a goal the repository
+// actually records. Validation alone only says a goal was named, which is how a
+// proposal serving a goal nobody agreed reaches the operator looking exactly
+// like one that serves an approved one. It runs before the operator is asked
+// rather than at approval, for the same reason the placement check does: an
+// approval that then fails has already spent the decision it was asking for.
+//
+// A repository with no goals to check against is not a proposal problem. The
+// creation that follows says the goal went unchecked, and refusing to propose
+// anything until the goals exist would leave a new project unable to plan its
+// way to writing them.
+func (s *Session) verifyProposalGoals(proposals []Proposal) error {
+	if _, uncheckable := s.options.Goals.Uncheckable(); uncheckable {
+		return nil
+	}
+	var problems []error
+	for _, proposal := range proposals {
+		attribution := s.options.Goals.Attribute(proposal.Goal)
+		if attribution.State != goal.StateUnresolved {
+			continue
+		}
+		problems = append(problems, fmt.Errorf("%q serves %q, and %s",
+			strings.TrimSpace(proposal.Title), attribution.Named, attribution.Reason))
+	}
+	return errors.Join(problems...)
+}
+
 // referencedItems lists every existing item the proposals name, once each and in
 // a stable order, so a turn placing three items under one parent asks the
 // tracker about it once and a failure always reads the same way.
@@ -383,8 +425,8 @@ func (p PendingProposal) body() []string {
 // to stop doing.
 func (p PendingProposal) provenanceNotes() string {
 	return fmt.Sprintf(
-		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\nGoal served: %s\n\nRationale: %s",
-		p.ConversationID, p.Turn, p.ID, strings.TrimSpace(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
+		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\n%s\n\nRationale: %s",
+		p.ConversationID, p.Turn, p.ID, goal.Note(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
 	)
 }
 

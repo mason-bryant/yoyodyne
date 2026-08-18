@@ -39,6 +39,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runChat(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "artifact":
 		return runArtifact(args[1:], stdout, stderr)
+	case "goals":
+		return runGoals(ctx, args[1:], stdout, stderr)
 	case "invariant":
 		return runInvariant(args[1:], stdout, stderr)
 	case "run":
@@ -255,6 +257,7 @@ Commands:
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
   artifact          read the canonical artifacts and their identity metadata
+  goals             read the recorded goals, and what admitted work serves
   invariant         record, amend, retire, and read architectural invariants
   run               run one Beads work item in an isolated worktree
   review            review what a branch accumulated over a base, as one change

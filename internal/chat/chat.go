@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -107,6 +108,17 @@ type Options struct {
 	// already on. It is optional like the rest, and a conversation without one
 	// says so rather than showing an empty pile.
 	Reports Reports
+	// Goals are the goals the repository records, which is what work admitted
+	// here has to name. It is what makes traceability something the harness holds
+	// rather than something the product manager asserts: a goal named on an item
+	// is resolved against this before the item exists.
+	//
+	// The zero value is a conversation with nothing to check against, and that is
+	// stated wherever a goal is recorded rather than being read as approval. A
+	// caller whose goals could not be read says so with goal.Unreadable, because
+	// "this repository records no goals" and "the goals could not be read" lead
+	// to opposite conclusions about the same attribution.
+	Goals goal.Set
 	// Model is required. A conversation is evidence like any other provider
 	// invocation, and evidence produced by whatever model the provider happened
 	// to default to is not auditable.
@@ -437,6 +449,14 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		reply.Concerns = append(reply.Concerns, raised...)
 		if err != nil {
 			return reply, err
+		}
+		// What a proposal says the work is for is checked first, because it needs
+		// nothing but the goals already read: an operator asked to approve work
+		// under a goal nothing states is being asked to approve traceability that
+		// does not exist, and the approval is spent by the time the creation
+		// refuses it.
+		if err := s.verifyProposalGoals(parsed.Proposals); err != nil {
+			return reply, &ProposalGoalError{Err: err}
 		}
 		// What a proposal is placed against is confirmed to exist before the
 		// operator is asked about any of it. A block naming an item nobody created
@@ -799,6 +819,14 @@ func (s *Session) Approve(ctx context.Context, proposalID string) (CreatedItem, 
 	}
 	if s.options.Tracker == nil {
 		return CreatedItem{}, errors.New("no work tracker is configured; an approved proposal cannot be created")
+	}
+	// The goal is checked again where the item is actually created. It was
+	// checked before the operator was asked, and the goals are read from the
+	// repository rather than from the conversation, so between the two the goal
+	// this work serves can have been reworded or retired.
+	if attribution := s.options.Goals.Attribute(record.pending.Proposal.Goal); attribution.State == goal.StateUnresolved {
+		return CreatedItem{}, fmt.Errorf("proposal %s serves %q, and %s; nothing was created, and it is still awaiting a decision",
+			record.pending.ID, attribution.Named, attribution.Reason)
 	}
 	// The approval is recorded before anything is created, so the record shows
 	// the operator's decision even when the creation that followed it failed.
@@ -1532,7 +1560,7 @@ Discuss product intent with the operator: turn vague intent into something speci
 
 Every piece of work you admit or propose serves a goal, and you check that before the operator is asked rather than after. Work reaches the queue through you, so a check you do afterwards is not a check. There are four cases and they are not the same thing:
 
-- It serves a goal. Name that goal as you admit or propose it, in the words the specifications use, so the item says what it is for.
+- It serves a goal. Name that goal as you admit or propose it, in the words the goals document states it in, so the item says what it is for. The harness resolves what you name against the goals the repository records, and refuses an admission or a proposal naming anything they do not state: quote the goal rather than paraphrasing it, and a goal you believe should exist is a change to the goals to propose, not a sentence to write into an item.
 - It serves no goal you can find. Do not propose it, and do not quietly drop it: raise it as a concern and ask. Work nobody can attribute is usually a sign the goals are incomplete rather than that the operator asked for the wrong thing, and the answer may well be a new goal.
 - It would cut against a goal. Do not propose it. Put the conflict to the operator as a question and wait for their answer, rather than proposing it with a caveat attached.
 - It is consistent with the goals as written and you judge it to be against what the product is for. Say so, and say it as a question that stops. This is the one you can be wrong about, and you say it anyway: the operator can overrule an opinion you stated, and cannot overrule one you never voiced.
@@ -1552,6 +1580,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
   {"action":"read","id":"beads-id"},
   {"action":"survey"},
   {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"reason":"why you are doing this"},
+  {"action":"attribute","id":"beads-id","goal":"the goal this work serves","reason":"why this is the goal it serves"},
   {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
   {"action":"reprioritize","id":"beads-id","priority":2,"reason":"why"},
@@ -1562,7 +1591,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 ]}
 ` + "```" + `
 
-That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "close" and "retire" are the two ways work leaves it; "read" and "survey" only look. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and taken by nothing else: it names the goal the admitted work serves, it is recorded on the item, and work you cannot name a goal for is raised as a concern instead of admitted. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
+That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "attribute" records the goal an item already in the backlog serves; "close" and "retire" are the two ways work leaves it; "read" and "survey" only look. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and on "attribute" and taken by nothing else: it names the goal the work serves, in the words the goals document states it in, and it is recorded on the item. An action naming a goal the goals do not state is refused and changes nothing, and work you cannot name a goal for is raised as a concern instead of admitted. Work admitted before goals were checked names none, and a survey says which items those are; "attribute" is how one of them acquires a goal, appended to what the item already records rather than replacing it, so the goal an item was admitted under is never rewritten. Attributing work is a judgement about what it is for: read the item before you attribute it, and where you cannot say which goal it serves, raise it rather than picking the nearest one. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
 
 The state you were given lists items by title only. When a title is not enough to judge whether proposed work belongs inside an existing item or beside it, read the item instead of guessing or asking the operator to paste it: "read" returns one in full, and its results come back to you before you finish answering.
 
@@ -1580,7 +1609,7 @@ To propose, end your reply with exactly one block, after the prose:
 {"items":[{"title":"one line","description":"what the work is and what done means","rationale":"why this follows from what the operator said","goal":"the goal this work serves","parent":"beads-id","dependencies":["beads-id"]}]}
 ` + "```" + `
 
-"title", "description", "rationale", and "goal" are required on every item. "goal" names the goal from the specifications that this work serves; a proposal that serves no goal is not a proposal you make, it is a concern you raise. "parent" and "dependencies" are optional and must name Beads items that already exist; never invent an identifier, because the harness looks each one up before the operator is asked and a block naming an item that does not exist proposes nothing at all. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.
+"title", "description", "rationale", and "goal" are required on every item. "goal" names the goal from the specifications that this work serves, in the words that document states it in, and it is resolved against the recorded goals before the operator is asked: a block naming a goal they do not state proposes nothing at all. A proposal that serves no goal is not a proposal you make, it is a concern you raise. "parent" and "dependencies" are optional and must name Beads items that already exist; never invent an identifier, because the harness looks each one up before the operator is asked and a block naming an item that does not exist proposes nothing at all. Propose at most ` + maxProposalsPerTurnText + ` items in one reply, propose only work the operator has actually discussed, and leave the block out entirely when you are not proposing anything. Describe proposals in your prose as well, because the block is not what the operator reads.
 
 ` + report.Contract + `
 
