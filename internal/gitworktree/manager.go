@@ -110,12 +110,45 @@ type Observation struct {
 // Integration reports exactly which commits an integration produced, so a
 // caller can record the promoted work and prove the target moved where it
 // expected before removing anything.
+//
+// A refused promotion reports what it had already done rather than nothing: the
+// harness commits whatever the developer left before it advances anything, and
+// that commit exists whether or not the advance succeeds. TargetCommit is the
+// one field that is only ever set by a promotion that happened.
 type Integration struct {
 	Branch               string `json:"branch"`
 	TargetBranch         string `json:"target_branch"`
 	SourceCommit         string `json:"source_commit"`
 	TargetCommit         string `json:"target_commit"`
 	PreviousTargetCommit string `json:"previous_target_commit"`
+}
+
+// Rebase is what re-preparing a run's change against a moved target produced:
+// the target commit the change now sits on, which is the worktree's new base,
+// and the harness commit that carries the replayed work. The previous pair is
+// reported beside them because a caller records both and has to be able to say
+// what it replaced.
+//
+// A refused rebase reports the same way an integration does. HeadCommit names
+// the commit the harness owns in that worktree either way, so a caller that
+// could not replay the work still knows which HEAD it is permitted to accept;
+// BaseCommit is the base the change actually sits on, which an aborted rebase
+// leaves exactly where it was.
+type Rebase struct {
+	Branch             string `json:"branch"`
+	TargetBranch       string `json:"target_branch"`
+	BaseCommit         string `json:"base_commit"`
+	HeadCommit         string `json:"head_commit"`
+	PreviousBaseCommit string `json:"previous_base_commit"`
+	PreviousHeadCommit string `json:"previous_head_commit"`
+}
+
+// Moved reports that the replay actually put the change on a different base. A
+// rebase onto a target that never moved is a legitimate no-op — an integration
+// can lose a race to a lock rather than to a commit — and it must not read as
+// work that was replayed.
+func (r Rebase) Moved() bool {
+	return r.BaseCommit != r.PreviousBaseCommit
 }
 
 // CleanupRequest names exactly which artifacts may be removed and the evidence
@@ -159,6 +192,11 @@ var (
 	// ErrNotFastForward reports that the target could not be advanced by a
 	// fast-forward. The harness never resolves this by forcing or resetting.
 	ErrNotFastForward = errors.New("integration target cannot be fast-forwarded")
+	// ErrRebaseConflict reports a change that could not be replayed onto its
+	// moved target. It is deliberately terminal: the harness replays work, it
+	// never resolves a conflict, because which side of one is right is a
+	// judgement about the product rather than a Git operation.
+	ErrRebaseConflict = errors.New("change cannot be replayed onto the moved integration target")
 )
 
 type ChangeSummary struct {
@@ -513,14 +551,10 @@ func (m *Manager) verifyOwnedHead(ctx context.Context, worktree Worktree) (strin
 	if !registered || branch != worktree.Branch {
 		return "", "", errors.New("worktree is not registered with the expected branch")
 	}
-	head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
+	commit, err := m.resolveWorktreeHead(ctx, path)
 	if err != nil {
 		return "", "", err
 	}
-	if head.Status != execution.ProcessSucceeded {
-		return "", "", fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
-	}
-	commit := strings.TrimSpace(head.Stdout)
 	// Only one HEAD is permitted: the commit the harness recorded when it made
 	// it, or the base when it has made none. A run that has published nothing
 	// therefore permits no movement at all, which is the pre-publishing rule
@@ -907,23 +941,160 @@ func (m *Manager) Integrate(ctx context.Context, worktree Worktree, message stri
 	if sourceCommit == worktree.BaseCommit {
 		return Integration{}, ErrNoChanges
 	}
-	if err := m.fastForward(ctx, worktree.Branch, target, previousTarget, sourceCommit, inPrimary); err != nil {
-		return Integration{}, err
-	}
-	integrated, err := m.resolveBranchCommit(ctx, target)
-	if err != nil {
-		return Integration{}, err
-	}
-	if integrated != sourceCommit {
-		return Integration{}, fmt.Errorf("%w: %s is at %s after the update, want %s", ErrNotFastForward, target, integrated, sourceCommit)
-	}
-	return Integration{
+	// From here the harness may already have made a commit, which exists whether
+	// or not the promotion below succeeds. It is reported alongside a refusal for
+	// the reason PublishBranch reports its own: a caller that could not learn of
+	// it would be left holding a worktree at a HEAD nothing recorded, which is the
+	// one state the ownership check has to be able to tell from an agent's commit.
+	attempted := Integration{
 		Branch:               worktree.Branch,
 		TargetBranch:         target,
 		SourceCommit:         sourceCommit,
-		TargetCommit:         integrated,
 		PreviousTargetCommit: previousTarget,
-	}, nil
+	}
+	if err := m.fastForward(ctx, worktree.Branch, target, previousTarget, sourceCommit, inPrimary); err != nil {
+		return attempted, err
+	}
+	integrated, err := m.resolveBranchCommit(ctx, target)
+	if err != nil {
+		return attempted, err
+	}
+	if integrated != sourceCommit {
+		return attempted, fmt.Errorf("%w: %s is at %s after the update, want %s", ErrNotFastForward, target, integrated, sourceCommit)
+	}
+	attempted.TargetCommit = integrated
+	return attempted, nil
+}
+
+// RebaseOntoTarget replays a run's change onto wherever its target branch is
+// now, so a promotion that lost a race to another run — or to an operator who
+// moved the target mid-run — can be attempted again against what the target
+// actually became. Nothing about the promotion rule is relaxed by it: the
+// change is moved to the target rather than the target to the change, and the
+// retried promotion is still the same fast-forward onto a base the worktree
+// records.
+//
+// Only the run's own branch is rewritten, and only into commits the harness
+// authors. A conflict is refused rather than resolved: the replay is aborted,
+// the branch is left exactly where it was, and ErrRebaseConflict is what the
+// caller reports to whoever owns that decision.
+func (m *Manager) RebaseOntoTarget(ctx context.Context, worktree Worktree, message string) (Rebase, error) {
+	target := worktree.TargetBranch
+	if err := validateTargetBranch(target); err != nil {
+		return Rebase{}, err
+	}
+	if target == worktree.Branch {
+		return Rebase{}, errors.New("integration target must differ from the worktree branch")
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = defaultCommitMessage(worktree)
+	}
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
+	if err != nil {
+		return Rebase{}, err
+	}
+	dirty, err := m.isDirty(ctx, path)
+	if err != nil {
+		return Rebase{}, err
+	}
+	if !dirty && head == worktree.BaseCommit {
+		return Rebase{}, ErrNoChanges
+	}
+	targetCommit, err := m.resolveBranchCommit(ctx, target)
+	if err != nil {
+		return Rebase{}, err
+	}
+	// A replay needs the work in commits, and a promotion that was refused before
+	// it committed anything leaves the developer's change in the working tree. It
+	// is committed here for exactly the reason integration commits it, under the
+	// same harness identity.
+	source := head
+	if dirty {
+		source, err = m.commitWorktree(ctx, path, message)
+		if err != nil {
+			return Rebase{}, err
+		}
+	}
+	// Everything from here reports the commit the harness owns, whichever way the
+	// replay goes, so the caller can record it and keep accepting this worktree.
+	rebase := Rebase{
+		Branch:             worktree.Branch,
+		TargetBranch:       target,
+		BaseCommit:         worktree.BaseCommit,
+		HeadCommit:         source,
+		PreviousBaseCommit: worktree.BaseCommit,
+		PreviousHeadCommit: source,
+	}
+	if source == worktree.BaseCommit {
+		return rebase, ErrNoChanges
+	}
+	if targetCommit == worktree.BaseCommit {
+		// The target never moved, so there is nothing to replay onto. Reporting it
+		// as a no-op rather than a failure is what lets a promotion that lost to a
+		// held index lock rather than to a commit simply be retried.
+		return rebase, nil
+	}
+	if err := m.replay(ctx, path, worktree, targetCommit); err != nil {
+		return rebase, err
+	}
+	replayed, err := m.resolveWorktreeHead(ctx, path)
+	if err != nil {
+		return rebase, err
+	}
+	if replayed != targetCommit {
+		if err := m.verifyHarnessHistory(ctx, path, targetCommit, replayed); err != nil {
+			return rebase, err
+		}
+	}
+	rebase.BaseCommit = targetCommit
+	rebase.HeadCommit = replayed
+	return rebase, nil
+}
+
+// replay runs the rebase itself and refuses to leave a half-applied one behind.
+// The commits it writes carry the harness identity for the same reason every
+// other commit the harness makes does, and the abort is what keeps a conflict
+// from becoming a worktree nobody can promote or inspect afterwards.
+func (m *Manager) replay(ctx context.Context, path string, worktree Worktree, targetCommit string) error {
+	rebased, err := m.runWithEnvironment(ctx, harnessCommitEnvironment(), "-C", path,
+		"-c", "core.hooksPath="+os.DevNull,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"rebase", "--no-gpg-sign", "--onto", targetCommit, worktree.BaseCommit, worktree.Branch)
+	if err != nil {
+		return err
+	}
+	if rebased.Status == execution.ProcessSucceeded {
+		return nil
+	}
+	refused := fmt.Errorf("%w: replay %s onto %s at %s failed with exit code %d: %s",
+		ErrRebaseConflict, worktree.Branch, worktree.TargetBranch, targetCommit, rebased.ExitCode, strings.TrimSpace(rebased.Stderr))
+	aborted, err := m.run(ctx, "-C", path, "rebase", "--abort")
+	if err != nil {
+		return errors.Join(refused, err)
+	}
+	if aborted.Status != execution.ProcessSucceeded {
+		return errors.Join(refused, fmt.Errorf("abandon the replay failed with exit code %d: %s", aborted.ExitCode, strings.TrimSpace(aborted.Stderr)))
+	}
+	return refused
+}
+
+// resolveWorktreeHead reads a worktree's HEAD without judging it, which is what
+// a step that has just moved that HEAD on purpose needs.
+func (m *Manager) resolveWorktreeHead(ctx context.Context, path string) (string, error) {
+	head, err := m.run(ctx, "-C", path, "rev-parse", "--verify", "HEAD^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if head.Status != execution.ProcessSucceeded {
+		return "", fmt.Errorf("resolve worktree HEAD failed with exit code %d: %s", head.ExitCode, strings.TrimSpace(head.Stderr))
+	}
+	commit := strings.TrimSpace(head.Stdout)
+	if !commitPattern.MatchString(commit) {
+		return "", fmt.Errorf("resolved worktree HEAD %q is invalid", commit)
+	}
+	return commit, nil
 }
 
 // commitWorktree stages tracked edits, deletions, and untracked files, then

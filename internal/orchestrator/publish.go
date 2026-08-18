@@ -130,6 +130,39 @@ func (a *activeRun) publishAttempt(ctx context.Context) error {
 	return nil
 }
 
+// republishRebase puts a replayed run branch back where the pull request that
+// carries it can see it. Replaying a change onto a moved target rewrites the
+// branch, so the published head stops being the change the harness would
+// promote, and a forge asked to merge the old head would put work on the remote
+// that the authoritative local branch does not have.
+//
+// The remote branch is replaced from exactly the commit the harness published
+// there, which is the same compare-and-swap the local target is advanced by. A
+// remote branch carrying anything else is refused rather than overwritten, and
+// that refusal stops the run: the promotion has not happened yet, so there is
+// nothing outstanding to report and nothing to lose by leaving it to a person.
+func (a *activeRun) republishRebase(ctx context.Context, rebase gitworktree.Rebase) error {
+	if !a.publishing || a.outcome.PullRequest == nil {
+		return nil
+	}
+	published := *a.outcome.PullRequest
+	if published.HeadCommit == rebase.HeadCommit {
+		return nil
+	}
+	publication, err := a.pipeline.Worktrees.RepublishBranch(ctx, a.worktree, published.HeadCommit)
+	if err != nil {
+		return fmt.Errorf("republish the replayed developer branch: %w", err)
+	}
+	published.HeadCommit = publication.Commit
+	a.state.PullRequest = &published
+	a.outcome.PullRequest = &published
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record the republished pull request: %w", err)
+	}
+	return nil
+}
+
 // mergeMethod is how the harness asks the forge to merge, and it is a constant
 // rather than a setting because the choice decides what the remote history is.
 // A merge commit is the only method that puts the promoted commit itself on the

@@ -82,6 +82,7 @@ product:
 execution:
   max_concurrent_developers: 1
   repair_attempts_before_replan: 2
+  integration_retries_before_reconciliation: 2
   worktree_root: auto
   remote: origin
   usage_limit_max_pause: 6h
@@ -156,7 +157,9 @@ Up to three layers produce the effective configuration, later ones winning:
    them: `product.specifications` (`docs/product`), `product.invariants`
    (`docs/decisions/invariants`), `product.designs` (`docs/designs`),
    `product.decisions` (`docs/decisions`), `execution.max_concurrent_developers` (1),
-   `execution.repair_attempts_before_replan` (2), `execution.worktree_root`
+   `execution.repair_attempts_before_replan` (2),
+   `execution.integration_retries_before_reconciliation` (2),
+   `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
    `execution.usage_limit_in_process_pause` (`6h` each),
@@ -695,6 +698,47 @@ still declining work while claiming it has already reset is not describing a
 wait, and honoring it would mean reissuing straight back into the same refusal.
 Transient throttling never reaches any of this: the provider CLI retries that
 itself, and the harness does not duplicate the wait.
+
+## Losing a race for the target branch
+
+A run promotes its change by fast-forwarding the branch it was written against,
+which requires that branch to still be where the run started from. It may not
+be: another run can promote into the same branch first, and an operator who
+commits to it while a run is working moves it just as effectively. The
+promotion fails closed in both cases — nothing is force-merged and nothing is
+reset — and the run then re-prepares rather than dying on it:
+
+```yaml
+execution:
+  integration_retries_before_reconciliation: 2
+```
+
+Each retry replays the change onto wherever the target went, runs the
+configured checks again, and obtains a **fresh independent review**. The earlier
+approval is discarded rather than carried over: it described a diff on the base
+the change no longer sits on, and an approval that survived a replay would be
+authorizing a promotion nobody judged. Nothing is handed back to the developer,
+so a retry spends no repair attempt — the change is not what went wrong.
+
+Retries are counted in durable run state before each one begins, so a process
+that dies mid-retry resumes against the budget it had rather than a fresh one. A
+run that spends the budget stops and records a blocker on the work item saying
+plainly that the checks passed and the reviewer approved, and that what needs
+looking at is the target branch. Setting the bound to `0` restores the earlier
+behavior: the first refused promotion ends the run.
+
+A replay that **conflicts** is never retried and never resolved automatically.
+The replay is abandoned, the branch and worktree are left exactly as they were,
+both sides of the conflict survive, and the run stops with a blocker on the
+item. Which side of a conflict is right is a decision about the product, not a
+Git operation.
+
+A published run's pull request follows the replay: the run branch is replaced on
+the remote from exactly the commit the harness published there, so the request
+carries the change that would actually be promoted. That is the same
+compare-and-swap every other write makes — a remote branch carrying anything
+else is refused rather than overwritten — and the refusal stops the run, because
+nothing has been promoted yet and there is nothing outstanding to report.
 
 ## Merge and removal semantics
 

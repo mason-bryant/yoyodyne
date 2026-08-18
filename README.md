@@ -971,6 +971,17 @@ a new project preserves the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
 reviewer agent both exist.
 
+A fast-forward needs the target branch to still be where the run started from,
+and it may not be: another run can promote into it first, and committing to it
+yourself while a run is working moves it just as effectively. The promotion
+fails closed either way, and the run then replays its change onto where the
+target went, re-runs the checks, and gets a fresh independent review before
+trying again — up to `execution.integration_retries_before_reconciliation`
+times. The earlier approval never carries over, because the diff it approved is
+not the one that would now be promoted. A replay that conflicts is never
+resolved automatically: the run stops, both sides survive untouched, and the
+blocker on the item says so.
+
 Documentation counts as part of a work item rather than as follow-up: the
 developer contract makes updating the documents that describe changed behavior
 part of the assigned work, and the reviewer reports a change that leaves a

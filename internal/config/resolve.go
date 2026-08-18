@@ -178,13 +178,17 @@ func newResolution() *resolution {
 				Decisions:      DefaultDecisions,
 			},
 			Execution: Execution{
-				MaxConcurrentDevelopers:     1,
-				RepairAttemptsBeforeReplan:  2,
-				WorktreeRoot:                "auto",
-				Remote:                      defaultRemote,
-				UsageLimitMaxPause:          defaultUsageLimitMaxPause,
-				UsageLimitInProcessPause:    defaultUsageLimitInProcessPause,
-				UsageLimitUnknownResetPause: defaultUsageLimitUnknownResetPause,
+				MaxConcurrentDevelopers:    1,
+				RepairAttemptsBeforeReplan: 2,
+				// Two retries is the same shape of bound as the repair one: enough
+				// for a target that moved under a run to be caught up with, and far
+				// short of a run that keeps re-reviewing a change it can never land.
+				IntegrationRetriesBeforeReconciliation: 2,
+				WorktreeRoot:                           "auto",
+				Remote:                                 defaultRemote,
+				UsageLimitMaxPause:                     defaultUsageLimitMaxPause,
+				UsageLimitInProcessPause:               defaultUsageLimitInProcessPause,
+				UsageLimitUnknownResetPause:            defaultUsageLimitUnknownResetPause,
 			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
@@ -194,17 +198,18 @@ func newResolution() *resolution {
 			Approvals: Approvals{Publishing: domain.ApprovalHuman},
 		},
 		origins: map[string]string{
-			"product.specifications":                  OriginDefault,
-			"product.invariants":                      OriginDefault,
-			"product.designs":                         OriginDefault,
-			"product.decisions":                       OriginDefault,
-			"approvals.publishing":                    OriginDefault,
-			"execution.max_concurrent_developers":     OriginDefault,
-			"execution.repair_attempts_before_replan": OriginDefault,
-			"execution.worktree_root":                 OriginDefault,
-			"execution.remote":                        OriginDefault,
-			"execution.usage_limit_max_pause":         OriginDefault,
-			"execution.usage_limit_in_process_pause":  OriginDefault,
+			"product.specifications":                              OriginDefault,
+			"product.invariants":                                  OriginDefault,
+			"product.designs":                                     OriginDefault,
+			"product.decisions":                                   OriginDefault,
+			"approvals.publishing":                                OriginDefault,
+			"execution.max_concurrent_developers":                 OriginDefault,
+			"execution.repair_attempts_before_replan":             OriginDefault,
+			"execution.integration_retries_before_reconciliation": OriginDefault,
+			"execution.worktree_root":                             OriginDefault,
+			"execution.remote":                                    OriginDefault,
+			"execution.usage_limit_max_pause":                     OriginDefault,
+			"execution.usage_limit_in_process_pause":              OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -227,6 +232,7 @@ func (r *resolution) apply(applied layer) error {
 	if execution := document.Execution; execution != nil {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
 		setValue(r.origins, "execution.repair_attempts_before_replan", execution.RepairAttemptsBeforeReplan, &r.config.Execution.RepairAttemptsBeforeReplan, applied.origin)
+		setValue(r.origins, "execution.integration_retries_before_reconciliation", execution.IntegrationRetriesBeforeReconciliation, &r.config.Execution.IntegrationRetriesBeforeReconciliation, applied.origin)
 		setValue(r.origins, "execution.worktree_root", execution.WorktreeRoot, &r.config.Execution.WorktreeRoot, applied.origin)
 		setValue(r.origins, "execution.remote", execution.Remote, &r.config.Execution.Remote, applied.origin)
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)

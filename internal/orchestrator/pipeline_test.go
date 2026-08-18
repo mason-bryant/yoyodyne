@@ -1587,6 +1587,10 @@ func TestPipelineRefusesToResumeARunThatIsNotInsideItsRepairLoop(t *testing.T) {
 	}
 }
 
+// A drifted target is never integrated onto, and the approved work it refused
+// is preserved. The retry budget is spent to zero here so this stays a test of
+// the refusal itself; a project that permits retries replays the change instead,
+// which TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved covers.
 func TestPipelinePreservesApprovedWorkWhenTheTargetDrifts(t *testing.T) {
 	t.Parallel()
 
@@ -1605,6 +1609,7 @@ func TestPipelinePreservesApprovedWorkWhenTheTargetDrifts(t *testing.T) {
 		return nil
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
 
 	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
 	if !errors.Is(err, gitworktree.ErrTargetDrift) {
@@ -2224,6 +2229,10 @@ func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, s
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
 }
 
+func (partialWorktreeManager) RebaseOntoTarget(context.Context, gitworktree.Worktree, string) (gitworktree.Rebase, error) {
+	return gitworktree.Rebase{}, errors.New("partial worktree cannot be replayed")
+}
+
 func (partialWorktreeManager) CleanupIntegrated(context.Context, gitworktree.CleanupRequest) (gitworktree.Cleanup, error) {
 	return gitworktree.Cleanup{}, errors.New("partial worktree cannot be cleaned up")
 }
@@ -2232,6 +2241,10 @@ func (partialWorktreeManager) RemoteConfigured(context.Context) (bool, error) { 
 
 func (partialWorktreeManager) PublishBranch(context.Context, gitworktree.Worktree, string) (gitworktree.Publication, error) {
 	return gitworktree.Publication{}, errors.New("partial worktree cannot be published")
+}
+
+func (partialWorktreeManager) RepublishBranch(context.Context, gitworktree.Worktree, string) (gitworktree.Publication, error) {
+	return gitworktree.Publication{}, errors.New("partial worktree cannot be republished")
 }
 
 func (partialWorktreeManager) VerifyRemoteTarget(context.Context, gitworktree.Integration) error {
@@ -2381,11 +2394,12 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			Decisions:      config.DefaultDecisions,
 		},
 		Execution: config.Execution{
-			MaxConcurrentDevelopers:     1,
-			RepairAttemptsBeforeReplan:  2,
-			WorktreeRoot:                "auto",
-			Remote:                      "origin",
-			UsageLimitUnknownResetPause: config.Duration(30 * time.Minute),
+			MaxConcurrentDevelopers:                1,
+			RepairAttemptsBeforeReplan:             2,
+			IntegrationRetriesBeforeReconciliation: 2,
+			WorktreeRoot:                           "auto",
+			Remote:                                 "origin",
+			UsageLimitUnknownResetPause:            config.Duration(30 * time.Minute),
 		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
@@ -3559,4 +3573,221 @@ func TestRunFailsAStoppedProviderItCannotContinueWithoutBlamingTheDeveloper(t *t
 	if state.ProviderStop != "" || !state.Status.Terminal() {
 		t.Fatalf("terminal state = %#v, want no resumption marker on a run that ended", state)
 	}
+}
+
+// A target branch that moves while a run is working is what concurrency makes
+// ordinary and what an operator committing to main already does today. The run
+// replays its change onto where the target went and promotes it after all, and
+// everything the promotion depends on is re-earned rather than carried over:
+// the checks run again and a second, independent review judges the replayed
+// change.
+func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	moved := ""
+	developed := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		// The target moves once, after this run's worktree was cut from it, which
+		// is exactly the window a losing promotion opens.
+		developed++
+		if developed > 1 {
+			return nil
+		}
+		writePipelineFile(t, repository, "elsewhere.txt", "somebody else's work\n")
+		runPipelineGit(t, repository, "add", "elsewhere.txt")
+		runPipelineGit(t, repository, "commit", "-m", "concurrent target change")
+		moved = gitLine(t, repository, "rev-parse", "refs/heads/main")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+	base := gitLine(t, repository, "rev-parse", "refs/heads/main")
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
+		t.Fatalf("Run() outcome = %#v", outcome)
+	}
+	if outcome.IntegrationRetries != 1 {
+		t.Fatalf("integration retries = %d, want 1", outcome.IntegrationRetries)
+	}
+	// The promotion was made from where the target actually was, not from the
+	// base the run was cut at.
+	if outcome.BaseCommit != moved || outcome.Integration.PreviousTargetCommit != moved {
+		t.Fatalf("promotion base = %q / %q, want the moved target %q", outcome.BaseCommit, outcome.Integration.PreviousTargetCommit, moved)
+	}
+	// Nothing was lost and nothing was forced: base, then the change that moved
+	// the target, then the replayed promotion, in a straight line.
+	history := strings.Fields(gitOutput(t, repository, "rev-list", "refs/heads/main"))
+	if len(history) != 3 || history[0] != outcome.Integration.TargetCommit || history[1] != moved || history[2] != base {
+		t.Fatalf("main history = %v, want %q, %q, %q", history, outcome.Integration.TargetCommit, moved, base)
+	}
+	for _, name := range []string{"feature.txt", "elsewhere.txt"} {
+		if _, err := os.Stat(filepath.Join(repository, name)); err != nil {
+			t.Fatalf("main is missing %s after the retry: %v", name, err)
+		}
+	}
+
+	// The approval that authorized the first promotion described a diff on the
+	// old base, so the replayed change was reviewed again by its own invocation.
+	if reviews := provider.requestsForRole(domain.RoleReviewer); len(reviews) != 2 {
+		t.Fatalf("reviewer invocations = %d, want 2", len(reviews))
+	}
+	// The retry is not a repair: nothing was handed back to the developer.
+	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
+		t.Fatalf("developer invocations = %d, want 1", len(developers))
+	}
+	if outcome.RepairAttempts != 0 {
+		t.Fatalf("repair attempts = %d, want the retry to spend none", outcome.RepairAttempts)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.IntegrationRetries != 1 || state.BaseCommit != moved {
+		t.Fatalf("durable retry evidence = %#v", state)
+	}
+	if !strings.Contains(tracker.notes, "Integration retries: 1") {
+		t.Fatalf("notes are missing the retry evidence: %q", tracker.notes)
+	}
+}
+
+// The retry is bounded, and a run that spends the bound records what stopped it
+// on the item rather than disappearing. Nothing here says the change is wrong,
+// so the artifacts are preserved for whoever settles the target branch.
+func TestPipelineBlocksWhenTheIntegrationRetryBudgetIsSpent(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return err
+		}
+		writePipelineFile(t, repository, "elsewhere.txt", "somebody else's work\n")
+		runPipelineGit(t, repository, "add", "elsewhere.txt")
+		runPipelineGit(t, repository, "commit", "-m", "concurrent target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation = 0
+	moved := ""
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	moved = gitLine(t, repository, "rev-parse", "refs/heads/main")
+	if err == nil || !strings.Contains(err.Error(), "lost its target branch") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !outcome.Blocked || outcome.Integration != nil || tracker.closed {
+		t.Fatalf("Run() outcome = %#v, closed = %t", outcome, tracker.closed)
+	}
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "target branch kept moving") {
+		t.Fatalf("blocker = %t: %q", tracker.blocked, tracker.blockReason)
+	}
+	// The target keeps whatever moved it, and the run's work stays where a person
+	// can pick it up.
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != moved {
+		t.Fatalf("main = %q, want the change that moved it (%q)", head, moved)
+	}
+	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("worktree was not preserved: %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Integration != nil || state.IntegrationRetries != 0 {
+		t.Fatalf("state = %#v", state)
+	}
+	// This promotion was refused before it committed anything, so the change is
+	// still uncommitted and the worktree is still at the HEAD the run recorded.
+	// Nothing about the ownership rule is loosened by the refusal.
+	if state.HarnessCommit != "" {
+		t.Fatalf("a promotion that never committed recorded a harness commit: %q", state.HarnessCommit)
+	}
+	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.BaseCommit {
+		t.Fatalf("worktree HEAD = %q, want the recorded base %q", head, state.BaseCommit)
+	}
+}
+
+// A replay that conflicts is the one case the harness must not resolve. It
+// blocks with both sides intact rather than choosing between them.
+func TestPipelineBlocksOnAReplayConflictWithoutResolvingIt(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "docs", "design.md"), []byte("this run's answer\n"), 0o600); err != nil {
+			return err
+		}
+		// The target moves onto the same line, so the replay is a decision rather
+		// than a mechanical one.
+		writePipelineFile(t, repository, filepath.Join("docs", "design.md"), "somebody else's answer\n")
+		runPipelineGit(t, repository, "add", "docs/design.md")
+		runPipelineGit(t, repository, "commit", "-m", "conflicting target change")
+		return nil
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "cannot be replayed onto the moved integration target") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !outcome.Blocked || outcome.Integration != nil || tracker.closed {
+		t.Fatalf("Run() outcome = %#v, closed = %t", outcome, tracker.closed)
+	}
+	if !tracker.blocked || !strings.Contains(tracker.blockReason, "conflicts with what the target now holds") {
+		t.Fatalf("blocker = %t: %q", tracker.blocked, tracker.blockReason)
+	}
+	if !strings.Contains(tracker.blockReason, "Nothing was force-merged") {
+		t.Fatalf("blocker does not say what was not done: %q", tracker.blockReason)
+	}
+	// Both sides survive: the target keeps its answer, the worktree keeps this
+	// run's, and neither was merged into the other.
+	if content := readPipelineFile(t, repository, filepath.Join("docs", "design.md")); content != "somebody else's answer\n" {
+		t.Fatalf("target content = %q", content)
+	}
+	if content := readPipelineFile(t, outcome.WorktreePath, filepath.Join("docs", "design.md")); content != "this run's answer\n" {
+		t.Fatalf("preserved worktree content = %q", content)
+	}
+	if status := gitOutput(t, outcome.WorktreePath, "status", "--porcelain=v1"); strings.TrimSpace(status) != "" {
+		t.Fatalf("preserved worktree is mid-replay: %q", status)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Integration != nil || state.IntegrationRetries != 1 || state.HarnessCommit == "" {
+		t.Fatalf("state = %#v", state)
+	}
+	if head := gitLine(t, outcome.WorktreePath, "rev-parse", "HEAD"); head != state.HarnessCommit {
+		t.Fatalf("worktree HEAD = %q, want the recorded harness commit %q", head, state.HarnessCommit)
+	}
+}
+
+func writePipelineFile(t *testing.T, root, relative, content string) {
+	t.Helper()
+	path := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll(%s) error = %v", relative, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", relative, err)
+	}
+}
+
+func readPipelineFile(t *testing.T, root, relative string) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, relative))
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", relative, err)
+	}
+	return string(content)
 }

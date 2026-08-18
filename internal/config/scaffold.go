@@ -165,6 +165,14 @@ product:
 execution:
   max_concurrent_developers: %d
   repair_attempts_before_replan: %d
+  # A promotion that loses a race -- to another run, or to whoever moved the
+  # target branch while this one was working -- is replayed onto where the
+  # target went and tried again, up to this many times. Every retry re-runs the
+  # checks and asks for a fresh independent review, because the change that
+  # would now be promoted is not the one that was approved. A replay that
+  # conflicts is never resolved automatically: it stops the run and is left for
+  # a person.
+  integration_retries_before_reconciliation: %d
   worktree_root: %s
   # The remote publishing pushes to and opens pull requests against. It is only
   # consulted when approvals.publishing is automatic; a repository with no
@@ -196,6 +204,7 @@ approvals:
 		effective.Product.Decisions,
 		effective.Execution.MaxConcurrentDevelopers,
 		effective.Execution.RepairAttemptsBeforeReplan,
+		effective.Execution.IntegrationRetriesBeforeReconciliation,
 		effective.Execution.WorktreeRoot,
 		effective.Execution.Remote,
 		renderScaffoldDuration(effective.Execution.UsageLimitMaxPause),

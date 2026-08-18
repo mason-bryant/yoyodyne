@@ -55,6 +55,10 @@ type WorktreeManager interface {
 	SummarizeChanges(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.ChangeSummary, error)
 	UnifiedChanges(ctx context.Context, worktree gitworktree.Worktree, limits gitworktree.DiffLimits) (gitworktree.ChangeDiff, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
+	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
+	// replaying it onto wherever the target branch went. It is the only thing
+	// that ever rewrites a run's branch, and it never resolves a conflict.
+	RebaseOntoTarget(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Rebase, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	// The publishing half. RemoteConfigured is what lets a repository with no
 	// remote degrade to purely local behavior instead of failing; PublishBranch
@@ -65,6 +69,9 @@ type WorktreeManager interface {
 	// the promotion there and at which commit it left the branch.
 	RemoteConfigured(ctx context.Context) (bool, error)
 	PublishBranch(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Publication, error)
+	// RepublishBranch puts a replayed run branch back on the remote, replacing
+	// exactly the commit the harness published there and nothing else.
+	RepublishBranch(ctx context.Context, worktree gitworktree.Worktree, previousCommit string) (gitworktree.Publication, error)
 	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
 	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
@@ -187,8 +194,14 @@ type Outcome struct {
 	// developer, whether it was a failing check or the reviewer's findings; the
 	// two share one budget. Blocked reports that the budget was spent and what
 	// remained unresolved was recorded on the work item.
-	RepairAttempts int  `json:"repair_attempts,omitempty"`
-	Blocked        bool `json:"blocked,omitempty"`
+	RepairAttempts int `json:"repair_attempts,omitempty"`
+	// IntegrationRetries counts the promotions this run re-prepared after losing
+	// a race for its target branch. Each one replayed the change onto where the
+	// target went and put it back through the checks and a fresh independent
+	// review, so it is evidence about the target moving rather than about the
+	// change being wrong.
+	IntegrationRetries int  `json:"integration_retries,omitempty"`
+	Blocked            bool `json:"blocked,omitempty"`
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
@@ -650,19 +663,153 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 		}
 		return a.finish(ctx)
 	}
-	if err := a.repairLoop(ctx); err != nil {
-		return a.stop(ctx, err)
+	// The whole gate repeats when a promotion loses its race for the target
+	// branch, because everything it established belongs to a change that would
+	// now be promoted onto a different base: the checks ran against the old one
+	// and the approval was given for the old diff. Nothing about the loop
+	// weakens the gate — it re-earns it.
+	for {
+		if err := a.repairLoop(ctx); err != nil {
+			return a.stop(ctx, err)
+		}
+		// An approval only authorizes integration when it demonstrably came from a
+		// second invocation. Missing or reused provider identity means the
+		// independence the policy relies on was never established.
+		if err := validateIndependentInvocations(a.outcome); err != nil {
+			return a.fail(err, runstate.StatusFailed)
+		}
+		err := a.integrate(ctx)
+		if err == nil {
+			return a.finish(ctx)
+		}
+		retry, retryErr := a.prepareIntegrationRetry(ctx, err)
+		if retryErr != nil {
+			return a.fail(retryErr, failureStatus(ctx, retryErr))
+		}
+		if !retry {
+			return a.fail(err, failureStatus(ctx, err))
+		}
 	}
-	// An approval only authorizes integration when it demonstrably came from a
-	// second invocation. Missing or reused provider identity means the
-	// independence the policy relies on was never established.
-	if err := validateIndependentInvocations(a.outcome); err != nil {
-		return a.fail(err, runstate.StatusFailed)
+}
+
+// contendedIntegration reports a promotion refused because the target branch is
+// not where this run left it. Both refusals mean it: the recorded base no
+// longer matches the branch, or the fast-forward itself lost the race. Neither
+// says anything is wrong with the change, which is why they are the only
+// failures worth re-preparing rather than ending the run on.
+func contendedIntegration(err error) bool {
+	return errors.Is(err, gitworktree.ErrTargetDrift) || errors.Is(err, gitworktree.ErrNotFastForward)
+}
+
+// prepareIntegrationRetry re-prepares a change whose promotion lost its race,
+// and reports whether the run may try again. The retry is recorded before any
+// of it happens, so a process that dies part-way through cannot come back to a
+// fresh budget, and the commit the refused promotion had already made is
+// recorded for the same reason publishing records its own: a worktree at a HEAD
+// nothing named is a worktree nothing may promote afterwards.
+//
+// A replay that conflicts is the end of the line rather than another retry. The
+// harness does not decide which side of a conflict is right — that belongs to
+// the development manager, which is the operator until the role exists — so it
+// is recorded as a blocker on the work item with the artifacts preserved.
+func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (bool, error) {
+	if !contendedIntegration(cause) {
+		return false, nil
 	}
-	if err := a.integrate(ctx); err != nil {
-		return a.fail(err, failureStatus(ctx, err))
+	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
+	if a.state.IntegrationRetries >= limit {
+		return false, a.blockOnContendedIntegration(ctx, cause, limit)
 	}
-	return a.finish(ctx)
+	a.state.IntegrationRetries++
+	a.outcome.IntegrationRetries = a.state.IntegrationRetries
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return false, fmt.Errorf("save integration retry %d: %w", a.state.IntegrationRetries, err)
+	}
+	rebase, err := a.pipeline.Worktrees.RebaseOntoTarget(ctx, a.worktree, integrationMessage(a.item, a.outcome))
+	// The replay reports the commit it owns whichever way it went, so it is
+	// recorded before the failure is: an aborted replay leaves the branch on that
+	// commit, and the worktree is preserved for whoever picks the conflict up.
+	if recordErr := a.recordRebase(rebase); recordErr != nil {
+		return false, errors.Join(err, recordErr)
+	}
+	if errors.Is(err, gitworktree.ErrRebaseConflict) {
+		return false, a.blockOnRebaseConflict(ctx, err)
+	}
+	if err != nil {
+		return false, fmt.Errorf("replay the change onto the moved integration target: %w", err)
+	}
+	// The published branch has to become the replayed one, or the pull request
+	// would carry work the authoritative local branch no longer has.
+	if err := a.republishRebase(ctx, rebase); err != nil {
+		return false, err
+	}
+	// The approval that was granted described the change on its old base. It is
+	// discarded rather than carried over, so the next pass through the gate gets
+	// its own checks and its own independent verdict on the replayed diff.
+	a.clearReviewEvidence()
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return false, fmt.Errorf("save replayed run state: %w", err)
+	}
+	return true, nil
+}
+
+// recordRebase makes the replayed base and the harness commit that carries the
+// work durable together. They move as one — the recorded base is what the
+// promotion is checked against and what every diff is taken from, and the
+// harness commit is the only HEAD the worktree may be at — so a record with one
+// of them updated and not the other describes a worktree nothing would accept.
+func (a *activeRun) recordRebase(rebase gitworktree.Rebase) error {
+	if rebase.HeadCommit == "" {
+		return nil
+	}
+	a.worktree.BaseCommit = rebase.BaseCommit
+	a.state.BaseCommit = rebase.BaseCommit
+	a.outcome.BaseCommit = rebase.BaseCommit
+	// A replay that leaves nothing above the base has no harness commit to name:
+	// the work it replayed is already in the target. Recording one anyway would
+	// claim a commit past a base that is also that commit.
+	harnessCommit := rebase.HeadCommit
+	if harnessCommit == rebase.BaseCommit {
+		harnessCommit = ""
+	}
+	a.recordHarnessCommit(harnessCommit)
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save the replayed change: %w", err)
+	}
+	return nil
+}
+
+// blockOnContendedIntegration ends a run that kept losing its target branch. It
+// is the integration-side twin of the repair blockers: the change is sound as
+// far as every gate could tell, and what it needs is a person to say what the
+// target is supposed to look like.
+func (a *activeRun) blockOnContendedIntegration(ctx context.Context, cause error, limit int) error {
+	blocked := fmt.Errorf("integration lost its target branch after %d of %d permitted retry(s): %w",
+		a.state.IntegrationRetries, limit, cause)
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
+		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return blocked
+}
+
+// blockOnRebaseConflict ends a run whose change cannot be replayed onto what its
+// target became. Nothing is forced and nothing is resolved: the worktree and the
+// branch stay exactly as they were, and the conflict is recorded for whoever
+// owns the decision.
+func (a *activeRun) blockOnRebaseConflict(ctx context.Context, cause error) error {
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRebaseConflictNotes(a.outcome, cause.Error())); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the replay conflict as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
 }
 
 // repairLoop returns each failure to the same developer until an attempt both
@@ -1239,6 +1386,19 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	}
 	integration, err := p.Worktrees.Integrate(ctx, a.worktree, integrationMessage(a.item, a.outcome))
 	if err != nil {
+		// A refused promotion may already have committed what the developer left,
+		// and that commit is what this worktree's HEAD is now. It is recorded
+		// before the failure is reported, for the reason publishing records its
+		// own: a retry, a resumed run, and a reconciler all have to be able to tell
+		// it from a commit an agent made for itself.
+		if integration.SourceCommit != "" && integration.SourceCommit != a.state.HarnessCommit {
+			a.recordHarnessCommit(integration.SourceCommit)
+			a.state.UpdatedAt = p.clock().Now()
+			if saveErr := p.Store.Save(a.state); saveErr != nil {
+				return errors.Join(fmt.Errorf("integrate approved change: %w", err),
+					fmt.Errorf("record the commit the refused promotion made: %w", saveErr))
+			}
+		}
 		return fmt.Errorf("integrate approved change: %w", err)
 	}
 	a.outcome.Integration = &integration
@@ -2095,6 +2255,42 @@ func renderCheckBlockerNotes(outcome Outcome, failure runstate.CheckFailure, lim
 	return strings.Join(lines, "\n")
 }
 
+// renderIntegrationBlockerNotes describes a run that kept losing its target
+// branch. It says plainly that nothing was found wrong with the change, because
+// the artifacts it preserves are worth picking up rather than replanning: what
+// the reader has to settle is what the target branch is supposed to hold.
+func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its target branch kept moving under the promotion, so the change was never integrated.",
+		fmt.Sprintf("Integration retries: %d of %d permitted", outcome.IntegrationRetries, limit),
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"Base commit: " + outcome.BaseCommit,
+		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and the target branch is what needs looking at.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderRebaseConflictNotes describes a change that cannot be replayed onto what
+// its target became. This is the one integration outcome that is genuinely a
+// decision rather than a retry, so it names both sides and says explicitly that
+// nothing was resolved automatically.
+func renderRebaseConflictNotes(outcome Outcome, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its target branch moved, and this change conflicts with what the target now holds.",
+		"Nothing was force-merged, reset, or auto-resolved; which side of the conflict is right is a decision for a person.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"Base commit: " + outcome.BaseCommit,
+		"The branch and worktree are preserved exactly as they were; reconciling them against the target branch is what this needs.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
 // renderUsageLimitPauseNotes describes a run that is waiting rather than one
 // that stopped. It says plainly that nothing was abandoned, because an operator
 // reading a claimed item that has gone quiet needs to know the difference
@@ -2193,6 +2389,12 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))
 	}
+	// A promotion that had to be re-prepared says something about the branch it
+	// was promoted into rather than about the change, and it is the only record
+	// that the approved diff was replayed and judged again.
+	if outcome.IntegrationRetries > 0 {
+		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
+	}
 	if outcome.ProviderSessionID != "" {
 		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
 	}
@@ -2236,7 +2438,10 @@ func renderFailureNotes(outcome Outcome) string {
 		headline = "Yoyodyne run failed after the change was already integrated; the integrated commit, branch, and worktree are preserved for reconciliation."
 	}
 	if outcome.Blocked {
-		headline = "Yoyodyne blocked this item after its repair attempts were spent; the branch and worktree are preserved."
+		// A run is blocked by a spent repair budget or by a target branch it could
+		// not promote into, and the recorded blocker says which. This headline
+		// deliberately does not: naming one of them would be wrong half the time.
+		headline = "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it."
 	}
 	lines := []string{
 		headline,
@@ -2248,6 +2453,9 @@ func renderFailureNotes(outcome Outcome) string {
 	}
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts: "+strconv.Itoa(outcome.RepairAttempts))
+	}
+	if outcome.IntegrationRetries > 0 {
+		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
 	}
 	if outcome.Branch != "" {
 		lines = append(lines, "Branch: "+outcome.Branch)

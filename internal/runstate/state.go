@@ -25,7 +25,10 @@ import (
 // absence means what it meant before queued merges existed: no merge is waiting
 // on the forge. The recorded account of what a run changed is the same kind of
 // addition: a state file written before it decodes unchanged, and its absence
-// means what it always meant, which is that nothing summarized the change.
+// means what it always meant, which is that nothing summarized the change. The
+// count of retried promotions is the same again: absent means no promotion of
+// this run was ever re-prepared, which is what every run written before the
+// retry existed did.
 const StateSchemaVersion = 1
 
 type Status string
@@ -328,6 +331,15 @@ type State struct {
 	// starts, so an interrupted run resumes at the attempt it reached and a
 	// restart cannot buy the run a fresh budget.
 	RepairAttempts int `json:"repair_attempts,omitempty"`
+	// IntegrationRetries counts the promotions this run has re-prepared after
+	// losing a race for its target branch: the change replayed onto where the
+	// target went, re-checked, and re-reviewed. It is recorded before the retry
+	// begins, for the same reason the repair count is, so a process that dies
+	// mid-retry resumes against the budget it had rather than a fresh one. It is
+	// bounded separately from the repair budget because it bounds a different
+	// thing: how long a run keeps chasing a moving target, rather than how many
+	// times a developer is asked to fix its own change.
+	IntegrationRetries int `json:"integration_retries,omitempty"`
 	// UsageLimitResetsAt is the deadline a run paused for an exhausted provider
 	// usage limit is waiting on. It is written before the wait begins, so a
 	// process that dies during the wait does not lose the deadline and a restart
@@ -505,6 +517,9 @@ func (s State) Validate() error {
 	}
 	if s.RepairAttempts < 0 {
 		problems = append(problems, errors.New("repair_attempts cannot be negative"))
+	}
+	if s.IntegrationRetries < 0 {
+		problems = append(problems, errors.New("integration_retries cannot be negative"))
 	}
 	if s.UsageLimitPausedSeconds < 0 {
 		problems = append(problems, errors.New("usage_limit_paused_seconds cannot be negative"))
