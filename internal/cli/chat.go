@@ -228,6 +228,11 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		// The collected reports are the same pile the runs fill, read and written
 		// from here because this conversation is where the operator already is.
 		Reports: parts.reports,
+		// The same directives every run reads before it commits to work. One
+		// recorded from this conversation is not this conversation's: it belongs
+		// to the product, and it reaches runs in other processes exactly as it
+		// reaches this one.
+		Directives: conversationDirectives{store: parts.directives, productID: cfg.Product.ID},
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.

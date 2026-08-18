@@ -212,7 +212,13 @@ type RunReport struct {
 	// run was the harness stopping a provider invocation on time. Such a run is
 	// continuable straight away rather than waiting on a deadline.
 	ProviderStop string `json:"provider_stop,omitempty"`
-	Failure      string `json:"failure,omitempty"`
+	// DirectivePause is set instead of either when what paused the work was an
+	// unresolved user directive. It names the directive and what is unresolved,
+	// because settling that is what makes the work continuable — nothing about it
+	// is a matter of waiting. It is the one pause that can appear without a run
+	// behind it, on work a directive stopped before it was ever claimed.
+	DirectivePause string `json:"directive_pause,omitempty"`
+	Failure        string `json:"failure,omitempty"`
 	// Reported counts what this run's agents reported while their work carried
 	// on, and ReportProblem names one the run could not keep. The reports
 	// themselves are in the collected pile that /reports shows; the count is
@@ -675,6 +681,12 @@ func (r RunReport) Headline() string {
 		item = "the work item"
 	}
 	switch {
+	case r.Paused && r.DirectivePause != "":
+		// A directive pause is lifted by a decision rather than by time, so this
+		// says what to settle rather than what to wait for. It never claims a run
+		// is in flight: a directive can stop work before anything was claimed.
+		return fmt.Sprintf("%s is paused for an unresolved directive and nothing is working on it: %s; /resolve releases it and /work %s carries on",
+			item, r.DirectivePause, item)
 	case r.Paused && r.ProviderStop != "":
 		stopped := "its provider stopped emitting events and was stopped"
 		if r.ProviderStop == ProviderStopBudgetExhausted {

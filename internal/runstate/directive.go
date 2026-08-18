@@ -1,0 +1,266 @@
+package runstate
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/directive"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+)
+
+// DirectiveStore is where user directives live: in the same operating-system
+// state root as runs and collected reports, product-scoped and beside both
+// rather than inside either.
+//
+// That placement is the whole mechanism behind a directive applying regardless
+// of which agent received it. A directive kept in the conversation that heard it
+// would reach that conversation; one kept in a run's state would reach that run.
+// Kept here, it is read by every process that acts on this product's work, and
+// the run pipeline consults it before it starts a run, before it resumes one,
+// and before it puts a change through the gate.
+//
+// It is a file per directive rather than an append-only log, which is the one
+// way it differs from the reports beside it. A report is written once and never
+// revised; a directive is revised exactly once, when somebody resolves it, and
+// resolving it is what lets the paused work resume.
+type DirectiveStore struct {
+	root      string
+	productID domain.ProductID
+}
+
+func NewDirectiveStore(root string, productID domain.ProductID) (*DirectiveStore, error) {
+	if !filepath.IsAbs(root) {
+		return nil, errors.New("state root must be an absolute path")
+	}
+	if err := domain.ValidateIdentifier("product id", string(productID)); err != nil {
+		return nil, err
+	}
+	return &DirectiveStore{
+		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "directives"),
+		productID: productID,
+	}, nil
+}
+
+func (s *DirectiveStore) Root() string { return s.root }
+
+// ErrNoDirective reports a reference that names nothing recorded, which is a
+// plain answer rather than a failure to look.
+var ErrNoDirective = errors.New("no directive is recorded under that reference")
+
+// Record makes one directive durable. It is an exclusive create: a directive is
+// recorded once, and two processes recording at the same moment must not be able
+// to overwrite each other's.
+func (s *DirectiveStore) Record(recorded directive.Directive) error {
+	if err := s.validate(recorded); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create directive directory: %w", err)
+	}
+	path, err := s.path(recorded.ID)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("directive %s is already recorded", recorded.ID)
+		}
+		return fmt.Errorf("create directive: %w", err)
+	}
+	if err := writeJSONFile(file, "directive", recorded); err != nil {
+		return cleanupFailedCreate(file, path, err)
+	}
+	if err := file.Close(); err != nil {
+		return cleanupFailedCreate(nil, path, fmt.Errorf("close directive: %w", err))
+	}
+	if err := syncDirectory(s.root); err != nil {
+		return cleanupFailedCreate(nil, path, err)
+	}
+	return nil
+}
+
+// List returns every recorded directive in the order it was received. A
+// directory that does not exist yet is a product nobody has directed, which is
+// not a failure to read.
+func (s *DirectiveStore) List() ([]directive.Directive, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read directive directory: %w", err)
+	}
+	directives := make([]directive.Directive, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		loaded, err := s.Load(strings.TrimSuffix(entry.Name(), ".json"))
+		if err != nil {
+			return nil, err
+		}
+		directives = append(directives, loaded)
+	}
+	directive.Sort(directives)
+	return directives, nil
+}
+
+// Pausing lists the unresolved directives that pause one work item. It is the
+// question the run pipeline asks, and it is answered from the durable records
+// every time rather than from anything a process remembers: a directive recorded
+// by one process while another is mid-run has to reach that run.
+func (s *DirectiveStore) Pausing(workItemID string) ([]directive.Directive, error) {
+	recorded, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	return directive.Pausing(recorded, workItemID), nil
+}
+
+// Load reads one directive by its full identifier.
+func (s *DirectiveStore) Load(id string) (directive.Directive, error) {
+	path, err := s.path(id)
+	if err != nil {
+		return directive.Directive{}, err
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return directive.Directive{}, fmt.Errorf("%w: %s", ErrNoDirective, id)
+	}
+	if err != nil {
+		return directive.Directive{}, fmt.Errorf("open directive: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
+	decoder.DisallowUnknownFields()
+	var loaded directive.Directive
+	if err := decoder.Decode(&loaded); err != nil {
+		return directive.Directive{}, fmt.Errorf("decode directive %s: %w", id, err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return directive.Directive{}, fmt.Errorf("decode directive %s: %w", id, err)
+	}
+	if loaded.ID != id {
+		return directive.Directive{}, fmt.Errorf("directive file %s holds directive %s", id, loaded.ID)
+	}
+	if err := s.validate(loaded); err != nil {
+		return directive.Directive{}, err
+	}
+	return loaded, nil
+}
+
+// Find resolves a reference an operator typed. A full identifier is matched
+// exactly; anything shorter is matched as a prefix and is only an answer when it
+// names exactly one directive. An identifier is thirty-two hex digits because
+// every other identity here is, and nobody types thirty-two hex digits: an
+// ambiguous prefix is reported as ambiguous rather than resolved to whichever
+// directive happened to sort first.
+func (s *DirectiveStore) Find(reference string) (directive.Directive, error) {
+	wanted := strings.TrimSpace(reference)
+	if wanted == "" {
+		return directive.Directive{}, errors.New("name the directive; a listing shows what is recorded")
+	}
+	recorded, err := s.List()
+	if err != nil {
+		return directive.Directive{}, err
+	}
+	var matched []directive.Directive
+	for _, candidate := range recorded {
+		if candidate.ID == wanted {
+			return candidate, nil
+		}
+		if strings.HasPrefix(candidate.ID, wanted) {
+			matched = append(matched, candidate)
+		}
+	}
+	switch len(matched) {
+	case 0:
+		return directive.Directive{}, fmt.Errorf("%w: %s", ErrNoDirective, wanted)
+	case 1:
+		return matched[0], nil
+	default:
+		names := make([]string, 0, len(matched))
+		for _, candidate := range matched {
+			names = append(names, candidate.ID)
+		}
+		return directive.Directive{}, fmt.Errorf("%q names %d directives: %s", wanted, len(matched), strings.Join(names, ", "))
+	}
+}
+
+// Resolve settles a directive and returns what was recorded. Settling is what
+// lifts the pause: the work it affected becomes runnable again on the next
+// consultation, in whichever process makes it.
+func (s *DirectiveStore) Resolve(reference, resolution string, at time.Time) (directive.Directive, error) {
+	found, err := s.Find(reference)
+	if err != nil {
+		return directive.Directive{}, err
+	}
+	resolved, err := found.Resolve(resolution, at)
+	if err != nil {
+		return directive.Directive{}, err
+	}
+	if err := s.save(resolved); err != nil {
+		return directive.Directive{}, err
+	}
+	return resolved, nil
+}
+
+// save replaces one recorded directive atomically. It is the one revision a
+// directive ever takes, so it refuses to write a record for a directive that
+// does not already exist rather than creating one by the back door.
+func (s *DirectiveStore) save(recorded directive.Directive) error {
+	if err := s.validate(recorded); err != nil {
+		return err
+	}
+	path, err := s.path(recorded.ID)
+	if err != nil {
+		return err
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("load existing directive before save: %w", err)
+	}
+	temporary, err := os.CreateTemp(s.root, ".directive-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary directive: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		temporary.Close()
+		return fmt.Errorf("secure temporary directive: %w", err)
+	}
+	if err := writeJSONFile(temporary, "directive", recorded); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("close temporary directive: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace directive: %w", err)
+	}
+	return syncDirectory(s.root)
+}
+
+func (s *DirectiveStore) validate(recorded directive.Directive) error {
+	if recorded.ProductID != s.productID {
+		return fmt.Errorf("directive product %q does not match store product %q", recorded.ProductID, s.productID)
+	}
+	return recorded.Validate()
+}
+
+// path names one directive's file. The identifier is checked against its own
+// pattern first, so nothing that came from outside can name a path.
+func (s *DirectiveStore) path(id string) (string, error) {
+	if !directive.ValidID(id) {
+		return "", fmt.Errorf("directive id %q is invalid", id)
+	}
+	return filepath.Join(s.root, id+".json"), nil
+}
