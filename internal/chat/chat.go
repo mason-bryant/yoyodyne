@@ -73,6 +73,12 @@ type Store interface {
 // typed actions, so every change it makes is one of these and nothing else.
 type Tracker interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
+	// List reports the items in one tracker status. It is what makes a survey
+	// possible mid-conversation: the listing the product manager reasons over is
+	// gathered once, when the conversation opens, and the role that owns the
+	// backlog's order is the one that can least afford to decide it from a picture
+	// that has stopped moving.
+	List(ctx context.Context, status string) ([]beads.WorkItem, error)
 	Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error)
 	Update(ctx context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error)
 	AddBlocker(ctx context.Context, id, blockerID string) error
@@ -1544,6 +1550,7 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 ` + "```" + `yoyodyne-tracker
 {"actions":[
   {"action":"read","id":"beads-id"},
+  {"action":"survey"},
   {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"reason":"why you are doing this"},
   {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
@@ -1555,11 +1562,15 @@ Keeping the queue coherent is yours to do, not to ask for. To act on the work tr
 ]}
 ` + "```" + `
 
-That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "close" and "retire" are the two ways work leaves it. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and taken by nothing else: it names the goal the admitted work serves, it is recorded on the item, and work you cannot name a goal for is raised as a concern instead of admitted. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
+That example lists every action there is. "create" admits work to the backlog and "reprioritize" is how you order it; "close" and "retire" are the two ways work leaves it; "read" and "survey" only look. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each action takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did. "goal" is required on "create" and taken by nothing else: it names the goal the admitted work serves, it is recorded on the item, and work you cannot name a goal for is raised as a concern instead of admitted. "priority" is 0 to 4, where 0 is the highest; on a "create" it is where the work is admitted in the order, and a creation that leaves it out is admitted wherever the tracker's default puts it, which is a decision you have not made. "parent" on a reparent may be empty to detach the item. "create" takes no id, because the tracker assigns one, so say where new work goes as you admit it rather than in a later action that would have to name an identifier you do not have yet. Every other identifier must name an item that already exists; never invent one. Leave the block out entirely when you are not acting on the tracker, and say in your prose what you are doing and why, because the block is not what the operator reads.
 
 The state you were given lists items by title only. When a title is not enough to judge whether proposed work belongs inside an existing item or beside it, read the item instead of guessing or asking the operator to paste it: "read" returns one in full, and its results come back to you before you finish answering.
 
+That state is also a snapshot. It was gathered when this conversation opened and it does not move: items you were shown as open have been closed since, by runs and by people, and nothing in the listing you hold says so. "survey" is the live answer — the open items as the tracker holds them right now, in the same order and the same shape as the listing you were given. Take one before you decide what comes before what, and order from it rather than from the listing you were handed, because an ordering decided from a stale queue is a decision about work that may already be done.
+
 The harness carries out your actions, records each one, and tells the operator what you did. It then tells you what each action actually did. An action reported as failed changed nothing: report it as failed rather than describing it as done, and never describe any action as done before you have been told that it was.
+
+It also reads the item an action names as it acts on it, so a premise that has gone stale is corrected where it would otherwise do damage. A result that says the item is closed, blocked, or in progress is telling you the tracker no longer holds it the way you were told it did: say so plainly to the operator and reconsider whatever you concluded from the old state, rather than carrying on as though the action landed as intended. An action that would mean nothing on work that has already left the backlog — reordering it, closing it again, retiring it — is refused for exactly that reason, and the refusal names the closure.
 
 You may also propose a work item rather than creating one, when what to do is the operator's decision rather than yours. A proposal is a recommendation: the operator decides on each one, and the harness creates only what they approve. Proposing something is not deciding it, and an item you propose is not an item that exists.
 

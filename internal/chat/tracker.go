@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -58,6 +59,26 @@ const maxTrackerItemBytes = 8 << 10
 // what that record may hold rather than growing with whatever was read.
 const maxPendingResultBytes = 32 << 10
 
+// maxTrackerSurveyItems and maxTrackerSurveyBytes bound one survey of the open
+// queue. The item count matches what the product context lists, so a survey
+// taken mid-conversation is never a smaller view of the queue than the picture it
+// is being compared against, and the byte bound is what keeps a survey of a large
+// backlog from crowding out the rest of a turn. A survey cut at either is cut
+// with the cut declared.
+const (
+	maxTrackerSurveyItems = 200
+	maxTrackerSurveyBytes = 16 << 10
+)
+
+// The tracker statuses this reasons about. A conversation's picture of the queue
+// is assembled from the tracker's open items and nothing else, so open is the
+// state everything the product manager was told about was in when it was told;
+// closed is work that has left the backlog, whether it was finished or retired.
+const (
+	openWorkItemStatus   = "open"
+	closedWorkItemStatus = "closed"
+)
+
 const (
 	maxTrackerTitleBytes = 200
 	maxTrackerTextBytes  = 8 << 10
@@ -69,7 +90,14 @@ const (
 // The operations the product manager may ask for. Each is bounded, has named
 // arguments, and is reversible by another one of them.
 const (
-	actionRead         = "read"
+	actionRead = "read"
+	// actionSurvey is the open queue as the tracker holds it now. It exists
+	// because the listing the product manager reasons over is gathered when the
+	// conversation opens and never moves, while the order it decides from that
+	// listing is the one thing in the harness that must not be decided from a
+	// stale one: on 2026-08-18 the backlog was reordered around an item that had
+	// been closed for hours.
+	actionSurvey       = "survey"
 	actionCreate       = "create"
 	actionUpdate       = "update"
 	actionReparent     = "reparent"
@@ -86,6 +114,7 @@ const (
 // parsed would do something nobody asked for.
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
+	actionSurvey:       {},
 	actionCreate:       {"title", "description", "goal", "parent", "priority"},
 	actionUpdate:       {"title", "description", "note"},
 	actionReparent:     {"parent"},
@@ -99,7 +128,7 @@ var trackerActionArguments = map[string][]string{
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
-	actionRead, actionCreate, actionUpdate, actionReparent,
+	actionRead, actionSurvey, actionCreate, actionUpdate, actionReparent,
 	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire,
 }
 
@@ -150,8 +179,15 @@ type TrackerOutcome struct {
 	// WorkItemID names the item the action affected, including the identifier a
 	// creation was assigned.
 	WorkItemID string `json:"work_item_id,omitempty"`
+	// TargetStatus is the state the tracker held the acted-on item in at the
+	// moment the action ran, and TargetUnread is why the tracker would not say.
+	// They are read as the action is carried out rather than taken from the
+	// conversation's picture of the item, which is what lets a result correct a
+	// premise that had gone stale instead of acting on it silently.
+	TargetStatus string `json:"target_status,omitempty"`
+	TargetUnread string `json:"target_unread,omitempty"`
 	// Summary says in one line what happened, and Detail carries the item text a
-	// read returned.
+	// read returned or the queue a survey returned.
 	Summary string `json:"summary,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 	Failure string `json:"failure,omitempty"`
@@ -250,10 +286,11 @@ func (a TrackerAction) Validate() error {
 	}
 	problems = append(problems, a.validateSubject())
 	problems = append(problems, a.validateArguments()...)
-	if a.Action == actionRead {
-		// A read changes nothing, so it is the one action that owes no reason.
+	if a.changesNothing() {
+		// Reading an item and surveying the queue change nothing, so they are the
+		// two actions that owe no reason.
 		if strings.TrimSpace(a.Reason) != "" {
-			problems = append(problems, errors.New("read does not take \"reason\""))
+			problems = append(problems, fmt.Errorf("%s does not take \"reason\"", a.Action))
 		}
 	} else {
 		problems = append(problems, boundTrackerText("reason", a.Reason, maxTrackerTextBytes, true))
@@ -265,20 +302,53 @@ func (a TrackerAction) Validate() error {
 }
 
 // validateSubject checks the item the action is about: named for everything that
-// acts on an existing item, and absent for a creation, whose identifier the
-// tracker assigns.
+// acts on an existing item, absent for a creation, whose identifier the tracker
+// assigns, and absent for a survey, which is about the queue rather than any item
+// in it.
 func (a TrackerAction) validateSubject() error {
 	id := strings.TrimSpace(a.ID)
-	if a.Action == actionCreate {
+	switch {
+	case a.Action == actionCreate:
 		if id != "" {
 			return errors.New("create does not take an id; the tracker assigns one")
 		}
 		return nil
-	}
-	if id == "" {
+	case a.Action == actionSurvey:
+		if id != "" {
+			return errors.New("survey does not take an id; it reports the whole open queue, and one item is what \"read\" is for")
+		}
+		return nil
+	case id == "":
 		return fmt.Errorf("%s requires the id of the item to act on", a.Action)
+	default:
+		return beads.ValidateIssueID(id)
 	}
-	return beads.ValidateIssueID(id)
+}
+
+// actsOnExistingItem reports an action about an item that already exists, which
+// is every operation but admitting new work and surveying the queue.
+func (a TrackerAction) actsOnExistingItem() bool {
+	switch a.Action {
+	case actionCreate, actionSurvey:
+		return false
+	default:
+		return true
+	}
+}
+
+// changesNothing reports an action that only reads the tracker. Such an action
+// owes no reason, because there is nothing for the operator to be owed the
+// reasoning for afterwards.
+func (a TrackerAction) changesNothing() bool {
+	return a.Action == actionRead || a.Action == actionSurvey
+}
+
+// readsTargetFirst reports an action whose item the harness looks up before
+// carrying it out. A read is excluded because it is that lookup: the item it
+// returns is the act-time answer, and asking twice would spend a tracker call to
+// learn what the action already found out.
+func (a TrackerAction) readsTargetFirst() bool {
+	return a.actsOnExistingItem() && a.Action != actionRead
 }
 
 // validateArguments checks what each operation needs beyond its subject. An
@@ -434,8 +504,14 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 			"turn":         outcome.Turn,
 			"action":       action,
 			"work_item_id": outcome.WorkItemID,
-			"summary":      outcome.Summary,
-			"failure":      outcome.Failure,
+			// What state the item was in when it was acted on is recorded beside
+			// what was done to it, because it is the reason an action was refused
+			// or carried out with a caveat, and a later reader has no other way to
+			// know what the harness saw.
+			"target_status": outcome.TargetStatus,
+			"target_unread": outcome.TargetUnread,
+			"summary":       outcome.Summary,
+			"failure":       outcome.Failure,
 		}); err != nil {
 			problems = append(problems, fmt.Errorf("record the outcome of tracker action %s: %w", outcome.ID, err))
 		}
@@ -447,11 +523,81 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 // applyTrackerAction runs one action against the tracker and writes down what
 // happened. It never reports more than the tracker confirmed: a failure leaves
 // Applied false, and the reply the operator reads says so.
+//
+// An action that names an existing item has that item read first, and that read
+// is not a formality. What the conversation believes about an item is as old as
+// the picture it was given, so an action can be aimed at work that has moved on
+// or finished since — on 2026-08-18 the backlog was reordered around an item
+// closed hours earlier, and the change was applied to the closed item without a
+// word. So the action is applied only if it still means something, and its result
+// says what state the tracker holds the item in now.
 func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcome) {
 	if s.options.Tracker == nil {
 		outcome.Failure = "no work tracker is configured for this conversation, so nothing was changed"
 		return
 	}
+	if outcome.Action.readsTargetFirst() {
+		s.readActionTarget(ctx, outcome)
+		if refusal := refuseWhenClosed(outcome.Action.Action, strings.TrimSpace(outcome.Action.ID), outcome.TargetStatus); refusal != "" {
+			outcome.Failure = refusal
+			return
+		}
+	}
+	s.carryOutTrackerAction(ctx, outcome)
+	outcome.noteTarget()
+}
+
+// readActionTarget records the state the tracker holds an action's item in, as
+// the action is about to run. A read that fails is recorded as an unanswered
+// question rather than left out: the action is still attempted, since a tracker
+// that would not describe an item is not evidence about the item, but nothing
+// afterwards may read as a confirmation that the item was where the conversation
+// last saw it.
+func (s *Session) readActionTarget(ctx context.Context, outcome *TrackerOutcome) {
+	item, err := s.options.Tracker.Show(ctx, strings.TrimSpace(outcome.Action.ID))
+	if err != nil {
+		outcome.TargetUnread = singleLine(err.Error(), maxTrackerFailureBytes)
+		return
+	}
+	outcome.recordTargetStatus(item)
+}
+
+// recordTargetStatus keeps what one item said about its own state, or says that
+// it said nothing. A status the tracker omitted is unknown rather than open: the
+// whole point of reading the item is that "open" is the assumption being checked.
+func (o *TrackerOutcome) recordTargetStatus(item beads.WorkItem) {
+	if status := strings.TrimSpace(item.Status); status != "" {
+		o.TargetStatus = status
+		return
+	}
+	o.TargetUnread = "its status was not in the tracker's answer"
+}
+
+// refuseWhenClosed says why an action on a closed item would mean nothing, or
+// says nothing when it still would. Work that has left the backlog cannot be
+// ordered within it or taken out of it again, and those are exactly the actions a
+// stale picture provokes. Everything else is still meaningful on closed work — a
+// note recording what was learned, and the dependency graph around it — and is
+// carried out with the closure stated rather than refused for tidiness.
+func refuseWhenClosed(action, id, status string) string {
+	if status != closedWorkItemStatus {
+		return ""
+	}
+	switch action {
+	case actionReprioritize:
+		return fmt.Sprintf("%s is closed, so where it sits in the queue is no longer a decision about what happens next; its priority was left as it is", id)
+	case actionClose:
+		return fmt.Sprintf("%s is already closed, so there was nothing to close", id)
+	case actionRetire:
+		return fmt.Sprintf("%s is already closed and has left the backlog, so there was nothing to retire", id)
+	default:
+		return ""
+	}
+}
+
+// carryOutTrackerAction is the operation itself, once the harness knows what it
+// is acting on.
+func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOutcome) {
 	action := outcome.Action
 	id := strings.TrimSpace(action.ID)
 	outcome.WorkItemID = id
@@ -463,8 +609,20 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 			return
 		}
 		outcome.WorkItemID = item.ID
+		outcome.recordTargetStatus(item)
 		outcome.Detail = renderWorkItemEvidence(item)
 		outcome.applied("read %s: %s", item.ID, singleLine(item.Title, maxSurveyTitleBytes))
+	case actionSurvey:
+		// The one action about the queue rather than about an item in it. It is the
+		// live answer to the question the opening picture answered once: what is
+		// admitted and open, in the order it will be pulled in.
+		items, err := s.options.Tracker.List(ctx, openWorkItemStatus)
+		if err != nil {
+			outcome.fail(err)
+			return
+		}
+		outcome.Detail = renderOpenQueueEvidence(items)
+		outcome.applied("surveyed the queue: %d open item(s) as the tracker holds it now", len(items))
 	case actionCreate:
 		// Admission carries the priority it is admitted at, because the item's
 		// identifier does not exist until this returns: an ordering left for a
@@ -569,6 +727,26 @@ func (o *TrackerOutcome) applied(format string, args ...any) {
 	o.Summary = fmt.Sprintf(format, args...)
 }
 
+// noteTarget adds the state the tracker holds the acted-on item in to what was
+// done to it. It says so exactly when that state is not open, and the asymmetry
+// is the point: a conversation's picture of the queue is assembled from the
+// tracker's open items, so an item that is not open now is one that has moved
+// since the picture was taken or one that was never in it, and either way the
+// reasoning that named it rested on something that is no longer true. Saying "it
+// is open" after every action would bury the one case that matters in the ones
+// that do not.
+func (o *TrackerOutcome) noteTarget() {
+	if !o.Applied {
+		return
+	}
+	switch {
+	case o.TargetUnread != "":
+		o.Summary += fmt.Sprintf("; the tracker would not say what state %s is in: %s", o.WorkItemID, o.TargetUnread)
+	case o.TargetStatus != "" && o.TargetStatus != openWorkItemStatus:
+		o.Summary += fmt.Sprintf("; %s is %s as the tracker holds it now", o.WorkItemID, o.TargetStatus)
+	}
+}
+
 func (o *TrackerOutcome) fail(err error) {
 	o.Applied = false
 	o.Failure = singleLine(err.Error(), maxTrackerFailureBytes)
@@ -659,14 +837,50 @@ func renderTrackerResults(outcomes []TrackerOutcome) string {
 		if outcome.Detail == "" {
 			continue
 		}
-		fmt.Fprintf(&rendered, "\n## Work item %s as the tracker holds it\n\n%s\n", outcome.WorkItemID, outcome.Detail)
+		fmt.Fprintf(&rendered, "\n%s\n\n%s\n", outcome.detailHeading(), outcome.Detail)
 	}
 	rendered.WriteString("\n")
 	return rendered.String()
 }
 
+// detailHeading names what the text under it describes: one item for a read, and
+// the queue itself for a survey, which is about no item at all.
+func (o TrackerOutcome) detailHeading() string {
+	if o.Action.Action == actionSurvey {
+		return "## The open queue as the tracker holds it now"
+	}
+	return "## Work item " + o.WorkItemID + " as the tracker holds it"
+}
+
+// renderOpenQueueEvidence is the open work the tracker holds now, which is what
+// the product manager asked to survey. It is the same listing, in the same order,
+// that the product context carries, so a survey taken mid-conversation can be
+// read against the picture the conversation opened with rather than as a second,
+// differently shaped account of the same queue.
+func renderOpenQueueEvidence(items []beads.WorkItem) string {
+	if len(items) == 0 {
+		return "The tracker holds no open work items. That is an answer about the queue, not a tracker that could not be read.\n"
+	}
+	ordered := append([]beads.WorkItem(nil), items...)
+	backlog.Sort(ordered)
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "%d open work item(s), in backlog order: highest priority first, which is the order work is pulled in. Items at the same priority are in the tracker's own order, and nothing has decided which of those comes first.\n\n", len(items))
+	listed := ordered
+	if len(listed) > maxTrackerSurveyItems {
+		listed = listed[:maxTrackerSurveyItems]
+	}
+	for _, item := range listed {
+		fmt.Fprintf(&rendered, "- %s [%s, p%d, %s] %s\n",
+			item.ID, item.Status, item.Priority, item.IssueType, singleLine(item.Title, maxTrackerTitleBytes))
+	}
+	if len(items) > len(listed) {
+		fmt.Fprintf(&rendered, "\n%d further open item(s) are not listed here.\n", len(items)-len(listed))
+	}
+	return boundText(rendered.String(), maxTrackerSurveyBytes)
+}
+
 // renderWorkItemEvidence is one work item in full, which is what the product
-// manager asked to read. The survey stays a summary; this is the detail that
+// manager asked to read. A survey stays a summary; this is the detail that
 // judgement about a specific item actually needs.
 func renderWorkItemEvidence(item beads.WorkItem) string {
 	var rendered strings.Builder

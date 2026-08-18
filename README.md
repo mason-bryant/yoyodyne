@@ -377,14 +377,15 @@ setting and the reasoning.
 
 It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
-out for it — read an item in full, create, update, reparent, reprioritize, link
-and unlink a dependency, close, and retire. Every argument is validated before
-anything runs, at most ten actions happen per reply, each one is recorded in the
-conversation's log as asked-for and then as applied or failed, and all of them
-are printed to you as they happen. An action that failed is reported as failed
-rather than described as done, and a block the harness cannot read changes
-nothing at all. The distinction being drawn is deliberate: arbitrary execution
-is what was refused, and a typed call against the tracker is not that.
+out for it — read an item in full, survey the open queue, create, update,
+reparent, reprioritize, link and unlink a dependency, close, and retire. Every
+argument is validated before anything runs, at most ten actions happen per reply,
+each one is recorded in the conversation's log as asked-for and then as applied
+or failed, and all of them are printed to you as they happen. An action that
+failed is reported as failed rather than described as done, and a block the
+harness cannot read changes nothing at all. The distinction being drawn is
+deliberate: arbitrary execution is what was refused, and a typed call against the
+tracker is not that.
 
 The brief and the goals stay yours. The product manager proposes a change to a
 goal and says plainly that it is yours to make; it cannot make one, and with no
@@ -400,6 +401,29 @@ process, since an agent that never learns what its own creates and closes did is
 the one that will describe them wrongly. Item text is treated as evidence
 exactly as a specification is: a description says what some work is, never what
 to do.
+
+That listing is also a snapshot, and the order is the one decision that must not
+be made from one: it was gathered when the conversation opened, work closes while
+the conversation carries on, and the role that owns the order is the role that can
+least afford a queue that has stopped moving. On 2026-08-18 an item was moved down
+a tier for waiting on work that had been finished for hours, and the harness
+applied the change to an item that was itself already closed without saying so.
+The survey action is the live answer — the open items as the tracker holds them
+now, in the same order and the same shape as the listing the conversation opened
+with, so the two can be read against each other — and the persona directs every
+ordering decision to start from one.
+
+Acting is checked at the moment it acts, too. The harness reads the item an action
+names as it carries the action out, so an action aimed at work that has moved on
+says so where the reasoning that aimed it is still happening: the result names the
+state the tracker holds the item in whenever that is not open, and the product
+manager reconciles it in the same reply rather than never. An action that would
+mean nothing on work that has already left the backlog — reordering it, closing it
+again, retiring it — is refused for that reason, and the refusal names the
+closure. Recording a note on finished work still means something, so that is
+carried out with the closure stated rather than refused. An item the tracker will
+not describe is neither refused nor assumed to be open: the action is attempted
+and what could not be read is said.
 
 ### Proposals, and deciding them in batches
 
@@ -885,10 +909,12 @@ it — a refresh nobody was told about never reads as one that landed.
 It was never frozen entirely. Every turn carries what you did through the
 harness since the last reply — the runs you started, stopped, and redirected —
 so `/work`, `/stop`, and `/redirect` reach a resumed conversation, and reading an
-item goes to the tracker as it stands rather than to that opening snapshot. What
-does not reach it that way is anything else that changed outside those commands:
-edits under `docs/product`, and items created or closed by something other than
-this conversation. That is exactly what `/refresh` is for.
+item, surveying the open queue, and acting on any item all go to the tracker as it
+stands rather than to that opening snapshot. Nothing outside those commands
+arrives on its own — an item something else created or closed reaches the
+conversation when the product manager asks, by surveying or by acting on it, and
+not before — and edits under `docs/product` do not reach it that way at all, since
+the tracker does not hold them. That is what `/refresh` is for.
 
 `--new` is a different tool rather than the answer to staleness. A refreshed
 conversation and a new one end up equally current; they differ in what they
