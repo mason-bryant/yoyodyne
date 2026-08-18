@@ -229,6 +229,17 @@ func TestPromotionLeaseRefusesWhatIsNotALocalBranch(t *testing.T) {
 			t.Fatalf("LeasePromotion(%q) was accepted", branch)
 		}
 	}
+	// `+` is what the lock name encodes a slash as, so the encoding is only
+	// reversible while a branch cannot contain one itself. Git accepts `+` in a
+	// branch name and validLocalBranch does not, which is the whole reason the
+	// encoding is safe — and it is an assumption about code elsewhere, so it is
+	// pinned here rather than left to be discovered when `release/1.2` and
+	// `release+1.2` quietly start sharing a lease.
+	for _, branch := range []string{"+x", "release+1.2"} {
+		if _, err := store.LeasePromotion(context.Background(), branch); err == nil {
+			t.Fatalf("LeasePromotion(%q) was accepted; the lock name encoding is no longer reversible", branch)
+		}
+	}
 }
 
 func TestPromotionLockNameKeepsBranchesApart(t *testing.T) {

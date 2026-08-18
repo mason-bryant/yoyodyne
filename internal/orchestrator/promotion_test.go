@@ -103,20 +103,19 @@ func TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand(t *testing.T) {
 	}
 }
 
-// promotionInvariantID is the invariant the architect records for the rule the
-// test above enforces. It is checked against this repository's own invariants
-// rather than a fixture, because the fixture cannot fail the way that matters:
-// an invariant nobody recorded, or one recorded with a scope, reaches no
-// developer and no reviewer and there is nothing else to notice it.
+// promotionInvariantID is the invariant recorded for the rule the test above
+// enforces. It is checked against this repository's own invariants rather than
+// a fixture, because the fixture cannot fail the way that matters: an invariant
+// nobody recorded, or one recorded with a scope, reaches no developer and no
+// reviewer and there is nothing else to notice it.
 const promotionInvariantID = "one-promotion-per-target-branch"
 
-// The invariant is the architect's to record; this is the harness side of it,
-// which is that a recorded one actually reaches both roles that could break it.
-// Until the architect has recorded it the test skips rather than failing,
-// because a developer creating the file to make its own test green is exactly
-// the authority the ownership boundary exists to refuse. It goes red the moment
-// a recorded constraint stops being delivered, which is the failure worth
-// catching: an invariant nobody is shown constrains nothing.
+// Recording the constraint and delivering it are two different facts, and only
+// the second is something code can hold. This asserts the second: that the
+// recorded invariant is active, repository-wide, and actually rendered into
+// both the developer's context and the reviewer's evidence. An invariant nobody
+// is shown constrains nothing, and a scope quietly added to this one would take
+// it out of every prompt without anything else noticing.
 func TestThisRepositoryDeliversThePromotionInvariantToEveryRoleThatCouldBreakIt(t *testing.T) {
 	t.Parallel()
 
@@ -126,9 +125,9 @@ func TestThisRepositoryDeliversThePromotionInvariantToEveryRoleThatCouldBreakIt(
 	}
 	recorded, found := set.Find(promotionInvariantID)
 	if !found {
-		t.Skipf("the architect has not recorded %q in %s yet; it states that at most one promotion per "+
-			"target branch happens at a time, enforced by a store lease the promoting run's harness acquires, "+
-			"and that no agent performs a promotion", promotionInvariantID, set.Directory)
+		t.Fatalf("no invariant %q is recorded in %s; nothing tells a developer or a reviewer that at most "+
+			"one promotion per target branch happens at a time, enforced by a store lease the promoting "+
+			"run's harness acquires, and that no agent performs a promotion", promotionInvariantID, set.Directory)
 	}
 	if !recorded.Active() {
 		t.Fatalf("invariant %q is %s", promotionInvariantID, recorded.Status)
