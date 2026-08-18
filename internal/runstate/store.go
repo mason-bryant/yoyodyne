@@ -468,6 +468,12 @@ func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 			continue
 		}
 		runID := strings.TrimSuffix(entry.Name(), ".json")
+		// Records that belong to a run rather than being one live beside it in
+		// this directory — the operator's release of a usage-limit wait is one —
+		// and only a file named for a run holds a run.
+		if !runIDPattern.MatchString(runID) {
+			continue
+		}
 		state, err := s.Load(runID)
 		if err != nil {
 			return nil, fmt.Errorf("discover %s runs: %w", label, err)
@@ -600,6 +606,16 @@ func (s *Store) leasePath(runID string) (string, error) {
 		return "", errors.New("run id is invalid")
 	}
 	return filepath.Join(s.root, runID+".lease"), nil
+}
+
+// releasePath names where an operator's release of one run's usage-limit wait
+// is recorded. It sits beside the run's own state rather than inside it because
+// the waiting process holds that state's lease and the operator does not.
+func (s *Store) releasePath(runID string) (string, error) {
+	if !runIDPattern.MatchString(runID) {
+		return "", errors.New("run id is invalid")
+	}
+	return filepath.Join(s.root, runID+".release.json"), nil
 }
 
 // writeJSONFile durably writes one record. The label names what is being

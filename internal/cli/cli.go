@@ -49,6 +49,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runDirective(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
+	case "resume":
+		return resumeWorkItem(args[1:], stdout, stderr)
 	case "review":
 		return reviewBranch(ctx, args[1:], stdout, stderr)
 	case "cost":
@@ -266,6 +268,7 @@ Commands:
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
   run               run one Beads work item in an isolated worktree
+  resume            release a run waiting out a provider usage limit, now
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
   reconcile         settle runs an interrupted process left behind
