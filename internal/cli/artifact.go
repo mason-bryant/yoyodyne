@@ -24,9 +24,10 @@ import (
 )
 
 type artifactOutput struct {
-	Artifacts []artifact.Artifact `json:"artifacts,omitempty"`
-	Problems  []artifact.Problem  `json:"problems,omitempty"`
-	Error     string              `json:"error,omitempty"`
+	Artifacts         []artifact.Artifact         `json:"artifacts,omitempty"`
+	Problems          []artifact.Problem          `json:"problems,omitempty"`
+	ReferenceProblems []artifact.ReferenceProblem `json:"reference_problems,omitempty"`
+	Error             string                      `json:"error,omitempty"`
 }
 
 func runArtifact(args []string, stdout, stderr io.Writer) int {
@@ -69,7 +70,7 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 		listed = set.OfKind(selected)
 	}
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, artifactOutput{Artifacts: listed, Problems: set.Problems})
+		return writeJSON(stdout, stderr, artifactOutput{Artifacts: listed, Problems: set.Problems, ReferenceProblems: set.ReferenceProblems})
 	}
 	if len(listed) == 0 {
 		fmt.Fprintf(stdout, "no artifacts are recorded in %s\n", strings.Join(set.Homes, ", "))
@@ -84,6 +85,13 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 	// discovered by whatever tries to link to it.
 	for _, problem := range set.Problems {
 		fmt.Fprintf(stderr, "not an artifact: %s\n", problem)
+	}
+	// A relationship that does not hold is reported over the whole set rather
+	// than over what --kind selected: the chain runs between kinds, and a listing
+	// narrowed to the goals would otherwise hide the design that names one of
+	// them and resolves to nothing.
+	for _, problem := range set.ReferenceProblems {
+		fmt.Fprintf(stderr, "%s: %s\n", problem.Kind, problem)
 	}
 	return 0
 }
@@ -106,8 +114,9 @@ func showArtifact(args []string, stdout, stderr io.Writer) int {
 		return reportArtifactError(stdout, stderr, *flags.jsonOutput,
 			fmt.Errorf("no artifact %q is recorded in %s", flags.set.Arg(0), strings.Join(set.Homes, ", ")))
 	}
+	problems := set.ReferenceProblemsFor(found.ID)
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, artifactOutput{Artifacts: []artifact.Artifact{found}})
+		return writeJSON(stdout, stderr, artifactOutput{Artifacts: []artifact.Artifact{found}, ReferenceProblems: problems})
 	}
 	fmt.Fprintf(stdout, "%s [%s, %s] %s\n", found.ID, found.Kind, found.Status, found.Title)
 	fmt.Fprintf(stdout, "file: %s\n", found.Path)
@@ -115,6 +124,11 @@ func showArtifact(args []string, stdout, stderr io.Writer) int {
 	for _, revision := range found.Revisions {
 		fmt.Fprintf(stdout, "%s %s by the %s: %s\n",
 			revision.At.UTC().Format(time.RFC3339), revision.Action, revision.By, revision.Reason)
+	}
+	// What this one document's place in the chain is wrong about, so somebody
+	// asking after a single artifact is told without reading the whole listing.
+	for _, problem := range problems {
+		fmt.Fprintf(stderr, "%s: %s\n", problem.Kind, problem.Reason)
 	}
 	return 0
 }
@@ -211,6 +225,12 @@ id, a kind, a lifecycle status, what they support upstream, and a revision log,
 in frontmatter at the top of the file. The id is the file name, so a document
 whose frontmatter claims another id, and two documents claiming one id, are
 refused rather than reconciled.
+
+The relationships are checked too, and reported rather than refused: a supports
+entry naming an id no artifact answers to, and an artifact nothing connects back
+to the brief, are named on stderr beside a set that still holds every document
+it read. The brief is the root and the decision records are not downstream of
+it, so neither is reported for supporting nothing.
 
   list [--kind <kind>]   list the recorded artifacts, and name what is not one
   show <id>              print one artifact and its recorded revisions

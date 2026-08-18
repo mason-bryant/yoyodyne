@@ -367,11 +367,46 @@ artifact's content is written by the role that owns it, and its frontmatter is
 edited in the same file at the same time. What the harness owns is refusing a
 document whose identity is missing, malformed, or claimed by something else.
 
-What identity does not yet buy is validation of the relationships it makes
-expressible. `supports` is checked as a reference — an id shaped like one,
-naming something other than the artifact itself — and not as one that resolves.
-An artifact naming an upstream that does not exist, and a goal naming no
-upstream at all, both load today and are reported by nothing.
+### Traceability: references and orphans
+
+Identity makes a relationship expressible; it does not make it true. So the
+chain is validated across the whole set every time the artifacts are loaded, and
+what it finds is **reported, never refused** — the opposite of how a document
+with no usable identity is handled, and for the same reason a malformed
+specification is still read. A broken relationship is a thing to correct, not a
+reason to lose a document somebody wrote.
+
+| Reported as | What it is |
+| --- | --- |
+| `dangling-reference` | A `supports` entry naming an id no artifact answers to. Both ends are named: the file the reference is written in, and the id it names. If that id belongs to a file that is in an artifact home and was refused, the report says so and names it, rather than reading as a document nobody wrote. |
+| `orphan` | An artifact that nothing connects back to the brief. Following `supports` upstream from it — through as many artifacts as the chain runs — arrives at no `brief`. |
+
+Two kinds are never orphans. The **brief** is the root, so nothing is upstream
+of it. A **decision** record says how the product is built rather than what it
+is for: it is taken in service of the goals without being a statement of intent
+downstream of them. Everything else — goals, non-goals, designs, and
+specifications — has to trace to the brief.
+
+Only references that resolve are followed, so a reference that names nothing is
+reported once as the broken name it is rather than guessed at. Nothing is
+followed twice, so two artifacts that support each other are reported as
+reaching nothing rather than sending the check round in a circle. A repository
+with no `brief` recorded at all is told that, once per document, instead of
+being told that each of its documents is separately unconnected.
+
+An artifact that is `superseded` or `retired` still answers to its id and still
+holds its place in the chain. The record of what was intended is what makes a
+later change traceable, so a design that traces through a goal since replaced is
+not an orphan.
+
+```sh
+yoyo artifact list   # broken relationships go to stderr beside the listing
+yoyo artifact show v1-goals   # and what is wrong with one document, for that one
+```
+
+`--kind` narrows the listing and not the reporting: the chain runs between
+kinds, and a listing narrowed to the goals would otherwise hide the design that
+names one of them and resolves to nothing.
 
 ## Architectural invariants
 

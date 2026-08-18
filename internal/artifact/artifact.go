@@ -19,13 +19,14 @@
 // reader who has to know which kind of document they are holding before they
 // can tell what its id is has no identity scheme at all.
 //
-// What this package does not do yet is judge the relationships it makes
-// expressible. `supports` is validated as a reference — an id shaped like one,
-// naming something other than the artifact itself — and not as a reference that
-// resolves. An artifact naming an upstream that does not exist, and a goal that
-// names no upstream at all, are both loaded here and left for the relationship
-// validation that follows; reporting an orphan needs the whole graph, and this
-// is the half that reads one file.
+// The relationships identity makes expressible are judged in two places,
+// because they are two different questions. One file answers whether `supports`
+// is a reference at all — an id shaped like one, naming something other than
+// the artifact itself — and that is Validate, below. Whether the reference
+// resolves, and whether anything upstream of it arrives at the brief, needs the
+// whole graph rather than one document, and that is references.go, run when the
+// set is loaded. Neither refuses an artifact: a dangling reference and an
+// orphan are reported beside a set that still holds every document it read.
 package artifact
 
 import (
@@ -316,14 +317,21 @@ func (p Problem) String() string {
 	return p.Path + ": " + p.Reason
 }
 
-// Set is every artifact the repository records, and the files in its artifact
-// homes that could not be read as one.
+// Set is every artifact the repository records, the files in its artifact
+// homes that could not be read as one, and the relationships between the
+// artifacts that do not hold.
 type Set struct {
 	// Homes are the repository-relative directories this was loaded from,
 	// carried so what is reported can say where it looked.
 	Homes     []string   `json:"homes,omitempty"`
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 	Problems  []Problem  `json:"problems,omitempty"`
+	// ReferenceProblems are the broken relationships between the artifacts that
+	// did load. They are kept apart from Problems because they mean something
+	// different: a Problem is a file that is not in the set, and one of these is
+	// a document that is, whose place in the chain is wrong. Nothing is dropped
+	// over one.
+	ReferenceProblems []ReferenceProblem `json:"reference_problems,omitempty"`
 }
 
 // Find returns the artifact with an id, whatever its lifecycle status.
@@ -334,6 +342,19 @@ func (s Set) Find(id string) (Artifact, bool) {
 		}
 	}
 	return Artifact{}, false
+}
+
+// ReferenceProblemsFor returns the broken relationships recorded against one
+// artifact, so a reader looking at a single document is told what is wrong with
+// it without filtering the whole set themselves.
+func (s Set) ReferenceProblemsFor(id string) []ReferenceProblem {
+	matched := make([]ReferenceProblem, 0, len(s.ReferenceProblems))
+	for _, problem := range s.ReferenceProblems {
+		if problem.ID == id {
+			matched = append(matched, problem)
+		}
+	}
+	return matched
 }
 
 // InForce returns the artifacts that state what the product currently intends.
