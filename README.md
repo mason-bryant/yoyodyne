@@ -1,30 +1,63 @@
-# Yoyodyne
+# yoyo
 
-Yoyodyne turns a conversation into merged code.
+Writing code was never the hard part. Deciding what to build, keeping every
+change traceable to why, and making sure something other than the author
+reviewed it before it landed -- that is the work still done by hand around every
+coding agent. Yoyo is that structure, built to run without you driving each
+turn: goals in, merged software out, a conversation to steer it.
 
-You say what you want in a conversation with a product manager that has read
-your product's own written intent and the work already tracked against it. It
-turns what you agreed into work items, proposing the ones that are yours to
-decide, and you approve as many as you like in a single answer. Then you watch
-the harness take an approved item and do the rest: develop it in an isolated
-worktree, run the checks your project declared, put the change in front of an
-independent reviewer, hand the reviewer's findings back to the developer to
-repair, fast-forward the result into your target branch, and — where you have
-asked for it — publish it as a pull request that merges itself once your
-required checks pass, which takes one repository setting named where
-[publishing is set up](#optional-publishing-and-auto-merge).
+The nearest picture is a dark factory. The floor is dark: work is developed,
+checked, reviewed, and integrated without anybody watching each step. The office
+is not. You say what the line is for — you state intent, approve the brief and
+the goals it becomes, and answer what gets escalated to you — and everything
+between that and merged code belongs to the harness. Autonomy here is the
+absence of routine per-change approval rather than the absence of you, since a
+system that never had to ask its owner anything would be one that had stopped
+taking direction.
 
-Every one of those gates is enforced by the harness rather than by convention.
-Integration requires passing checks, an approving verdict, and two demonstrably
-separate provider invocations; the reviewer whose verdict authorizes a merge
-runs with no tools at all, so it cannot perform one; and a persona can
-specialize how a role works but can never grant it authority it does not have.
+Three gates hold that up, and each is enforced by the harness rather than left
+to an agent's good behavior:
 
-**The conversation is the product.** `yoyo run`, `yoyo review`, `yoyo reconcile`,
-and `yoyo resume` are administrative and recovery entry points — one named item,
-one branch judged as a whole, settling what a killed process left behind, and
-releasing a run waiting on a usage limit the provider no longer imposes — rather
-than the way work normally happens.
+- **Nothing merges unreviewed.** Integration requires passing checks, an
+  approving verdict, and two demonstrably separate provider invocations, so no
+  change is judged by the agent that wrote it.
+- **The reviewer cannot merge, and cannot be talked into one.** It runs with no
+  tools at all, everything it is shown is evidence rather than instruction, and
+  a persona can specialize how a role works but never grant it authority it does
+  not have.
+- **The written goals are the only authority work traces to.** Work reaches the
+  backlog with a goal named against it in the words your goals document states
+  it in, and the brief and the goals stay yours: a role that disagrees with one
+  proposes a change rather than making it.
+
+**You drive it from one conversation.** `yoyo chat` opens it: you talk to a
+product manager that has read your product's own written intent and the work
+already tracked against it, approve as many of the work items it proposes as you
+like in a single answer, and say `/work <id>` when you want one of them run. The
+run happens in the background while the conversation stays a conversation — an
+isolated worktree, the checks your project declared, an independent reviewer,
+that reviewer's findings handed back to the developer to repair, a fast-forward
+into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
+— a pull request that merges itself once your required checks pass. `yoyo run`,
+`yoyo review`, `yoyo reconcile`, and `yoyo resume` sit beside that conversation
+as administrative and recovery entry points — one named item, one branch judged
+as a whole, settling what a killed process left behind, and releasing a run
+waiting on a usage limit the provider no longer imposes — rather than as the way
+work normally happens.
+
+**Quick start.** With [Beads](https://github.com/gastownhall/beads) and
+[Claude Code](https://code.claude.com/docs) installed, and Go 1.24 or newer:
+
+```sh
+go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+cd path/to/your/project
+bd init && yoyo init   # then write your project's checks into .yoyodyne/config.yaml
+yoyo chat
+```
+
+[Getting started](#getting-started) is the same three steps with what each one
+is for and what it needs; [Install](#install) has the release download and the
+from-source routes, for anyone who would rather not have Go.
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -73,7 +106,7 @@ tar -xzf "yoyo_${tag}_${platform}.tar.gz"
 install -m 0755 yoyo /usr/local/bin/yoyo
 ```
 
-**From source**, which is also how you work on Yoyodyne itself:
+**From source**, which is also how you work on yoyo itself:
 
 ```sh
 git clone https://github.com/mason-bryant/yoyodyne
@@ -84,7 +117,7 @@ make build
 That writes `./bin/yoyo`, stamped from `git describe`, so `yoyo version` names
 the commit a local build came from rather than only saying `dev`.
 
-**What is tested, and what is only built.** Yoyodyne is developed and used on
+**What is tested, and what is only built.** `yoyo` is developed and used on
 macOS. The `linux_amd64` binary is built by the same workflow as the others and
 exercised by CI, and by nothing else; the `darwin_amd64` binary is built and is
 not regularly run by anyone. Treat anything other than macOS on Apple silicon as
@@ -107,7 +140,7 @@ Three steps, in this order:
    there.
 
 Nothing here assumes your project is written in Go, and nothing after step 1
-needs a Yoyodyne checkout: a configured project carries its own configuration
+needs a checkout of yoyo: a configured project carries its own configuration
 and personas.
 
 **What you need.** Git and a repository with at least one commit;
@@ -197,7 +230,7 @@ own exports — `.beads/issues.jsonl` and `.beads/interactions.jsonl` — are th
 exception, since a run writes them itself.
 
 ```sh
-git add -A && git commit -m "adopt Yoyodyne"
+git add -A && git commit -m "adopt yoyo"
 yoyo chat
 ```
 
@@ -255,7 +288,7 @@ rest of this document's subject.
 
 ### Optional: publishing and auto-merge
 
-By default Yoyodyne is entirely local. A repository with no remote publishes
+By default yoyo is entirely local. A repository with no remote publishes
 nothing and never notices publishing exists. Two settings turn it on, and they
 compose rather than imply one another:
 
@@ -288,9 +321,9 @@ approvals:
 the full behavior, and the [configuration guide](docs/configuration.md#publishing-through-pull-requests)
 has the table of what each combination produces.
 
-### Working on Yoyodyne itself
+### Working on yoyo itself
 
-Yoyodyne is configured against its own repository, so a checkout of it is a
+`yoyo` is configured against its own repository, so a checkout of it is a
 project like any other. From one, verify the tools, run every check, and open
 the conversation:
 
@@ -1301,16 +1334,16 @@ the reviewer works and cannot let it approve a change it could not see. Bump the
 `version` label beside the path when you edit one, so the change is visible in
 diagnostics.
 
-**What owning the configuration costs.** A later Yoyodyne that improves a
+**What owning the configuration costs.** A later `yoyo` that improves a
 persona or corrects a model selector does not reach a project that already has
 its own copy of it. Re-run `yoyo init` in a scratch directory and merge the
 difference if you want those improvements. The executable's built-in bundle is
 the template `init` generates from rather than a layer projects keep
 inheriting — inheritance still works for a project that writes
 `extends: builtin:v1`, and is the right choice for a fleet that should improve
-together, but the explicit file is what Yoyodyne ships.
+together, but the explicit file is what yoyo ships.
 
-Yoyodyne finds the nearest `.yoyodyne/config.yaml` from the current directory
+`yoyo` finds the nearest `.yoyodyne/config.yaml` from the current directory
 upwards, so it runs from the project root or anywhere beneath it. To see what a
 configuration resolves to and where each value came from:
 
