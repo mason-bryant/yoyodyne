@@ -702,7 +702,7 @@ func (r RunReport) Headline() string {
 		if r.UsageLimitResetsAt != nil {
 			resets = r.UsageLimitResetsAt.UTC().Format(time.RFC3339)
 		}
-		return fmt.Sprintf("%s is paused for the %s usage limit and is still in flight; it resets at %s, and /work %s after that continues the same run", item, limit, resets, item)
+		return fmt.Sprintf("%s is paused for the %s usage limit and is still in flight; it resets at %s at the latest, the run asks again at its probe interval before then, and /work %s continues the same run", item, limit, resets, item)
 	case r.Integrated:
 		closed := ""
 		if r.WorkItemClosed {

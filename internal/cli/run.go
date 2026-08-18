@@ -494,7 +494,11 @@ func reportRunPause(stdout, stderr io.Writer, outcome orchestrator.Outcome, err 
 	if outcome.ProviderStop != "" {
 		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run\n", outcome.WorkItemID)
 	} else {
-		fmt.Fprintf(stdout, "run yoyodyne on %s again after the reset time to continue this run\n", outcome.WorkItemID)
+		// The reset bounds the wait rather than gating it, so continuing is not
+		// something to hold off until it passes. What does need saying is the one
+		// verb that overrides it, for when the reset has stopped being true.
+		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run; it asks the provider again at its probe interval rather than only at the reset\n", outcome.WorkItemID)
+		fmt.Fprintf(stdout, "`yoyo resume %s` releases the wait now if that reset no longer holds\n", outcome.WorkItemID)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)

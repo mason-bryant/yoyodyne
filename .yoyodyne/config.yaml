@@ -65,7 +65,10 @@ execution:
   # it. The maximum covers the five-hour limit and deliberately stops short of
   # the seven-day one, so a capacity problem that needs a person reaches one
   # instead of a timer. The in-process bound is how much of that a run spends
-  # sleeping here rather than exiting with its deadline recorded.
+  # sleeping here rather than exiting with its deadline recorded. The unknown
+  # reset pause is the interval between probes, whether or not the provider
+  # named a reset: a quoted reset bounds the wait rather than gating it, because
+  # capacity can be bought and windows can roll before the quoted edge.
   usage_limit_max_pause: 6h
   usage_limit_in_process_pause: 6h
   usage_limit_unknown_reset_pause: 30m

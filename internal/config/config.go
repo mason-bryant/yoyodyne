@@ -119,13 +119,19 @@ type Execution struct {
 	// hours. It is never larger than UsageLimitMaxPause in effect, because a
 	// pause beyond that bound is refused before either path is chosen.
 	UsageLimitInProcessPause Duration `yaml:"usage_limit_in_process_pause" json:"usage_limit_in_process_pause"`
-	// UsageLimitUnknownResetPause is how long a run waits before asking again
-	// when the provider reports an exhausted limit without naming a reset time.
-	// That is not the same as having no capacity: the monthly overage allowance
-	// reports this way while the ordinary rolling window keeps resetting on its
-	// usual schedule, so the limit is waitable and simply carries no deadline.
-	// The wait still spends UsageLimitMaxPause, so a provider that keeps
-	// refusing walks into that bound rather than polling forever.
+	// UsageLimitUnknownResetPause is the interval between probes: how long a run
+	// sleeps before reissuing the attempt to find out whether the provider will
+	// serve it now. It applies whether or not a reset time was named, which is
+	// the whole of the polling discipline. A limit reported without one is not
+	// the same as having no capacity — the monthly overage allowance reports this
+	// way while the ordinary rolling window keeps resetting on its usual schedule
+	// — so it is waitable and simply carries no deadline. A limit reported with
+	// one carries a deadline that bounds the wait rather than gating it, because
+	// a reset time is a claim about the provider and claims go stale in both
+	// directions. Either way a run sleeps this interval or the time left to the
+	// deadline, whichever is shorter, and asks again. Every probe spends
+	// UsageLimitMaxPause, so a provider that keeps refusing walks into that bound
+	// rather than polling forever.
 	UsageLimitUnknownResetPause Duration `yaml:"usage_limit_unknown_reset_pause" json:"usage_limit_unknown_reset_pause"`
 }
 
@@ -145,9 +151,12 @@ const (
 	// Lowering it trades that for a run that exits with its deadline recorded
 	// and is resumed by a later invocation.
 	defaultUsageLimitInProcessPause = defaultUsageLimitMaxPause
-	// defaultUsageLimitUnknownResetPause is how long to wait before asking again
-	// when no reset time was named. Short enough to resume soon after a window
-	// rolls, long enough not to hammer a provider that is refusing.
+	// defaultUsageLimitUnknownResetPause is how long to wait between probes,
+	// whether or not a reset time was named. Short enough to resume soon after a
+	// window rolls, long enough not to hammer a provider that is refusing — and
+	// deliberately checked at least this often even under a multi-hour quoted
+	// reset, because a quoted reset can be overtaken by a window that rolls or by
+	// capacity somebody bought.
 	defaultUsageLimitUnknownResetPause = Duration(30 * time.Minute)
 )
 

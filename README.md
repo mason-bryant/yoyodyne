@@ -20,10 +20,11 @@ separate provider invocations; the reviewer whose verdict authorizes a merge
 runs with no tools at all, so it cannot perform one; and a persona can
 specialize how a role works but can never grant it authority it does not have.
 
-**The conversation is the product.** `yoyo run`, `yoyo review`, and
-`yoyo reconcile` are administrative and recovery entry points — one named item,
-one branch judged as a whole, and settling what a killed process left behind —
-rather than the way work normally happens.
+**The conversation is the product.** `yoyo run`, `yoyo review`, `yoyo reconcile`,
+and `yoyo resume` are administrative and recovery entry points — one named item,
+one branch judged as a whole, settling what a killed process left behind, and
+releasing a run waiting on a usage limit the provider no longer imposes — rather
+than the way work normally happens.
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -1467,24 +1468,59 @@ run state before any waiting starts, and nothing is cleaned up: the worktree,
 the branch, the claimed Beads item, and the developer session are all kept, so
 the reissued attempt continues the same change rather than starting it over. A
 review that was declined is simply asked for again once the limit resets,
-without redeveloping the change or spending a repair attempt. A wait shorter
-than `execution.usage_limit_in_process_pause` is waited out and the run finishes
-on its own; a longer one exits with the run still in flight, and running
-`yoyo run` on the same item after the reset time continues it. Either way
-nothing retries before the deadline, and a restart during the wait honors the
-recorded deadline rather than asking the provider again.
+without redeveloping the change or spending a repair attempt.
+
+The recorded reset is an upper bound on the wait rather than a gate on it. A run
+sleeps `execution.usage_limit_unknown_reset_pause` — thirty minutes by default —
+or the time left to the deadline, whichever is shorter, and then reissues the
+attempt: the reissue *is* the probe. A reset time is a claim about the provider,
+and claims go stale in both directions — capacity gets bought mid-wait, and a
+rolling window can free room before the quoted edge — so a probe into a window
+that is still closed costs one refused request and re-parks on whatever the
+provider now reports. A probe longer than
+`execution.usage_limit_in_process_pause` exits with the run still in flight
+instead, and running `yoyo run` on the same item continues it.
 `execution.usage_limit_max_pause` bounds what one run may spend waiting in total
 rather than each wait separately, so a provider that keeps refusing cannot walk
-a run past it. A limit reported without a reset time is unknown rather than
+a run past it, and what it records is what was actually waited rather than the
+span to a deadline the run never reached. A limit reported without a reset time
+polls under exactly the same rule, because it is unknown rather than
 unwaitable: the monthly overage allowance reports this way while the ordinary
-rolling window keeps resetting on its usual schedule, so the run waits
-`execution.usage_limit_unknown_reset_pause` — thirty minutes by default — and
-asks again. That wait spends the same budget as any other, so a provider that
-keeps refusing walks into the maximum rather than polling forever. A limit the
-harness genuinely cannot wait for — a reset that is not in the future, or one
-that no longer fits the run's remaining budget — stops the run and records a
-blocker rather than guessing a wait. Transient throttling is not this: the
-provider CLI retries that itself, and the harness does not duplicate it.
+rolling window keeps resetting on its usual schedule, so it waits the same
+interval and asks again. Unifying the two was the point — one polling
+discipline, whether or not a deadline was quoted. A limit the harness genuinely
+cannot wait for — a reset that is not in the future, or one that no longer fits
+the run's remaining budget — stops the run and records a blocker rather than
+guessing a wait. Transient throttling is not this: the provider CLI retries that
+itself, and the harness does not duplicate it.
+
+### Releasing a usage-limit wait early
+
+Everything above honors the recorded deadline as an upper bound, and a restart
+mid-wait serves the rest of it rather than asking again, which is what keeps a
+crash from retrying straight back into a window that is still closed.
+`yoyo resume` is the one thing that overrides that deadline, and it overrides
+nothing else:
+
+```sh
+./bin/yoyo resume yoyodyne-ifd.53
+```
+
+It exists because the deadline is a claim about the provider and you are the one
+who can change what it is a claim about. Raise the account's capacity while runs
+are asleep against an 18:50 reset and that reset has stopped being true; a run
+waiting out a limit its owner has already lifted is autonomy working against
+them. The command moves the next probe to now and does nothing else. In
+particular it does not stop anything: killing a waiting run leaves a cancelled
+run whose item stays claimed, and recovering from that means reconciling,
+reopening the item, and developing it again from scratch. Released, the run
+keeps its claim, its branch, its worktree, and its developer session, and a
+process already asleep on the wait acts on the release within seconds. If the
+provider still refuses, the run records the new report and waits again, so the
+worst a premature release costs is one refused request. It is refused when the
+named item has no run in flight, or has one that is not waiting on a usage
+limit, because a release recorded against a run that is not waiting would be
+acted on by whatever pause that run took next.
 
 ### When a provider stalls or runs out of budget
 

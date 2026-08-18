@@ -927,13 +927,21 @@ execution:
   usage_limit_unknown_reset_pause: 30m
 ```
 
-`usage_limit_unknown_reset_pause` is how long a run waits before asking again
-when the provider reports an exhausted limit but names no reset time. That is
-not the same as having no capacity: an exhausted overage allowance reports this
-way while the ordinary rolling window keeps resetting on its usual schedule, so
-the work is waitable and simply carries no deadline. The wait spends the same
-budget as any other, so a provider that keeps refusing reaches the maximum
-rather than polling forever.
+`usage_limit_unknown_reset_pause` is the interval between probes: how long a run
+sleeps before reissuing the attempt and finding out whether the provider will
+serve it now. It applies whether or not a reset time was named, which is the
+whole of the polling discipline. A limit reported *without* one is not the same
+as having no capacity — an exhausted overage allowance reports this way while
+the ordinary rolling window keeps resetting on its usual schedule — so the work
+is waitable and simply carries no deadline. A limit reported *with* one is
+waitable and carries a deadline that is an upper bound rather than a gate: a
+reset time is a claim about the provider, and claims go stale in both directions,
+because capacity gets bought mid-wait and a rolling window can free room before
+the quoted edge. So a run sleeps this interval or the time left to the deadline,
+whichever is shorter, and then asks again; a probe into a window that is still
+closed costs one refused request and re-parks on whatever the provider now
+reports. Every probe spends the same budget as any other wait, so a provider
+that keeps refusing reaches the maximum rather than polling forever.
 
 `usage_limit_max_pause` is the longest a single run will spend waiting **in
 total**, across every pause it takes. The budget is per run, not per pause,
@@ -948,17 +956,19 @@ waiting entirely, so every exhausted limit blocks immediately.
 
 `usage_limit_in_process_pause` is how much of that bound a run will spend
 sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
-default every wait the harness will take is taken here and the run continues on
-its own once the limit resets. Lowering it — say to `15m` — makes a longer wait
+default every probe the harness will take is taken here and the run continues on
+its own once the limit resets. Lowering it — say to `15m` — makes a longer probe
 exit instead, with the run still in flight and its deadline recorded; running
-`yoyo run` on the same item after the reset time continues that same run.
+`yoyo run` on the same item continues that same run.
 
 Both paths record the deadline in durable run state *before* any waiting begins,
-so a process that dies mid-wait loses nothing and a restart honors the same
-deadline rather than retrying straight back into the limit. Nothing polls and
-nothing retries before the deadline. `yoyo reconcile` leaves a paused run
-alone for the same reason it leaves a repair loop alone: it is not an interrupted
-run, it is a run that is owed the attempt it was refused.
+so a process that dies mid-wait loses nothing and a restart serves the same
+deadline rather than retrying straight back into the limit. What each probe will
+spend is committed before it is spent, for the same reason, and the unspent
+remainder of a probe cut short is given back — so the recorded total is what was
+actually waited. `yoyo reconcile` leaves a paused run alone for the same reason
+it leaves a repair loop alone: it is not an interrupted run, it is a run that is
+owed the attempt it was refused.
 
 A reset time that is absent, unreadable, already in the past, or beyond what the
 run has left of `usage_limit_max_pause` stops the run with a blocker naming what
@@ -967,6 +977,16 @@ still declining work while claiming it has already reset is not describing a
 wait, and honoring it would mean reissuing straight back into the same refusal.
 Transient throttling never reaches any of this: the provider CLI retries that
 itself, and the harness does not duplicate the wait.
+
+`yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
+and it overrides nothing else. It moves the next probe to now, for when the
+reset has stopped being true — you raised the account's capacity, say — because
+the deadline is a claim about the provider and you are the one who can change
+what it is a claim about. It never stops the run: a process asleep on the wait
+acts on the release within seconds, and the run keeps its claim, its branch, its
+worktree, and its developer session. If the provider still refuses, the run
+records the new report and waits again, so a premature release costs one refused
+request. See the README for the whole of that behavior.
 
 ## Losing a race for the target branch
 
