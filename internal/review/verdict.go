@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 )
 
@@ -50,30 +51,118 @@ type Verdict struct {
 	Findings []Finding `json:"findings,omitempty"`
 }
 
-// Decode strictly decodes a validated verdict from a bounded JSON document.
-// Unknown fields, trailing content, and oversized input are rejected rather
-// than silently tolerated.
-func Decode(data []byte) (Verdict, error) {
+// UndecodableVerdictError reports a reply that could not be read as a verdict at
+// all: empty, past the size bound, not a single JSON document, or malformed. It
+// is deliberately distinct from a verdict that was read and then refused,
+// because a reply nothing can parse says nothing whatever about the change --
+// that review was never made, and asking for it again costs one review where
+// giving up costs the whole change. A verdict that was read and refused has
+// already said what it thinks.
+type UndecodableVerdictError struct {
+	cause error
+}
+
+func (e UndecodableVerdictError) Error() string {
+	return "decode review verdict: " + e.cause.Error()
+}
+
+func (e UndecodableVerdictError) Unwrap() error {
+	return e.cause
+}
+
+func undecodable(cause error) error {
+	return UndecodableVerdictError{cause: cause}
+}
+
+// Decode decodes a validated verdict from a bounded JSON document and names
+// every field the closed schema does not define.
+//
+// Strictness is kept where it protects the contract and dropped where it only
+// punishes. The document must be one JSON object within the size bound, and
+// every field the schema does name keeps exactly its validation: an unknown
+// decision, an unknown severity, or a missing required field is still refused.
+// An unknown *extra* field is not a corrupted verdict, it is a verbose one --
+// verdicts are model-generated and a model asked for structured output will
+// occasionally embellish the schema -- so the extras are named for the caller to
+// record as evidence of drift and the verdict is decoded without them.
+func Decode(data []byte) (Verdict, []string, error) {
 	if len(data) == 0 {
-		return Verdict{}, errors.New("decode review verdict: input is empty")
+		return Verdict{}, nil, undecodable(errors.New("input is empty"))
 	}
 	if len(data) > MaxVerdictBytes {
-		return Verdict{}, fmt.Errorf("decode review verdict: input is %d bytes, limit is %d", len(data), MaxVerdictBytes)
+		return Verdict{}, nil, undecodable(fmt.Errorf("input is %d bytes, limit is %d", len(data), MaxVerdictBytes))
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
 	var verdict Verdict
 	if err := decoder.Decode(&verdict); err != nil {
-		return Verdict{}, fmt.Errorf("decode review verdict: %w", err)
+		return Verdict{}, nil, undecodable(err)
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return Verdict{}, errors.New("decode review verdict: unexpected trailing content after the verdict")
+		return Verdict{}, nil, undecodable(errors.New("unexpected trailing content after the verdict"))
 	}
+	// The drift is reported whatever becomes of the verdict beside it: a reviewer
+	// that embellished the schema did so whether or not what it decided survives
+	// validation.
+	unknown := unknownFields(data)
 	if err := verdict.Validate(); err != nil {
-		return Verdict{}, err
+		return Verdict{}, unknown, err
 	}
-	return verdict, nil
+	return verdict, unknown, nil
+}
+
+// The closed schema, named once so the decoder and the drift walk below cannot
+// disagree about what the contract defines.
+var (
+	verdictFields  = []string{"decision", "summary", "findings"}
+	findingFields  = []string{"severity", "message", "location"}
+	locationFields = []string{"file", "line"}
+)
+
+// unknownFields names every field the closed schema does not define, in the
+// order a reader would come across them: the verdict's own, then each finding's,
+// then that finding's location's. It is deliberately tolerant of anything it
+// cannot re-read, because the typed decode above has already settled whether the
+// document is a verdict at all; this walk only says what else was in it.
+func unknownFields(data []byte) []string {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		return nil
+	}
+	unknown := unknownKeys(document, "", verdictFields)
+	var findings []json.RawMessage
+	if err := json.Unmarshal(document["findings"], &findings); err != nil {
+		return unknown
+	}
+	for index, raw := range findings {
+		var finding map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &finding); err != nil {
+			continue
+		}
+		prefix := fmt.Sprintf("findings[%d].", index)
+		unknown = append(unknown, unknownKeys(finding, prefix, findingFields)...)
+		var location map[string]json.RawMessage
+		if err := json.Unmarshal(finding["location"], &location); err != nil {
+			continue
+		}
+		unknown = append(unknown, unknownKeys(location, prefix+"location.", locationFields)...)
+	}
+	return unknown
+}
+
+// unknownKeys names the fields of one object that the schema does not define.
+// They are sorted because Go's map iteration is not ordered and the recorded
+// evidence has to read the same way every time it is produced.
+func unknownKeys(fields map[string]json.RawMessage, prefix string, known []string) []string {
+	var unknown []string
+	for name := range fields {
+		if slices.Contains(known, name) {
+			continue
+		}
+		unknown = append(unknown, prefix+name)
+	}
+	slices.Sort(unknown)
+	return unknown
 }
 
 // Validate reports every contract violation in the verdict at once.

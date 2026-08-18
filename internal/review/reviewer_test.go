@@ -530,11 +530,6 @@ func TestReviewRejectsUnusableProviderOutput(t *testing.T) {
 			want:     "decode review verdict",
 		},
 		{
-			name:     "unknown field",
-			provider: &fakeBackend{finalText: `{"decision":"approve","summary":"fine","confidence":0.9}`},
-			want:     "unknown field",
-		},
-		{
 			name:     "trailing prose",
 			provider: &fakeBackend{finalText: `{"decision":"approve","summary":"fine"} Hope that helps!`},
 			want:     "trailing content",
@@ -590,6 +585,85 @@ func TestReviewRejectsUnusableProviderOutput(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A reviewer that embellished the schema still gets its verdict read. What it
+// invented is recorded in the run's event stream instead of costing the review,
+// because an extra field is a verbose verdict rather than a corrupted one.
+func TestReviewRecordsVerdictFieldsTheSchemaDoesNotNameWithoutRefusingTheVerdict(t *testing.T) {
+	t.Parallel()
+
+	// The exact shape that killed run-2e5102d105a1c4ad772722b30b3d2635.
+	provider := &fakeBackend{finalText: `{"decision":"approve","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`}
+	var events []execution.Event
+	request := newRequest(func(event execution.Event) error {
+		events = append(events, event)
+		return nil
+	})
+	request.LastSequence = 7
+
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if result.Decision != DecisionApprove || result.Verdict.Summary != "the change matches the acceptance criteria" {
+		t.Fatalf("Review() = %#v, want the verdict decoded without the extra field", result)
+	}
+	gotTypes := make([]execution.EventType, 0, len(events))
+	for _, event := range events {
+		gotTypes = append(gotTypes, event.Type)
+	}
+	wantTypes := []execution.EventType{execution.EventReviewStarted, execution.EventReviewDrift, execution.EventReviewCompleted}
+	if !reflect.DeepEqual(gotTypes, wantTypes) {
+		t.Fatalf("event types = %#v, want %#v", gotTypes, wantTypes)
+	}
+	if drift := string(events[1].Payload); !strings.Contains(drift, `"fields":["severity_note"]`) {
+		t.Fatalf("review.drift payload = %s, want the drifted field named", drift)
+	}
+	// The drift event takes a sequence like any other, so the review that follows
+	// it is still recorded in order.
+	if events[1].Sequence != 9 || events[2].Sequence != 10 || result.LastSequence != 10 {
+		t.Fatalf("sequences = %d, %d, result = %d", events[1].Sequence, events[2].Sequence, result.LastSequence)
+	}
+
+	// The contract asks for the schema to be respected in the first place, which
+	// is where the drift is cheapest to prevent.
+	for _, want := range []string{"The schema is closed", "you must not add another one"} {
+		if !strings.Contains(provider.request.SystemPrompt, want) {
+			t.Errorf("review contract is missing %q: %q", want, provider.request.SystemPrompt)
+		}
+	}
+}
+
+// The drift is evidence whatever became of the verdict carrying it, including a
+// verdict the contract went on to refuse for something the schema does name.
+func TestReviewRecordsDriftBesideARefusedVerdict(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"looks-good","summary":"fine","severity_note":"none"}`}
+	var events []execution.Event
+	_, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), newRequest(func(event execution.Event) error {
+		events = append(events, event)
+		return nil
+	}))
+	if err == nil || !strings.Contains(err.Error(), `decision "looks-good"`) {
+		t.Fatalf("Review() error = %v, want the unknown decision refused", err)
+	}
+	var drift, completed bool
+	for _, event := range events {
+		switch event.Type {
+		case execution.EventReviewDrift:
+			drift = true
+		case execution.EventReviewCompleted:
+			completed = true
+		}
+	}
+	if !drift {
+		t.Fatal("a refused verdict lost the drift it carried")
+	}
+	if completed {
+		t.Fatal("a refused review emitted review.completed")
 	}
 }
 

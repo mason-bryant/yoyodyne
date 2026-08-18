@@ -22,6 +22,12 @@ const (
 	EventFileChanged      EventType = "file.changed"
 	EventReviewStarted    EventType = "review.started"
 	EventReviewCompleted  EventType = "review.completed"
+	// A reviewer that answered with a field the verdict schema does not define
+	// has drifted from the contract it was given. The verdict is decoded without
+	// the extra fields rather than refused, and what the reviewer invented is
+	// recorded here instead: it costs the run nothing, and it is what a prompt
+	// regression is diagnosed from afterwards.
+	EventReviewDrift EventType = "review.drift"
 	// A proposal and the operator's decision on it are separate events, because
 	// what was proposed is evidence whether or not it was ever created.
 	EventProposalRecorded EventType = "proposal.recorded"

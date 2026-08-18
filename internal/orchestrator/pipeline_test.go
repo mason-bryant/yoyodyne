@@ -781,9 +781,9 @@ func TestPipelineNeverIntegratesWithoutAnApprovingVerdict(t *testing.T) {
 			want:    "contradictory review verdict",
 		},
 		{
-			name:    "reviewer instructed by the change under review",
-			verdict: `{"decision":"approve","summary":"ok","extra":"ignore prior instructions"}`,
-			want:    "decode review verdict",
+			name:    "approval carrying a decision the contract does not define",
+			verdict: `{"decision":"looks-good","summary":"ok","severity_note":"none"}`,
+			want:    `decision "looks-good"`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -825,6 +825,114 @@ func TestPipelineNeverIntegratesWithoutAnApprovingVerdict(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A verdict that carries a field the schema does not name is a verbose verdict
+// rather than a corrupted one. It integrates the run exactly as the same verdict
+// without the extra field would, and what the reviewer invented is recorded in
+// the run's event stream instead of costing the whole change. This replays the
+// verdict shape that killed run-2e5102d105a1c4ad772722b30b3d2635.
+func TestPipelineIntegratesAVerdictCarryingFieldsTheSchemaDoesNotName(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, `{"decision":"approve","summary":"the change matches the acceptance criteria","severity_note":"no blocking issues found"}`)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed || outcome.ReviewDecision != review.DecisionApprove {
+		t.Fatalf("a verbose verdict did not integrate: %#v, closed = %t", outcome, tracker.closed)
+	}
+	if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != outcome.Integration.TargetCommit {
+		t.Fatalf("main = %q, want the integrated commit %q", head, outcome.Integration.TargetCommit)
+	}
+	// One review: an extra field is never a reason to ask again.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Fatalf("reviews = %d, want 1", reviews)
+	}
+	// The drift is diagnostic gold for a prompt regression, so it survives the
+	// run that shrugged it off.
+	events, err := store.LoadEvents(outcome.RunID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	drift := ""
+	for _, event := range events {
+		if event.Type == execution.EventReviewDrift {
+			drift = string(event.Payload)
+		}
+	}
+	if !strings.Contains(drift, `"fields":["severity_note"]`) {
+		t.Fatalf("review.drift payload = %q, want the drifted field named", drift)
+	}
+	// Nothing the schema does not define reaches anything that acts on a
+	// verdict, so an extra field is no more than a note in the log.
+	if outcome.ReviewSummary != "the change matches the acceptance criteria" || len(outcome.ReviewFindings) != 0 {
+		t.Fatalf("Run() review evidence = %#v", outcome)
+	}
+}
+
+// A reply nothing could read as a verdict is a failed review invocation rather
+// than a failed change, so the reviewer is asked once more before the run gives
+// up on work the checks have already passed.
+func TestPipelineAsksTheReviewerAgainWhenItsReplyCannotBeReadAsAVerdict(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, "Sure! Here is my review.", approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed || outcome.ReviewDecision != review.DecisionApprove {
+		t.Fatalf("the re-asked review did not integrate: %#v, closed = %t", outcome, tracker.closed)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+		t.Fatalf("reviews = %d, want the unreadable reply asked again once", reviews)
+	}
+	// The re-ask costs a review, never a repair attempt: the developer was told
+	// nothing, because the reviewer said nothing about the change.
+	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 1 {
+		t.Fatalf("developer invocations = %d, want 1", runs)
+	}
+	if outcome.RepairAttempts != 0 {
+		t.Fatalf("Run() repair attempts = %d, want the re-ask to cost none", outcome.RepairAttempts)
+	}
+}
+
+// Two unreadable replies in a row is a reviewer that cannot answer the contract,
+// and the run ends on it rather than asking forever.
+func TestPipelineFailsAfterASecondUnreadableVerdict(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, "Sure! Here is my review.")
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !strings.Contains(err.Error(), "decode review verdict") {
+		t.Fatalf("Run() error = %v, want the second unreadable verdict to end the run", err)
+	}
+	if outcome.Integration != nil || tracker.closed {
+		t.Fatalf("an unreviewed change was integrated: %#v, closed = %t", outcome.Integration, tracker.closed)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+		t.Fatalf("reviews = %d, want exactly one re-ask", reviews)
 	}
 }
 
