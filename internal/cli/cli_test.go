@@ -224,6 +224,15 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 			t.Errorf("the conversation prompt does not carry %q", want)
 		}
 	}
+	// A string in a prompt is not a reply, and no check here can become one: a
+	// test takes no product-manager turn, and a developer worktree has no
+	// provider to take one with, so `yoyo chat` run from inside one fails at
+	// authentication before any prompt is evaluated. Whether the opening reply
+	// really does arrive as a count, a named ordering, and a single question is
+	// verified by a person, with `yoyo chat --new` in a repository that has no
+	// specifications directory. That is written down here rather than left
+	// implied, because a criterion nobody can see going unmet is one that goes
+	// unmet quietly.
 }
 
 func TestChatRefusesArgumentsItCannotHonor(t *testing.T) {
