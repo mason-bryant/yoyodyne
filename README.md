@@ -1528,7 +1528,9 @@ interval and asks again. Unifying the two was the point — one polling
 discipline, whether or not a deadline was quoted. A limit the harness genuinely
 cannot wait for — a reset that is not in the future, or one that no longer fits
 the run's remaining budget — stops the run and records a blocker rather than
-guessing a wait.
+guessing a wait. An exhausted limit is not the only thing a run waits out:
+[an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
+same machinery on a much shorter clock.
 
 ### Waiting out an overloaded provider
 
@@ -1541,8 +1543,8 @@ reissues, instead of parking for the half-hour probe interval a usage limit uses
 Everything else is shared: the deadline is durable before the wait starts, the
 wait spends the same `execution.usage_limit_max_pause` budget, and an overload
 that never lifts therefore walks into that maximum and stops with a blocker
-rather than reissuing forever. `yoyo resume` releases one of these waits exactly
-as it releases a usage-limit wait.
+rather than reissuing forever. [Releasing a wait early](#releasing-a-wait-early)
+below covers one of these exactly as it covers a usage-limit wait.
 
 Ordinary transient throttling still never reaches any of this: the provider CLI
 retries that on its own, and the harness does not duplicate the wait. What it

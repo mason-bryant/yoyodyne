@@ -82,11 +82,34 @@ type UsageLimit struct {
 // one, so what it calls for is a short wait and another attempt rather than a
 // deadline to sleep on.
 //
-// It is the third kind of answer a backend gives about why an invocation
-// produced nothing, and yoyodyne-ifd.32 is where those answers become a plugin
-// contract rather than two structs and an adapter that knows one provider's
-// dialect. The Claude Code shape this was derived from — a terminal api_error
-// reporting HTTP 529 — is recorded in that adapter's parser.
+// For yoyodyne-ifd.32, which turns this package into a plugin contract.
+//
+// A transient server refusal is a fourth answer that contract has to name,
+// beside the ordinary retry a provider takes itself, the limit that will lift,
+// and the refusal that will not. It is not a variant of any of them: nothing
+// about the account is exhausted, so it is not a usage limit; the provider has
+// already stopped retrying by the time it says this, so it is not an ordinary
+// retry; and it is explicitly temporary, so it is not a refusal that stands.
+// What makes it a distinct answer operationally is that it carries no reset
+// time and never will, so the contract cannot fold it into the unknown-reset
+// case: that case polls on the interval an exhausted limit deserves, and an
+// overload wants one two orders of magnitude shorter.
+//
+// The evidence, so a plugin author has the shape rather than the assertion. Two
+// runs on 2026-08-18, run-ff3c59bff086d6ac16dbf5101778843d and
+// run-19dc9dff153e1eb89a2470f78f02f240, each failed a whole run instantly on a
+// terminal result identical apart from the session: terminal_reason "api_error"
+// and the text
+//
+//	API Error: 529 Overloaded. This is a server-side issue, usually temporary —
+//	try again in a moment. If it persists, check https://status.claude.com.
+//
+// Both had already exhausted the provider CLI's own ten api_retry attempts on
+// error "overloaded" before emitting it. That is Claude Code's spelling of the
+// answer and belongs behind the contract rather than in it; how the Claude Code
+// adapter reads it is in that adapter's parser. What generalizes is the answer
+// itself, and that the harness — never the plugin — decides how long to wait
+// for it and against which budget.
 type ServerOverload struct {
 	// Detail is the provider's own message, carried as evidence rather than
 	// interpreted by the harness.

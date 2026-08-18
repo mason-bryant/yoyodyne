@@ -1279,6 +1279,86 @@ func (fixedClock) Now() time.Time {
 	return time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 }
 
+// The two refusals a run waits out share a deadline, a budget, and everything
+// else, so the headline is the only place a conversation tells them apart. They
+// ask different things of the operator — an exhausted account may need a
+// decision about capacity, an overloaded server needs nothing but time — so
+// reading one as the other is worse than saying nothing.
+func TestRunReportHeadlineDistinguishesAnOverloadFromAnExhaustedLimit(t *testing.T) {
+	t.Parallel()
+
+	asksBy := time.Date(2026, 8, 18, 18, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		report     RunReport
+		want       string
+		wantAbsent string
+	}{
+		{
+			name:       "server overload",
+			report:     RunReport{WorkItemID: "yoyodyne-9", Paused: true, PauseCause: PauseServerOverload, UsageLimitResetsAt: &asksBy},
+			want:       "paused for a transient provider server overload",
+			wantAbsent: "usage limit",
+		},
+		{
+			name:       "named usage limit",
+			report:     RunReport{WorkItemID: "yoyodyne-9", Paused: true, PauseCause: PauseUsageLimit, UsageLimitKind: "five_hour", UsageLimitResetsAt: &asksBy},
+			want:       "paused for an exhausted five_hour usage limit",
+			wantAbsent: "overload",
+		},
+		{
+			// A record written before pause_cause existed carries no cause at all,
+			// and every one of those was an exhausted limit. Reading an empty cause
+			// as an overload would rewrite the history of runs already on disk.
+			name:       "a limit recorded before the cause was",
+			report:     RunReport{WorkItemID: "yoyodyne-9", Paused: true, UsageLimitKind: "five_hour", UsageLimitResetsAt: &asksBy},
+			want:       "paused for an exhausted five_hour usage limit",
+			wantAbsent: "overload",
+		},
+		{
+			// The provider does not always name the limit, and the headline still
+			// has to read as a sentence rather than trailing off.
+			name:       "an unnamed limit",
+			report:     RunReport{WorkItemID: "yoyodyne-9", Paused: true, PauseCause: PauseUsageLimit, UsageLimitResetsAt: &asksBy},
+			want:       "paused for an exhausted provider usage limit",
+			wantAbsent: "overload",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			headline := testCase.report.Headline()
+			if !strings.Contains(headline, testCase.want) {
+				t.Fatalf("Headline() = %q, want it to say %q", headline, testCase.want)
+			}
+			if strings.Contains(headline, testCase.wantAbsent) {
+				t.Fatalf("Headline() = %q, want it not to say %q", headline, testCase.wantAbsent)
+			}
+			// The deadline bounds the wait rather than gating it, and both refusals
+			// are probed sooner than it. A headline promising the operator nothing
+			// happens until that time would be describing a run that does not exist.
+			if !strings.Contains(headline, "asks again by 2026-08-18T18:00:00Z at the latest, sooner at its probe interval") {
+				t.Fatalf("Headline() = %q, want the deadline read as a bound rather than a gate", headline)
+			}
+			if !strings.Contains(headline, "still in flight") || !strings.Contains(headline, "continues the same run") {
+				t.Fatalf("Headline() = %q, want a paused run described as continuable", headline)
+			}
+		})
+	}
+}
+
+// A pause with no deadline recorded at all still reads as a sentence. It is the
+// one thing the headline cannot state, so it says so rather than rendering an
+// empty time.
+func TestRunReportHeadlineSurvivesAPauseWithNoDeadline(t *testing.T) {
+	t.Parallel()
+
+	headline := RunReport{WorkItemID: "yoyodyne-9", Paused: true, PauseCause: PauseServerOverload}.Headline()
+	if !strings.Contains(headline, "asks again by an unstated time") {
+		t.Fatalf("Headline() = %q, want an absent deadline named rather than rendered", headline)
+	}
+}
+
 // A run the harness stopped on time is owed a continuation, and the operator is
 // told which of the two things happened. Neither is the agent reporting a
 // failure, and neither reads as a wait on a provider deadline.
