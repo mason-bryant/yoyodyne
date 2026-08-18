@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"time"
 
-	"yoyodyne/internal/backlog"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/orchestrator"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // surveyedStatuses are the tracker slices a conversation reports, each asked

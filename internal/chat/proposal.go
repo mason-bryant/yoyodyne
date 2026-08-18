@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 // MaxProposalBytes bounds the untrusted proposal payload one turn may carry.

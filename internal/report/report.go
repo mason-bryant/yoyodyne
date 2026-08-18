@@ -28,7 +28,7 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // SchemaVersion is versioned independently of run and conversation state. A

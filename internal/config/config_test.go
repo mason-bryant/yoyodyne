@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 const validBootstrapConfig = `version: 1

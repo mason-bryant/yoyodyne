@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 const (

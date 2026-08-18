@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // TestReconcileSettlesAnInterruptionAtEveryPhaseBoundary drives a real run to

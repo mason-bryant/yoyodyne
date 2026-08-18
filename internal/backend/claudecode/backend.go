@@ -10,9 +10,9 @@ import (
 	"time"
 	"unicode"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // defaultTimeout is the total budget for one provider invocation: how long a

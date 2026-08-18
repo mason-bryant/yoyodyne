@@ -31,14 +31,14 @@ import (
 	"fmt"
 	"strings"
 
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/invariant"
-	"yoyodyne/internal/report"
-	"yoyodyne/internal/review"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // BranchChangeReader describes an accumulated change. It is the narrow half of

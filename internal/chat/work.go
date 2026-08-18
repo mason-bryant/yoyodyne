@@ -7,8 +7,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"yoyodyne/internal/backlog"
-	"yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 )
 
 // maxSurveyItems bounds how many items of one kind a survey lists. What an

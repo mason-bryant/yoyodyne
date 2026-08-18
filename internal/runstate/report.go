@@ -11,8 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // maxEncodedReportBytes bounds one encoded report, including the trailing

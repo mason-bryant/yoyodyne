@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 )
 
 func newBranchRequest(sink func(execution.Event) error) Request {

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {

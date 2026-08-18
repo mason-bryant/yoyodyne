@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const maxEventTextBytes = 16 << 10

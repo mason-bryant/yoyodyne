@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/backlog"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/execution"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // TestAnOperatorTakesIntentThroughToIntegratedWorkInOneConversation is the

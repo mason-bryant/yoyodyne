@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 const invariantsDirectory = "docs/decisions/invariants"

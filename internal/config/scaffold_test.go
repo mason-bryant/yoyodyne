@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // A generated project owns everything it runs on: one layer, no bundle, and

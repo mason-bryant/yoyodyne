@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // An item's price is what every run made for it cost, which is the whole reason

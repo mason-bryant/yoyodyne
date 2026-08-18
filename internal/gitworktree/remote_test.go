@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // Publishing is the whole life of a run's branch on a remote: the harness

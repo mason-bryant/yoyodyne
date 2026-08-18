@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 func TestAssembleUsesExplicitDeterministicReferences(t *testing.T) {

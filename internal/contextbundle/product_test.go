@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 // wellFormed is a specification that follows the contract: an introduction

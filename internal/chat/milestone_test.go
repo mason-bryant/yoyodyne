@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 )
 
 // TestCrossingsSayWhatChangedAndSayItOnce covers the rule the whole display

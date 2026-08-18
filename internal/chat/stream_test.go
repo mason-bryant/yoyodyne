@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/execution"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // replyingBackend writes its answer to whoever is watching before it returns

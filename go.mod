@@ -1,4 +1,4 @@
-module yoyodyne
+module github.com/mason-bryant/yoyodyne
 
 go 1.24.0
 

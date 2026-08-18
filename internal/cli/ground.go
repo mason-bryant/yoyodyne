@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/contextbundle"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // maxInteractionsBytes bounds how much of the tracker's own log is read to

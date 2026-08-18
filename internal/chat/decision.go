@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 )
 
 // The words one answer is written with. An approval is spelled out or answered

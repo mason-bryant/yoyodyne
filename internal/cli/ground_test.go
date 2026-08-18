@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // The conversation asks the repository and the tracker how old its picture is

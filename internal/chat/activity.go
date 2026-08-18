@@ -11,8 +11,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // The phases a turn passes through, in the operator's language rather than the

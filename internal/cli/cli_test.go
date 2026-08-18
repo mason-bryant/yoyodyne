@@ -10,14 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 )
 
 func TestRunHelp(t *testing.T) {

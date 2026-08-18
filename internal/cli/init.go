@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // runInit writes a project its own complete configuration. The built-in bundle

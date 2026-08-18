@@ -9,8 +9,8 @@ package orchestrator
 import (
 	"fmt"
 
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // ReportCollector is where collected reports are kept. It is satisfied by

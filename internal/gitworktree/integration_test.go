@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestManagerIntegratePromotesCheckedWorkAndPermitsCleanup(t *testing.T) {

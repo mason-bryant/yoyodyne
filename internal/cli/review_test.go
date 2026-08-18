@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/orchestrator"
-	"yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/review"
 )
 
 func TestReviewRequiresTheBaseItIsMeasuredAgainst(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 	"time"
 	"unicode"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 const CurrentVersion = 1

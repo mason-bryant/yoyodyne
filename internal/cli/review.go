@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 
-	"yoyodyne/internal/backend/claudecode"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/orchestrator"
-	"yoyodyne/internal/review"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/review"
 )
 
 type branchReviewOutput struct {

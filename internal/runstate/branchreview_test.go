@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const branchReviewID = "review-0123456789abcdef0123456789abcdef"

@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/publish"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // ReconcileWorktrees is the repository access reconciliation needs: reading

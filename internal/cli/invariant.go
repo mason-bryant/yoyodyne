@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/invariant"
 )
 
 type invariantOutput struct {

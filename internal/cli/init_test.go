@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 )
 
 func TestRunInitWritesAProjectThatOwnsItsConfiguration(t *testing.T) {
