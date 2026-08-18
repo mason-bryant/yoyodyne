@@ -140,7 +140,9 @@ agents:
     role: developer
     backend: claude-code
     model: opus
-    instances: 1
+    # Two instances so max_concurrent_developers: 2 is coherent; the
+    # capacity rule refuses a limit the instances cannot supply.
+    instances: 2
     persona:
       version: v1
       path: personas/developer.md
