@@ -408,6 +408,79 @@ yoyo artifact show v1-goals   # and what is wrong with one document, for that on
 kinds, and a listing narrowed to the goals would otherwise hide the design that
 names one of them and resolves to nothing.
 
+### Goals, and the work attributed to them
+
+The chain's last link runs from a work item to a goal, and a work item is in the
+tracker rather than in an artifact home. So the goals themselves are read out of
+the goals artifacts: **every statement under a goals document's `Goals` heading
+is a goal work can be attributed to**, and an attribution resolves by naming one
+of them in the words that document states it in.
+
+Only a `goals` artifact is read this way. A brief or a design with a `Goals`
+heading of its own states no goals work may be attributed to — the goals are the
+product manager's document, and reading intent out of anything with the right
+heading is how a design comes to authorize its own work.
+
+The `Goals` heading is the heading whose **whole text** is `Goals`, at any
+level. A title that merely opens with the word — `# Goals for V1` — is a title,
+and a document with no such heading states no goals and is reported as stating
+none. The exactness is load-bearing rather than pedantic: a title read as the
+section opens the goals at the document's top level, and nothing written below
+it can then end them by level, so everything in the file becomes something work
+may be admitted under.
+
+Each goal is one top-level list entry under that heading. Prose indented under
+an entry describes that goal rather than being another, and a heading below the
+`Goals` heading divides the goals rather than ending them. The section ends at
+the next heading at the same level or above, **or at any heading stating what
+the product will not do** — a `Non-goals` heading ends it wherever it is
+written, including nested inside it, so a document that files its non-goals
+under its goals rather than beside them is read as ending the goals there rather
+than as stating more of them. Attributing work to a non-goal is worse than
+attributing it to nothing, so that bound does not depend on how the document was
+nested.
+
+| Reported as | What it is | What it means for the work |
+| --- | --- | --- |
+| `attributed` | Names a goal an in-force goals artifact states. | The chain holds. |
+| `unresolved` | Names something no in-force goals artifact states. | A claim that is wrong. Admission is refused, and an item already carrying one is reported for correction. |
+| `unattributed` | Names no goal at all. | Work admitted before this check existed. Grandfathered: reported, never refused, and nothing stops it running. |
+| `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. |
+
+Wording is compared with case, surrounding and repeated whitespace, and trailing
+sentence punctuation folded. Nothing else is guessed at: a paraphrase is
+`unresolved` with the goals documents named, because deciding it was near enough
+is the inference a resolved attribution exists to replace.
+
+An attribution is written on the item as a `Goal served:` line — by the creation
+that admitted the work, or by an `attribute` action afterwards, appended to what
+the item already records rather than replacing it. The newest such line is the
+item's current claim, so the goal an item was admitted under is never rewritten
+and the record of how it came to be attributed survives.
+
+```sh
+yoyo goals list          # the goals work may be attributed to, and where each is stated
+yoyo goals attribution   # what each admitted work item says it is for
+```
+
+`attribution` exits non-zero for an item whose attribution is `unresolved` and
+zero for one with none. That asymmetry is the decision, not an oversight: an
+item admitted before goals were checked is somebody's to attribute, and a rule
+that failed every one of them would stop a backlog to close a gap that has cost
+nothing yet. Attributing one is a judgement about what the work is for, so it is
+the product manager's to make in conversation and there is no command here that
+makes it.
+
+That leaves a pass still owed. When the check arrived, Yoyodyne's own backlog
+carried one attribution across seventeen open items, and **the rest are still to
+be attributed**: until they are, `yoyo goals attribution` reports most of the
+queue as naming no goal, and that is the queue's real state rather than a
+reporting artefact. Grandfathering is what keeps the work running while the pass
+is outstanding; it is not a substitute for making it. The pass is made by the
+product manager in conversation, working from `yoyo goals attribution` and using
+the `attribute` action on each item — which appends, so nothing already recorded
+is lost.
+
 ## Architectural invariants
 
 The architect's durable constraints live in a second configured directory:

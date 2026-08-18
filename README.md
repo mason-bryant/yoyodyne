@@ -391,8 +391,9 @@ setting and the reasoning.
 
 It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
-out for it — read an item in full, survey the open queue, create, update,
-reparent, reprioritize, link and unlink a dependency, close, and retire. Every
+out for it — read an item in full, survey the open queue, create, attribute to a
+goal, update, reparent, reprioritize, link and unlink a dependency, close, and
+retire. Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -500,15 +501,34 @@ it names with commas or `and`, and everything after them is your reason even
 when it starts with a number: `decline 2 3 weeks out` turns down card 2 for
 being three weeks out rather than turning down cards 2 and 3.
 
-Work reaches the queue only with a goal named against it. Every proposal, and
-every item the product manager admits itself, says which goal it serves; the
-harness requires it and writes it onto the item, so what the work is for is
-recorded rather than asserted once and lost. The naming is what is enforced, not
-the goal: goals are prose in `docs/product` with no identifiers yet, so the
-harness can insist that a goal is named and recorded and cannot yet check that
-the named goal is one you approved. What a proposal is placed against is
-checked: a parent or dependency the tracker does not hold proposes nothing at
-all, rather than becoming an approval that fails after you have given it.
+Work reaches the queue only with a goal named against it, and the goal has to be
+one you approved. Every proposal, and every item the product manager admits
+itself, says which goal it serves in the words your goals document states it in;
+the harness resolves that against the goals it reads from `docs/product` and
+refuses an admission — or a proposal, before you are asked about it — that names
+anything they do not state. So what an item says it is for is checked rather
+than asserted, and the check is on the goal rather than on the fact that a
+sentence was typed into the field. Wording is compared with case, spacing, and
+trailing punctuation folded; nothing else is guessed at, so a paraphrase is
+refused with the goals named rather than accepted as near enough. What a
+proposal is placed against is checked the same way: a parent or dependency the
+tracker does not hold proposes nothing at all, rather than becoming an approval
+that fails after you have given it.
+
+Work admitted before that check existed names no goal, and it is grandfathered
+rather than blocked or backfilled by the harness itself: nothing refuses to run
+it, and it is reported as unattributed wherever the queue is read, because a
+rule that failed every item admitted before attributions were checked would stop
+all work to close a gap that has cost nothing yet. Grandfathering keeps that
+work running until it is attributed; it does not mean it stays unattributed.
+Attributing one is a judgement about what the work is for, so the product
+manager makes it in the conversation and the harness never guesses: `attribute`
+records a goal on an item already in the backlog,
+appended to what the item records rather than replacing it, so the goal an item
+was admitted under is never rewritten. An item that names no goal and one whose
+goal your goals do not state are reported apart, because the first is work to
+attribute and the second is a claim to correct. [`yoyo goals`](#goals-and-what-work-serves-them)
+reads both from outside the conversation.
 
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
@@ -1191,6 +1211,34 @@ brief is the root and a decision record is not downstream of intent, so neither
 is asked to support anything. The
 [configuration guide](docs/configuration.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
+
+## Goals, and what work serves them
+
+Identity ends at the document. The last link of the chain is the goal a work
+item names, and that link is closed by reading the goals out of the goals
+artifacts themselves: every statement under a goals document's `Goals` heading
+is a goal work can be attributed to, and an attribution resolves by naming one
+of them in the words that document states it in.
+
+```sh
+./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
+./bin/yoyo goals attribution   # what each admitted work item says it is for
+```
+
+Nothing there writes an attribution, for the same reason nothing writes an
+artifact: what a piece of work is for is a product judgement, made by the
+product manager in the conversation where you can see it. What the harness owns
+is resolving the claim. An item that names no goal at all and one that names a
+goal your goals do not state are reported apart and treated differently, because
+they are not the same thing to do: the first predates the check, is somebody's
+to attribute, and never stops the work running; the second is a claim that is
+wrong, and it is what `yoyo goals attribution` exits non-zero for.
+
+A goals document nobody can read goals out of — one with no `Goals` heading, or
+with nothing stated under it — is named on stderr rather than quietly shrinking
+the set work may be attributed to, and a repository with no goals in force is
+told that nothing was checked rather than having its queue reported as
+unattributed.
 
 ## Architectural invariants
 

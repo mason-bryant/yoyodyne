@@ -197,6 +197,18 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		return nil, nil, err
 	}
 
+	// The goals the repository records, which is what work admitted in this
+	// conversation has to name. A repository whose goals cannot be read still
+	// opens a conversation: what it costs is the check, and every action that
+	// would have been checked says so rather than reading as approved.
+	goals, err := loadGoals(repository, cfg.Product)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: %v\n", err)
+	}
+	for _, problem := range goals.Problems {
+		fmt.Fprintf(stderr, "warning: goals not read: %s\n", problem)
+	}
+
 	ground := newConversationGround(parts)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
@@ -215,7 +227,11 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		Work:    newConversationWork(parts),
 		// The collected reports are the same pile the runs fill, read and written
 		// from here because this conversation is where the operator already is.
-		Reports:      parts.reports,
+		Reports: parts.reports,
+		// What work admitted here has to name. It is read from the repository
+		// rather than from the conversation, so a goal retired since the
+		// conversation opened stops being one work can be admitted under.
+		Goals:        goals,
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
 		Agent:        agentNameForRole(cfg, domain.RoleProductManager),
@@ -299,15 +315,17 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string)
 	// repository it may have read hours ago.
 	fmt.Fprintln(writer, freshness)
 	fmt.Fprintln(writer, "It owns the backlog: what is admitted to it, and the order work is pulled in.")
-	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, update, reparent,")
-	fmt.Fprintln(writer, "reprioritize, link, unlink, close, and retire items, and every change it makes")
-	fmt.Fprintln(writer, "is reported to you here. It has no files, commands, or network, and it proposes")
-	fmt.Fprintln(writer, "changes to the brief and the goals rather than making them.")
+	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, attribute to a goal,")
+	fmt.Fprintln(writer, "update, reparent, reprioritize, link, unlink, close, and retire items, and every")
+	fmt.Fprintln(writer, "change it makes is reported to you here. It has no files, commands, or network,")
+	fmt.Fprintln(writer, "and it proposes changes to the brief and the goals rather than making them.")
 	fmt.Fprintln(writer, "It may also propose work items; one is created only when you approve it by name,")
-	fmt.Fprintln(writer, "and every one of them names the goal it serves. Several proposals are decided in")
-	fmt.Fprintln(writer, "one answer: approve 1,3 and decline 2 <reason>. Work it cannot place under a")
-	fmt.Fprintln(writer, "goal, work it says would cut against one, and work it judges to be against the")
-	fmt.Fprintln(writer, "product's intent are not proposed at all: it stops and asks you instead.")
+	fmt.Fprintln(writer, "and every one of them names a goal your goals state, checked rather than taken.")
+	fmt.Fprintln(writer, "Work admitted before that check names none, and it says which items those are.")
+	fmt.Fprintln(writer, "Several proposals are decided in one answer: approve 1,3 and decline 2 <reason>.")
+	fmt.Fprintln(writer, "Work it cannot place under a goal, work it says would cut against one, and work")
+	fmt.Fprintln(writer, "it judges to be against the product's intent are not proposed at all: it stops")
+	fmt.Fprintln(writer, "and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
 	fmt.Fprintln(writer, "shows you what has been collected.")
 	fmt.Fprintln(writer, "Its picture of the repository and the tracker is the one gathered above; /refresh")

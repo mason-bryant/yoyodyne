@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 func TestExtractTrackerActionsSeparatesProseFromWhatWasAskedFor(t *testing.T) {
@@ -257,7 +258,7 @@ func TestReadingAnItemReturnsItInFull(t *testing.T) {
 		Parent:             "yoyodyne-ifd.4",
 		Dependencies:       []beads.Dependency{{ID: "yoyodyne-ifd.4", Type: "parent-child", Status: "closed"}},
 	}
-	rendered := renderWorkItemEvidence(item)
+	rendered := renderWorkItemEvidence(item, goal.Set{})
 	// Everything the survey cannot show is what reading is for, so all of it is
 	// here rather than a longer title.
 	for _, required := range []string{
@@ -280,7 +281,7 @@ func TestReadingAnItemReturnsItInFull(t *testing.T) {
 	// manager reading part of an item has to know that is what it read.
 	huge := item
 	huge.Description = strings.Repeat("x", maxTrackerItemBytes*2)
-	cut := renderWorkItemEvidence(huge)
+	cut := renderWorkItemEvidence(huge, goal.Set{})
 	if len(cut) > maxTrackerItemBytes+len("\n\n[cut at 8192 bytes; treat the rest as unread rather than absent]") {
 		t.Fatalf("cut item is %d bytes", len(cut))
 	}
