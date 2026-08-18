@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -157,6 +158,7 @@ func TestRunKeepsTheDecidedResultWhenTheProviderKeepsWriting(t *testing.T) {
 		`{"type":"rate_limit_event","session_id":"session-2","subtype":"upgrade"}`,
 		`{"type":"assistant","session_id":"session-2","message":{"content":[{"type":"text","text":"trailing chatter"}]}}`,
 		`{"type":"system","subtype":"init","session_id":"session-2","model":"late-model"}`,
+		`{"type":"result","session_id":"session-2","result":"","terminal_reason":"","usage":{}}`,
 	}, "\n") + "\n"
 	var events []execution.Event
 	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
@@ -179,15 +181,84 @@ func TestRunKeepsTheDecidedResultWhenTheProviderKeepsWriting(t *testing.T) {
 		t.Fatalf("trailing events rewrote the terminal envelope: %#v", result)
 	}
 	// The trailing events stay in the stream so a late notice such as a usage
-	// limit is still diagnosable, and the sequence checkpoint covers them.
-	if len(events) != 5 || result.LastEvent != 5 {
-		t.Fatalf("events = %d, last event = %d, want 5 events recorded", len(events), result.LastEvent)
+	// limit is still diagnosable, and the sequence checkpoint covers them. The
+	// last of them is a nested agent finishing after the parent did, which is
+	// recorded like the rest and is not a second terminal.
+	if len(events) != 6 || result.LastEvent != 6 {
+		t.Fatalf("events = %d, last event = %d, want 6 events recorded", len(events), result.LastEvent)
 	}
 	if !strings.Contains(string(events[2].Payload), "rate_limit_event") {
 		t.Fatalf("post-result event payload = %s", events[2].Payload)
 	}
 	if !strings.Contains(string(events[3].Payload), "trailing chatter") {
 		t.Fatalf("post-result message payload = %s", events[3].Payload)
+	}
+}
+
+// TestRunHonorsTheParentTerminalWhenANestedAgentFinishesFirst replays the
+// stream that killed run-841f5ee1866addb533c02a30e67f001a. Its developer had
+// spawned subagents, one finished, and its completion arrived in the parent's
+// stream as a result envelope — which the parser of the day took for this
+// invocation's terminal, so the real terminal was rejected as a second one and
+// a finished piece of work was thrown away.
+//
+// The fixture is what the run recorded. The provider's raw stdout is
+// deliberately not retained (see Backend.Run), so the envelopes are rebuilt from
+// the normalized events: the system init at sequence 1185, the nested result at
+// 1186 with its usage object byte for byte, and the second init at 1187, each
+// carrying only fields the record actually holds. The parent's own terminal is
+// the one thing that cannot be recovered — the guard fired before it was
+// recorded — so it is written here in the shape every genuine terminal in that
+// history has.
+func TestRunHonorsTheParentTerminalWhenANestedAgentFinishesFirst(t *testing.T) {
+	t.Parallel()
+
+	stream, err := os.ReadFile("testdata/run-841f5ee1-nested-agent-result.jsonl")
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	var events []execution.Event
+	result, err := (Backend{Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: string(stream)}}}, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "resolve the review findings",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	// The parent's terminal decides the invocation: its text, its reason, its
+	// cost. None of that survives if the nested result is taken for a terminal,
+	// because the first result seen is the one every later field defers to.
+	if result.IsError || result.FinalText != "All three findings resolved." || result.StopReason != "completed" {
+		t.Fatalf("Run() result = %#v", result)
+	}
+	if result.CostUSD != 9.410398 || result.ResolvedModel != "claude-opus-5" {
+		t.Fatalf("the nested result displaced the terminal envelope: %#v", result)
+	}
+	// A nested result is recorded rather than dropped — it is the only evidence
+	// a subagent ran at all — but as stream noise, not as this run completing.
+	wantTypes := []execution.EventType{
+		execution.EventProcessOutput,
+		execution.EventRunStarted,
+		execution.EventProcessOutput,
+		execution.EventRunStarted,
+		execution.EventAgentMessage,
+		execution.EventRunCompleted,
+	}
+	gotTypes := make([]execution.EventType, 0, len(events))
+	for _, event := range events {
+		gotTypes = append(gotTypes, event.Type)
+	}
+	if !reflect.DeepEqual(gotTypes, wantTypes) {
+		t.Fatalf("event types = %#v, want %#v", gotTypes, wantTypes)
+	}
+	if !strings.Contains(string(events[2].Payload), `"provider_type":"result"`) {
+		t.Fatalf("nested result payload = %s", events[2].Payload)
 	}
 }
 
@@ -293,7 +364,11 @@ func TestRunRejectsMalformedOrIncompleteStream(t *testing.T) {
 		{name: "malformed", stream: "{\n", want: "decode stream event"},
 		{name: "missing type", stream: "{}\n", want: "type is required"},
 		{name: "no result", stream: `{"type":"system","subtype":"init","session_id":"session-1"}` + "\n", want: "without a result"},
-		{name: "second result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","usage":{}}` + "\n", want: "second provider terminal result"},
+		// Telling a nested result apart from a terminal one does not soften the
+		// guard: two envelopes that both carry a terminal's marks are still two
+		// terminals, and the second may not replace the first.
+		{name: "second result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","terminal_reason":"completed","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","terminal_reason":"api_error","usage":{}}` + "\n", want: "second provider terminal result"},
+		{name: "second result after a nested one", stream: `{"type":"result","session_id":"session-1","result":"","terminal_reason":"","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-1","result":"done","terminal_reason":"completed","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","terminal_reason":"api_error","usage":{}}` + "\n", want: "second provider terminal result"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

@@ -214,6 +214,19 @@ func (p *streamParser) ParseLine(line string) error {
 	if err := p.redactEnvelope(&envelope); err != nil {
 		return err
 	}
+	// Not every result envelope is the invocation's result. A nested agent ends
+	// in one too, so the guard below is about the terminal rather than about the
+	// envelope type: a nested result is recorded as the stream noise it is and
+	// never counts as a terminal at all.
+	if envelope.Type == "result" && nestedAgentResult(envelope) {
+		return p.emit(execution.EventProcessOutput, map[string]any{
+			"provider_type":    envelope.Type,
+			"provider_subtype": envelope.Subtype,
+			"is_error":         envelope.IsError,
+			"total_cost_usd":   envelope.TotalCostUSD,
+			"usage":            json.RawMessage(envelope.Usage),
+		})
+	}
 	// A terminal result decides the run's outcome, but the provider keeps
 	// writing after it. Trailing events are recorded so their payload stays
 	// diagnosable; they must not disturb the decided result, and the guarded
@@ -432,6 +445,37 @@ func redactJSONValue(value any, redactor execution.Redactor) any {
 	default:
 		return value
 	}
+}
+
+// nestedAgentResult reports a result envelope that ends something inside the
+// invocation rather than the invocation itself. An agent may spawn subagents,
+// and a subagent's completion arrives in the parent's stream as another
+// type:result envelope; nothing in it says whose result it is, so the two are
+// told apart by shape.
+//
+// Provenance. Run run-841f5ee1866addb533c02a30e67f001a, developing
+// yoyodyne-ifd.60 on 2026-08-18, recorded one at sequence 1186 while its
+// developer had subagents outstanding: is_error false, empty result, empty
+// terminal_reason, no cost, and an all-zero usage object, arriving sixteen
+// milliseconds after a system init and sixteen before another. It is the only
+// envelope of that shape in the local run history; the 218 genuine terminals
+// beside it all carry a terminal_reason and result text. The parser of the day
+// read it as this invocation's terminal, so the real terminal three minutes
+// later tripped the one-terminal guard and killed a run whose work was already
+// complete in the worktree.
+//
+// The test is deliberately narrow, because both mistakes cost the same thing —
+// a nested result read as terminal loses the real outcome, and so does a
+// terminal read as nested — and only one of them has ever been observed. An
+// envelope carrying either mark is therefore still the terminal it has always
+// been, and only one carrying neither is noise.
+//
+// This is Claude Code's dialect like the rest of this file, and it is one more
+// thing yoyodyne-ifd.32 has to name: what generalizes is that a provider which
+// can nest agents emits results that are not the run's, and that a contract
+// which identifies the terminal by envelope type alone cannot survive one.
+func nestedAgentResult(envelope streamEnvelope) bool {
+	return envelope.TerminalReason == "" && envelope.Result == ""
 }
 
 func (p *streamParser) parseResult(envelope streamEnvelope) error {
