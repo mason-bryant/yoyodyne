@@ -957,9 +957,18 @@ waiting entirely, so every exhausted limit blocks immediately.
 `usage_limit_in_process_pause` is how much of that bound a run will spend
 sleeping inside the `yoyodyne` process. It defaults to the same `6h`, so by
 default every probe the harness will take is taken here and the run continues on
-its own once the limit resets. Lowering it — say to `15m` — makes a longer probe
-exit instead, with the run still in flight and its deadline recorded; running
-`yoyo run` on the same item continues that same run.
+its own once the limit resets. Lowering it — say to `1h` — makes the process
+sleep probes until it has spent that hour on the run and then exit, with the run
+still in flight and its deadline recorded; running `yoyo run` on the same item
+continues that same run, and that process gets the whole bound again.
+
+The bound is on how long one process stays open for a run, so it counts every
+probe that process has already slept rather than each probe separately. Applying
+it per probe would bound nothing: a probe interval of `30m` fits under a `1h`
+bound however many times it is taken, so a six-hour deadline would hold the
+process open for the whole six hours in half-hour slices. It spans phases for
+the same reason — a process that waited half an hour for the developer and half
+an hour for the review has been open for an hour.
 
 Both paths record the deadline in durable run state *before* any waiting begins,
 so a process that dies mid-wait loses nothing and a restart serves the same

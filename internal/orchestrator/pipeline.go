@@ -679,6 +679,17 @@ type activeRun struct {
 	// and change, so a developer that makes the same argument again on a repair
 	// attempt raises one proposal rather than one per attempt.
 	proposedAmendments map[string]bool
+	// inProcessWait is how long this process has already slept waiting out usage
+	// limits for this run, across every probe and every phase. It is what the
+	// in-process bound is measured against, because that bound is on how long a
+	// process stays open rather than on any one probe. It is deliberately not
+	// durable: a later invocation is a new process and gets the whole bound.
+	inProcessWait time.Duration
+	// pausedAt is when this process recorded the deadline it is now serving. It
+	// dates the pause so an operator's release can be told apart from one aimed
+	// at a pause this run has already served. The zero time means the deadline
+	// was written by an earlier process, which no release can predate.
+	pausedAt time.Time
 }
 
 // loadInvariants reads the architect's durable constraints. It is a hard failure
@@ -1337,6 +1348,9 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	resetsAt := limit.ResetsAt.UTC()
 	a.state.UsageLimitResetsAt = &resetsAt
 	a.state.UpdatedAt = p.clock().Now()
+	// When this pause was recorded is what tells a release meant for it apart
+	// from one meant for a pause this run has already served and reissued past.
+	a.pausedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("record usage limit pause: %w", err)
 	}
@@ -1389,9 +1403,13 @@ func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 		// served and the refused attempt is owed its reissue. A deadline already
 		// behind us is the normal way a paused run is resumed, and is a different
 		// thing from a fresh report naming a reset in the past.
-	case probe > p.Config.Execution.UsageLimitInProcessPause.Duration():
-		// Longer than this process will stay open for. The deadline is durable,
-		// so the run is left in flight for a later invocation to continue.
+	case a.inProcessWait+probe > p.Config.Execution.UsageLimitInProcessPause.Duration():
+		// This process has stayed open for this run as long as it is allowed to.
+		// The bound counts every probe this process has already slept rather than
+		// this one on its own, because a bound applied per probe would not bound
+		// anything: an hour's worth of it would hold a process open for a whole
+		// six-hour deadline, half an hour at a time. The deadline is durable, so
+		// the run is left in flight for a later invocation to continue.
 		return usageLimitPause{kind: a.state.UsageLimitKind, resetsAt: deadline}
 	default:
 		// What this probe will spend is committed before it is spent, so a process
@@ -1408,10 +1426,14 @@ func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 			return err
 		}
 		// A release that landed mid-probe leaves time on the clock that was never
-		// waited, and the budget must not be charged for it.
+		// waited. The budget must not be charged for it, and it is not time this
+		// process stayed open for either.
+		waited := probe
 		if unspent := wakesAt.Sub(p.clock().Now()); unspent > 0 {
+			waited -= unspent
 			a.state.UsageLimitPausedSeconds -= int64(unspent / time.Second)
 		}
+		a.inProcessWait += waited
 	}
 	return a.clearUsageLimitPause()
 }
@@ -1446,12 +1468,23 @@ func (a *activeRun) waitForProbe(ctx context.Context, wakesAt time.Time) error {
 // the wait rather than being treated as an absence: an operator who released a
 // run and was silently ignored would be back where this verb exists to get them
 // out of, and the run is preserved and resumable either way.
+//
+// A release older than the pause being served belongs to a pause this process
+// has already served and reissued past. The operator reads the waiting run
+// without holding its lease, so a release they typed against the pause they saw
+// can land just after this run cleared it — and honoring it would release a
+// pause the provider reported afterwards, which nobody has said anything about.
+// A release recorded while no process was serving the run has no such pause to
+// be older than, and is honored.
 func (a *activeRun) releasedByOperator() (bool, error) {
-	_, released, err := a.pipeline.Store.ReleasedWait(a.state.RunID)
+	released, found, err := a.pipeline.Store.ReleasedWait(a.state.RunID)
 	if err != nil {
 		return false, fmt.Errorf("read whether the operator released this usage limit wait: %w", err)
 	}
-	return released, nil
+	if !found {
+		return false, nil
+	}
+	return !released.ReleasedAt.Before(a.pausedAt), nil
 }
 
 // clearUsageLimitPause records that the run is no longer waiting, before the

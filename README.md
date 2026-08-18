@@ -1477,9 +1477,13 @@ attempt: the reissue *is* the probe. A reset time is a claim about the provider,
 and claims go stale in both directions — capacity gets bought mid-wait, and a
 rolling window can free room before the quoted edge — so a probe into a window
 that is still closed costs one refused request and re-parks on whatever the
-provider now reports. A probe longer than
-`execution.usage_limit_in_process_pause` exits with the run still in flight
-instead, and running `yoyo run` on the same item continues it.
+provider now reports. A run sleeps probes inside this process until it has spent
+`execution.usage_limit_in_process_pause` on this run, and then exits with the
+run still in flight instead of sleeping the next one; running `yoyo run` on the
+same item continues it, with the whole bound available to that process again.
+That bound counts every probe this process has already slept rather than each
+one on its own, because a bound applied per probe would stop bounding how long
+the process stays open at all.
 `execution.usage_limit_max_pause` bounds what one run may spend waiting in total
 rather than each wait separately, so a provider that keeps refusing cannot walk
 a run past it, and what it records is what was actually waited rather than the

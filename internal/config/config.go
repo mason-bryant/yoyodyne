@@ -113,10 +113,14 @@ type Execution struct {
 	// exhausted limit blocks immediately.
 	UsageLimitMaxPause Duration `yaml:"usage_limit_max_pause" json:"usage_limit_max_pause"`
 	// UsageLimitInProcessPause is how much of that bound a run will spend
-	// sleeping inside this process. A shorter wait is simply waited out; a
-	// longer one exits with the run still in flight and its deadline recorded,
-	// so a later invocation resumes it rather than holding a process open for
-	// hours. It is never larger than UsageLimitMaxPause in effect, because a
+	// sleeping inside this process. The process sleeps probes until it has spent
+	// this much on one run and then exits with the run still in flight and its
+	// deadline recorded, so a later invocation resumes it rather than holding a
+	// process open for hours. It is measured against every probe this process has
+	// already slept, across phases, rather than against each probe separately: a
+	// bound applied per probe would not bound how long the process stays open,
+	// because a probe interval that fits under it fits however many times it is
+	// taken. It is never larger than UsageLimitMaxPause in effect, because a
 	// pause beyond that bound is refused before either path is chosen.
 	UsageLimitInProcessPause Duration `yaml:"usage_limit_in_process_pause" json:"usage_limit_in_process_pause"`
 	// UsageLimitUnknownResetPause is the interval between probes: how long a run
