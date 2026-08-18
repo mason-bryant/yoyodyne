@@ -121,10 +121,193 @@ func TestScaffoldCarriesTheProjectsOwnChecks(t *testing.T) {
 	resolved := loadScaffold(t, ScaffoldOptions{
 		ProductID:  "example",
 		Repository: ".",
-		Checks:     []string{"go test ./...", "go vet ./..."},
+		Detection: Detection{Checks: []CheckProposal{
+			{Command: "go test ./...", Source: "go.mod"},
+			{Command: "go vet ./...", Source: "go.mod"},
+		}},
 	})
 	if len(resolved.Config.Checks) != 2 || resolved.Config.Checks[0] != "go test ./..." {
 		t.Fatalf("checks = %v", resolved.Config.Checks)
+	}
+}
+
+// A proposal an operator cannot trace back to something in their own repository
+// is a guess, so the generated file names what each entry was derived from, once
+// per artifact rather than once per line.
+func TestScaffoldNamesWhereEachProposedCheckCameFrom(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{
+		ProductID:  "example",
+		Repository: ".",
+		Detection: Detection{Checks: []CheckProposal{
+			{Command: "go test ./...", Source: "go.mod"},
+			{Command: "go vet ./...", Source: "go.mod"},
+			{Command: "mvn --batch-mode --quiet verify", Source: "pom.xml"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	want := "checks:\n  # from go.mod\n  - go test ./...\n  - go vet ./...\n  # from pom.xml\n  - mvn --batch-mode --quiet verify\n"
+	if !strings.Contains(rendered, want) {
+		t.Errorf("rendered checks section does not contain:\n%s\ngot:\n%s", want, rendered)
+	}
+	if strings.Contains(rendered, CandidateMarker) {
+		t.Error("a configuration with nothing left to choose still carries the choose-one marker")
+	}
+}
+
+// A candidate is written so that choosing it costs one character: deleting the
+// leading "#" has to leave a valid entry of the list above it.
+func TestScaffoldWritesCandidatesCommentedUnderAMarker(t *testing.T) {
+	t.Parallel()
+
+	detection := Detection{Candidates: []CheckProposal{
+		{Command: "python3 -m pytest -q", Source: "tests", Reason: "nothing here names the test runner"},
+		{Command: "python3 -m unittest discover -q -s tests -t .", Source: "tests", Reason: "nothing here names the test runner"},
+	}}
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{ProductID: "example", Repository: ".", Detection: detection})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	if !strings.Contains(rendered, CandidateMarker) {
+		t.Fatalf("rendered configuration carries no %q marker:\n%s", CandidateMarker, rendered)
+	}
+	// Nothing ambiguous was decided on the operator's behalf.
+	if !strings.Contains(rendered, "checks: []\n") {
+		t.Error("candidates were written into the checks list rather than beside it")
+	}
+	for _, candidate := range detection.Candidates {
+		if !strings.Contains(rendered, "#  - "+candidate.Command+"\n") {
+			t.Errorf("candidate %q is not commented out at the list's own indentation", candidate.Command)
+		}
+	}
+	if !strings.Contains(rendered, "nothing here names the test runner") {
+		t.Error("the candidates do not say why they could not be chosen")
+	}
+
+	// Uncommenting is the whole gesture the file asks for, so it is performed
+	// exactly as written -- open the empty list, delete one leading "#" per
+	// chosen line, change nothing else -- and the result has to load.
+	uncommented := strings.Replace(rendered, "checks: []\n", "checks:\n", 1)
+	for _, candidate := range detection.Candidates {
+		uncommented = strings.Replace(uncommented, "#  - "+candidate.Command+"\n", "  - "+candidate.Command+"\n", 1)
+	}
+	directory := filepath.Join(t.TempDir(), DirectoryName)
+	for _, file := range scaffold.Files() {
+		path := filepath.Join(directory, filepath.FromSlash(file.Path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		content := file.Content
+		if file.Path == FileName {
+			content = []byte(uncommented)
+		}
+		if err := os.WriteFile(path, content, 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	loaded, err := Load(filepath.Join(directory, FileName))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.Checks) != len(detection.Candidates) || loaded.Checks[0] != detection.Candidates[0].Command {
+		t.Errorf("checks = %v, want the candidates that were uncommented", loaded.Checks)
+	}
+}
+
+// A demand to choose is only honest where a run cannot happen until somebody
+// does. Where init wrote a usable list and something else about the toolchain is
+// merely open, the file says so without demanding anything.
+func TestScaffoldDemandsAChoiceOnlyWhereTheListIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{
+		ProductID:  "example",
+		Repository: ".",
+		Detection: Detection{
+			Checks: []CheckProposal{{Command: "make check", Source: `Makefile (its "check" target)`}},
+			Candidates: []CheckProposal{
+				{Command: "python3 -m pytest -q", Source: "tests/test_calc.py", Reason: "nothing here names the test runner"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	if strings.Contains(rendered, CandidateMarker) {
+		t.Errorf("a configuration that already runs still demands a choice:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, UndecidedMarker) {
+		t.Errorf("the open question is not named at all:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "#  - python3 -m pytest -q\n") {
+		t.Error("the undecided command is not offered")
+	}
+}
+
+// A command init read and decided against is not a decision the operator owes,
+// so it is written under its own heading rather than under the one that means a
+// run is blocked until somebody answers.
+func TestScaffoldWritesSupersededCommandsAsAlternativesRatherThanDemands(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{
+		ProductID:  "example",
+		Repository: ".",
+		Detection: Detection{
+			Checks: []CheckProposal{{Command: "make check", Source: `Makefile (its "check" target)`}},
+			Alternatives: []CheckProposal{
+				{Command: "go test ./...", Source: "go.mod", Reason: "the Makefile above already names this project's entry point"},
+				{Command: "go vet ./...", Source: "go.mod", Reason: "the Makefile above already names this project's entry point"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	for _, unwanted := range []string{CandidateMarker, UndecidedMarker} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("a settled configuration carries %q:\n%s", unwanted, rendered)
+		}
+	}
+	if !strings.Contains(rendered, AlternativeMarker) {
+		t.Errorf("the superseded commands are not headed as alternatives:\n%s", rendered)
+	}
+	for _, alternative := range []string{"#  - go test ./...\n", "#  - go vet ./...\n"} {
+		if !strings.Contains(rendered, alternative) {
+			t.Errorf("alternative %q was dropped rather than offered", strings.TrimSpace(alternative))
+		}
+	}
+	if !strings.Contains(rendered, "the Makefile above already names this project's entry point") {
+		t.Error("the alternatives do not say what displaced them")
+	}
+}
+
+// A project that proposed nothing keeps the placeholder and the examples that
+// were there before detection existed, plus somewhere to read about them.
+func TestScaffoldKeepsThePlaceholderWhenNothingWasDetected(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{ProductID: "example", Repository: "."})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	for _, want := range []string{"checks: []\n", "#   # Go\n", "#   # TypeScript / Node\n", "#   # Python\n", "#   # Java (Maven)\n", "#   # Java (Gradle)\n", checksGuide} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("rendered configuration does not contain %q", want)
+		}
+	}
+	for _, unwanted := range []string{CandidateMarker, UndecidedMarker, AlternativeMarker} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("a project with nothing detected carries %q", unwanted)
+		}
 	}
 }
 

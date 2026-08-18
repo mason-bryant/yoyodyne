@@ -44,6 +44,9 @@ readme_install_module="github.com/mason-bryant/yoyodyne"
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/yoyodyne-walk.XXXXXX")"
+# TMPDIR often ends in a slash on macOS; normalize so path assertions compare
+# against the same spelling the harness prints.
+scratch="$(cd "$scratch" && pwd)"
 project="$scratch/calc"
 failures=0
 skips=0
@@ -140,7 +143,10 @@ git config user.email walk@example.invalid
 git config user.name "Adoption Walk"
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 : > tests/__init__.py
-cat > tests/test_calc.py <<'PY'
+# Step 4 asserts that init names this file as where it read the project's tests,
+# so the path is named once here and used there rather than spelled twice.
+fixture_test_file="tests/test_calc.py"
+cat > "$fixture_test_file" <<'PY'
 import unittest
 
 from calc import add
@@ -172,11 +178,32 @@ done
 refusal="$("$yoyo" init 2>&1 || true)"
 contains "$refusal" "pass --force to overwrite it" "a second init refuses rather than overwriting"
 
-step "4. the placeholder checks are empty, with per-language examples"
+step "4. init proposes checks from what this project already declares"
+# This project keeps its tests in tests/ and names no runner anywhere, so there
+# are two plausible commands and nothing here says which one is the gate. What
+# init must not do is pick one: it leaves both commented under a marker and
+# leaves the list empty.
 if grep -q '^checks: \[\]' .yoyodyne/config.yaml; then
-  pass "the generated file leaves checks empty"
+  pass "an undecidable toolchain leaves checks empty rather than guessing"
 else
-  fail "the generated file does not leave checks empty"
+  fail "a checks list was written for a project that names no test runner"
+fi
+if grep -q '^# YOU MUST CHOOSE' .yoyodyne/config.yaml; then
+  pass "the candidates carry an explicit you-must-choose marker"
+else
+  fail "the candidates carry no you-must-choose marker"
+fi
+for candidate in "#  - python3 -m pytest -q" "#  - python3 -m unittest discover -q -s tests -t ."; do
+  if grep -qF "$candidate" .yoyodyne/config.yaml; then
+    pass "offers a candidate, commented out: $candidate"
+  else
+    fail "offers no candidate: $candidate"
+  fi
+done
+if grep -qF "$fixture_test_file" .yoyodyne/config.yaml; then
+  pass "names $fixture_test_file as where the candidates were derived from"
+else
+  fail "does not name $fixture_test_file as where the candidates came from"
 fi
 for language in "# Go" "# TypeScript / Node" "# Python" "# Java (Maven)"; do
   if grep -qF "$language" .yoyodyne/config.yaml; then
@@ -185,6 +212,70 @@ for language in "# Go" "# TypeScript / Node" "# Python" "# Java (Maven)"; do
     fail "carries no commented $language example"
   fi
 done
+
+# A project that does say which runner it uses gets a list it can run instead.
+# `init --json` reports what was detected and what was written, so this is
+# asserted rather than eyeballed. Both of the projects below are their own
+# scratch directories, so the documented walk above is left undisturbed.
+decided="$scratch/decided"
+mkdir -p "$decided"
+printf '[tool.pytest.ini_options]\naddopts = "-q"\n' > "$decided/pyproject.toml"
+report="$("$yoyo" init --directory "$decided" --product decided --json || true)"
+printf '%s\n' "$report"
+summary="$(printf '%s' "$report" | python3 -c '
+import json, sys
+
+payload = json.load(sys.stdin)
+written = ";".join(payload["checks"])
+sources = ";".join(entry["source"] for entry in payload["detected"]["checks"])
+print("written: %s from: %s" % (written, sources))
+' || true)"
+contains "$summary" "python3 -m pytest -q" "a project that names pytest gets a runnable check written"
+contains "$summary" "pyproject.toml" "the report names the file the check was derived from"
+if grep -q '^  # from pyproject.toml' "$decided/.yoyodyne/config.yaml"; then
+  pass "the written check carries its provenance as a comment"
+else
+  fail "the written check carries no provenance comment"
+fi
+
+# Detection reads; it does not run. A Makefile whose target would leave a trace
+# is how that is checked from outside: the target is detected and its trace is
+# never written. The go.mod beside it makes this the supersede case too -- the
+# Makefile is the project's own entry point, so the Go commands are offered
+# rather than added, and offered is not the same as asked about.
+untrusted="$scratch/untrusted"
+mkdir -p "$untrusted"
+printf 'check:\n\ttouch %s/ran\n' "$untrusted" > "$untrusted/Makefile"
+printf 'module untrusted\n\ngo 1.24\n' > "$untrusted/go.mod"
+"$yoyo" init --directory "$untrusted" --product untrusted >/dev/null || true
+untrusted_config="$untrusted/.yoyodyne/config.yaml"
+if grep -q '^  - make check$' "$untrusted_config"; then
+  pass "a Makefile's check target is proposed as the project's gate"
+else
+  fail "a Makefile's check target was not proposed"
+fi
+if [ -e "$untrusted/ran" ]; then
+  fail "init executed a target from the project it was configuring"
+else
+  pass "init read the Makefile without running anything in it"
+fi
+if grep -q '^# ALSO FOUND, AND NOT NEEDED' "$untrusted_config"; then
+  pass "the superseded Go commands are headed as offered, not as owed"
+else
+  fail "the superseded Go commands carry no not-needed heading"
+fi
+if grep -qF '#  - go test ./...' "$untrusted_config"; then
+  pass "the superseded Go commands are still shown, commented out"
+else
+  fail "the superseded Go commands were dropped rather than offered"
+fi
+# The demand to choose belongs only where a run cannot happen until somebody
+# does. This configuration already runs, so it must not carry one.
+if grep -q '^# YOU MUST CHOOSE' "$untrusted_config"; then
+  fail "a configuration with a written checks list still demands a choice"
+else
+  pass "a configuration that already runs demands nothing"
+fi
 
 step "5. an empty checks list validates, but a run refuses it"
 validate="$("$yoyo" config validate 2>&1)"
@@ -206,22 +297,42 @@ printf 'work item: %s\n' "$item"
 refusal="$("$yoyo" run "$item" 2>&1 || true)"
 contains "$refusal" "requires at least one configured check" "yoyo run refuses a run with no checks"
 
-step "6. the project's own checks, in the project's own language"
-python3 - <<'PY'
+step "6. choose one of the candidates init offered"
+# The README says choosing costs one character: open the empty list, then delete
+# the leading "#" from the candidate that belongs. That is done here exactly as
+# written rather than by writing the line out again, because the claim being
+# checked is that the generated file can be edited that way.
+chosen="python3 -m unittest discover -q -s tests -t ."
+# The edit runs as an `if` condition so a candidate that was never offered is
+# reported as the failed claim it is, rather than aborting the walk under set -e.
+if python3 - "$chosen" <<'PY'
 import pathlib
+import sys
 
+chosen = sys.argv[1]
 path = pathlib.Path(".yoyodyne/config.yaml")
-path.write_text(path.read_text().replace(
-    "checks: []\n",
-    "checks:\n  - python3 -m unittest discover -q -s tests -t .\n",
-))
+text = path.read_text()
+if "#  - " + chosen + "\n" not in text:
+    raise SystemExit("init offered no candidate for %r" % chosen)
+text = text.replace("checks: []\n", "checks:\n", 1)
+text = text.replace("#  - " + chosen + "\n", "  - " + chosen + "\n", 1)
+path.write_text(text)
 PY
+then
+  pass "uncommented the chosen candidate in place"
+else
+  fail "could not uncomment the chosen candidate"
+fi
+# `|| true` so a command that fails is reported as the claim it broke rather than
+# aborting the walk under set -e with nothing said about which step it was.
+effective="$("$yoyo" config show --effective 2>&1 || true)"
+contains "$effective" "$chosen" "the uncommented candidate is the effective checks list"
 # The README says each entry runs through /bin/sh -c and must exit non-zero on
 # failure, so the declared command is executed exactly that way.
-if /bin/sh -c 'python3 -m unittest discover -q -s tests -t .' >/dev/null 2>&1; then
-  pass "the declared check passes through /bin/sh -c"
+if /bin/sh -c "$chosen" >/dev/null 2>&1; then
+  pass "the chosen check passes through /bin/sh -c"
 else
-  fail "the declared check does not pass through /bin/sh -c"
+  fail "the chosen check does not pass through /bin/sh -c"
 fi
 validate="$("$yoyo" config validate 2>&1)"
 contains "$validate" "configuration valid" "config validate passes with the project's own checks"

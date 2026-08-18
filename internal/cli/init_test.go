@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -54,6 +55,166 @@ func TestRunInitWritesAProjectThatOwnsItsConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "checks") {
 		t.Errorf("stdout = %q, want it to name the checks that still have to be written", stdout.String())
+	}
+}
+
+// The three-step adoption path breaks if the operator has to hand-write a YAML
+// list to get past step two, so init reads what the repository already
+// announces and proposes checks from it. What it wrote and what it only found
+// are reported separately, because a candidate is deliberately not written.
+func TestRunInitProposesChecksFromTheProjectsOwnFiles(t *testing.T) {
+	t.Parallel()
+
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.MkdirAll(filepath.Join(project, "tests"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "go.mod"), []byte("module example\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tests", "test_calc.py"), []byte("import unittest\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--json"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var result struct {
+		Checks   []string `json:"checks"`
+		Detected struct {
+			Checks []struct {
+				Command string `json:"command"`
+				Source  string `json:"source"`
+			} `json:"checks"`
+			Candidates []struct {
+				Command string `json:"command"`
+				Reason  string `json:"reason"`
+			} `json:"candidates"`
+		} `json:"detected"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if want := []string{"go test ./...", "go vet ./..."}; !reflect.DeepEqual(result.Checks, want) {
+		t.Errorf("checks = %v, want %v", result.Checks, want)
+	}
+	for _, detected := range result.Detected.Checks {
+		if detected.Source != "go.mod" {
+			t.Errorf("check %q source = %q, want the file it was derived from", detected.Command, detected.Source)
+		}
+	}
+	if len(result.Detected.Candidates) == 0 {
+		t.Error("the Python tests with no runner named were decided rather than offered")
+	}
+
+	// The written file is the thing an operator reads, so what it says is
+	// asserted there rather than only in the report.
+	path := filepath.Join(project, config.DirectoryName, config.FileName)
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.Checks) != 2 || loaded.Checks[0] != "go test ./..." {
+		t.Errorf("checks = %v, want the proposed list", loaded.Checks)
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{"# from go.mod", config.UndecidedMarker, "python3 -m pytest -q"} {
+		if !strings.Contains(string(contents), want) {
+			t.Errorf("the generated configuration does not contain %q", want)
+		}
+	}
+	// The Go commands are a usable gate on their own, so nothing here has to be
+	// chosen before work can run and the file does not say otherwise.
+	if strings.Contains(string(contents), config.CandidateMarker) {
+		t.Error("a configuration that already runs demands a choice anyway")
+	}
+}
+
+// The adoption walkthrough chooses a candidate by deleting one "#" and then asks
+// `config show --effective` whether that took. Both halves are checked here as
+// well, so the claim rests on the supplied checks rather than only on a script
+// none of them runs.
+func TestUncommentingACandidateMakesItTheEffectiveChecksList(t *testing.T) {
+	t.Parallel()
+
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.MkdirAll(filepath.Join(project, "tests"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tests", "test_calc.py"), []byte("import unittest\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	path := filepath.Join(project, config.DirectoryName, config.FileName)
+	generated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	const chosen = "python3 -m unittest discover -q -s tests -t ."
+	if !strings.Contains(string(generated), "#  - "+chosen+"\n") {
+		t.Fatalf("no candidate was offered for %q:\n%s", chosen, generated)
+	}
+	// Exactly the gesture the file asks for: open the empty list, delete one
+	// leading "#", change nothing else.
+	edited := strings.Replace(string(generated), "checks: []\n", "checks:\n", 1)
+	edited = strings.Replace(edited, "#  - "+chosen+"\n", "  - "+chosen+"\n", 1)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"config", "show", "--config", path, "--effective"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("config show --effective code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), chosen) {
+		t.Errorf("config show --effective does not report the uncommented check:\n%s", stdout.String())
+	}
+}
+
+// A repository that announces nothing keeps the placeholder it always had, and
+// is told where the per-language examples are.
+func TestRunInitKeepsThePlaceholderWhenNothingIsDetected(t *testing.T) {
+	t.Parallel()
+
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	contents, err := os.ReadFile(filepath.Join(project, config.DirectoryName, config.FileName))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if !strings.Contains(string(contents), "checks: []\n") {
+		t.Error("a project with nothing detected did not keep its empty checks list")
+	}
+	if strings.Contains(string(contents), config.CandidateMarker) {
+		t.Error("a project with nothing detected was told to choose between nothing")
+	}
+	for _, want := range []string{"#   # Go\n", "#   # Python\n", "docs/configuration.md#checks"} {
+		if !strings.Contains(string(contents), want) {
+			t.Errorf("the generated configuration does not contain %q", want)
+		}
+	}
+	if !strings.Contains(stdout.String(), "nothing in this project proposed one") {
+		t.Errorf("stdout = %q, want it to say that nothing was proposed", stdout.String())
 	}
 }
 

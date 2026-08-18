@@ -39,11 +39,17 @@ than mangled, and `--product` names one instead. Nothing is overwritten without
 `--force`, and a refusal happens before any file is written, so a project is
 never left half-configured.
 
-One thing the generated file deliberately leaves empty is `checks`. The harness
-cannot guess a project's toolchain, and a run with nothing to verify has no gate
-to integrate behind, so `yoyo run` refuses one. Fill the list in — the generated
-file carries commented examples for Go, TypeScript, Python, and Java — before
-running work.
+The one thing `init` derives from the project rather than from the template is
+`checks`, which it proposes by reading what the repository already declares about
+its toolchain. See [What `init` proposes for `checks`](#what-init-proposes-for-checks)
+for what it reads and what it does with an answer it cannot settle. A run with
+nothing to verify has no gate to integrate behind, so `yoyo run` refuses one
+whatever `init` found; read what it proposed before running work.
+
+`init --json` reports it. `checks` is the list that was written; `detected`
+carries every proposal with the artifact it came from, in the three lists the
+generated file keeps apart — `checks` written, `candidates` found and not
+settled, `alternatives` read and deliberately left out.
 
 ## Layout
 
@@ -755,6 +761,74 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+### What `init` proposes for `checks`
+
+A project does not start from the empty list unless it has to. `yoyo init` reads
+what the repository already announces about its own toolchain and writes the
+commands that follow into `checks`, each under a comment naming the artifact it
+was derived from:
+
+| What is there | What is proposed |
+| --- | --- |
+| a Makefile with a `check` target, or with `test` and no `check` | `make check` / `make test` |
+| `go.mod` | `go test ./...`, `go vet ./...` |
+| `package.json` with a test script and exactly one lockfile | the lockfile's install, `npm`/`yarn`/`pnpm test`, and `tsc --noEmit` where there is a `tsconfig.json` |
+| `pyproject.toml`, `pytest.ini`, `setup.cfg`, or `tox.ini` naming pytest | `python3 -m pytest -q` |
+| `pom.xml` | `mvn --batch-mode --quiet verify` |
+| a `gradlew` wrapper | `./gradlew --no-daemon check` |
+
+**Nothing is executed.** Detection is by artifact presence and by reading those
+artifacts, because running a stranger's build to discover what it is is not a
+first impression worth making, and because a command that has to run to be
+proposed is one that runs before anybody has reviewed it. This is a convenience
+default derived from the project's own files rather than an understanding of
+toolchains in the harness: what runs is still only the shell commands this list
+declares, judged by their exit codes.
+
+**Whatever is not written into `checks` is written beside it, commented out,
+under a heading that says what it wants from you.** There are three, and only the
+first asks for anything:
+
+| Heading | What it means | What you owe |
+| --- | --- | --- |
+| `YOU MUST CHOOSE` | detection could not tell which command is the gate, and `checks` is empty | a choice: a run is refused until there is one |
+| `ALSO FOUND, AND NOT DECIDED` | the same, except `checks` was written from something else and works | nothing; the question is open, not blocking |
+| `ALSO FOUND, AND NOT NEEDED` | commands detection read and decided against, because what it wrote covers them | nothing |
+
+The distinction is the point. A demand to choose is worth reading only where a
+run cannot happen until somebody does; putting it over an already-runnable file
+teaches an operator to scroll past it.
+
+Taking any of them is the same gesture: delete the leading `#` and nothing else,
+and open the list above with `checks:` if it is still `checks: []`. Each carries
+the reason it is where it is.
+
+**A Makefile supersedes the language-native commands**, which is the ordinary way
+into the third heading. A project with a `check` target and a `go.mod` gets
+`make check`, and `go test ./...` and `go vet ./...` appear under
+`ALSO FOUND, AND NOT NEEDED` rather than being added, because two gates running
+the same suite is the suite run twice. Nothing about that is undecided, so
+nothing about it demands a decision.
+
+**What cannot be settled is not settled**, which is the first two headings. The
+cases that reach them today are:
+
+- Python tests with no runner named anywhere. unittest discovery over
+  pytest-style tests collects nothing and exits 0, which is a gate that passes
+  everything, so neither runner is written.
+- A `package.json` with no lockfile beside it, or with more than one, which
+  leaves how the project installs unsettled.
+- A `package.json` that declares no `test` script at all, or whose only one is
+  npm's `exit 1` placeholder: nothing there says how the project is tested.
+- A Gradle build script with no `gradlew` wrapper to pin the version a check
+  would run under.
+
+Which of the two headings they land under depends only on whether anything else
+in the project produced a `checks` list to stand on.
+
+A repository that announces none of this keeps `checks: []` and the commented
+per-language examples above, which is what it always did.
 
 ### How long a check may take
 

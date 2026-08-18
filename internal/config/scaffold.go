@@ -13,7 +13,10 @@ import (
 type ScaffoldOptions struct {
 	ProductID  string
 	Repository string
-	Checks     []string
+	// Detection is what reading the project's own files proposed as checks. Its
+	// confident proposals become the checks list; its candidates are written
+	// beside them, commented out and marked, for the operator to choose from.
+	Detection Detection
 }
 
 // ScaffoldFile is one generated file, named relative to the project's
@@ -66,7 +69,7 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 	effective.Extends = ""
 	effective.Product.ID = domain.ProductID(strings.TrimSpace(options.ProductID))
 	effective.Product.Repository = strings.TrimSpace(options.Repository)
-	effective.Checks = append([]string(nil), options.Checks...)
+	effective.Checks = options.Detection.Commands()
 	// Validate what loading the rendered file will see rather than what the
 	// struct happens to hold, so the repository id is derived from the product
 	// id here exactly as it is derived there. It stays out of the rendered file
@@ -83,7 +86,7 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 	}
 	return Scaffold{
 		Bundle:   template.name,
-		Config:   ScaffoldFile{Path: FileName, Content: renderScaffoldConfig(effective, template.name)},
+		Config:   ScaffoldFile{Path: FileName, Content: renderScaffoldConfig(effective, template.name, options.Detection)},
 		Personas: personas,
 	}, nil
 }
@@ -120,7 +123,7 @@ func scaffoldPersonas(effective Config) ([]ScaffoldFile, error) {
 // renderScaffoldConfig writes the configuration as a file meant to be read and
 // edited rather than only parsed: every value the harness uses, in a stable
 // order, with the reasoning an operator needs to change one safely.
-func renderScaffoldConfig(effective Config, bundleName string) []byte {
+func renderScaffoldConfig(effective Config, bundleName string, detection Detection) []byte {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `# Yoyodyne project configuration.
 #
@@ -235,41 +238,7 @@ approvals:
 		effective.Approvals.Publishing,
 	)
 
-	builder.WriteString(`
-# Checks are this project's own. Each entry is run through "/bin/sh -c" in the
-# run's worktree, so shell syntax works. A check must be non-interactive and
-# must exit non-zero on failure -- a run stops at a failing check and never
-# reaches review or integration. A run with no checks at all is refused, so
-# this list is what makes the file usable rather than merely valid:
-#
-#   # Go
-#   checks:
-#     - go test ./...
-#     - go vet ./...
-#     - gofmt -l . | (! grep .)
-#
-#   # TypeScript / Node
-#   checks:
-#     - npm ci
-#     - npx tsc --noEmit
-#     - npm test -- --run
-#     - npx eslint .
-#
-#   # Python
-#   checks:
-#     - python -m pytest -q
-#     - python -m ruff check .
-#     - python -m mypy .
-#
-#   # Java (Maven)
-#   checks:
-#     - mvn --batch-mode --quiet verify
-#
-#   # Java (Gradle)
-#   checks:
-#     - ./gradlew --no-daemon check
-`)
-	renderScaffoldChecks(&builder, effective.Checks)
+	renderScaffoldChecks(&builder, detection)
 
 	builder.WriteString(`
 # Every agent is stated in full: nothing about them is inherited. A model
@@ -300,15 +269,193 @@ func renderScaffoldDuration(duration Duration) string {
 	}
 }
 
-func renderScaffoldChecks(builder *strings.Builder, checks []string) {
-	if len(checks) == 0 {
-		builder.WriteString("checks: []\n")
+// The headings a generated configuration puts over commented commands. They are
+// deliberately unmissable and deliberately stable, and they are three rather
+// than one because they ask three different things: a demand to choose belongs
+// only where a run cannot happen until somebody does, and putting it anywhere
+// else teaches an operator to skip past it.
+const (
+	// CandidateMarker heads candidates when nothing was written into "checks":
+	// a run is refused until one of them is chosen, so a decision is owed now.
+	CandidateMarker = "# YOU MUST CHOOSE"
+	// UndecidedMarker heads the same candidates when a checks list was written
+	// anyway. The question is still open, but the file already runs, so nothing
+	// waits on the answer.
+	UndecidedMarker = "# ALSO FOUND, AND NOT DECIDED"
+	// AlternativeMarker heads commands detection read and decided against,
+	// because what it wrote already covers them. Nothing is owed here at all;
+	// they are shown so an operator can swap one in.
+	AlternativeMarker = "# ALSO FOUND, AND NOT NEEDED"
+)
+
+// checksGuide points at the per-language examples and the reasoning behind them,
+// for a project that has no checkout of Yoyodyne to look them up in.
+const checksGuide = "https://github.com/mason-bryant/yoyodyne/blob/main/docs/configuration.md#checks"
+
+// renderScaffoldChecks writes the checks section: what detection proposed, where
+// each proposal came from, and what it could not decide. A proposal is only
+// worth having if the reader can see what it was derived from, so provenance is
+// written beside the commands rather than left to be reconstructed.
+func renderScaffoldChecks(builder *strings.Builder, detection Detection) {
+	builder.WriteString(`
+# Checks are this project's own. Each entry is run through "/bin/sh -c" in the
+# run's worktree, so shell syntax works. A check must be non-interactive and
+# must exit non-zero on failure -- a run stops at a failing check and never
+# reaches review or integration. A run with no checks at all is refused.
+`)
+	if len(detection.Checks) > 0 {
+		fmt.Fprintf(builder, `#
+# "yoyo init" proposed the list below from files this project already has, named
+# against each entry. It executed nothing to find them: they are what this
+# repository announces about itself rather than what it is known to need. Read
+# them before the first run and edit or delete whatever does not belong. The
+# configuration guide has per-language examples and the reasoning behind them:
+# %s
+checks:
+`, checksGuide)
+		lastSource := ""
+		for _, proposal := range detection.Checks {
+			if proposal.Source != lastSource {
+				fmt.Fprintf(builder, "  # from %s\n", proposal.Source)
+				lastSource = proposal.Source
+			}
+			fmt.Fprintf(builder, "  - %s\n", proposal.Command)
+		}
+	} else {
+		found := `# This list is what makes the file usable rather than merely valid, and "yoyo
+# init" found nothing in this project to propose for it. The configuration guide
+# has these examples with the reasoning behind them:`
+		if len(detection.Candidates) > 0 {
+			found = `# This list is what makes the file usable rather than merely valid, and "yoyo
+# init" found nothing here it could settle on its own -- what it did find is
+# below, marked, and waiting on you. The configuration guide has these examples
+# with the reasoning behind them:`
+		}
+		fmt.Fprintf(builder, `#
+%s
+# %s
+#
+#   # Go
+#   checks:
+#     - go test ./...
+#     - go vet ./...
+#     - gofmt -l . | (! grep .)
+#
+#   # TypeScript / Node
+#   checks:
+#     - npm ci
+#     - npx tsc --noEmit
+#     - npm test -- --run
+#     - npx eslint .
+#
+#   # Python
+#   checks:
+#     - python -m pytest -q
+#     - python -m ruff check .
+#     - python -m mypy .
+#
+#   # Java (Maven)
+#   checks:
+#     - mvn --batch-mode --quiet verify
+#
+#   # Java (Gradle)
+#   checks:
+#     - ./gradlew --no-daemon check
+checks: []
+`, found, checksGuide)
+	}
+	listed := len(detection.Checks) > 0
+	renderScaffoldCandidates(builder, detection.Candidates, listed)
+	renderScaffoldAlternatives(builder, detection.Alternatives)
+}
+
+// renderScaffoldCandidates writes what detection found and would not choose
+// between. Which heading it writes turns on whether a checks list was written at
+// all: with an empty list a run is refused until somebody chooses, and with a
+// written one the file already works and the question is merely open. Demanding
+// a choice in both cases would make the demand mean nothing in either.
+func renderScaffoldCandidates(builder *strings.Builder, candidates []CheckProposal, listed bool) {
+	if len(candidates) == 0 {
 		return
 	}
-	builder.WriteString("checks:\n")
-	for _, check := range checks {
-		fmt.Fprintf(builder, "  - %s\n", check)
+	if listed {
+		builder.WriteString("\n" + UndecidedMarker + ` -- nothing below runs, and the list above stands
+# without it. "yoyo init" read these out of this project too and could not tell
+# whether or which of them belongs, so it wrote none of them into "checks"
+# above. Uncomment what does belong -- delete the leading "#" and nothing else
+# -- and delete the rest.
+`)
+	} else {
+		builder.WriteString("\n" + CandidateMarker + ` -- nothing below runs, and the list above is empty, so a
+# run is refused until this is settled. "yoyo init" found these and could not
+# tell which one is this project's gate, so it wrote none of them into "checks"
+# above. Uncomment what belongs here -- delete the leading "#" and nothing else
+# -- then delete the rest, or write your own instead. Replace "checks: []"
+# above with "checks:" first, so the list can take the entry.
+`)
 	}
+	renderScaffoldCommented(builder, candidates)
+}
+
+// renderScaffoldAlternatives writes what detection read and decided against.
+// Nothing here is owed an answer: the list above already covers it, and this
+// exists so an operator who would rather have one of these can see it and swap.
+func renderScaffoldAlternatives(builder *strings.Builder, alternatives []CheckProposal) {
+	if len(alternatives) == 0 {
+		return
+	}
+	builder.WriteString("\n" + AlternativeMarker + ` -- nothing below runs, and nothing below has to be
+# chosen. "yoyo init" read these out of this project as well and left them out
+# for the reason given against each, because what is in "checks" above already
+# covers them. Swap one in only if you would rather have it.
+`)
+	renderScaffoldCommented(builder, alternatives)
+}
+
+// renderScaffoldCommented writes commands commented out beneath their
+// provenance, grouped by the reason they were not written rather than by
+// artifact: one question is one paragraph, however many files went into it.
+// Every command line is written so that deleting its leading "#" leaves a valid
+// entry of the checks list above, because that is the whole gesture the headings
+// above ask for.
+func renderScaffoldCommented(builder *strings.Builder, proposals []CheckProposal) {
+	for start := 0; start < len(proposals); {
+		end := start
+		for end < len(proposals) && proposals[end].Reason == proposals[start].Reason {
+			end++
+		}
+		group := proposals[start:end]
+		builder.WriteString("#\n")
+		header := "#  # from " + strings.Join(ProposalSources(group), ", ")
+		if group[0].Reason == "" {
+			builder.WriteString(header + "\n")
+		} else {
+			wrapScaffoldComment(builder, header+" -- ", "#  # ", group[0].Reason)
+		}
+		for _, proposal := range group {
+			fmt.Fprintf(builder, "#  - %s\n", proposal.Command)
+		}
+		start = end
+	}
+}
+
+// wrapScaffoldComment writes one comment across as many lines as it takes,
+// keeping the generated file inside the width the rest of it is written to.
+func wrapScaffoldComment(builder *strings.Builder, first, continued, text string) {
+	const width = 79
+	line, prefix := first, first
+	for _, word := range strings.Fields(text) {
+		if len(line) > len(prefix) {
+			if len(line)+1+len(word) > width {
+				builder.WriteString(line + "\n")
+				line, prefix = continued, continued
+			} else {
+				line += " "
+			}
+		}
+		line += word
+	}
+	builder.WriteString(line + "\n")
 }
 
 func renderScaffoldAgent(builder *strings.Builder, name string, agent AgentConfig) {
