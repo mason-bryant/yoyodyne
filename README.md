@@ -1503,6 +1503,46 @@ the set work may be attributed to, and a repository with no goals in force is
 told that nothing was checked rather than having its queue reported as
 unattributed.
 
+## What a change upstream leaves stale
+
+Amend a goal and the documents that serve it, and the work admitted under its
+old wording, may no longer be right — and until now nothing said so. `yoyo
+stale` says it:
+
+```sh
+./bin/yoyo stale          # what a change upstream left unanswered downstream
+./bin/yoyo stale --json   # machine-readable
+```
+
+An artifact is reported when something it traces to upstream — the goal a design
+serves, the brief a goal serves, through as many links as the chain runs —
+recorded a change after that artifact was itself last revised. An admitted work
+item is reported when the goals document stating the goal it serves, or anything
+upstream of that, changed after the item was admitted. Each one names what
+changed, when, under whose authority, and the reason that change recorded, which
+is what tells a rewording apart from a reversal of intent.
+
+Nothing is stored to make this true and nothing has to be marked. The documents'
+own revision logs and the tracker's record of when each item was admitted
+already say it, so any reading reports the same thing, a document edited by hand
+counts exactly as one amended through the harness, and there is no second
+account of staleness that can drift from the documents it describes. What it
+costs is that it clears only where those records say so: an artifact stops being
+reported once its owner records a revision later than the change — the durable
+record that somebody looked — and a work item carries only its admission time,
+so a stale item stays reported until it is closed.
+
+**Stale is not cancelled.** Nothing is stopped, closed, blocked, or reordered,
+and `yoyo stale` exits zero whatever it finds. A change to a goal's wording is
+frequently not a change to what the work should do, and a harness that failed a
+build or cancelled a queue over an edit would teach you not to edit — which
+costs more than the divergence this reports. What to do about each of these is
+yours to decide, or the owning role's.
+
+A tracker that cannot be read costs the work half of the report and not the
+whole of it: the documents still report, and the queue is stated as unread
+rather than rendered as one nothing has moved under.
+
 ## Architectural invariants
 
 Some constraints outlive the work item that established them: a contract one

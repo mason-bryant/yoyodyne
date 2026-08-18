@@ -653,6 +653,61 @@ product manager in conversation, working from `yoyo goals attribution` and using
 the `attribute` action on each item — which appends, so nothing already recorded
 is lost.
 
+### What a change upstream leaves stale
+
+A goal can be amended while the designs that serve it and the work admitted
+under its old wording carry on unchanged. The amendment is somebody exercising
+authority over their own document; the silence after it is the problem, and
+`yoyo stale` ends it.
+
+```sh
+yoyo stale          # what a change upstream left unanswered downstream
+yoyo stale --json   # machine-readable
+```
+
+| Reported as | What it is |
+| --- | --- |
+| a document | An artifact something upstream of it — through `supports`, as far as the chain runs — changed after the artifact itself was last revised. |
+| open work | An admitted item whose goals document, or anything upstream of it, changed after the item was admitted. |
+
+A change is an `amended`, `superseded`, or `retired` revision. A `created` one is
+not: a document that did not exist cannot be what anybody was working from. Each
+report names the document that changed, when, the role whose authority it
+happened under, and the reason it recorded — a rewording and a reversal of
+intent are the same event without the reason.
+
+Two things are never reported. An artifact that is itself `superseded` or
+`retired` stated what was intended and stopped, so it is not asked to answer for
+what happened upstream afterwards. An item naming no goal, or one the goals do
+not state, has no reference to follow at all; that is a gap in the chain, and it
+is [reported where attributions are](#goals-and-the-work-attributed-to-them)
+rather than restated here. The counts say how many admitted items were judged
+and how many were not, so what this could not answer for is never silence.
+
+**Nothing is stored.** Staleness is a comparison over records that already
+exist — each artifact's revision log, and the tracker's record of when an item
+was admitted — rather than a mark somebody writes. So a document edited by hand
+counts exactly as one amended through the harness, a process that dies between
+the amendment and anything else leaves nothing unmarked, and there is no second
+account of staleness that can disagree with the documents. What it costs is
+where it clears: an artifact stops being reported once its owner records a
+revision later than the change, which is the durable record that somebody looked
+at it, and a work item carries only its admission time, so a stale item stays
+reported until it is closed. The tracker's own modification time is deliberately
+not used for this — it moves when the harness records what a run cost, and
+staleness that vanished because a price was written would be a signal nobody
+could trust.
+
+**Stale is not cancelled.** Nothing is stopped, closed, blocked, or reordered,
+and the command exits zero whatever it finds. A change to a goal's wording is
+frequently not a change to what the work should do, and failing a build over an
+edit would teach an operator not to edit. What happens to stale work is the
+operator's decision or the owning role's; this surfaces the condition.
+
+A tracker that cannot be read costs the work half of the report rather than all
+of it: the documents still report, and the report says the queue was not read
+instead of rendering it as one nothing has moved under.
+
 ## Architectural invariants
 
 The architect's durable constraints live in a second configured directory:
