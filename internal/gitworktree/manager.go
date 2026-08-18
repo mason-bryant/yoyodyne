@@ -184,6 +184,10 @@ type DiffLimits struct {
 	// MaxFiles bounds separately rendered untracked files. Tracked changes are
 	// already rendered together and remain bounded by MaxTotalBytes.
 	MaxFiles int
+	// MaxCommits bounds how many commits of an accumulated change are described.
+	// A worktree's change is described against one base commit and has no
+	// history of its own, so this bounds a branch-scope change only.
+	MaxCommits int
 }
 
 // ChangeDiff is a bounded unified view of everything a developer changed in a
@@ -691,7 +695,10 @@ func (l DiffLimits) resolve() (DiffLimits, error) {
 	if l.MaxFiles == 0 {
 		l.MaxFiles = DefaultMaxDiffFiles
 	}
-	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 {
+	if l.MaxCommits == 0 {
+		l.MaxCommits = DefaultMaxDiffCommits
+	}
+	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 || l.MaxCommits < 0 {
 		return DiffLimits{}, errors.New("diff limits cannot be negative")
 	}
 	return l, nil

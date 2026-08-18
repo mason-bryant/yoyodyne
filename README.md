@@ -20,9 +20,10 @@ separate provider invocations; the reviewer whose verdict authorizes a merge
 runs with no tools at all, so it cannot perform one; and a persona can
 specialize how a role works but can never grant it authority it does not have.
 
-**The conversation is the product.** `yoyo run` and `yoyo reconcile` are
-administrative and recovery entry points — one named item, and settling what a
-killed process left behind — rather than the way work normally happens.
+**The conversation is the product.** `yoyo run`, `yoyo review`, and
+`yoyo reconcile` are administrative and recovery entry points — one named item,
+one branch judged as a whole, and settling what a killed process left behind —
+rather than the way work normally happens.
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -881,9 +882,47 @@ part of the assigned work, and the reviewer reports a change that leaves a
 document asserting something the change has made false. That reconciliation is
 diff-scoped, and the limit is worth stating plainly — the reviewer is given one
 change, not the repository, so it catches a contradiction with documentation it
-can see and misses a claim invalidated in a file the change never touches.
-Nothing in the harness yet compares the accumulated documentation against
-reality.
+can see and misses a claim invalidated in a file the change never touches. What
+that misses across a whole branch is what [`yoyo review`](#reviewing-what-a-branch-adds-up-to)
+is for; nothing in the harness compares the accumulated documentation against
+the repository as a whole.
+
+### Reviewing what a branch adds up to
+
+A per-item review sees exactly one work item's worktree, so a defect that is
+consistent inside every change that produced it and wrong only in their sum is
+structurally invisible to it. `yoyo review` is the same reviewer — the same
+contract, the same structured verdict, the same independence — pointed at a
+branch against the base it grew from:
+
+```sh
+./bin/yoyo review --base main                 # the branch you are on
+./bin/yoyo review --base main --branch milestone --json
+```
+
+It describes every commit the branch carries over that base and diffs the whole
+range as one patch, under the same bounds a single change is described within: a
+range too large to show in full is reported as truncated, and a truncated change
+cannot be approved, because what was not shown was not reviewed. The base must
+be an ancestor of the branch — a base that has moved on is a reconciliation
+rather than an accumulated change, and the command says so instead of quietly
+reviewing a range you did not name.
+
+The verdict is recorded with the same session and model evidence a per-item
+review leaves behind, in `branch-reviews.jsonl` beside the run state, and what
+the reviewer noticed beside its verdict is collected with every other report.
+
+What a `repair` verdict here does is deliberate and narrow: **nothing to the work
+already integrated.** Every commit under review was checked, reviewed, and
+promoted by a run that has since settled, so there is no gate left to hold and
+the harness does not revert or reopen a promotion on a second opinion — the
+branch review is wired with no run store and no integration, so it could not if
+it were asked to. What it does instead is answer one question, and enforce the
+answer: the branch is approved only if an independent reviewer approved the whole
+accumulated change, and `yoyo review` exits non-zero on anything else — a repair
+verdict, a review that never answered, a change too large to be seen in full. The
+findings are then work, and admitting work to the backlog is the product
+manager's.
 
 ### Publishing, and the merge that follows it
 
