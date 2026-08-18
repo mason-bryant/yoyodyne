@@ -6,7 +6,7 @@ DIST ?= dist
 # from a checkout describes itself from git, so a bug report about a local
 # binary names a commit rather than only saying "dev".
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS ?= -X main.version=$(VERSION)
+LDFLAGS := -X main.version=$(VERSION)
 
 # The platforms a release ships prebuilt binaries for. macOS is where Yoyodyne
 # is actually used; linux/amd64 is built and run by CI and nothing else. See
