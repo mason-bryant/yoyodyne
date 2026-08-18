@@ -39,11 +39,16 @@ than mangled, and `--product` names one instead. Nothing is overwritten without
 `--force`, and a refusal happens before any file is written, so a project is
 never left half-configured.
 
-One thing the generated file deliberately leaves empty is `checks`. The harness
-cannot guess a project's toolchain, and a run with nothing to verify has no gate
-to integrate behind, so `yoyo run` refuses one. Fill the list in — the generated
-file carries commented examples for Go, TypeScript, Python, and Java — before
-running work.
+The one thing `init` derives from the project rather than from the template is
+`checks`, which it proposes by reading what the repository already declares about
+its toolchain. See [What `init` proposes for `checks`](#what-init-proposes-for-checks)
+for what it reads and what it does with an answer it cannot settle. A run with
+nothing to verify has no gate to integrate behind, so `yoyo run` refuses one
+whatever `init` found; read what it proposed before running work.
+
+`init --json` reports it: `checks` is the list that was written, and `detected`
+carries every proposal with the artifact it came from, including the candidates
+that were deliberately not written.
 
 ## Layout
 
@@ -755,6 +760,49 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+### What `init` proposes for `checks`
+
+A project does not start from the empty list unless it has to. `yoyo init` reads
+what the repository already announces about its own toolchain and writes the
+commands that follow into `checks`, each under a comment naming the artifact it
+was derived from:
+
+| What is there | What is proposed |
+| --- | --- |
+| a Makefile with a `check` target, or with `test` and no `check` | `make check` / `make test` |
+| `go.mod` | `go test ./...`, `go vet ./...` |
+| `package.json` with a test script and exactly one lockfile | the lockfile's install, `npm`/`yarn`/`pnpm test`, and `tsc --noEmit` where there is a `tsconfig.json` |
+| `pyproject.toml`, `pytest.ini`, `setup.cfg`, or `tox.ini` naming pytest | `python3 -m pytest -q` |
+| `pom.xml` | `mvn --batch-mode --quiet verify` |
+| a `gradlew` wrapper | `./gradlew --no-daemon check` |
+
+**Nothing is executed.** Detection is by artifact presence and by reading those
+artifacts, because running a stranger's build to discover what it is is not a
+first impression worth making, and because a command that has to run to be
+proposed is one that runs before anybody has reviewed it. This is a convenience
+default derived from the project's own files rather than an understanding of
+toolchains in the harness: what runs is still only the shell commands this list
+declares, judged by their exit codes.
+
+**A Makefile supersedes the language-native commands.** A project with a
+`check` target and a `go.mod` gets `make check`, and the Go commands are offered
+as commented candidates rather than added, because two gates running the same
+suite is the suite run twice.
+
+**What cannot be settled is not settled.** Where detection finds a toolchain and
+cannot tell which command is the gate, it writes nothing into `checks` and
+comments the candidates underneath a `YOU MUST CHOOSE` marker, each with the
+reason it could not be chosen. Uncommenting one is the whole gesture: delete the
+leading `#` and nothing else, and open the list above with `checks:` if it is
+still `checks: []`. The cases that reach it today are Python tests with no
+runner named anywhere — unittest discovery over pytest-style tests collects
+nothing and exits 0, which is a gate that passes everything — a `package.json`
+with no lockfile or with several, one whose only test script is npm's
+`exit 1` placeholder, and a Gradle build with no wrapper to pin its version.
+
+A repository that announces none of this keeps `checks: []` and the commented
+per-language examples above, which is what it always did.
 
 ### How long a check may take
 

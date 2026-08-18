@@ -30,7 +30,7 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	written, err := initializeProject(*directory, *product, *force)
+	written, detection, err := initializeProject(*directory, *product, *force)
 	if err != nil {
 		// A reported failure exits nonzero whichever form it was reported in,
 		// so a script reading the JSON does not have to parse it to notice.
@@ -50,29 +50,65 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 			"bundle": config.BuiltinV1,
 			"config": written[0],
 			"files":  written,
+			// What was written, and what was detected, are reported separately:
+			// a candidate is detected and deliberately not written, and a caller
+			// that could not tell them apart could not check either.
+			"checks":   detection.Commands(),
+			"detected": detection,
 		})
 	}
 	for _, path := range written {
 		fmt.Fprintf(stdout, "wrote %s\n", path)
 	}
-	fmt.Fprintln(stdout, "the configuration is complete and inherits nothing; edit `checks` before running work")
+	fmt.Fprintln(stdout, "the configuration is complete and inherits nothing")
+	fmt.Fprintln(stdout, describeDetection(detection, written[0]))
 	return 0
+}
+
+// describeDetection says what became of the checks list, which is the one thing
+// in a generated configuration an operator still owes a decision on.
+func describeDetection(detection config.Detection, path string) string {
+	switch {
+	case len(detection.Checks) > 0:
+		reported := fmt.Sprintf("proposed %s from %s; review the checks in %s before running work",
+			countOf(len(detection.Checks), "check"), strings.Join(config.ProposalSources(detection.Checks), ", "), path)
+		if len(detection.Candidates) > 0 {
+			reported += fmt.Sprintf(", with %s left commented out beside them",
+				countOf(len(detection.Candidates), "candidate"))
+		}
+		return reported
+	case len(detection.Candidates) > 0:
+		return fmt.Sprintf("checks is empty: %s are commented in %s, and one of them has to be chosen before work can run",
+			countOf(len(detection.Candidates), "candidate"), path)
+	default:
+		return fmt.Sprintf("checks is empty and nothing in this project proposed one; write your own in %s before running work", path)
+	}
+}
+
+func countOf(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
 }
 
 // initializeProject renders the scaffold and writes it, configuration file
 // first. Every target is checked before anything is written, so a refusal to
 // overwrite leaves the project exactly as it was rather than half-configured.
-func initializeProject(directory, productID string, force bool) ([]string, error) {
+// The detection it returns is what the generated file proposed as checks, so the
+// command can report what was found alongside what was written.
+func initializeProject(directory, productID string, force bool) ([]string, config.Detection, error) {
+	var detection config.Detection
 	root, err := filepath.Abs(directory)
 	if err != nil {
-		return nil, fmt.Errorf("resolve project directory %q: %w", directory, err)
+		return nil, detection, fmt.Errorf("resolve project directory %q: %w", directory, err)
 	}
 	info, err := os.Stat(root)
 	if err != nil {
-		return nil, fmt.Errorf("inspect project directory %q: %w", directory, err)
+		return nil, detection, fmt.Errorf("inspect project directory %q: %w", directory, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("project directory %q is not a directory", directory)
+		return nil, detection, fmt.Errorf("project directory %q is not a directory", directory)
 	}
 
 	identifier := strings.TrimSpace(productID)
@@ -80,18 +116,23 @@ func initializeProject(directory, productID string, force bool) ([]string, error
 		identifier = defaultProductID(root)
 	}
 	if err := domain.ValidateIdentifier("product id", identifier); err != nil {
-		return nil, fmt.Errorf("%w; name one with --product", err)
+		return nil, detection, fmt.Errorf("%w; name one with --product", err)
 	}
 
+	// The project's own files are read before anything is generated, so what the
+	// scaffold proposes for `checks` comes from this repository rather than from
+	// the template. Reading is all that happens: no command here is executed.
+	detection = config.DetectChecks(root)
 	scaffold, err := config.NewScaffold(config.BuiltinV1, config.ScaffoldOptions{
 		ProductID: identifier,
 		// The configuration describes the repository that contains it, and
 		// relative paths resolve against that repository rather than against
 		// the .yoyodyne directory, so "." is the project root.
 		Repository: ".",
+		Detection:  detection,
 	})
 	if err != nil {
-		return nil, err
+		return nil, detection, err
 	}
 
 	configurationDirectory := filepath.Join(root, config.DirectoryName)
@@ -101,9 +142,9 @@ func initializeProject(directory, productID string, force bool) ([]string, error
 		path := filepath.Join(configurationDirectory, filepath.FromSlash(file.Path))
 		if !force {
 			if _, err := os.Stat(path); err == nil {
-				return nil, fmt.Errorf("%s already exists; pass --force to overwrite it", path)
+				return nil, detection, fmt.Errorf("%s already exists; pass --force to overwrite it", path)
 			} else if !os.IsNotExist(err) {
-				return nil, fmt.Errorf("inspect %q: %w", path, err)
+				return nil, detection, fmt.Errorf("inspect %q: %w", path, err)
 			}
 		}
 		paths = append(paths, path)
@@ -112,10 +153,10 @@ func initializeProject(directory, productID string, force bool) ([]string, error
 	for index, file := range files {
 		path := paths[index]
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, fmt.Errorf("create %q: %w", filepath.Dir(path), err)
+			return nil, detection, fmt.Errorf("create %q: %w", filepath.Dir(path), err)
 		}
 		if err := os.WriteFile(path, file.Content, 0o644); err != nil {
-			return nil, fmt.Errorf("write %q: %w", path, err)
+			return nil, detection, fmt.Errorf("write %q: %w", path, err)
 		}
 	}
 
@@ -123,9 +164,9 @@ func initializeProject(directory, productID string, force bool) ([]string, error
 	// personas have to resolve from the project directory they were copied into,
 	// not from the bundle they came from.
 	if _, err := config.Load(paths[0]); err != nil {
-		return nil, fmt.Errorf("the generated configuration does not load: %w", err)
+		return nil, detection, fmt.Errorf("the generated configuration does not load: %w", err)
 	}
-	return paths, nil
+	return paths, detection, nil
 }
 
 // defaultProductID names the product after the directory being configured,

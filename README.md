@@ -51,7 +51,7 @@ work normally happens.
 ```sh
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
 cd path/to/your/project
-bd init && yoyo init   # then write your project's checks into .yoyodyne/config.yaml
+bd init && yoyo init   # then review the checks it proposed in .yoyodyne/config.yaml
 yoyo chat
 ```
 
@@ -134,7 +134,8 @@ Three steps, in this order:
 
 1. **[Install `yoyo`](#1-install-yoyo)** — one binary, in your `PATH`.
 2. **[`yoyo init`](#2-yoyo-init--give-the-project-its-own-configuration)** —
-   give your project its own configuration and personas.
+   give your project its own configuration and personas, and its checks
+   proposed from what the repository already declares.
 3. **[`yoyo chat`](#3-yoyo-chat--establish-the-brief-and-the-goals)** — establish
    the brief and the goals with the product manager, and drive the work from
    there.
@@ -193,18 +194,33 @@ unless you pass `--product`. Nothing already there is overwritten without
 never left half-configured. See [Configuring a project](#configuring-a-project)
 for what is in the file.
 
-**Then replace the placeholder checks.** `init` writes `checks: []`, because the
-harness cannot guess your toolchain and a run with nothing to verify has no gate
-to integrate behind. This is the one step you must do by hand. The generated file
-carries commented examples for Go, TypeScript, Python, and Java; the
-[configuration guide](docs/configuration.md#checks) has the same examples with
-the reasoning:
+**Then review the checks it proposed.** Your repository already announces what
+it is built with, so `init` reads that and writes the commands that follow from
+it into `checks`, each with a comment naming the file it came from — a
+Makefile's `check` or `test` target, `go.mod`, a `package.json` with its
+lockfile and `tsconfig.json`, a `pyproject.toml` that names pytest, a Maven
+`pom.xml`, a Gradle wrapper. **Nothing in your project is executed to find
+them**: detection reads files and stops there, so a `yoyo init` in an unfamiliar
+repository runs none of its build.
+
+They are proposals rather than a verdict on your toolchain, so read them before
+the first run and edit or delete what does not belong:
 
 ```yaml
 checks:
-  - python -m pytest -q
-  - python -m ruff check .
+  # from pyproject.toml
+  - python3 -m pytest -q
 ```
+
+Where detection found a toolchain and could not tell which command is the gate —
+tests with no runner named anywhere, a `package.json` with no lockfile beside it,
+a Gradle build with no wrapper — it writes nothing into `checks` and comments the
+candidates underneath a `YOU MUST CHOOSE` marker instead, each with the reason it
+could not be settled. Choosing one costs a character: delete its leading `#`. A
+repository that announces nothing keeps `checks: []` and the commented examples
+for Go, TypeScript, Python, and Java that have always been there; the
+[configuration guide](docs/configuration.md#checks) has the same examples with
+the reasoning.
 
 Each entry runs through `/bin/sh -c` in the run's worktree. A check must be
 non-interactive and must exit non-zero on failure — a check that prints a
@@ -1313,7 +1329,9 @@ product:
   specifications: docs/product
   invariants: docs/decisions/invariants
 
-checks: []          # yours to write; a run with none is refused
+checks:             # proposed by init from this project's own files
+  # from go.mod
+  - go test ./...
 
 agents:
   developer:
@@ -1327,10 +1345,15 @@ agents:
   # ... product-manager, architect, development-manager, and reviewer
 ```
 
-`checks` is the one thing `init` cannot write for you: the harness has no way to
-guess a project's toolchain, and a run with nothing to verify has no gate to
-integrate behind, so `yoyo run` refuses it. The generated file carries commented
-examples for Go, TypeScript, Python, and Java.
+`checks` is the one thing `init` derives from your repository rather than from
+its template: it reads the project's Makefile targets, module and manifest
+files, lockfiles, and build wrappers, and proposes the commands that follow,
+naming the file each came from. It executes none of them, and it decides nothing
+it cannot decide — an ambiguous toolchain gets commented candidates under a
+`YOU MUST CHOOSE` marker, and a repository that announces nothing keeps
+`checks: []` and the commented examples for Go, TypeScript, Python, and Java. A
+run with nothing to verify has no gate to integrate behind, so `yoyo run`
+refuses one either way.
 
 Personas specialize how an agent works and never grant it authority. The harness
 contracts — agent authority, worktree sandboxing, the review verdict contract,

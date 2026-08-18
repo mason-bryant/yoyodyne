@@ -13,7 +13,10 @@ import (
 type ScaffoldOptions struct {
 	ProductID  string
 	Repository string
-	Checks     []string
+	// Detection is what reading the project's own files proposed as checks. Its
+	// confident proposals become the checks list; its candidates are written
+	// beside them, commented out and marked, for the operator to choose from.
+	Detection Detection
 }
 
 // ScaffoldFile is one generated file, named relative to the project's
@@ -66,7 +69,7 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 	effective.Extends = ""
 	effective.Product.ID = domain.ProductID(strings.TrimSpace(options.ProductID))
 	effective.Product.Repository = strings.TrimSpace(options.Repository)
-	effective.Checks = append([]string(nil), options.Checks...)
+	effective.Checks = options.Detection.Commands()
 	// Validate what loading the rendered file will see rather than what the
 	// struct happens to hold, so the repository id is derived from the product
 	// id here exactly as it is derived there. It stays out of the rendered file
@@ -83,7 +86,7 @@ func NewScaffold(bundleName string, options ScaffoldOptions) (Scaffold, error) {
 	}
 	return Scaffold{
 		Bundle:   template.name,
-		Config:   ScaffoldFile{Path: FileName, Content: renderScaffoldConfig(effective, template.name)},
+		Config:   ScaffoldFile{Path: FileName, Content: renderScaffoldConfig(effective, template.name, options.Detection)},
 		Personas: personas,
 	}, nil
 }
@@ -120,7 +123,7 @@ func scaffoldPersonas(effective Config) ([]ScaffoldFile, error) {
 // renderScaffoldConfig writes the configuration as a file meant to be read and
 // edited rather than only parsed: every value the harness uses, in a stable
 // order, with the reasoning an operator needs to change one safely.
-func renderScaffoldConfig(effective Config, bundleName string) []byte {
+func renderScaffoldConfig(effective Config, bundleName string, detection Detection) []byte {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, `# Yoyodyne project configuration.
 #
@@ -235,41 +238,7 @@ approvals:
 		effective.Approvals.Publishing,
 	)
 
-	builder.WriteString(`
-# Checks are this project's own. Each entry is run through "/bin/sh -c" in the
-# run's worktree, so shell syntax works. A check must be non-interactive and
-# must exit non-zero on failure -- a run stops at a failing check and never
-# reaches review or integration. A run with no checks at all is refused, so
-# this list is what makes the file usable rather than merely valid:
-#
-#   # Go
-#   checks:
-#     - go test ./...
-#     - go vet ./...
-#     - gofmt -l . | (! grep .)
-#
-#   # TypeScript / Node
-#   checks:
-#     - npm ci
-#     - npx tsc --noEmit
-#     - npm test -- --run
-#     - npx eslint .
-#
-#   # Python
-#   checks:
-#     - python -m pytest -q
-#     - python -m ruff check .
-#     - python -m mypy .
-#
-#   # Java (Maven)
-#   checks:
-#     - mvn --batch-mode --quiet verify
-#
-#   # Java (Gradle)
-#   checks:
-#     - ./gradlew --no-daemon check
-`)
-	renderScaffoldChecks(&builder, effective.Checks)
+	renderScaffoldChecks(&builder, detection)
 
 	builder.WriteString(`
 # Every agent is stated in full: nothing about them is inherited. A model
@@ -300,15 +269,147 @@ func renderScaffoldDuration(duration Duration) string {
 	}
 }
 
-func renderScaffoldChecks(builder *strings.Builder, checks []string) {
-	if len(checks) == 0 {
-		builder.WriteString("checks: []\n")
+// CandidateMarker heads the commented candidate list a generated configuration
+// carries when detection found a toolchain and could not tell which command is
+// the project's gate. It is deliberately unmissable, and deliberately stable:
+// this is the string that says a decision is owed rather than made.
+const CandidateMarker = "# YOU MUST CHOOSE"
+
+// checksGuide points at the per-language examples and the reasoning behind them,
+// for a project that has no checkout of Yoyodyne to look them up in.
+const checksGuide = "https://github.com/mason-bryant/yoyodyne/blob/main/docs/configuration.md#checks"
+
+// renderScaffoldChecks writes the checks section: what detection proposed, where
+// each proposal came from, and what it could not decide. A proposal is only
+// worth having if the reader can see what it was derived from, so provenance is
+// written beside the commands rather than left to be reconstructed.
+func renderScaffoldChecks(builder *strings.Builder, detection Detection) {
+	builder.WriteString(`
+# Checks are this project's own. Each entry is run through "/bin/sh -c" in the
+# run's worktree, so shell syntax works. A check must be non-interactive and
+# must exit non-zero on failure -- a run stops at a failing check and never
+# reaches review or integration. A run with no checks at all is refused.
+`)
+	if len(detection.Checks) > 0 {
+		fmt.Fprintf(builder, `#
+# "yoyo init" proposed the list below from files this project already has, named
+# against each entry. It executed nothing to find them: they are what this
+# repository announces about itself rather than what it is known to need, so read
+# them before the first run and edit or delete whatever does not belong. The
+# configuration guide has per-language examples and the reasoning behind them:
+# %s
+checks:
+`, checksGuide)
+		lastSource := ""
+		for _, proposal := range detection.Checks {
+			if proposal.Source != lastSource {
+				fmt.Fprintf(builder, "  # from %s\n", proposal.Source)
+				lastSource = proposal.Source
+			}
+			fmt.Fprintf(builder, "  - %s\n", proposal.Command)
+		}
+	} else {
+		found := `# This list is what makes the file usable rather than merely valid, and "yoyo
+# init" found nothing in this project to propose for it. The configuration guide
+# has these examples with the reasoning behind them:`
+		if len(detection.Candidates) > 0 {
+			found = `# This list is what makes the file usable rather than merely valid, and "yoyo
+# init" found nothing here it could settle on its own -- what it did find is
+# below, marked, and waiting on you. The configuration guide has these examples
+# with the reasoning behind them:`
+		}
+		fmt.Fprintf(builder, `#
+%s
+# %s
+#
+#   # Go
+#   checks:
+#     - go test ./...
+#     - go vet ./...
+#     - gofmt -l . | (! grep .)
+#
+#   # TypeScript / Node
+#   checks:
+#     - npm ci
+#     - npx tsc --noEmit
+#     - npm test -- --run
+#     - npx eslint .
+#
+#   # Python
+#   checks:
+#     - python -m pytest -q
+#     - python -m ruff check .
+#     - python -m mypy .
+#
+#   # Java (Maven)
+#   checks:
+#     - mvn --batch-mode --quiet verify
+#
+#   # Java (Gradle)
+#   checks:
+#     - ./gradlew --no-daemon check
+checks: []
+`, found, checksGuide)
+	}
+	renderScaffoldCandidates(builder, detection.Candidates, len(detection.Checks) > 0)
+}
+
+// renderScaffoldCandidates writes what detection found and would not choose
+// between. Every candidate is commented out, and each line is written so that
+// deleting its leading "#" leaves a valid entry of the list above: the operator
+// chooses, and choosing costs one character.
+func renderScaffoldCandidates(builder *strings.Builder, candidates []CheckProposal, listed bool) {
+	if len(candidates) == 0 {
 		return
 	}
-	builder.WriteString("checks:\n")
-	for _, check := range checks {
-		fmt.Fprintf(builder, "  - %s\n", check)
+	builder.WriteString("\n" + CandidateMarker + ` -- nothing below runs. "yoyo init" found these and could not
+# tell which one is this project's gate, so it wrote none of them into "checks"
+# above. Uncomment what belongs here -- delete the leading "#" and nothing else
+# -- then delete the rest, or write your own instead.
+`)
+	if !listed {
+		builder.WriteString("# The list above is empty, so replace \"checks: []\" with \"checks:\" first.\n")
 	}
+	// Candidates are grouped by what could not be decided about them rather than
+	// by artifact: one undecided question is one paragraph, however many files
+	// went into it.
+	for start := 0; start < len(candidates); {
+		end := start
+		for end < len(candidates) && candidates[end].Reason == candidates[start].Reason {
+			end++
+		}
+		group := candidates[start:end]
+		builder.WriteString("#\n")
+		header := "#  # from " + strings.Join(ProposalSources(group), ", ")
+		if group[0].Reason == "" {
+			builder.WriteString(header + "\n")
+		} else {
+			wrapScaffoldComment(builder, header+" -- ", "#  # ", group[0].Reason)
+		}
+		for _, candidate := range group {
+			fmt.Fprintf(builder, "#  - %s\n", candidate.Command)
+		}
+		start = end
+	}
+}
+
+// wrapScaffoldComment writes one comment across as many lines as it takes,
+// keeping the generated file inside the width the rest of it is written to.
+func wrapScaffoldComment(builder *strings.Builder, first, continued, text string) {
+	const width = 79
+	line, prefix := first, first
+	for _, word := range strings.Fields(text) {
+		if len(line) > len(prefix) {
+			if len(line)+1+len(word) > width {
+				builder.WriteString(line + "\n")
+				line, prefix = continued, continued
+			} else {
+				line += " "
+			}
+		}
+		line += word
+	}
+	builder.WriteString(line + "\n")
 }
 
 func renderScaffoldAgent(builder *strings.Builder, name string, agent AgentConfig) {
