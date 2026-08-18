@@ -23,11 +23,12 @@ import (
 	"strings"
 )
 
-// ReferenceProblemKind is what is wrong with a relationship. There are two
-// things that can be, and they are told apart rather than left to be read out
-// of prose, because they are fixed differently: a reference that resolves to
-// nothing is a name to correct, and an artifact nothing connects to the brief
-// is a relationship somebody has yet to state.
+// ReferenceProblemKind is what is wrong with a document that loaded. Three
+// things can be, and they are told apart rather than left to be read out of
+// prose, because they are fixed differently: a reference that resolves to
+// nothing is a name to correct, an artifact nothing connects to the brief is a
+// relationship somebody has yet to state, and a revision recorded by a role that
+// does not own the document is a boundary somebody crossed.
 type ReferenceProblemKind string
 
 const (
@@ -37,12 +38,15 @@ const (
 	// ProblemOrphan is an artifact that supports nothing tracing back to the
 	// product brief.
 	ProblemOrphan ReferenceProblemKind = "orphan"
+	// ProblemUnauthorizedRevision is a revision recorded under a role that does
+	// not own the artifact it is written in. See ownership.go.
+	ProblemUnauthorizedRevision ReferenceProblemKind = "unauthorized-revision"
 )
 
-// ReferenceProblem names one broken relationship, and the artifact it is
-// written down in. That artifact is in the set: unlike a Problem, which is a
-// file that could not be read as an artifact at all, this is a document that
-// loaded and whose place in the chain is wrong.
+// ReferenceProblem names one thing wrong with a document, and the document it
+// is written down in. That document is in the set: unlike a Problem, which is a
+// file that could not be read as an artifact at all, this is one that loaded and
+// whose place in the chain, or whose record of who changed it, is wrong.
 type ReferenceProblem struct {
 	Kind ReferenceProblemKind `json:"kind"`
 	// ID and Path are the end of the relationship that is written down here, so

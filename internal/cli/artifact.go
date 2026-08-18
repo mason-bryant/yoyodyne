@@ -8,15 +8,17 @@ package cli
 // commands beside it. An artifact's content is written by the role that owns
 // it — the operator and the product manager write the brief and the goals, the
 // architect writes designs and decisions — and its frontmatter is edited in the
-// same file at the same time. What the harness owns is refusing a document
-// whose identity is missing, malformed, claimed by another file, or recorded as
-// changed by a role that does not own it, which is what this reports.
+// same file at the same time. What the harness owns is refusing a document whose
+// identity is missing, malformed, or claimed by another file, and reporting a
+// revision recorded by a role that does not own the document, which is what this
+// prints.
 //
 // The store those commands would go through has the mutations already, gated by
 // the same authorization boundary the invariants use, so a role that runs later
-// meets the boundary rather than a persona asking it to respect one. Exposing
-// them here is what is missing, and it needs an answer to how a document's prose
-// reaches a command that is not how anybody writes prose today.
+// meets the boundary rather than a persona asking it to respect one. Nothing
+// calls them yet, which is why the reporting above is the whole of what is live:
+// exposing them needs an answer to how a document's prose reaches a command,
+// which is not how anybody writes prose today.
 
 import (
 	"flag"
@@ -237,6 +239,12 @@ entry naming an id no artifact answers to, and an artifact nothing connects back
 to the brief, are named on stderr beside a set that still holds every document
 it read. The brief is the root and the decision records are not downstream of
 it, so neither is reported for supporting nothing.
+
+Who changed each document is reported the same way. The product manager owns the
+brief and the goals and the architect owns the designs, specifications, and
+decision records, so a revision log recording a change by any other role is named
+on stderr as an unauthorized revision. The document still loads: the log is
+append-only, and losing it would leave a document nobody could correct.
 
   list [--kind <kind>]   list the recorded artifacts, and name what is not one
   show <id>              print one artifact and its recorded revisions

@@ -1202,16 +1202,18 @@ identity to yet says so. Nothing else changes for it: a specification with no
 frontmatter is still read as product intent, because refusing intent somebody
 wrote down is worse than reading it and saying its identity is missing.
 
-Who may change one of these documents is enforced rather than asked for. The
-product manager owns the brief and the goals, the architect owns the designs,
+Who may change one of these documents is in the code rather than in a persona.
+The product manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no
-document at all — and that is a check in the code every mutation the harness
-makes goes through, the same one the invariants use, rather than a line in a
-persona a configuration can weaken. A document whose revision log records a
-change by a role that does not own it is refused when it is read, so claiming
-somebody else's authority produces a file that stops loading rather than one
-that quietly governs. None of it constrains you: the boundary is between agent
-roles, and you direct any of them.
+document at all. Creating, amending, superseding, and retiring an artifact each
+refuse a role that does not own the kind, the way the invariants already do —
+though no command reaches that path yet, so what it constrains today is nothing
+that is happening. What does run on every load is the other half: a document
+whose revision log records a change by a role that does not own it is reported,
+naming the file and the entries that crossed. It is reported rather than refused
+because the log is append-only, so losing the document would leave one that could
+neither load nor be corrected. None of it constrains you: the boundary is between
+agent roles, and you direct any of them.
 
 The chain that identity makes expressible is then checked, every time the
 artifacts are loaded: a `supports` entry naming an id no artifact answers to is

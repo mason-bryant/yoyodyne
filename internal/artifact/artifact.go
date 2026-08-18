@@ -28,11 +28,13 @@
 // set is loaded. Neither refuses an artifact: a dangling reference and an
 // orphan are reported beside a set that still holds every document it read.
 //
-// Who may change one of these documents is a third question, and unlike the
-// other two it refuses: ownership is an authorization boundary rather than a
-// prompt convention, so no mutation reaches the filesystem without going through
-// Authorize in ownership.go, and a file whose revision log records a change by a
-// role that does not own it is not read as an artifact at all.
+// Who may change one of these documents is a third question, and it is answered
+// in ownership.go. Ownership is an authorization boundary rather than a prompt
+// convention, so no mutation reaches the filesystem without going through
+// Authorize; and a revision log recording a change by a role that does not own
+// the document is reported over the loaded set, beside the broken relationships
+// and for the same reason — losing a document nobody can now correct is worse
+// than carrying a named problem against one that still holds.
 package artifact
 
 import (
@@ -215,22 +217,12 @@ func (a Artifact) Validate() error {
 	if len(a.Revisions) == 0 {
 		problems = append(problems, errors.New("revisions must record at least the creation of this artifact"))
 	}
+	// Whether the role a revision names owns this kind is deliberately not checked
+	// here: it is reported over the loaded set instead, because it must not cost
+	// the document. See UnauthorizedRevisions.
 	for index, revision := range a.Revisions {
 		if err := revision.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("revisions[%d]: %w", index, err))
-			continue
-		}
-		// Ownership is an authorization boundary, so the record of who exercised
-		// it is held to the same rule the mutation is. A file claiming a role that
-		// does not own this kind changed it is refused rather than read: the
-		// revision log is the only durable evidence of the boundary, and one that
-		// can say anything audits nothing. The kind is checked first because an
-		// artifact nobody can place has no owner to hold the revision to, and that
-		// is already reported above.
-		if a.Kind.Valid() {
-			if err := Authorize(revision.By, a.Kind); err != nil {
-				problems = append(problems, fmt.Errorf("revisions[%d]: %w", index, err))
-			}
 		}
 	}
 	// The two halves of an ending have to agree, the same way an invariant's
@@ -338,19 +330,20 @@ func (p Problem) String() string {
 }
 
 // Set is every artifact the repository records, the files in its artifact
-// homes that could not be read as one, and the relationships between the
-// artifacts that do not hold.
+// homes that could not be read as one, and what is wrong with the documents
+// that did load.
 type Set struct {
 	// Homes are the repository-relative directories this was loaded from,
 	// carried so what is reported can say where it looked.
 	Homes     []string   `json:"homes,omitempty"`
 	Artifacts []Artifact `json:"artifacts,omitempty"`
 	Problems  []Problem  `json:"problems,omitempty"`
-	// ReferenceProblems are the broken relationships between the artifacts that
-	// did load. They are kept apart from Problems because they mean something
-	// different: a Problem is a file that is not in the set, and one of these is
-	// a document that is, whose place in the chain is wrong. Nothing is dropped
-	// over one.
+	// ReferenceProblems are what is wrong with the documents that did load: the
+	// relationships between them that do not hold, and the changes recorded under
+	// a role that does not own the document. They are kept apart from Problems
+	// because they mean something different: a Problem is a file that is not in
+	// the set, and one of these is a document that is. Nothing is dropped over
+	// one.
 	ReferenceProblems []ReferenceProblem `json:"reference_problems,omitempty"`
 }
 

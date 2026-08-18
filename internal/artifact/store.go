@@ -135,10 +135,11 @@ func (s Store) Load() (Set, error) {
 
 	sort.Slice(set.Artifacts, func(first, second int) bool { return set.Artifacts[first].ID < set.Artifacts[second].ID })
 	sort.Slice(set.Problems, func(first, second int) bool { return set.Problems[first].Path < set.Problems[second].Path })
-	// The relationships are checked here rather than by each caller remembering
-	// to: a chain validated only when somebody asked is a chain that holds only
-	// where somebody asked. Nothing loaded above is dropped over what this finds.
-	set.ReferenceProblems = referenceProblems(set.Artifacts, set.Problems)
+	// The relationships, and the authority each document records having been
+	// changed under, are checked here rather than by each caller remembering to: a
+	// rule validated only when somebody asked holds only where somebody asked.
+	// Nothing loaded above is dropped over what either of them finds.
+	set.ReferenceProblems = append(referenceProblems(set.Artifacts, set.Problems), UnauthorizedRevisions(set.Artifacts)...)
 	return set, nil
 }
 
@@ -652,8 +653,8 @@ func parse(content string) (Artifact, error) {
 }
 
 // splitDocument separates the fenced metadata at the top of a file from the
-// document below it. Only the metadata is parsed \u2014 this package identifies
-// documents rather than reading what they say \u2014 and the body is returned
+// document below it. Only the metadata is parsed — this package identifies
+// documents rather than reading what they say — and the body is returned
 // verbatim so a mutation can write back exactly the prose it read.
 func splitDocument(content string) (metadata, body string, err error) {
 	// A byte-order mark ahead of the fence is still frontmatter; an editor that

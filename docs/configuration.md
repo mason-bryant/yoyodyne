@@ -365,14 +365,14 @@ yoyo artifact show v1-goals         # one artifact and its revisions
 There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
 artifact's content is written by the role that owns it, and its frontmatter is
 edited in the same file at the same time. What the harness owns is refusing a
-document whose identity is missing, malformed, claimed by something else, or
-recorded as changed by a role that does not own it.
+document whose identity is missing, malformed, or claimed by something else, and
+[reporting a change recorded by a role that does not own it](#who-may-change-an-artifact).
 
 ### Who may change an artifact
 
 Ownership is an authorization boundary rather than a prompt convention, so it is
-enforced the same way the invariants are: in code, on every mutation the harness
-makes, rather than in a persona a configuration can weaken.
+in code the way the invariants' is, rather than in a persona a configuration can
+weaken.
 
 | Kind | Owner | Every other role |
 | --- | --- | --- |
@@ -384,15 +384,34 @@ document: its decomposition is Beads work rather than Markdown. Nothing here
 constrains **you**. The boundary is between agent roles, and the operator directs
 any of them.
 
-Two things enforce it. Every mutation the harness performs goes through the one
-package that writes an artifact, which refuses a role that does not own the kind
-and records the role that did in the revision log. And a document whose revision
-log records a change by a role that does not own it is **refused when it is
-read**, so hand-editing a design to say the developer amended it produces a file
-that stops loading rather than one that quietly governs. What is still not
-enforced is an agent with an editor in its worktree changing a document without
-recording that it did — the same gap the design records for pushing and merging,
-where the contract in the prompt and the reviewer are what stand in the way.
+It holds in two places, and only one of them is live today.
+
+**Writing.** The package that writes an artifact refuses a role that does not own
+the kind, on creating, amending, superseding, and retiring one, and records the
+role that did in the revision log. That path exists and is enforced, but no
+command reaches it yet — there is no `yoyo artifact create`, and the roles that
+would use it do not run — so today it constrains nothing that is actually
+happening. It is the boundary a role meets when it arrives, rather than a persona
+asking it to behave.
+
+**Reading.** A document whose revision log records a change by a role that does
+not own it is **reported every time the artifacts are loaded**, as an
+`unauthorized-revision` beside the [broken relationships](#traceability-references-and-orphans),
+naming the file and which entries crossed. This is the half that bites now: it
+catches a hand-edited log wherever it came from.
+
+It reports rather than refuses, deliberately. The revision log is append-only, so
+a past entry cannot be made lawful without rewriting history, which is the one
+thing the log exists to prevent. Refusing would drop the document out of the set,
+report everything that referred to it as naming something nobody wrote, and leave
+a file that could neither load nor be corrected. So the document keeps loading,
+keeps governing, and stays amendable by its owner, and the entry stays reported
+until somebody decides what to do about it.
+
+What is still not enforced anywhere is an agent with an editor in its worktree
+changing a document without recording that it did — the same gap the design
+records for pushing and merging, where the contract in the prompt and the
+reviewer are what stand in the way.
 
 ### Traceability: references and orphans
 
@@ -401,12 +420,15 @@ chain is validated across the whole set every time the artifacts are loaded, and
 what it finds is **reported, never refused** — the opposite of how a document
 with no usable identity is handled, and for the same reason a malformed
 specification is still read. A broken relationship is a thing to correct, not a
-reason to lose a document somebody wrote.
+reason to lose a document somebody wrote. What each document's revision log says
+about who changed it is reported in the same place and for the same reason, so
+one listing says everything that is wrong with the documents that loaded.
 
 | Reported as | What it is |
 | --- | --- |
 | `dangling-reference` | A `supports` entry naming an id no artifact answers to. Both ends are named: the file the reference is written in, and the id it names. If that id belongs to a file that is in an artifact home and was refused, the report says so and names it, rather than reading as a document nobody wrote. |
 | `orphan` | An artifact that nothing connects back to the brief. Following `supports` upstream from it — through as many artifacts as the chain runs — arrives at no `brief`. |
+| `unauthorized-revision` | A revision recorded under a role that does not [own the document](#who-may-change-an-artifact). Reported once per document, naming which entries crossed, because opening the file and deciding is one job however many there are. |
 
 Two kinds are never orphans. The **brief** is the root, so nothing is upstream
 of it. A **decision** record says how the product is built rather than what it

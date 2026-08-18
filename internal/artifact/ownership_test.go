@@ -158,15 +158,16 @@ func TestTheOwningRoleRecordsTheWholeLifecycle(t *testing.T) {
 	}
 }
 
-func TestARevisionByARoleThatDoesNotOwnTheArtifactIsRefused(t *testing.T) {
+func TestARevisionByARoleThatDoesNotOwnTheArtifactIsReported(t *testing.T) {
 	t.Parallel()
 
 	// The store is not the only way a file lands in an artifact home — an agent
-	// has an editor in its worktree — so the record of who exercised the boundary
-	// is held to the same rule the mutation is. A document claiming the developer
-	// amended a design stops loading rather than quietly governing.
+	// has an editor in its worktree — so a log claiming the developer amended a
+	// design is named every time the set is loaded.
 	store := newStore(t)
-	write(t, store, designsHome+"/v1-harness.md", "---\nid: v1-harness\nkind: design\ntitle: V1 harness design\nstatus: active\nrevisions:\n"+
+	write(t, store, productHome+"/brief.md", document("brief", "brief", "Product brief", nil, "active")+"\nIntent in, software out.\n")
+	write(t, store, designsHome+"/v1-harness.md", "---\nid: v1-harness\nkind: design\ntitle: V1 harness design\nsupports:\n    - brief\n"+
+		"status: active\nrevisions:\n"+
 		"    - action: created\n      by: architect\n      at: 2026-08-01T12:00:00Z\n      reason: recorded when the design was written\n"+
 		"    - action: amended\n      by: developer\n      at: 2026-08-17T12:00:00Z\n      reason: the developer changed the design to match its change\n---\n\nThe design.\n")
 
@@ -174,11 +175,45 @@ func TestARevisionByARoleThatDoesNotOwnTheArtifactIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if len(set.Artifacts) != 0 || len(set.Problems) != 1 {
+	// Reported, not refused. The document still loads and still governs what is
+	// downstream of it: dropping it would cascade into the orphan and dangling
+	// reports for everything that referred to it, over a record nobody can now
+	// lawfully correct, because the revision log is append-only.
+	recorded, found := set.Find("v1-harness")
+	if !found || !recorded.InForce() || len(set.Problems) != 0 {
 		t.Fatalf("set = %#v", set)
 	}
-	if !strings.Contains(set.Problems[0].Reason, "revisions[1]") || !strings.Contains(set.Problems[0].Reason, "may propose a change instead") {
-		t.Fatalf("problem = %#v", set.Problems[0])
+	problem, reported := problemOfKind(set.ReferenceProblems, ProblemUnauthorizedRevision)
+	if !reported || problem.ID != "v1-harness" || problem.Path != designsHome+"/v1-harness.md" {
+		t.Fatalf("reference problems = %#v", set.ReferenceProblems)
+	}
+	if !strings.Contains(problem.Reason, "revisions[1] records the developer") {
+		t.Fatalf("problem = %#v", problem)
+	}
+	// Only the entry that crossed the boundary is named, and only once for the
+	// document, because opening it and deciding is one job.
+	if strings.Contains(problem.Reason, "revisions[0]") || len(set.ReferenceProblems) != 1 {
+		t.Fatalf("reference problems = %#v", set.ReferenceProblems)
+	}
+
+	// The owner can still amend it, which is what makes the report something
+	// somebody can act on rather than a document stuck outside every lawful path.
+	title := "V1 harness design, as it now stands"
+	amended, err := store.Amend(domain.RoleArchitect, "v1-harness", Amendment{Title: &title, Reason: "restated after the unauthorized edit was found"}, moment())
+	if err != nil {
+		t.Fatalf("Amend() error = %v", err)
+	}
+	if len(amended.Revisions) != 3 || amended.Revisions[2].By != domain.RoleArchitect {
+		t.Fatalf("amended = %#v", amended)
+	}
+	// And the crossing stays reported afterwards: the log records what happened,
+	// and an amendment by the owner does not unsay it.
+	set, err = store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if _, reported := problemOfKind(set.ReferenceProblems, ProblemUnauthorizedRevision); !reported {
+		t.Fatalf("reference problems = %#v", set.ReferenceProblems)
 	}
 }
 
