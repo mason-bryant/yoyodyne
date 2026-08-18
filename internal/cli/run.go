@@ -70,6 +70,11 @@ type components struct {
 	// carried on. It is built beside the run store because it is durable in the
 	// same way and outlives the runs that fill it.
 	reports *runstate.ReportStore
+	// amendments is where changes proposed to documents their proposer does not
+	// own are kept, with what the owner or the operator decided about each. It is
+	// built beside the reports because it is durable in the same way and for the
+	// same reason: the argument outlives the run that made it.
+	amendments *runstate.AmendmentStore
 	// branchReviews is where verdicts on accumulated changes are recorded. It is
 	// its own store for the same reason: a branch review outlives every run whose
 	// work it judged, and it belongs to no one of them.
@@ -116,6 +121,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	amendments, err := runstate.NewAmendmentStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	branchReviews, err := runstate.NewBranchReviewStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -137,6 +146,7 @@ func buildComponents(configPath string) (components, error) {
 		runner:        processRunner,
 		store:         store,
 		reports:       reports,
+		amendments:    amendments,
 		branchReviews: branchReviews,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
@@ -202,6 +212,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// settled and its artifacts are removed, and what it reported is still
 		// waiting for somebody to read.
 		Reports: parts.reports,
+		// A change an agent proposes to a document it may not edit is recorded
+		// here, for the same reason and in the same way: the run that argued the
+		// design was wrong is over long before anybody decides what to do about it,
+		// and the proposal has to still be there when they do.
+		Amendments: parts.amendments,
 		// What a run costs is already recorded in its event log, and the item it
 		// served is already recorded beside it. This is the join: as a run ends,
 		// the item it was for is priced across every run ever made for it, and the
@@ -435,6 +450,10 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// What the run's agents reported is collected whichever way the run went,
 		// so it is named whichever way this reports.
 		reportCollectedReports(stdout, outcome)
+		// And so is what they proposed changing in a document they do not own: it
+		// is waiting on a person either way, and a proposal nobody is told about is
+		// one nobody decides.
+		reportProposedAmendments(stdout, outcome)
 		// So is what the work item has cost: a failed attempt spent money too, and
 		// the price is of the item rather than of this run.
 		reportItemCost(stdout, stderr, outcome)
@@ -455,6 +474,23 @@ func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
 	}
 	if outcome.ReportProblem != "" {
 		fmt.Fprintln(writer, outcome.ReportProblem)
+	}
+}
+
+// reportProposedAmendments names what this run's agents proposed changing in a
+// document they do not own. Nothing was written to any document, and nothing
+// will be until somebody decides, so what this owes the operator is to say a
+// decision is waiting and where to make it.
+func reportProposedAmendments(writer io.Writer, outcome orchestrator.Outcome) {
+	for _, proposal := range outcome.Amendments {
+		fmt.Fprintf(writer, "proposed a change to %s for the %s to decide; nothing was written to it (%s)\n",
+			proposal.Artifact, proposal.Owner, proposal.ID)
+	}
+	if len(outcome.Amendments) > 0 {
+		fmt.Fprintln(writer, "`yoyo amendment list` shows what is waiting, and approve or decline decides one")
+	}
+	if outcome.AmendmentProblem != "" {
+		fmt.Fprintln(writer, outcome.AmendmentProblem)
 	}
 }
 

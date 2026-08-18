@@ -228,6 +228,10 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		// The collected reports are the same pile the runs fill, read and written
 		// from here because this conversation is where the operator already is.
 		Reports: parts.reports,
+		// The changes other roles have proposed to the documents this one owns.
+		// They are read here so the owner hears the argument; deciding them is the
+		// operator's, through `yoyo amendment`.
+		Amendments: parts.amendments,
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
@@ -328,6 +332,8 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string)
 	fmt.Fprintln(writer, "and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
 	fmt.Fprintln(writer, "shows you what has been collected.")
+	fmt.Fprintln(writer, "Changes other roles have proposed to the brief and the goals are carried into")
+	fmt.Fprintln(writer, "this conversation for it to argue; you decide them with `yoyo amendment`.")
 	fmt.Fprintln(writer, "Its picture of the repository and the tracker is the one gathered above; /refresh")
 	fmt.Fprintln(writer, "reads them again into this conversation without discarding what has been said.")
 	fmt.Fprintln(writer, "You steer the work yourself: /backlog, /status, /work, /stop, /redirect. /show")
