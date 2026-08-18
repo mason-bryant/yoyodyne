@@ -184,6 +184,26 @@ step "a product that has only ever chatted still works"
 chatty_listing="$("$status" --product chatty -l 2>&1)"
 contains "$chatty_listing" "$waiting_chat" "a product with no runs directory lists its conversations"
 
+step "a paused harness says so before anything it is holding up"
+# The hold is one file at the state root rather than one per product, so it is
+# announced whichever product is being followed.
+cat > "$YOYODYNE_STATE_HOME/operator-hold.json" <<'JSON'
+{
+  "schema_version": 1,
+  "held_at": "2026-08-18T18:15:00Z"
+}
+JSON
+held="$("$status" --product demo -l 2>&1)"
+contains "$held" "PAUSED: all harness activity is paused since 2026-08-18T18:15:00Z" \
+  "a paused harness leads with when it was paused"
+contains "$held" "yoyo resume" "the banner says what lifts the pause"
+contains "$held" "$one_run" "the listing itself is still reported while paused"
+held_other="$("$status" --product chatty -l 2>&1)"
+contains "$held_other" "PAUSED:" "one switch is announced for every product"
+rm "$YOYODYNE_STATE_HOME/operator-hold.json"
+running="$("$status" --product demo -l 2>&1)"
+missing "$running" "PAUSED" "a running harness says nothing about a pause"
+
 step "cost reporting counts conversation turns in the total"
 if ! command -v jq >/dev/null 2>&1; then
   cost="$("$status" --product demo -c 2>&1 || true)"

@@ -2486,8 +2486,25 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		// nobody recorded anything in is a product nobody has directed, which is
 		// what all but the directive tests are about.
 		Directives: newDirectiveStore(t),
+		// And every pipeline reads whether the operator has paused everything
+		// before it spends, so every test pipeline has somewhere to read that from
+		// too. A store nobody paused is a harness that is running, which is what all
+		// but the hold tests are about.
+		Holds:      newOperatorHoldStore(t),
 		Repository: repository, Config: cfg,
 	}
+}
+
+// newOperatorHoldStore builds the durable record of the operator's hold. A test
+// that drives a pause keeps its own reference and hands the same store to the
+// pipeline, because a hold recorded anywhere else is one no run sees.
+func newOperatorHoldStore(t *testing.T) *runstate.OperatorHoldStore {
+	t.Helper()
+	store, err := runstate.NewOperatorHoldStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("runstate.NewOperatorHoldStore() error = %v", err)
+	}
+	return store
 }
 
 // newDirectiveStore builds the durable directive record a pipeline reads. A test

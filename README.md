@@ -39,9 +39,10 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo reconcile`, and `yoyo resume` sit beside that conversation
-as administrative and recovery entry points — one named item, one branch judged
-as a whole, settling what a killed process left behind, and releasing a run
+`yoyo review`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume` sit beside that
+conversation as administrative and recovery entry points — one named item, one
+branch judged as a whole, settling what a killed process left behind, stopping
+everything the harness would spend until you say otherwise, and releasing a run
 waiting on a refusal the provider no longer makes — rather than as the way
 work normally happens.
 
@@ -1603,6 +1604,53 @@ simply has none, and runs are unaffected.
 
 ## Operations and recovery
 
+### Pausing everything, and resuming it
+
+`yoyo pause` stops everything the harness would spend on a provider, and
+`yoyo resume` starts it again:
+
+```sh
+./bin/yoyo pause      # to conserve tokens, or for any other reason of your own
+./bin/yoyo resume     # everything parked on it carries on
+```
+
+It is one durable switch over the whole machine rather than one item. Every
+provider-call boundary reads it before it spends — a developer attempt, each
+reissue of one after a refusal, a reviewer invocation, a conversation turn — so
+a pause placed while a developer is working reaches that run at its next
+attempt rather than only reaching the runs that had not started. The flag lives
+at the state root rather than under a product, because what makes you pause is
+an account or an afternoon rather than any one project.
+
+A run that meets the pause parks exactly as one waiting out a
+[usage limit](#waiting-out-a-provider-usage-limit) does, on the same machinery
+with you as its reset instead of a clock: the park is durable before any waiting
+starts, and the item stays claimed with its branch, worktree, and developer
+session all preserved. A process already parked acts on `yoyo resume` within
+seconds and carries on unaided; one that exited while the pause stood is
+continued by `yoyo run <beads-id>`. Nothing is cancelled, so nothing has to be
+reconciled afterwards — which is the whole difference between this and killing
+processes, where the run lands cancelled with its item still claimed and the
+work has to be developed again from scratch. A conversation turn is refused
+rather than parked, because there is a person in front of it: saying the same
+thing again once the pause is lifted takes the turn that was refused. `yoyo
+review` is refused for the same reason, having no run to park.
+
+The honest boundary is that a provider call already in flight is not
+interrupted. The flag is read before a call, so a generation that is already
+streaming finishes and is charged for, and the pause takes effect at the next
+boundary — which for a developer attempt can be minutes away. Stopping a
+generation mid-flight would throw away what it had already cost and leave the
+run needing the same work again, which is the cost that makes a kill the wrong
+verb in the first place.
+
+Time a run spends held is accounted under its own kind, separately from what a
+provider's refusals are allowed to spend: a hold never eats a run's
+`execution.usage_limit_max_pause` budget, and nothing bounds it, because the
+thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
+`/status` lead with a PAUSED banner naming when the pause was placed, because a
+system somebody paused and forgot looks exactly like a system that died.
+
 ### Waiting out a provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
@@ -1668,12 +1716,18 @@ has stopped retrying and somebody has to.
 Everything above honors the recorded deadline as an upper bound, and a restart
 mid-wait serves the rest of it rather than asking again, which is what keeps a
 crash from retrying straight back into a window that is still closed.
-`yoyo resume` is the one thing that overrides that deadline, and it overrides
-nothing else:
+`yoyo resume` with a work item named is the one thing that overrides that
+deadline, and it overrides nothing else:
 
 ```sh
 ./bin/yoyo resume yoyodyne-ifd.53
 ```
+
+(With no work item named it is the other half of
+[`yoyo pause`](#pausing-everything-and-resuming-it) and lifts the operator's
+hold over everything instead. Both are the same act — stop waiting and carry on
+— and what the argument says is whose decision is being withdrawn: the
+provider's refusal of one run, or your own hold over all of them.)
 
 It exists because the deadline is a claim about the provider and you are the one
 who can change what it is a claim about. Raise the account's capacity while runs
@@ -1737,9 +1791,10 @@ Repeating it is safe — a settled run is no longer outstanding, and cleanup ove
 artifacts that are already gone does nothing. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
 inside its repair loop, one paused for a provider usage limit, one whose
-provider the harness stopped on time, or one paused for an [unresolved
-directive](#directives-and-the-work-they-pause) — is left exactly as it is for
-that command to pick up.
+provider the harness stopped on time, one paused for an [unresolved
+directive](#directives-and-the-work-they-pause), or one parked on an
+[operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
+for that command to pick up.
 
 ### Following a run, a conversation, or a branch review
 
@@ -1769,6 +1824,11 @@ between turns, and `ended` once the role has moved on to a later conversation. A
 branch review has no state file either — its verdicts share one log rather than
 having a record each — so its status comes from its own events: `reviewing`
 while the verdict is being made, and `reviewed` once it has been.
+
+Every mode leads with a PAUSED banner while
+[activity is paused](#pausing-everything-and-resuming-it), naming when the pause
+was placed: a quiet machine somebody paused and a quiet machine that died look
+identical, and this is the one place an operator is already looking.
 
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest

@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -50,6 +51,17 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
+		return reportBranchReview(stdout, stderr, *jsonOutput, orchestrator.BranchReviewOutcome{}, err)
+	}
+	// A branch review is one provider invocation and nothing else — there is no
+	// run to park, no claim to keep, and nothing durable it could resume from — so
+	// a held harness refuses it here rather than parking it. Asking again after
+	// `yoyo resume` costs nothing that was already spent.
+	if hold, held, err := parts.holds.Held(); err != nil || held {
+		if err == nil {
+			err = fmt.Errorf("all harness activity is paused, since %s; `yoyo resume` lifts it and this review can be asked for again",
+				hold.HeldAt.Format(time.RFC3339))
+		}
 		return reportBranchReview(stdout, stderr, *jsonOutput, orchestrator.BranchReviewOutcome{}, err)
 	}
 	reviewed := *branch

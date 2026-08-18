@@ -51,6 +51,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runDirective(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
+	case "pause":
+		return pauseHarness(args[1:], stdout, stderr)
 	case "resume":
 		return resumeWorkItem(args[1:], stdout, stderr)
 	case "review":
@@ -271,7 +273,8 @@ Commands:
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
   run               run one Beads work item in an isolated worktree
-  resume            release a run waiting out a provider usage limit, now
+  pause             pause everything the harness would spend on a provider
+  resume            lift that pause, or release one run's wait on the provider
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
   reconcile         settle runs an interrupted process left behind

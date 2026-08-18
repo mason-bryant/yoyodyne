@@ -233,6 +233,10 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		// to the product, and it reaches runs in other processes exactly as it
 		// reaches this one.
 		Directives: conversationDirectives{store: parts.directives, productID: cfg.Product.ID},
+		// The same hold every run reads before it spends. A turn is a provider
+		// invocation, so `yoyo pause` covers this conversation exactly as it covers
+		// the work steered from it.
+		Holds: parts.holds,
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.

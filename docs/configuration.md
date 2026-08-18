@@ -1137,6 +1137,16 @@ sleep probes until it has spent that hour on the run and then exit, with the run
 still in flight and its deadline recorded; running `yoyo run` on the same item
 continues that same run, and that process gets the whole bound again.
 
+It is also what bounds a run parked on an operator pause — `yoyo pause`, which
+holds everything the harness would spend at every provider-call boundary. That
+pause has no configuration of its own and no maximum: what lifts it is the
+operator rather than a clock, and time spent held is accounted separately from
+`usage_limit_max_pause`, because the provider never refused the run. What it
+shares is this bound on how long a single process will stay open waiting, and
+the durable park behind it: a run held past the bound exits with the park
+recorded, and `yoyo run` on the same item continues it once `yoyo resume` has
+lifted the pause. See the README for the whole of that behavior.
+
 The bound is on how long one process stays open for a run, so it counts every
 probe that process has already slept rather than each probe separately. Applying
 it per probe would bound nothing: a probe interval of `30m` fits under a `1h`

@@ -30,7 +30,9 @@ import (
 // this run was ever re-prepared, which is what every run written before the
 // retry existed did. The directive a run paused for is the same again: absent
 // means no user directive ever held this run up, which is what every run
-// written before directives were enforced meant.
+// written before directives were enforced meant. The operator hold a run parked
+// on is the last of them: absent means the operator never held this run, which
+// is what every run written before the hold existed meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -98,6 +100,9 @@ const (
 // for" or "waiting out". kind is the provider's own name for an exhausted usage
 // limit and says nothing about any other cause.
 func DescribePause(cause, kind string) string {
+	if cause == PauseOperatorHold {
+		return "an operator hold on all harness activity"
+	}
 	if cause == PauseServerOverload {
 		return "a transient provider server overload"
 	}
@@ -427,6 +432,24 @@ type State struct {
 	// is not waiting, and an empty value alongside a deadline reads as a usage
 	// limit, which is what every record written before this field described.
 	PauseCause string `json:"pause_cause,omitempty"`
+	// OperatorHeldSince is when this run parked at a provider-call boundary
+	// because the operator holds all harness activity. It is written before the
+	// wait begins, exactly as a usage-limit deadline is, so a process that dies
+	// while the harness is held leaves a run that still says why it stopped and
+	// can be picked up again. It is cleared as the run carries on, so a run
+	// carrying one is a run still waiting on the operator.
+	//
+	// There is no deadline beside it because there is nothing to record: what
+	// lifts an operator hold is the operator.
+	OperatorHeldSince *time.Time `json:"operator_held_since,omitempty"`
+	// OperatorHeldSeconds is how much of this run's elapsed time the operator's
+	// hold accounts for, across every hold it has parked on. It is kept apart
+	// from the usage-limit budget above because it answers a different question
+	// and is bounded by nothing the harness configures: the provider never
+	// refused this run, and a maximum pause that stopped a held run would be the
+	// harness overriding the operator. What it is for is the ledger — so time a
+	// run spent doing nothing says whose decision that was.
+	OperatorHeldSeconds int64 `json:"operator_held_seconds,omitempty"`
 	// ProviderStop records that the harness stopped a provider invocation on
 	// time -- because it stalled, or because it exhausted its total budget --
 	// rather than the provider ending it. It is written only when what the
@@ -609,8 +632,23 @@ func (s State) Validate() error {
 			problems = append(problems, errors.New("usage_limit_resets_at requires a run that is still in flight"))
 		}
 	}
-	if s.PauseCause != "" && s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload {
+	if s.PauseCause != "" && s.PauseCause != PauseUsageLimit && s.PauseCause != PauseServerOverload && s.PauseCause != PauseOperatorHold {
 		problems = append(problems, errors.New("pause_cause is invalid"))
+	}
+	if s.OperatorHeldSeconds < 0 {
+		problems = append(problems, errors.New("operator_held_seconds cannot be negative"))
+	}
+	if s.OperatorHeldSince != nil {
+		if s.OperatorHeldSince.IsZero() {
+			problems = append(problems, errors.New("operator_held_since cannot be the zero time"))
+		}
+		// A hold is an instruction to carry on once the operator lifts it, so like
+		// every other pause it is only coherent on a run something can still carry
+		// on: recorded on a terminal run it would promise a continuation that
+		// nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("operator_held_since requires a run that is still in flight"))
+		}
 	}
 	if s.ProviderStop != "" {
 		if s.ProviderStop != ProviderStopStalled && s.ProviderStop != ProviderStopBudgetExhausted {
@@ -706,6 +744,13 @@ func (s State) Validate() error {
 // measured against.
 func (s State) UsageLimitPaused() time.Duration {
 	return time.Duration(s.UsageLimitPausedSeconds) * time.Second
+}
+
+// OperatorHeld reports how much of this run's elapsed time the operator's hold
+// accounts for. It bounds nothing — nothing bounds an operator — and is the
+// ledger's answer to why a run took as long as it did.
+func (s State) OperatorHeld() time.Duration {
+	return time.Duration(s.OperatorHeldSeconds) * time.Second
 }
 
 // Outstanding reports that a run still owes a step somebody has to take. A run

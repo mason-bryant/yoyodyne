@@ -38,17 +38,24 @@ func resumeWorkItem(args []string, stdout, stderr io.Writer) int {
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
-		fmt.Fprintln(stderr, "resume requires exactly one Beads work item id")
+	if flags.NArg() > 1 {
+		fmt.Fprintln(stderr, "resume takes one Beads work item id, or none at all to lift a pause on everything")
 		printResumeUsage(stderr)
 		return 2
 	}
-	workItemID := flags.Arg(0)
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
 		return reportResumeError(stdout, stderr, *jsonOutput, err)
 	}
+	// Naming nothing resumes everything, which is the other half of `yoyo pause`.
+	// It is the same verb because it is the same act — stop waiting and carry on —
+	// and what the argument says is whose decision is being withdrawn: the
+	// provider's refusal of one run, or the operator's hold over all of them.
+	if flags.NArg() == 0 {
+		return resumeHarness(stdout, stderr, *jsonOutput, parts.holds)
+	}
+	workItemID := flags.Arg(0)
 	// The waiting run is found by reading, never by adopting: a run another
 	// process is serving must keep serving it, and taking its lease to release its
 	// wait would be the harness stopping the very run this exists to keep alive.
@@ -94,6 +101,14 @@ func pausedRunFor(store *runstate.Store, workItemID string) (runstate.State, err
 			continue
 		}
 		if candidate.UsageLimitResetsAt == nil {
+			// A run parked on the operator's own hold is waiting on them rather than
+			// on the provider, and what lifts it is this verb with nothing named. An
+			// operator who typed the item is one word from what they meant, so they
+			// are told which word rather than only that this is not it.
+			if candidate.OperatorHeldSince != nil {
+				return runstate.State{}, fmt.Errorf("run %s for %s is parked because all harness activity is paused, not because the provider refused it; `yoyo resume` with no work item lifts that pause",
+					candidate.RunID, workItemID)
+			}
 			return runstate.State{}, fmt.Errorf("run %s for %s is in flight but is not waiting on the provider; there is nothing to release",
 				candidate.RunID, workItemID)
 		}
@@ -114,9 +129,14 @@ func reportResumeError(stdout, stderr io.Writer, jsonOutput bool, err error) int
 }
 
 func printResumeUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo resume [options] <beads-id>
+	fmt.Fprintln(writer, `Usage: yoyo resume [options] [beads-id]
 
-Release a run that is waiting out a provider refusal — an exhausted usage limit
+With no work item, lift the pause `+"`yoyo pause`"+` placed over all harness
+activity. Everything parked on it carries on: a process still holding a parked
+run acts within seconds, and a run whose process has exited is continued by
+`+"`yoyo run <beads-id>`"+` from exactly where it stopped.
+
+With a work item, release a run that is waiting out a provider refusal — an exhausted usage limit
 or an overloaded server — so it asks again now rather than at its recorded
 deadline. Use it when that deadline has stopped being true — you raised the
 account's capacity, say, or the provider's status page went green — because it is
