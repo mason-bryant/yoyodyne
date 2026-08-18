@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/runstate"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 const testBriefing = "# Product context\n\nREADME says Yoyodyne runs bounded work items.\n"

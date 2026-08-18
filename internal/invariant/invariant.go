@@ -38,7 +38,7 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // Status is where an invariant is in its lifecycle. Retirement is explicit

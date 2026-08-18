@@ -20,7 +20,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 // The tracker statuses admitted work can be in. Open work is waiting to be

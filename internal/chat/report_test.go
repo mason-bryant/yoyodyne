@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/report"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 func TestTheProductManagerReportsWithoutItChangingTheTurn(t *testing.T) {

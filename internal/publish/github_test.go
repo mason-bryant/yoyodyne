@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // Ensure has to be idempotent, because it runs after every developer attempt.

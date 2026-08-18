@@ -36,3 +36,12 @@ jobs:
 
       - name: Build
         run: make build
+
+      # The release path runs here, on every change, rather than first executing
+      # during a tag push where a failure means a botched or absent release.
+      # This is the same `make dist` a release runs: it cross-compiles every
+      # platform in PLATFORMS, packages and checksums them, then unpacks the
+      # runner's own archive and asserts the binary names the version it was
+      # built from.
+      - name: Package a release and verify it names its version
+        run: make dist-verify VERSION=v0.0.0-ci

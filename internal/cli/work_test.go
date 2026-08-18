@@ -7,14 +7,14 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/contextbundle"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/orchestrator"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The conversation steers work through this, which is a compile-time fact

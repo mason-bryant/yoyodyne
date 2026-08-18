@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestClientWorkItemLifecycle(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestRunnerStopsAfterFailedCheck(t *testing.T) {

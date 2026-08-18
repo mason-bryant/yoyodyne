@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"yoyodyne/internal/backlog"
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 // defaultMaxProductBytes bounds the product context. It is larger than a work

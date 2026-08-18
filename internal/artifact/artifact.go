@@ -35,7 +35,7 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // Kind is what sort of artifact this is. The values are the canonical artifact

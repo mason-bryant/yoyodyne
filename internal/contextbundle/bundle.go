@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 const defaultMaxBytes = 256 << 10

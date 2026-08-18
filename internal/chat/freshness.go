@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // Briefing is one picture of the product: the text the product manager is

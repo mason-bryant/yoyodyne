@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/report"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The developer and the reviewer both notice something outside the work they

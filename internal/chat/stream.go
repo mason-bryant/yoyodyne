@@ -25,8 +25,8 @@ import (
 	"strings"
 	"sync"
 
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // replyOpening introduces the answer. It is the same opening the finished reply

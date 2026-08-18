@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/invariant"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 func TestRelevantInvariantsReachTheDeveloperAndTheReviewerWithoutBeingTranscribed(t *testing.T) {

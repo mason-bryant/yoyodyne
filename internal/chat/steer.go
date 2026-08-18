@@ -14,9 +14,9 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/backlog"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // commandHelp is what the conversation understands besides talking. It is

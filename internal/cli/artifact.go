@@ -19,8 +19,8 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/artifact"
-	"yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 )
 
 type artifactOutput struct {

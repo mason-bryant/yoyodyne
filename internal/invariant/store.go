@@ -18,7 +18,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // MaxFileBytes bounds one invariant file. It is a constraint stated tightly

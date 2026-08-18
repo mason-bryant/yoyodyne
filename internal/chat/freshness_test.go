@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/runstate"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // gatheredAt is when the picture in these tests was taken: two hours before the

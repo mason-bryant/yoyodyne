@@ -24,8 +24,8 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // maxEncodedBranchReviewBytes bounds one encoded record, including the trailing

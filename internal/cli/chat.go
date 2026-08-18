@@ -9,15 +9,15 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/backend/claudecode"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/report"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // chatWorkItemStatus is the tracker slice a product conversation is built from.

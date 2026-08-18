@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"

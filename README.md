@@ -42,44 +42,82 @@ rather than after:
   only contact with your toolchain is the list of shell commands you declare as
   `checks` and the exit codes they return.
 
-## Quick start
+## Install
 
-Prerequisites:
+`yoyo` is one binary. Two of the three ways to get it need no checkout of this
+repository.
 
-- Go 1.24 or newer
-- Git and Make
-- Beads (`bd`) initialized in the repository
-- Claude Code installed and authenticated
-
-From an initialized Yoyodyne checkout, verify the tools, run all checks, and
-build the CLI:
+**With Go 1.24 or newer**, which is the shortest path:
 
 ```sh
-claude auth status --json
-bd where
-make check
+go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+```
+
+That writes `yoyo` into `$(go env GOPATH)/bin`, which needs to be on your
+`PATH`. Replacing `@latest` with a version — `@v1.2.3` — pins that release
+rather than following the newest one.
+
+**From a release download**, if you would rather not have Go at all. Each tag on
+[the releases page](https://github.com/mason-bryant/yoyodyne/releases) carries a
+binary per platform and a `checksums.txt` covering them. Set `tag` to the
+version you want from that page, and `platform` to yours:
+
+```sh
+tag=<the tag from the releases page>
+platform=darwin_arm64   # or darwin_amd64, or linux_amd64
+base="https://github.com/mason-bryant/yoyodyne/releases/download/$tag"
+curl -fsSLO "$base/yoyo_${tag}_${platform}.tar.gz"
+curl -fsSL "$base/checksums.txt" | shasum -a 256 -c --ignore-missing
+tar -xzf "yoyo_${tag}_${platform}.tar.gz"
+install -m 0755 yoyo /usr/local/bin/yoyo
+```
+
+**From source**, which is also how you work on Yoyodyne itself:
+
+```sh
+git clone https://github.com/mason-bryant/yoyodyne
+cd yoyodyne
 make build
-./bin/yoyo config validate
 ```
 
-Then open the conversation:
+That writes `./bin/yoyo`, stamped from `git describe`, so `yoyo version` names
+the commit a local build came from rather than only saying `dev`.
 
-```sh
-./bin/yoyo chat
-```
+**What is tested, and what is only built.** Yoyodyne is developed and used on
+macOS. The `linux_amd64` binary is built by the same workflow as the others and
+exercised by CI, and by nothing else; the `darwin_amd64` binary is built and is
+not regularly run by anyone. Treat anything other than macOS on Apple silicon as
+untested rather than as a platform with the same evidence behind it. There is no
+Windows binary, and Windows is not supported.
 
-State what you want, approve what it proposes, and run an approved item with
-`/work <beads-id>` while you keep talking. [The conversation](#the-conversation)
-is the rest of this document's subject.
+Whichever way you got it, the rest of this document calls the binary `yoyo` and
+assumes it is on your `PATH`. Run it from your own project: it discovers its
+configuration by searching upwards from the current directory.
 
-To adopt Yoyodyne in a repository that is not this one, start at
-[Adopting Yoyodyne in another project](#adopting-yoyodyne-in-another-project).
+## Getting started
 
-## Adopting Yoyodyne in another project
+Three steps, in this order:
 
-Nothing here assumes your project is written in Go, and nothing after the build
-step needs the Yoyodyne checkout again: a configured project carries its own
-configuration and personas.
+1. **[Install `yoyo`](#1-install-yoyo)** — one binary, in your `PATH`.
+2. **[`yoyo init`](#2-yoyo-init--give-the-project-its-own-configuration)** —
+   give your project its own configuration and personas.
+3. **[`yoyo chat`](#3-yoyo-chat--establish-the-brief-and-the-goals)** — establish
+   the brief and the goals with the product manager, and drive the work from
+   there.
+
+Nothing here assumes your project is written in Go, and nothing after step 1
+needs a Yoyodyne checkout: a configured project carries its own configuration
+and personas.
+
+**What you need.** Git and a repository with at least one commit;
+[Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
+reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
+authenticated, which executes every agent role. Go 1.24 or newer is needed only
+if you install with `go install` or build from source; a release download needs
+neither Go nor a checkout. Two more are needed **only if you want pull
+requests**: a Git remote, and [`gh`](https://cli.github.com) authenticated with
+`gh auth login`. Without them everything stays on your machine and nothing is
+pushed.
 
 Every step below is executed by [`scripts/walk-adoption.sh`](scripts/walk-adoption.sh),
 which walks this section against a throwaway Python project — its own scratch
@@ -89,62 +127,44 @@ path work than take this section's word for it. It needs no provider unless you
 pass `WALK_PROVIDER=1`, and it names any claim it could not exercise rather than
 passing over it.
 
-**What you need.** Git and a repository with at least one commit;
-[Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
-reads and writes; [Claude Code](https://code.claude.com/docs), installed and
-authenticated, which executes every agent role; and Go 1.24 or newer to *build*
-`yoyo` — your project does not need Go, only the build does. Two more are
-needed **only if you want pull requests**: a Git remote, and
-[`gh`](https://cli.github.com) authenticated with `gh auth login`. Without them
-everything stays on your machine and nothing is pushed.
-
-### 1. Build the binary
-
-There is no release download and no `go install` path yet, so build it from a
-checkout of this repository:
+### 1. Install `yoyo`
 
 ```sh
-git clone https://github.com/mason-bryant/yoyodyne
-cd yoyodyne
-make build
+go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
 ```
 
-That writes `./bin/yoyo`. Put it wherever you keep local tools; the rest of this
-section calls it `yoyo` and assumes it is on your `PATH`. Run it from your own
-project, since it discovers the configuration by searching upwards from the
-current directory.
-
-### 2. Initialize the tracker
+[Install](#install) above has the release download and the from-source paths,
+and says which platforms are tested. Then change into your own project, since
+everything after this runs there:
 
 ```sh
 cd path/to/your/project
-bd init
 ```
 
-Beads is a required dependency rather than an optional integration: work items,
-their status and dependencies, blockers, and the durable record of what agents
-did all live there.
+### 2. `yoyo init` — give the project its own configuration
 
-### 3. Write the configuration
+**First initialize the tracker**, which is a required dependency rather than an
+optional integration: work items, their status and dependencies, blockers, and
+the durable record of what agents did all live there.
 
 ```sh
+bd init
 yoyo init
 ```
 
-That writes a complete `.yoyodyne/config.yaml` and copies the five personas into
-`.yoyodyne/personas/`, naming the product after the directory unless you pass
-`--product`. Nothing already there is overwritten without `--force`, and the
-refusal happens before any file is written, so a project is never left
-half-configured. See [Configuring a project](#configuring-a-project) for what is
-in the file.
+`yoyo init` writes a complete `.yoyodyne/config.yaml` and copies the five
+personas into `.yoyodyne/personas/`, naming the product after the directory
+unless you pass `--product`. Nothing already there is overwritten without
+`--force`, and the refusal happens before any file is written, so a project is
+never left half-configured. See [Configuring a project](#configuring-a-project)
+for what is in the file.
 
-### 4. Replace the placeholder checks
-
-`init` writes `checks: []`, because the harness cannot guess your toolchain and
-a run with nothing to verify has no gate to integrate behind. This is the one
-step you must do by hand. The generated file carries commented examples for Go,
-TypeScript, Python, and Java; the [configuration guide](docs/configuration.md#checks)
-has the same examples with the reasoning:
+**Then replace the placeholder checks.** `init` writes `checks: []`, because the
+harness cannot guess your toolchain and a run with nothing to verify has no gate
+to integrate behind. This is the one step you must do by hand. The generated file
+carries commented examples for Go, TypeScript, Python, and Java; the
+[configuration guide](docs/configuration.md#checks) has the same examples with
+the reasoning:
 
 ```yaml
 checks:
@@ -157,7 +177,7 @@ non-interactive and must exit non-zero on failure — a check that prints a
 complaint and exits 0 is not a gate. Prefer the pinned, non-daemon,
 non-interactive form of each tool, so the same commit checks the same way twice.
 
-### 5. Validate what you wrote
+**Then validate what you wrote:**
 
 ```sh
 yoyo config validate
@@ -168,12 +188,23 @@ list still is; it is `yoyo run` that refuses a run with no checks. Everything
 under `.yoyodyne/` is machine-independent and belongs in version control, so
 commit it along with the rest of your adoption.
 
-### 6. Write down what the product is for
+### 3. `yoyo chat` — establish the brief and the goals
 
-The product manager reads the Markdown under `product.specifications` —
-`docs/product` by default — and nothing else in the repository. A specification
-opens with an introduction saying what the thing is and why it exists, and
-states the goals that serve it after that introduction:
+Commit what you have added first: a run refuses to start while the primary
+checkout has uncommitted changes, and says which files they are. The tracker's
+own exports — `.beads/issues.jsonl` and `.beads/interactions.jsonl` — are the
+exception, since a run writes them itself.
+
+```sh
+git add -A && git commit -m "adopt Yoyodyne"
+yoyo chat
+```
+
+**What the product manager can see.** It reads the Markdown under
+`product.specifications` — `docs/product` by default — and nothing else in the
+repository: not the README, not the source, not the configuration. A
+specification opens with an introduction saying what the thing is and why it
+exists, and states the goals that serve it after that introduction:
 
 ```markdown
 # Calc
@@ -186,13 +217,24 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 - Every operation has a test that would fail if the operation broke.
 ```
 
-This step is optional in the sense that nothing fails without it: an empty or
-missing directory is reported as "product intent is not written down", which is
-a true statement about the repository rather than an error. It is not optional
-in any other sense — goals are what work is admitted against, and a product
-manager with no goals to name will stop and ask you for one.
+**A repository with none of that written down is the ordinary starting case**,
+and it is what the conversation is for. An empty or missing specifications
+directory is reported as "product intent is not written down", which is a true
+statement about the repository rather than an error, and the product manager
+says exactly that rather than inferring what your product must be about. Tell it
+what you are building and it will draft the brief and the goals with you.
 
-### 7. File a first work item
+It cannot save them. The product manager runs with no tools at all — it manages
+the Beads backlog through the harness and never touches your filesystem — so the
+division is plain: **the product manager drafts, and you put the files on disk.**
+Paste what you agreed into `docs/product/`, commit it, and the next conversation
+reads it back as the product's written intent. Nothing fails if you never do, but
+goals are what work is admitted against, and a product manager with no goals to
+name will stop and ask you for one.
+
+**Then drive the work from the same conversation.** Talk about what you want and
+approve the work items it proposes, as many as you like in one answer. You can
+also file one by hand if you would rather have something to run immediately:
 
 ```sh
 bd create --title="Add a subtract function" \
@@ -201,25 +243,11 @@ bd create --title="Add a subtract function" \
 bd ready
 ```
 
-You can also skip this and let the conversation propose the work; filing one by
-hand is simply the shortest path to having something to run.
-
-### 8. Drive it from the conversation
-
-Commit what you have added first: a run refuses to start while the primary
-checkout has uncommitted changes, and says which files they are. The tracker's
-own exports — `.beads/issues.jsonl` and `.beads/interactions.jsonl` — are the
-exception, since a run writes them itself.
-
-```sh
-git add -A && git commit -m "adopt Yoyodyne"
-yoyo chat
-```
-
-Talk about what you want. When there is an item you want run, `/work <beads-id>`
-starts it in the background and the conversation stays a conversation; `/status`
-says where it got to, `/diff` says what it changed, and `/stop` ends it and
-settles what it left behind. That is the whole loop.
+When there is an item you want run, `/work <beads-id>` starts it in the
+background and the conversation stays a conversation; `/status` says where it got
+to, `/diff` says what it changed, and `/stop` ends it and settles what it left
+behind. That is the whole loop, and [The conversation](#the-conversation) is the
+rest of this document's subject.
 
 ### Optional: publishing and auto-merge
 
@@ -255,6 +283,33 @@ approvals:
 [How work flows once you approve it](#how-work-flows-once-you-approve-it) has
 the full behavior, and the [configuration guide](docs/configuration.md#publishing-through-pull-requests)
 has the table of what each combination produces.
+
+### Working on Yoyodyne itself
+
+Yoyodyne is configured against its own repository, so a checkout of it is a
+project like any other. From one, verify the tools, run every check, and open
+the conversation:
+
+```sh
+claude auth status --json
+bd where
+make check
+make build
+./bin/yoyo config validate
+./bin/yoyo chat
+```
+
+`make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
+runs.
+
+`make dist VERSION=<tag>` builds the release archives and their checksums into
+`dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
+archive for the platform it is running on and asserts the binary reports
+`<tag>`. That target is the whole of what a release is: the release workflow
+runs it for a pushed tag and publishes what it produced, and CI runs the same
+target on every change with a placeholder version, so a tag push reruns a path
+that is already exercised rather than executing it for the first time when a
+failure would mean a botched or missing release.
 
 ## The conversation
 
@@ -1221,7 +1276,10 @@ to pick up.
 
 `bin/yoyo-status` follows the normalized event stream a run, a conversation, or
 a [branch review](#reviewing-what-a-branch-adds-up-to) records, which is the
-closest thing there is to watching an agent work:
+closest thing there is to watching an agent work. It is a shell script that
+lives in a checkout of this repository rather than part of the `yoyo` binary, so
+`go install` and a release download do not carry it; clone the repository, or
+copy the single file out of it, if you want it:
 
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind

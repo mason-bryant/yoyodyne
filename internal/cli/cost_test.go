@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 func TestCostRefusesMoreThanOneItemAndReportsConfigurationFailureAsJSON(t *testing.T) {

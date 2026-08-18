@@ -1,32 +1,46 @@
 #!/usr/bin/env bash
 #
-# walk-adoption.sh - execute the README's "Adopting Yoyodyne in another project"
-# steps against a throwaway project that is not this one and is not written in
-# Go, so that section is verified rather than asserted. This file's history is
-# the reason: a README that asserted something false about the product once
-# reached the operator as fact, and a claim a stranger will act on is worth
-# executing before it ships.
+# walk-adoption.sh - execute the README's "Getting started" steps against a
+# throwaway project that is not this one and is not written in Go, so that
+# section is verified rather than asserted. This file's history is the reason: a
+# README that asserted something false about the product once reached the
+# operator as fact, and a claim a stranger will act on is worth executing before
+# it ships.
+#
+# The README's spine is three steps -- install, `yoyo init`, `yoyo chat` -- and
+# the numbered steps below are this script's own finer sequence through the
+# claims those three make.
 #
 #   scripts/walk-adoption.sh                 walk every step that needs no provider
-#   WALK_PROVIDER=1 scripts/walk-adoption.sh also invoke the provider on step 8
+#   WALK_PROVIDER=1 scripts/walk-adoption.sh also invoke the provider on step 11
 #
 # The provider step is opt-in because it spends real capacity: it hands an item
 # to a developer agent. Everything before it is free and deterministic.
 #
 # Requires go, git, bd, and python3. jq is optional and only the yoyo-status
-# cost report needs it. Nothing outside this script's own temporary directories
-# is written: the scratch project, the worktrees, and the run state all live
-# under one temporary root that is removed on exit, so an operator's real state
-# directory is never touched.
+# cost report needs it.
 #
-# The one documented claim this cannot check is whether the clone URL is
-# reachable, which needs network access this script does not assume. It checks
-# the verifiable half instead: that the URL the README names is this checkout's
-# origin remote.
+# No state an operator owns is written: the scratch project, the worktrees, the
+# binary `go install` produces, and the run state all live under one temporary
+# root that is removed on exit, so a real state directory is never touched. Two
+# things outside it are written, and both are caches rather than state. Go's
+# build cache goes to $GOCACHE, which defaults into the scratch root here and is
+# left alone when a caller already set one; Go's module cache is deliberately
+# shared, because isolating it would mean re-downloading the module graph on
+# every walk to protect a directory whose whole purpose is to be rebuilt. The
+# repository's own ./bin/yoyo is also rebuilt, which is what `make build` does
+# and what the step is there to check.
+#
+# The documented claims this cannot check are the ones that need the network:
+# whether the clone URL is reachable, and whether `go install` of a published tag
+# actually fetches. It checks the verifiable halves instead -- that the URL the
+# README names is this checkout's origin remote, and that the module path the
+# README installs is the one go.mod declares -- and names the rest as skipped.
 
 set -euo pipefail
 
 readme_clone_url="https://github.com/mason-bryant/yoyodyne"
+readme_install_module="github.com/mason-bryant/yoyodyne"
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/yoyodyne-walk.XXXXXX")"
@@ -76,20 +90,47 @@ printf 'go.mod declares go %s\n' "$go_directive"
 case "$go_directive" in (1.24*) pass "README's \"Go 1.24 or newer\" matches go.mod" ;;
   (*) fail "README says Go 1.24 or newer, go.mod declares $go_directive" ;; esac
 
-step "1. build the binary"
+step "1. install the binary"
 origin="$(git -C "$repository" remote get-url origin 2>/dev/null || echo "(none)")"
 printf 'origin: %s\n' "$origin"
 case "$origin" in (*mason-bryant/yoyodyne*) pass "README's clone URL names this checkout's origin (reachability not checked)" ;;
   (*) fail "README names $readme_clone_url, origin is $origin" ;; esac
 
-# The README tells a newcomer there is no `go install` path. That is a property
-# of the module path rather than a policy, so it is checked rather than trusted.
-install_output="$(go install yoyodyne/cmd/yoyo@latest 2>&1 || true)"
-contains "$install_output" "malformed module path" "no \`go install\` path: the module path is not a URL"
+# The README leads its install section with `go install`, which needs the module
+# to be named by its repository path. That is a property of go.mod rather than a
+# policy, so it is checked rather than trusted.
+module="$(sed -n 's/^module \(.*\)$/\1/p' "$repository/go.mod")"
+printf 'module: %s\n' "$module"
+if [ "$module" = "$readme_install_module" ]; then
+  pass "go.mod names the module the README's \`go install\` line names"
+else
+  fail "README installs $readme_install_module, go.mod declares $module"
+fi
+# Whether the tag is actually fetchable needs the network and a published tag,
+# neither of which this script assumes. What it can settle offline is that the
+# path is well-formed as a module path at all, which is exactly what the old
+# `module yoyodyne` was not.
+install_output="$(GOBIN="$scratch/gobin" go install "$readme_install_module/cmd/yoyo@latest" 2>&1 || true)"
+missing "$install_output" "malformed module path" "\`go install\` reaches the proxy rather than refusing the path"
+if [ -x "$scratch/gobin/yoyo" ]; then
+  pass "go install $readme_install_module/cmd/yoyo@latest produced a binary"
+  printf 'installed version: %s\n' "$("$scratch/gobin/yoyo" version)"
+else
+  skip "go install of a published tag: needs network access and a pushed tag, neither assumed here"
+fi
 
 run make -C "$repository" build >/dev/null
 yoyo="$repository/bin/yoyo"
 if [ -x "$yoyo" ]; then pass "make build wrote ./bin/yoyo"; else fail "make build did not write ./bin/yoyo"; fi
+# The README says a from-source build names the commit it came from rather than
+# only saying "dev", which is a claim about the Makefile's version stamp.
+built_version="$("$yoyo" version)"
+printf 'built version: %s\n' "$built_version"
+if [ "$built_version" = "dev" ]; then
+  fail "make build reported \"dev\" rather than a git description"
+else
+  pass "yoyo version names the build it came from"
+fi
 
 step "the scratch project: not this repository, not Go"
 mkdir -p "$project/tests"
@@ -150,7 +191,8 @@ validate="$("$yoyo" config validate 2>&1)"
 contains "$validate" "configuration valid" "config validate passes with checks: []"
 
 # Something has to be in the tracker before a run can be refused for anything
-# else, so the first work item is filed here rather than at step 7.
+# else, so the first work item is filed here rather than where the README files
+# one, which is inside its third step.
 bd create --title="Add a subtract function" \
   --description="calc has add and nothing else. Add subtract(a, b) with a test." \
   --type=feature --priority=2 >/dev/null 2>&1

@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/publish"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The harness performs, the roles decide. The developer's phase is what causes

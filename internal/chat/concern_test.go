@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/execution"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestExtractConcernsSeparatesProseFromWhatItWillNotPropose(t *testing.T) {

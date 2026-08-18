@@ -13,8 +13,8 @@ import (
 	"regexp"
 	"time"
 
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // ConversationSchemaVersion is versioned independently of run state. A

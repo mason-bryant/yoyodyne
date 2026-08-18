@@ -1,0 +1,57 @@
+name: Release
+
+# A release is a tag push and nothing else. Everything the release consists of
+# is `make dist`, so rerunning this for a later tag is the whole procedure
+# rather than a set of steps somebody has to remember.
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Check
+        run: make check
+
+      # `dist-verify` builds every platform's archive and then asserts the
+      # runner's own binary reports the tag. It is the same target CI runs on
+      # every change, so a tag push is a rerun of a path already exercised
+      # rather than its first execution.
+      - name: Build the release binaries and verify they name the tag
+        run: make dist-verify VERSION="$TAG"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file .github/release-notes-preamble.md \
+            --generate-notes \
+            dist/*.tar.gz dist/checksums.txt

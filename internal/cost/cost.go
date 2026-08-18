@@ -21,8 +21,8 @@ import (
 	"errors"
 	"fmt"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // Prices is the recorded run evidence a price is read from. It is satisfied by

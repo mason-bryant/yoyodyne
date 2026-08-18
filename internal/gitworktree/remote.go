@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // Publication is what publishing a run's branch produced: the commit the

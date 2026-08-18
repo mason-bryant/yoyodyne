@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/checks"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/report"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/checks"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 const (

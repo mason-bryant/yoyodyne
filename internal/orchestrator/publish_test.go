@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/publish"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The shape the operator asked for: the developer phase pushes the branch and

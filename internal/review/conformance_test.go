@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/backend/claudecode"
-	"yoyodyne/internal/checks"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/checks"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 )
 
 // TestLocalReviewConformance checks the one part of documentation

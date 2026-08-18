@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"

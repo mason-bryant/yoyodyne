@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 func TestCollectedReportsSurviveTheProcessThatMadeThem(t *testing.T) {

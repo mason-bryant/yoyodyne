@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 )
 
 type reconcileOutput struct {

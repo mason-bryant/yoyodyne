@@ -10,7 +10,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
-	"yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 )
 
 func Run(args []string, stdout, stderr io.Writer, version string) int {

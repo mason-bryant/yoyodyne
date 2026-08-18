@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 func TestLedgerRecordsWhatEveryRunOfAnItemCost(t *testing.T) {

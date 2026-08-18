@@ -15,7 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const (

@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // ScaffoldOptions are the project facts a bundle cannot supply, because they

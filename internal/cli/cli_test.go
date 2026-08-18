@@ -10,14 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/chat"
-	"yoyodyne/internal/config"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/domain"
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/gitworktree"
-	"yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 )
 
 func TestRunHelp(t *testing.T) {
@@ -34,6 +34,30 @@ func TestRunHelp(t *testing.T) {
 	}
 	if stderr.Len() != 0 {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// TestRunVersionPrintsTheBareVersion pins the exact bytes of `yoyo version`,
+// because two things outside this package compare them literally: `make
+// dist-verify` refuses to package a release whose binary does not report the
+// tag it was built from, and the release workflow runs that target. A banner, a
+// "yoyo " prefix, or a second line here would not fail any other test and would
+// instead fail at a tag push, which is the one place a failure means a botched
+// or missing release.
+func TestRunVersionPrintsTheBareVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"version"}, &stdout, &stderr, "v0.1.0")
+	if code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if stdout.String() != "v0.1.0\n" {
+		t.Fatalf("stdout = %q, want exactly %q", stdout.String(), "v0.1.0\n")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing", stderr.String())
 	}
 }
 

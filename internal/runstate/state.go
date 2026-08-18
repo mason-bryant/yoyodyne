@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // StateSchemaVersion stays 1 because every addition since has been an optional

@@ -12,8 +12,8 @@ import (
 	"io"
 	"strings"
 
-	"yoyodyne/internal/execution"
-	"yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // maxRenderedReports bounds how many collected reports one listing shows. The

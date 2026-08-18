@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/beads"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 )
 
 func TestExtractProposalsSeparatesProseFromWhatWasProposed(t *testing.T) {

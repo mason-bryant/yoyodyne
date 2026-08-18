@@ -18,8 +18,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"yoyodyne/internal/beads"
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // trackerFence opens the one block a reply may carry tracker actions in. It is

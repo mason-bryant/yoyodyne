@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const defaultTimeout = 30 * time.Second

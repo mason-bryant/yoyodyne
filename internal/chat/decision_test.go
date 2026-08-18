@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	backendapi "yoyodyne/internal/backend"
-	"yoyodyne/internal/console"
-	"yoyodyne/internal/execution"
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // testCards is a batch of proposals as the operator is asked about them.
