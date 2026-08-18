@@ -1009,9 +1009,12 @@ proposal can produce on its own is a decision.
 
 Like a report, it costs the run nothing. The run integrates exactly as it would
 have, and a proposal the harness cannot read or cannot keep is named on the
-outcome rather than failing the attempt it arrived with. It is durable in the
-same place and for the same reason: the run that argued the design was wrong is
-long finished before anybody decides what to do about it.
+outcome rather than failing the attempt it arrived with — that naming reaches
+you and not the agent, so a role that misnames a document is not told and
+repeats the mistake. It is durable in the same place and for the same reason:
+the run that argued the design was wrong is long finished before anybody decides
+what to do about it. A developer that makes the same argument again on a repair
+attempt raises one proposal rather than one per attempt.
 
 The owner hears it where it works. Proposals against the brief and the goals are
 carried into the product manager's conversation, which argues for or against them

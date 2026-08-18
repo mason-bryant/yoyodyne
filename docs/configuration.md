@@ -430,10 +430,14 @@ design contradicts the goal it serves ends its reply with it:
 
 The harness resolves the document to its kind and its kind to its owner, so who
 is being asked follows from the document rather than from anything the agent
-claims. A proposal naming a document nobody records is refused where the
-proposer can still be told, because there is no owner to decide a change to a
-document that does not exist, and a proposal from the role that already owns the
-document is refused too: that role amends it.
+claims. A proposal naming a document nobody records is refused, because there is
+no owner to decide a change to a document that does not exist, and a proposal
+from the role that already owns the document is refused too: that role amends
+it. **The refusal reaches you and not the agent that wrote it** — it is named on
+the run's outcome beside the proposals that were kept, and nothing carries it
+back into the agent's next attempt, so a role that misnames a document is not
+told and will misname it the same way again. The artifact ids are what
+`yoyo artifact list` prints.
 
 **Nothing an unapproved proposal contains reaches the document, and neither does
 anything an approved one contains.** A proposal carries what should become true
@@ -469,6 +473,24 @@ change is a finding, which decides whether the change is repaired; a reviewer
 that could also propose amendments would have two ways to say one thing. The
 product manager raises what it cannot place under a goal as a concern, which
 stops and asks you, for the same reason.
+
+A developer that could not be talked out of its argument makes it again on every
+repair attempt, and the second and later copies within one run are dropped: one
+disagreement is one proposal, rather than one per attempt for whoever decides to
+answer several times over. Two proposals count as the same argument when they
+ask for the same change to the same document; restating the reasoning does not
+make a new one.
+
+**This is a second proposal path rather than a reuse of the one the conversation
+already has**, and that is worth knowing because it was not the first choice. The
+product manager's work-item proposals live in the conversation that raised them,
+in memory, decided inside a turn. A proposed amendment has to survive the run
+that raised it, is addressed to an owning role rather than to you alone, and is
+decided from the command line days later — so what carries over is the shape
+(propose, never defer an edit, decide explicitly, record the decision) rather
+than the code. The cost is two vocabularies for one idea: a proposal in the
+conversation is a work item, and a proposal in `yoyo amendment` is a change to a
+document. Consolidating them is not done.
 
 ### Traceability: references and orphans
 

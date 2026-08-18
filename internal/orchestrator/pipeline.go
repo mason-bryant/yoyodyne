@@ -668,6 +668,10 @@ type activeRun struct {
 	// this run proposes a change to one and kept so a second proposal in the same
 	// run does not read the repository again. Nil means nothing has needed it.
 	artifactSet *artifact.Set
+	// proposedAmendments is the changes this run has already recorded, by document
+	// and change, so a developer that makes the same argument again on a repair
+	// attempt raises one proposal rather than one per attempt.
+	proposedAmendments map[string]bool
 }
 
 // loadInvariants reads the architect's durable constraints. It is a hard failure

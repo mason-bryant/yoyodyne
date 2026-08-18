@@ -303,6 +303,10 @@ type Artifacts interface {
 // nothing answers to the artifact it names — there is then no owner to decide
 // it — and when the proposer owns the artifact itself, which is a role asking
 // permission to do its own job.
+//
+// The error goes to the caller, which names it on the run's outcome for the
+// operator. Nothing carries it back to the agent that wrote the entry, so a role
+// that misnames a document does not learn that it did.
 func Collect(entries []Entry, attribution Attribution, artifacts Artifacts, now time.Time) ([]Proposal, error) {
 	collected := make([]Proposal, 0, len(entries))
 	var problems []error

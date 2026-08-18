@@ -2339,6 +2339,12 @@ type fakeBackend struct {
 	// developerFinalText replaces what a served developer attempt says about its
 	// work, which is what a test that cares about the summary itself sets.
 	developerFinalText string
+	// developerFinalTextByAttempt says it per attempt instead, for a test where
+	// what the developer says has to change between the first attempt and the
+	// repair. The last entry repeats once the list runs out, the way the review
+	// verdicts do.
+	developerFinalTextByAttempt []string
+	developerAttempts           int
 }
 
 func (f *fakeBackend) CheckAvailability(context.Context) (backend.Availability, error) {
@@ -2459,6 +2465,10 @@ func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fa
 			if provider.developerFinalText != "" {
 				finalText = provider.developerFinalText
 			}
+			if texts := provider.developerFinalTextByAttempt; len(texts) > 0 {
+				finalText = texts[min(provider.developerAttempts, len(texts)-1)]
+			}
+			provider.developerAttempts++
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
 				SessionID:     provider.developerSession,

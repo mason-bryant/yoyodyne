@@ -127,6 +127,99 @@ func TestAResumedConversationDoesNotDeliverWhatAnEarlierProcessAlreadySaid(t *te
 	}
 }
 
+// A proposal the section had no room for must not be recorded as shown. Marking
+// as each one is written and bounding the section afterwards loses exactly the
+// proposals the bound cut: they are pending forever and never put to anybody
+// again, which is the one thing this delivery exists to prevent. The sizes here
+// are ones the harness itself accepts, so this is reachable rather than
+// theoretical.
+func TestAProposalThatDidNotFitIsOfferedAgainRatherThanRecordedAsShown(t *testing.T) {
+	t.Parallel()
+
+	// Proposals at the size the contract permits, enough of them that they cannot
+	// all be carried in one turn.
+	large := strings.Repeat("a", amendment.MaxTextBytes)
+	var records []amendment.Record
+	ids := []string{
+		"amendment-0000000000000000000000000000000a",
+		"amendment-0000000000000000000000000000000b",
+		"amendment-0000000000000000000000000000000c",
+		"amendment-0000000000000000000000000000000d",
+		"amendment-0000000000000000000000000000000e",
+	}
+	for _, id := range ids {
+		proposal := testGoalsProposal(id)
+		proposal.Change = large
+		proposal.Why = large
+		if err := proposal.Validate(); err != nil {
+			t.Fatalf("the fixture is not a proposal the harness would accept: %v", err)
+		}
+		records = append(records, amendment.Record{Proposal: ptr(proposal)})
+	}
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{FinalText: "noted", SessionID: "session-1"},
+		{FinalText: "noted again", SessionID: "session-1"},
+	}}
+	options := testOptions(t, provider)
+	options.Amendments = &fakeAmendmentLog{records: records}
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := session.Send(context.Background(), "what is waiting?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	first := provider.requests[0].Prompt
+	// The section is within its own bound because it was built that way, rather
+	// than by being cut after the fact.
+	section := amendmentSection(t, first)
+	if len(section) > maxAmendmentSectionBytes {
+		t.Fatalf("the section is %d bytes, over its %d bound", len(section), maxAmendmentSectionBytes)
+	}
+	// Only what actually fits was marked, so the rest are still owed to the owner.
+	if len(session.state.DeliveredAmendmentIDs) != strings.Count(section, "  [amendment-") {
+		t.Fatalf("marked %d delivered but showed %d:\n%s", len(session.state.DeliveredAmendmentIDs), strings.Count(section, "  [amendment-"), section)
+	}
+	if len(session.state.DeliveredAmendmentIDs) == len(records) {
+		t.Fatal("every proposal was marked delivered, so the bound cut nothing and this proves nothing")
+	}
+	if !strings.Contains(section, "waiting") {
+		t.Fatalf("what did not fit was not counted:\n%s", section)
+	}
+
+	// The next turn offers what did not fit, rather than treating it as said.
+	if _, err := session.Send(context.Background(), "and now?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	second := provider.requests[1].Prompt
+	if !strings.Contains(second, "Changes proposed to documents you own") {
+		t.Fatalf("a proposal that never fit was never put to its owner again:\n%s", second)
+	}
+	for _, delivered := range session.state.DeliveredAmendmentIDs[:strings.Count(amendmentSection(t, first), "  [amendment-")] {
+		if strings.Contains(amendmentSection(t, second), delivered) {
+			t.Fatalf("a proposal already shown was delivered twice: %s", delivered)
+		}
+	}
+}
+
+// amendmentSection is the proposals section of a turn's prompt, which is what
+// the bound applies to rather than the whole prompt.
+func amendmentSection(t *testing.T, prompt string) string {
+	t.Helper()
+	const heading = "# Changes proposed to documents you own"
+	at := strings.Index(prompt, heading)
+	if at < 0 {
+		return ""
+	}
+	rest := prompt[at+len(heading):]
+	if end := strings.Index(rest, "\n# "); end >= 0 {
+		return heading + rest[:end]
+	}
+	return heading + rest
+}
+
 func TestADecidedProposalIsNotPutToTheOwnerAgain(t *testing.T) {
 	t.Parallel()
 

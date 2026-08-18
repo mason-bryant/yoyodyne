@@ -59,12 +59,42 @@ func (a *activeRun) collectAmendments(role domain.AgentRole, entries []amendment
 		a.noteAmendmentProblem(role, problem)
 	}
 	for _, proposal := range collected {
+		// A developer that could not be talked out of its argument makes it again on
+		// every repair attempt, and each collection would otherwise mint a fresh id
+		// for it: one disagreement would arrive as up to repair_attempts_before_replan
+		// separate proposals, and whoever decides would answer the same argument
+		// several times to clear the queue. The second and later copies within a run
+		// are dropped rather than noted, because nothing was lost — the first one is
+		// recorded and is the one waiting.
+		key := amendmentKey(proposal)
+		if a.proposedAmendments[key] {
+			continue
+		}
 		if err := a.pipeline.Amendments.Append(proposal); err != nil {
 			a.noteAmendmentProblem(role, err)
 			continue
 		}
+		// Remembered only once it is actually recorded, so a proposal the log
+		// refused is not treated as already made: if the developer argues it again
+		// on the next attempt and the log has recovered, that attempt keeps it.
+		a.rememberAmendment(key)
 		a.outcome.Amendments = append(a.outcome.Amendments, proposal)
 	}
+}
+
+// amendmentKey is what makes two proposals the same argument: the same change to
+// the same document. The reasoning is deliberately not part of it — a developer
+// that restates its case differently on the next attempt is making the same
+// request, and treating that as new would defeat the whole of this.
+func amendmentKey(proposal amendment.Proposal) string {
+	return proposal.Artifact + "\x00" + proposal.Change
+}
+
+func (a *activeRun) rememberAmendment(key string) {
+	if a.proposedAmendments == nil {
+		a.proposedAmendments = map[string]bool{}
+	}
+	a.proposedAmendments[key] = true
 }
 
 // artifacts is the recorded artifact set a proposal's document is resolved

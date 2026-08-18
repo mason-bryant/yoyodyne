@@ -159,8 +159,9 @@ func TestAProposalToADocumentNobodyRecordsReachesNobody(t *testing.T) {
 	t.Parallel()
 
 	// There is no owner to decide a change to a document that does not exist, so
-	// it is refused where the proposer can still be told rather than recorded as
-	// something waiting on a role nobody can name.
+	// it is refused rather than recorded as something waiting on a role nobody can
+	// name. The refusal is reported to the operator on the run's outcome; nothing
+	// carries it back to the agent that misnamed the document.
 	collected, err := Collect(
 		[]Entry{{Artifact: "invented-design", Change: "x", Why: "y"}},
 		developerAttribution(),

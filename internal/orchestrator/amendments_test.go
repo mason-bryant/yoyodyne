@@ -128,6 +128,91 @@ func TestAChangeProposedToTheProductManagersOwnDocumentReachesTheProductManager(
 	}
 }
 
+// A developer that could not be talked out of its argument makes it again on
+// every repair attempt. That is one disagreement, and it has to arrive as one
+// proposal: minting a fresh id per attempt would put the same argument in the
+// queue up to repair_attempts_before_replan times and make whoever decides
+// answer it once per copy to clear it.
+func TestTheSameArgumentMadeAgainOnARepairAttemptIsOneProposal(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// The first attempt leaves the check failing, so the developer is asked
+		// again and says the same thing about the design both times.
+		if attempts == 1 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalText = "worked on it\n\n" +
+		amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
+	recorder := &fakeAmendments{}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline.Amendments = recorder
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.RepairAttempts != 1 {
+		t.Fatalf("repair attempts = %d, want the developer asked twice", outcome.RepairAttempts)
+	}
+	if len(recorder.appended) != 1 || len(outcome.Amendments) != 1 {
+		t.Fatalf("one argument made twice produced %d proposal(s): %#v", len(recorder.appended), recorder.appended)
+	}
+	// Dropping the repeat is not the same as losing it: the first one is recorded
+	// and is the one waiting on the architect.
+	if recorder.appended[0].Artifact != "v1-design" || recorder.appended[0].Owner != domain.RoleArchitect {
+		t.Fatalf("proposal = %#v", recorder.appended[0])
+	}
+	if outcome.AmendmentProblem != "" {
+		t.Fatalf("a dropped repeat was reported as a lost proposal: %q", outcome.AmendmentProblem)
+	}
+}
+
+// A different argument on a later attempt is a different proposal, so the
+// deduplication cannot swallow something new the developer found.
+func TestADifferentChangeOnARepairAttemptIsItsOwnProposal(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		if attempts == 1 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalTextByAttempt = []string{
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`),
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design","change":"say what happens when the queue is empty","why":"nothing here answers it"}`),
+	}
+	recorder := &fakeAmendments{}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline.Amendments = recorder
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(recorder.appended) != 2 || len(outcome.Amendments) != 2 {
+		t.Fatalf("two different arguments produced %d proposal(s): %#v", len(recorder.appended), recorder.appended)
+	}
+	if recorder.appended[0].Change == recorder.appended[1].Change {
+		t.Fatalf("the same change was recorded twice: %#v", recorder.appended)
+	}
+}
+
 // A proposal the harness cannot read, cannot resolve, or cannot keep is named on
 // the outcome and costs the run nothing. A run that failed because an agent
 // argued with the design would teach every agent to stop arguing with it.
