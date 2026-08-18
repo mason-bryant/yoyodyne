@@ -991,14 +991,24 @@ a new project preserves the worktree for external integration until it opts in.
 Either way the harness refuses `automatic` unless deterministic checks and a
 reviewer agent both exist.
 
+Development is parallel and integration is serial. Two runs may develop, check,
+and review at the same time, but a run reaching its promotion phase waits its
+turn: the harness takes a lease on the target branch out of the run state store
+before it promotes and releases it once the promotion has settled, so at most
+one promotion per target branch is ever in flight. The lease is an advisory file
+lock, so it dies with the process holding it — a promotion whose process was
+killed leaves no stale lock, and `yoyo reconcile` settles what it left behind.
+No agent takes the lease or performs a promotion; the harness does both.
+
 A fast-forward needs the target branch to still be where the run started from,
-and it may not be: another run can promote into it first, and committing to it
-yourself while a run is working moves it just as effectively. The promotion
-fails closed either way, and the run then replays its change onto where the
-target went, re-runs the checks, and gets a fresh independent review before
-trying again — up to `execution.integration_retries_before_reconciliation`
-times. The earlier approval never carries over, because the diff it approved is
-not the one that would now be promoted. A replay that conflicts is never
+and it may not be: the run ahead of it in the queue can have promoted into it,
+and committing to it yourself while a run is working moves it just as
+effectively. The promotion fails closed either way, and the run then replays its
+change onto where the target went, re-runs the checks, and gets a fresh
+independent review before trying again — up to
+`execution.integration_retries_before_reconciliation` times. The earlier
+approval never carries over, because the diff it approved is not the one that
+would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the
 blocker on the item says so.
 

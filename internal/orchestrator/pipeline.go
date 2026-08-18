@@ -101,6 +101,11 @@ type StateStore interface {
 	// run is exactly as exclusive as starting one.
 	Reserve(ctx context.Context, state runstate.State, maxConcurrent int) (*runstate.Lease, error)
 	Adopt(ctx context.Context, workItemID string) (runstate.State, *runstate.Lease, error)
+	// LeasePromotion admits this run to promote into one target branch, waiting
+	// its turn behind whatever is promoting into it now. Development is parallel
+	// and integration is serial, and this is what makes the second half true
+	// across processes rather than only within one.
+	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
 	Save(state runstate.State) error
 	AppendEvent(event execution.Event) error
 }
@@ -1384,6 +1389,18 @@ func (e checkFailure) Error() string {
 }
 
 // integrate promotes an approved change and records the promotion.
+//
+// Reaching this phase is what puts a run in the promotion queue for its target
+// branch. Everything under the lease reads where that branch is and then moves
+// it — the drift check, the fast-forward, and the merge the forge is asked for
+// against the same commit — so a second promotion interleaved with it is a race
+// rather than a second promotion. The lease is the harness's own, taken in this
+// process: no agent asks for it, and none can perform what it admits.
+//
+// It is released as soon as the promotion settles, which is well before the run
+// ends. Cleanup is this run's own artifacts rather than the target branch, and
+// holding the queue through it would make every other run wait on work that
+// cannot affect them.
 func (a *activeRun) integrate(ctx context.Context) error {
 	p := a.pipeline
 	a.state.Phase = runstate.PhaseIntegrating
@@ -1391,6 +1408,14 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save integrating run state: %w", err)
 	}
+	lease, err := p.Store.LeasePromotion(ctx, a.worktree.TargetBranch)
+	if err != nil {
+		return fmt.Errorf("wait for this run's turn to promote: %w", err)
+	}
+	// Releasing is this process letting the next promotion in, and the operating
+	// system does it anyway when the process exits. A close that failed therefore
+	// says nothing about the promotion below, which either happened or did not.
+	defer func() { _ = lease.Release() }()
 	integration, err := p.Worktrees.Integrate(ctx, a.worktree, integrationMessage(a.item, a.outcome))
 	if err != nil {
 		// A refused promotion may already have committed what the developer left,

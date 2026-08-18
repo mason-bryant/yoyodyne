@@ -48,6 +48,10 @@ const (
 type Store struct {
 	root      string
 	productID domain.ProductID
+	// promotionWait bounds how long LeasePromotion waits its turn. It is a field
+	// only so a test can drive the bound without spending it; every store the
+	// harness builds gets promotionQueueWait.
+	promotionWait time.Duration
 }
 
 type ExistingWorkItemError struct {
@@ -67,14 +71,19 @@ var ErrNoRunInFlight = errors.New("work item has no run in flight")
 // decide anything about it.
 var ErrRunHeld = errors.New("run is held by another process")
 
-// Lease is exclusive ownership of one in-flight run, held for as long as a
-// process acts on it. Only one holder exists at a time, so a run resumed by a
-// second process is as singular as one a first process reserved. It is an
-// advisory file lock, which the operating system releases if its holder exits
-// unexpectedly: an interrupted run stays adoptable rather than becoming
-// permanently owned by a process that no longer exists.
+// Lease is exclusive ownership of something only one process may act on at a
+// time: an in-flight run, held for as long as a process acts on it, or a
+// promotion into one target branch, held for as long as that promotion takes.
+// Only one holder exists at a time, so a run resumed by a second process is as
+// singular as one a first process reserved. It is an advisory file lock, which
+// the operating system releases if its holder exits unexpectedly: an
+// interrupted run stays adoptable, and a crashed promotion blocks nobody,
+// rather than either becoming permanently owned by a process that no longer
+// exists.
 type Lease struct {
-	file *os.File
+	// label names what this lease owns, so a failure to release says which.
+	label string
+	file  *os.File
 }
 
 // Release drops the lease. Releasing twice is a no-op, so a caller can defer it
@@ -86,7 +95,7 @@ func (l *Lease) Release() error {
 	file := l.file
 	l.file = nil
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("release run lease: %w", err)
+		return fmt.Errorf("release %s lease: %w", l.label, err)
 	}
 	return nil
 }
@@ -108,8 +117,9 @@ func NewStore(root string, productID domain.ProductID) (*Store, error) {
 		return nil, err
 	}
 	return &Store{
-		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "runs"),
-		productID: productID,
+		root:          filepath.Join(filepath.Clean(root), "products", string(productID), "runs"),
+		productID:     productID,
+		promotionWait: promotionQueueWait,
 	}, nil
 }
 
@@ -275,7 +285,7 @@ func (s *Store) takeLease(ctx context.Context, runID string) (*Lease, bool, erro
 		file.Close()
 		return nil, false, nil
 	}
-	return &Lease{file: file}, true, nil
+	return &Lease{label: "run", file: file}, true, nil
 }
 
 // acquireLease takes the exclusive lock on an open lease file, retrying within
