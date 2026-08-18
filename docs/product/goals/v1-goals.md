@@ -28,7 +28,7 @@ What v1 deliberately does not do is stated separately in
 Eight of these goals were agreed as part of the v1 design and stated in
 [the v1 harness design](../../v1-harness-design.md) until they were moved here;
 their wording is unchanged from that document, and what has changed is that each
-now names its link upstream. Two are new, and both were added when the brief was
+now names its link upstream. Three are new, and all were added when the brief was
 written and the backlog was checked against it. The goal on independent review
 was added because the brief requires that nothing lands unreviewed by someone
 other than its author, and no v1 goal reached that. The goal on cost was added
@@ -60,6 +60,10 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
 - Keep roles, policies, and provider selection configurable without making safety invariants optional.
   *Supports: safety invariants hold whatever the configuration says.*
 - Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates. Directing the architect, development manager, developer, or reviewer individually is available for inspection, recovery, and override, but is not part of the normal loop.
+  *Supports: the human's attention goes only where it is needed.*
+- The harness's surfaces read clearly: boundaries between topics and speakers
+  are visible, important findings stand out, and every distinction survives a
+  terminal that cannot render emphasis.
   *Supports: the human's attention goes only where it is needed.*
 - The operator can see what the harness spends on their behalf: provider-reported cost, per work item, per run, and in total.
   *Supports: the operator can see what the system does on their behalf.*
