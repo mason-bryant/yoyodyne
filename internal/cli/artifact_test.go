@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 )
 
 func TestArtifactsAreListedAndShownWithTheirIdentity(t *testing.T) {
@@ -171,8 +173,11 @@ func TestBrokenArtifactRelationshipsAreReportedRatherThanRefused(t *testing.T) {
 }
 
 // artifactDocument renders a well-formed artifact's frontmatter, so a test about
-// the relationships between documents says only what they support.
+// the relationships between documents says only what they support. The creating
+// role is the one that owns the kind, because a revision recorded by any other
+// is an artifact the harness refuses.
 func artifactDocument(id, kind, title string, supports []string) string {
+	owner, _ := artifact.Owner(artifact.Kind(kind))
 	var rendered strings.Builder
 	rendered.WriteString("---\nid: " + id + "\nkind: " + kind + "\ntitle: " + title + "\n")
 	if len(supports) > 0 {
@@ -182,7 +187,7 @@ func artifactDocument(id, kind, title string, supports []string) string {
 		}
 	}
 	rendered.WriteString("status: active\nrevisions:\n")
-	rendered.WriteString("    - action: created\n      by: architect\n      at: 2026-08-17T12:00:00Z\n      reason: recorded when identity arrived\n")
+	rendered.WriteString("    - action: created\n      by: " + string(owner) + "\n      at: 2026-08-17T12:00:00Z\n      reason: recorded when identity arrived\n")
 	rendered.WriteString("---\n")
 	return rendered.String()
 }

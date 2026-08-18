@@ -331,7 +331,7 @@ The document itself, unchanged by any of the above.
 | `title` | One line naming what the document is. |
 | `supports` | The artifacts upstream of this one, by id: the goal a design serves, the brief a goal serves. Optional — the brief is the root and supports nothing. |
 | `status` | `draft` (written, not yet in force), `active` (what the product currently intends), `superseded` (replaced by a later artifact), or `retired` (stopped applying, not replaced). |
-| `revisions` | Append-only: what changed (`created`, `amended`, `superseded`, `retired`), the role it was recorded under, when, and why. At least the creation is required. |
+| `revisions` | Append-only: what changed (`created`, `amended`, `superseded`, `retired`), the role it was recorded under, when, and why. At least the creation is required, and the role must be the one that [owns the kind](#who-may-change-an-artifact). |
 
 Everything below the frontmatter is the document, and nothing about it is
 prescribed here: a brief, a goals document, and a decision record have nothing in
@@ -365,7 +365,34 @@ yoyo artifact show v1-goals         # one artifact and its revisions
 There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
 artifact's content is written by the role that owns it, and its frontmatter is
 edited in the same file at the same time. What the harness owns is refusing a
-document whose identity is missing, malformed, or claimed by something else.
+document whose identity is missing, malformed, claimed by something else, or
+recorded as changed by a role that does not own it.
+
+### Who may change an artifact
+
+Ownership is an authorization boundary rather than a prompt convention, so it is
+enforced the same way the invariants are: in code, on every mutation the harness
+makes, rather than in a persona a configuration can weaken.
+
+| Kind | Owner | Every other role |
+| --- | --- | --- |
+| `brief`, `goals`, `non-goals` | Product manager | Asks questions and proposes amendments |
+| `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and proposes amendments |
+
+The development manager appears in neither row, because it owns no repository
+document: its decomposition is Beads work rather than Markdown. Nothing here
+constrains **you**. The boundary is between agent roles, and the operator directs
+any of them.
+
+Two things enforce it. Every mutation the harness performs goes through the one
+package that writes an artifact, which refuses a role that does not own the kind
+and records the role that did in the revision log. And a document whose revision
+log records a change by a role that does not own it is **refused when it is
+read**, so hand-editing a design to say the developer amended it produces a file
+that stops loading rather than one that quietly governs. What is still not
+enforced is an agent with an editor in its worktree changing a document without
+recording that it did — the same gap the design records for pushing and merging,
+where the contract in the prompt and the reviewer are what stand in the way.
 
 ### Traceability: references and orphans
 

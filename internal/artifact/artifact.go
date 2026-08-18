@@ -27,6 +27,12 @@
 // whole graph rather than one document, and that is references.go, run when the
 // set is loaded. Neither refuses an artifact: a dangling reference and an
 // orphan are reported beside a set that still holds every document it read.
+//
+// Who may change one of these documents is a third question, and unlike the
+// other two it refuses: ownership is an authorization boundary rather than a
+// prompt convention, so no mutation reaches the filesystem without going through
+// Authorize in ownership.go, and a file whose revision log records a change by a
+// role that does not own it is not read as an artifact at all.
 package artifact
 
 import (
@@ -212,6 +218,19 @@ func (a Artifact) Validate() error {
 	for index, revision := range a.Revisions {
 		if err := revision.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("revisions[%d]: %w", index, err))
+			continue
+		}
+		// Ownership is an authorization boundary, so the record of who exercised
+		// it is held to the same rule the mutation is. A file claiming a role that
+		// does not own this kind changed it is refused rather than read: the
+		// revision log is the only durable evidence of the boundary, and one that
+		// can say anything audits nothing. The kind is checked first because an
+		// artifact nobody can place has no owner to hold the revision to, and that
+		// is already reported above.
+		if a.Kind.Valid() {
+			if err := Authorize(revision.By, a.Kind); err != nil {
+				problems = append(problems, fmt.Errorf("revisions[%d]: %w", index, err))
+			}
 		}
 	}
 	// The two halves of an ending have to agree, the same way an invariant's
@@ -261,10 +280,11 @@ func (r Revision) Validate() error {
 		problems = append(problems, fmt.Errorf("action %q must be %q, %q, %q, or %q",
 			r.Action, ActionCreated, ActionAmended, ActionSuperseded, ActionRetired))
 	}
-	// Which role owns which kind of artifact is a boundary of its own, and it is
-	// not settled here. What is required is that a revision names a role the
-	// harness knows, so the record says whose authority it was made under rather
-	// than naming somebody nobody can hold to it.
+	// Whether the role that made this revision owns the artifact needs the kind,
+	// which one revision does not carry, so that half is checked by the artifact
+	// itself against Authorize. What is required here is that a revision names a
+	// role the harness knows at all, so the record says whose authority it was
+	// made under rather than naming somebody nobody can hold to it.
 	if !knownRole(r.By) {
 		problems = append(problems, fmt.Errorf("by %q must name a role: %s", r.By, renderRoles()))
 	}

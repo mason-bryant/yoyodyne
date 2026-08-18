@@ -9,8 +9,14 @@ package cli
 // it — the operator and the product manager write the brief and the goals, the
 // architect writes designs and decisions — and its frontmatter is edited in the
 // same file at the same time. What the harness owns is refusing a document
-// whose identity is missing, malformed, or claimed by another file, which is
-// what this reports.
+// whose identity is missing, malformed, claimed by another file, or recorded as
+// changed by a role that does not own it, which is what this reports.
+//
+// The store those commands would go through has the mutations already, gated by
+// the same authorization boundary the invariants use, so a role that runs later
+// meets the boundary rather than a persona asking it to respect one. Exposing
+// them here is what is missing, and it needs an answer to how a document's prose
+// reaches a command that is not how anybody writes prose today.
 
 import (
 	"flag"
