@@ -364,6 +364,20 @@ specifications themselves — and still read, because refusing to load it would
 silently lose intent somebody wrote down. A directory with nothing in it is
 reported the same way rather than treated as a product with no intent.
 
+The context also says outright what those specifications record of the two
+documents intent is written in — the brief saying what the product is and who it
+is for, and the goals that serve it — naming each with roughly how much prose it
+carries, and calling one that carries almost none a placeholder. That is what
+makes the first conversation on a fresh repository the intended opening move
+rather than a confusing silence: with no brief and no goals to read, the product
+manager says so, asks what only you can answer — what this is, who it is for,
+what finished looks like — and offers to draft both from your answers. It is a
+question and not a gate. Nothing is blocked, nothing is written, later means
+later, and a repository whose goals are already written gets no such prompt. The
+asking is persona guidance, so a project that wants a different opening
+[replaces it](docs/configuration.md#personas) like any other part of the
+persona.
+
 That is all it sees of the repository. Not this README, not the design document,
 not the source: those describe how the product is built and run, they are owned
 by other roles, and they go stale against the code without anybody noticing —

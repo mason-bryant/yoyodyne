@@ -260,6 +260,169 @@ func TestAssembleProductStatesWhenThereAreNoSpecifications(t *testing.T) {
 	}
 }
 
+// A repository that has written its intent down is told so plainly, so a
+// product manager reading a substantive brief and goals has no reason to open by
+// asking for either.
+func TestAssembleProductSaysWhatIntentIsRecorded(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", "---\nid: brief\nkind: brief\n---\n\n# Product brief\n\n"+strings.Repeat("What this is, who it is for, and what finished means. ", 12)+"\n\n## Goals\n\n- An outcome.\n")
+	writeProductFile(t, root, "docs/product/goals/v1-goals.md", "---\nid: v1-goals\nkind: goals\n---\n\n# V1 goals\n\n"+strings.Repeat("The outcomes the first version reaches. ", 12)+"\n\n## Goals\n\n- An outcome.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"## Recorded product intent",
+		"- Brief: docs/product/brief.md, about ",
+		"- Goals: docs/product/goals/v1-goals.md, about ",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("recorded intent is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+	// Neither document is thin, so nothing here reads as a repository waiting to
+	// be asked what it is for.
+	for _, absent := range []string{"none recorded", "little more than a placeholder"} {
+		if strings.Contains(bundle.Text, absent) {
+			t.Fatalf("recorded intent says %q about substantive documents:\n%s", absent, bundle.Text)
+		}
+	}
+}
+
+// The blind repository: nothing written down, and the emptiness said in so many
+// words rather than left to be inferred from a context with no brief in it.
+func TestAssembleProductSaysWhenIntentIsNotRecorded(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"- Brief: none recorded.",
+		"- Goals: none recorded.",
+		"the operator's to state",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("an unwritten product is not reported: missing %q:\n%s", required, bundle.Text)
+		}
+	}
+
+	// A specification that is neither of the two documents leaves both missing:
+	// what the product will not do is not what it is for.
+	writeProductFile(t, root, "docs/product/goals/v1-non-goals.md", "---\nid: v1-non-goals\nkind: non-goals\n---\n\n# V1 non-goals\n\nWhat the first version does not do.\n\n## Goals\n\n- Nothing here.\n")
+	neither, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(neither.Text, "- Goals: none recorded.") {
+		t.Fatalf("a non-goals document is counted as the goals:\n%s", neither.Text)
+	}
+}
+
+// A document that exists and says almost nothing is reported as what it is,
+// with the count beside it: whether a short document is enough is a judgment,
+// and one made from a verdict alone is not one.
+func TestAssembleProductSaysWhenIntentIsAPlaceholder(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", "# Product brief\n\nTODO.\n\n## Goals\n\n- TODO.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "- Brief: docs/product/brief.md, about 3 words and little more than a placeholder.") {
+		t.Fatalf("a placeholder brief is not reported as one:\n%s", bundle.Text)
+	}
+}
+
+// The recorded-intent section is reserved its allowance before any
+// specification is read, so it has to fit inside one however many documents the
+// repository files under those two kinds and however long their paths are. A
+// section that outgrew the reserve would push the context past the budget it was
+// assembled to.
+func TestRecordedIntentFitsWhatIsReservedForIt(t *testing.T) {
+	t.Parallel()
+
+	document := intentDocument{path: strings.Repeat("nested/", 40) + "brief.md", words: 999999}
+	worst := recordedIntent{
+		brief: []intentDocument{document, document, document, document},
+		goals: []intentDocument{document, document, document, document},
+	}
+	// The configured directory is added to the allowance rather than counted
+	// against it, so it is left out of what is measured here.
+	if rendered := len(renderRecordedIntent("", worst)); rendered > maxRecordedIntentBytes {
+		t.Fatalf("recorded intent renders %d bytes, allowance is %d", rendered, maxRecordedIntentBytes)
+	}
+}
+
+func TestIntentKind(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		path    string
+		content string
+		kind    string
+	}{
+		{name: "frontmatter brief", path: "docs/product/anything.md", content: "---\nid: anything\nkind: brief\n---\n\n# Brief\n", kind: kindBrief},
+		{name: "frontmatter goals", path: "docs/product/anything.md", content: "---\nid: anything\nkind: goals\n---\n\n# Goals\n", kind: kindGoals},
+		// A document's own word on what it is beats where it is filed.
+		{name: "frontmatter non-goals in a goals directory", path: "docs/product/goals/v1-non-goals.md", content: "---\nid: v1-non-goals\nkind: non-goals\n---\n\n# Non-goals\n", kind: ""},
+		{name: "frontmatter design", path: "docs/product/brief.md", content: "---\nid: brief\nkind: design\n---\n\n# A design\n", kind: ""},
+		// A key inside the metadata is not the document's own kind.
+		{name: "nested kind key", path: "docs/product/notes.md", content: "---\nid: notes\nrevisions:\n    - kind: brief\n---\n\n# Notes\n", kind: ""},
+		// Nothing has been asked of the operator about identity yet, so a document
+		// with no frontmatter is read by what it is called.
+		{name: "named brief", path: "docs/product/brief.md", content: "# Brief\n", kind: kindBrief},
+		{name: "named goals", path: "docs/product/v1-goals.md", content: "# Goals\n", kind: kindGoals},
+		{name: "filed under goals", path: "docs/product/goals/v1.md", content: "# V1\n", kind: kindGoals},
+		{name: "named non-goals", path: "docs/product/goals/v1-non-goals.md", content: "# Non-goals\n", kind: ""},
+		{name: "a directory index states no intent", path: "docs/product/goals/README.md", content: "# Goals directory\n", kind: ""},
+		{name: "an ordinary specification", path: "docs/product/runs.md", content: wellFormed, kind: ""},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if kind := intentKind(testCase.path, testCase.content); kind != testCase.kind {
+				t.Fatalf("intentKind(%q) = %q, want %q", testCase.path, kind, testCase.kind)
+			}
+		})
+	}
+}
+
+func TestProseWords(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name    string
+		content string
+		words   int
+	}{
+		{name: "prose", content: "One two three four.\n", words: 4},
+		// Identity metadata, a title, and a heading for every unanswered question
+		// are not a written document.
+		{name: "frontmatter and headings only", content: "---\nid: brief\nkind: brief\n---\n\n# Product brief\n\n## Goals\n", words: 0},
+		{name: "a fenced block is not prose", content: "# Brief\n\n```\nyoyo run --now\n```\n\nTwo words.\n", words: 2},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			if words := proseWords(testCase.content); words != testCase.words {
+				t.Fatalf("proseWords() = %d, want %d", words, testCase.words)
+			}
+		})
+	}
+}
+
 func TestAssembleProductNamesWhatItCouldNotInclude(t *testing.T) {
 	t.Parallel()
 

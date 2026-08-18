@@ -232,6 +232,20 @@ An empty or missing specifications directory is not an error either. The
 conversation says that product intent is not written down, which is a true
 statement about the repository rather than a reason to fail.
 
+The context also states, in so many words, what the directory records of the two
+documents intent is written in: the **brief** saying what the product is and who
+it is for, and the **goals** that serve it. Each is named with roughly how much
+prose it carries, and one that carries almost none is called a placeholder — a
+count beside the verdict, because how much a short document needs to say is a
+judgment. A document's kind comes from the `kind:` in its
+[frontmatter](#artifact-identity-and-metadata) when it has one, and from what it
+is called when it does not, so a brief written by hand before anything was said
+about identity still counts as one. What the product manager does with that
+signal is the [persona's](#personas) — the built-in one opens a
+project with no brief or goals by asking what the product is for and offering to
+draft them, and a project that wants something else replaces that guidance like
+any other part of the persona.
+
 ### What the product manager does not see
 
 **Only the specifications directory and the tracker.** No `README.md`, no
