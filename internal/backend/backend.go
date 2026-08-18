@@ -116,6 +116,21 @@ type ServerOverload struct {
 	Detail string
 }
 
+// RunResult is what one provider invocation is worth: the invocation's own
+// terminal, and nothing nested inside it.
+//
+// For yoyodyne-ifd.32, which turns this package into a plugin contract.
+//
+// A provider whose agents can spawn agents emits results that are not the run's.
+// Claude Code spells this as a second envelope of the terminal type carrying
+// neither a terminal reason nor result text — run
+// run-841f5ee1866addb533c02a30e67f001a, sequence 1186, is the recorded specimen,
+// and how that adapter tells the two apart is in its parser. What generalizes is
+// that the terminal cannot be identified by envelope type or by arrival order,
+// because a nested agent may finish before the parent and one that finishes
+// after is not a duplicate; a plugin has to say which result is the
+// invocation's, and the contract has to make that answerable rather than assume
+// exactly one result arrives.
 type RunResult struct {
 	Backend   domain.Backend
 	SessionID string
