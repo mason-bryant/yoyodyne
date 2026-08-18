@@ -293,8 +293,15 @@ func write(t *testing.T, store Store, relative, content string) {
 }
 
 // document renders a well-formed artifact's frontmatter, so a test that is
-// about one field says only that field.
+// about one field says only that field. The creating role is the one that owns
+// the kind, because any other is an artifact the loader refuses.
 func document(id, kind, title string, supports []string, status string) string {
+	owner, known := Owner(Kind(kind))
+	if !known {
+		// A kind with no owner is what some of these tests are about, and the role
+		// is not what they are checking.
+		owner = "architect"
+	}
 	var rendered strings.Builder
 	rendered.WriteString("---\nid: " + id + "\nkind: " + kind + "\ntitle: " + title + "\n")
 	rendered.WriteString("supports:\n")
@@ -302,7 +309,7 @@ func document(id, kind, title string, supports []string, status string) string {
 		rendered.WriteString("    - " + reference + "\n")
 	}
 	rendered.WriteString("status: " + status + "\nrevisions:\n")
-	rendered.WriteString("    - action: created\n      by: architect\n      at: 2026-08-17T12:00:00Z\n      reason: recorded when identity arrived\n")
+	rendered.WriteString("    - action: created\n      by: " + string(owner) + "\n      at: 2026-08-17T12:00:00Z\n      reason: recorded when identity arrived\n")
 	rendered.WriteString("---\n")
 	return rendered.String()
 }
