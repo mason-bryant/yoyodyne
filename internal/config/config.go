@@ -137,6 +137,15 @@ type Execution struct {
 	// UsageLimitMaxPause, so a provider that keeps refusing walks into that bound
 	// rather than polling forever.
 	UsageLimitUnknownResetPause Duration `yaml:"usage_limit_unknown_reset_pause" json:"usage_limit_unknown_reset_pause"`
+	// ServerOverloadPause is how long a run waits before reissuing an attempt the
+	// provider refused because its own servers were transiently overloaded. It is
+	// the same polling discipline as an exhausted limit with a different clock:
+	// an overload quotes no reset time and lifts in seconds rather than hours, so
+	// waiting the usage-limit probe interval would park a run for half an hour on
+	// a condition that had already passed. It spends UsageLimitMaxPause like every
+	// other wait, so a provider that stays overloaded walks into that bound rather
+	// than reissuing forever.
+	ServerOverloadPause Duration `yaml:"server_overload_pause" json:"server_overload_pause"`
 }
 
 const (
@@ -162,6 +171,12 @@ const (
 	// reset, because a quoted reset can be overtaken by a window that rolls or by
 	// capacity somebody bought.
 	defaultUsageLimitUnknownResetPause = Duration(30 * time.Minute)
+	// defaultServerOverloadPause is long enough to be worth waiting — the
+	// provider CLI has already spent its own ten retries on the condition before
+	// the harness ever sees it — and short enough that a run resumes within a
+	// minute or two of the overload lifting, which is the timescale the provider's
+	// own message describes.
+	defaultServerOverloadPause = Duration(90 * time.Second)
 )
 
 type Approvals struct {
@@ -272,6 +287,12 @@ func (c Config) Validate() error {
 	}
 	if c.Execution.UsageLimitInProcessPause < 0 {
 		problems = append(problems, "usage_limit_in_process_pause cannot be negative")
+	}
+	// An overload names no reset time, so this interval is the whole of the wait
+	// rather than a bound on it. Zero would mean reissuing straight back into the
+	// same overloaded server with nothing between the attempts.
+	if c.Execution.ServerOverloadPause <= 0 {
+		problems = append(problems, "execution.server_overload_pause must be positive")
 	}
 
 	approvalValues := []struct {

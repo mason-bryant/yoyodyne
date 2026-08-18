@@ -742,6 +742,95 @@ func TestRunDoesNotTreatATransientRetryAsAnExhaustedUsageLimit(t *testing.T) {
 	}
 }
 
+// overloadedMessage is what the provider CLI wrote, byte for byte, on the two
+// runs that failed instantly to a 529 on 2026-08-18. The em dash and the trailing
+// status-page sentence are its own; nothing here normalizes them, because a
+// recognizer tested against a cleaned-up copy of the evidence is a recognizer
+// tested against something the provider never sends.
+const overloadedMessage = "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment. If it persists, check https://status.claude.com."
+
+// terminalErrorStream ends the way the CLI ends when the API refused it: a
+// terminal result carrying the reason and the message it wrote for the operator.
+func terminalErrorStream(reason, message string) string {
+	encoded, err := json.Marshal(message)
+	if err != nil {
+		panic(err)
+	}
+	return strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"terminal_reason":"` + reason + `","result":` + string(encoded) + `,"usage":{}}`,
+	}, "\n") + "\n"
+}
+
+// A terminal 529 is the most retryable condition the provider has, and it is the
+// one the harness used to fail a run on outright.
+func TestRunReportsATransientServerOverload(t *testing.T) {
+	t.Parallel()
+
+	result, _ := runUsageLimitStream(t, terminalErrorStream("api_error", overloadedMessage))
+	if result.ServerOverload == nil {
+		t.Fatalf("Run() reported no server overload: %#v", result)
+	}
+	// The provider's own message is the evidence, so it is carried rather than
+	// summarized into a category the harness invented.
+	if result.ServerOverload.Detail != overloadedMessage {
+		t.Fatalf("server overload detail = %q, want the provider's own message", result.ServerOverload.Detail)
+	}
+	// An overload is not an exhausted account, and describing it as one would send
+	// the run into the wrong wait and the operator to the wrong question.
+	if result.UsageLimit != nil {
+		t.Fatalf("a server overload became an exhausted usage limit: %#v", result.UsageLimit)
+	}
+}
+
+// Everything else fails the run exactly as it did before. Waiting is only ever
+// justified by a refusal the harness actually recognized.
+func TestRunTreatsAnUnrecognizedTerminalErrorAsAFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "another api error", stream: terminalErrorStream("api_error", "API Error: 400 Bad Request. Your request could not be read.")},
+		{name: "an authentication failure", stream: terminalErrorStream("api_error", "Not logged in")},
+		// The status alone is not the claim: it is a terminal API error saying it
+		// that makes a refusal, and prose that merely mentions one is an agent
+		// talking about an error rather than the provider reporting one.
+		{name: "prose that mentions the status", stream: terminalErrorStream("error_during_execution", "the retry loop I wrote handles API Error: 529 Overloaded")},
+		{name: "a refusal the agent itself reported", stream: terminalErrorStream("error_max_turns", overloadedMessage)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, testCase.stream)
+			if result.ServerOverload != nil {
+				t.Fatalf("an unrecognized terminal error became a server overload: %#v", result.ServerOverload)
+			}
+			if !result.IsError {
+				t.Fatalf("Run() lost the reported failure: %#v", result)
+			}
+		})
+	}
+}
+
+// The CLI retries an overload ten times on its own before it gives up. Those
+// retries are its business and stay its business: only the terminal result it
+// ends on asks the harness for anything.
+func TestRunDoesNotTreatATransientRetryAsAServerOverload(t *testing.T) {
+	t.Parallel()
+
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"system","subtype":"api_retry","session_id":"session-1","attempt":1,"max_retries":10,"error":"overloaded"}`,
+		`{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","usage":{}}`,
+	}, "\n") + "\n"
+	result, _ := runUsageLimitStream(t, stream)
+	if result.ServerOverload != nil {
+		t.Fatalf("an api_retry became a server overload: %#v", result.ServerOverload)
+	}
+}
+
 func TestRunRedactsSecretsInsideARateLimitPayload(t *testing.T) {
 	t.Parallel()
 

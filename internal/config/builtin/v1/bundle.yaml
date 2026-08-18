@@ -37,6 +37,11 @@ execution:
   # resumed by a later invocation instead.
   usage_limit_max_pause: 6h
   usage_limit_in_process_pause: 6h
+  # A provider whose own servers are transiently overloaded refuses without
+  # naming any reset, so a run waits this short interval and asks again rather
+  # than failing. It spends the same maximum pause above, so an overload that
+  # never lifts reaches that bound instead of reissuing forever.
+  server_overload_pause: 90s
 
 # Conservative defaults: a project opts in to automatic integration, which the
 # harness then refuses unless deterministic checks and a reviewer agent exist.

@@ -88,6 +88,7 @@ execution:
   usage_limit_max_pause: 6h
   usage_limit_in_process_pause: 6h
   usage_limit_unknown_reset_pause: 30m
+  server_overload_pause: 90s
 
 approvals:
   brief: human
@@ -163,6 +164,8 @@ Up to three layers produce the effective configuration, later ones winning:
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
    `execution.usage_limit_in_process_pause` (`6h` each),
+   `execution.usage_limit_unknown_reset_pause` (`30m`),
+   `execution.server_overload_pause` (`90s`),
    `approvals.publishing` (`human`), and an agent's `instances` (1).
    `approvals.publishing` is the only approval with a harness default, because
    it was added after configurations existed: a file written before it keeps the
@@ -910,7 +913,7 @@ Nothing is ever force-pushed to resolve it.
   copy your local branch does not have. A protection rule requiring linear
   history has the same effect.
 
-## Waiting out a provider usage limit
+## Waiting out a provider that refuses
 
 When the provider reports that a usage limit is exhausted, the run pauses rather
 than failing: nothing is cleaned up, the Beads item stays claimed, the worktree
@@ -925,6 +928,7 @@ execution:
   usage_limit_max_pause: 6h
   usage_limit_in_process_pause: 6h
   usage_limit_unknown_reset_pause: 30m
+  server_overload_pause: 90s
 ```
 
 `usage_limit_unknown_reset_pause` is the interval between probes: how long a run
@@ -984,8 +988,24 @@ run has left of `usage_limit_max_pause` stops the run with a blocker naming what
 refused it. A reset that is not in the future is refused deliberately: a limit
 still declining work while claiming it has already reset is not describing a
 wait, and honoring it would mean reissuing straight back into the same refusal.
-Transient throttling never reaches any of this: the provider CLI retries that
-itself, and the harness does not duplicate the wait.
+
+`server_overload_pause` is the same discipline on a different clock, for the
+other way a provider refuses without judging the work: its own servers are
+transiently unable to serve the attempt. That names no reset time at all and
+lifts in seconds rather than hours, so a run waits this interval — `90s` by
+default — and reissues, rather than parking for the half-hour probe interval a
+usage limit uses. Everything else is shared with the paragraphs above: the
+deadline is durable before the wait begins, the reissue continues the same
+worktree and developer session, and each wait spends `usage_limit_max_pause`, so
+an overload that never lifts walks into that maximum and stops with a blocker
+instead of reissuing forever. `yoyo resume` releases one of these waits exactly
+as it releases a usage-limit wait.
+
+Ordinary transient throttling still never reaches any of this: the provider CLI
+retries that itself, and the harness does not duplicate the wait. What the
+harness acts on is the terminal result that CLI ends on once its own retries are
+spent — an `api_error` reporting HTTP 529 — because the provider has stopped
+retrying by then and something has to.
 
 `yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
 and it overrides nothing else. It moves the next probe to now, for when the

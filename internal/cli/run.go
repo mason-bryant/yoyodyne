@@ -484,9 +484,9 @@ func reportRunPause(stdout, stderr io.Writer, outcome orchestrator.Outcome, err 
 			fmt.Fprintln(stdout, "the provider was still working when its total budget ran out; it reported no failure")
 		}
 	} else {
-		fmt.Fprintf(stdout, "waiting for the %s usage limit to reset\n", nonEmptyValue(outcome.UsageLimitKind, "provider"))
+		fmt.Fprintf(stdout, "waiting out %s\n", runstate.DescribePause(outcome.PauseCause, outcome.UsageLimitKind))
 		if outcome.UsageLimitResetsAt != nil {
-			fmt.Fprintf(stdout, "resets at: %s\n", outcome.UsageLimitResetsAt.Format(time.RFC3339))
+			fmt.Fprintf(stdout, "asks again by: %s\n", outcome.UsageLimitResetsAt.Format(time.RFC3339))
 		}
 	}
 	fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
@@ -494,11 +494,11 @@ func reportRunPause(stdout, stderr io.Writer, outcome orchestrator.Outcome, err 
 	if outcome.ProviderStop != "" {
 		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run\n", outcome.WorkItemID)
 	} else {
-		// The reset bounds the wait rather than gating it, so continuing is not
-		// something to hold off until it passes. What does need saying is the one
-		// verb that overrides it, for when the reset has stopped being true.
-		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run; it asks the provider again at its probe interval rather than only at the reset\n", outcome.WorkItemID)
-		fmt.Fprintf(stdout, "`yoyo resume %s` releases the wait now if that reset no longer holds\n", outcome.WorkItemID)
+		// The recorded time bounds the wait rather than gating it, so continuing is
+		// not something to hold off until it passes. What does need saying is the
+		// one verb that overrides it, for when the refusal has stopped being true.
+		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run; it asks the provider again at its probe interval rather than only at that time\n", outcome.WorkItemID)
+		fmt.Fprintf(stdout, "`yoyo resume %s` releases the wait now if the provider would serve it already\n", outcome.WorkItemID)
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)

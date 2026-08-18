@@ -44,6 +44,7 @@ type executionDocument struct {
 	UsageLimitMaxPause                     *Duration `yaml:"usage_limit_max_pause"`
 	UsageLimitInProcessPause               *Duration `yaml:"usage_limit_in_process_pause"`
 	UsageLimitUnknownResetPause            *Duration `yaml:"usage_limit_unknown_reset_pause"`
+	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 }
 
 type approvalsDocument struct {
