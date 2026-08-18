@@ -34,6 +34,15 @@ const commandHelp = `Commands the harness carries out for you:
   /stop [reason]              stop the run this conversation started and settle what it left
   /redirect <beads-id> <what to do differently>
                               record direction on an item, stopping it first if it is running
+  /directives                 what you have directed, and what is still unresolved
+  /directive <what you have decided>
+                              record a directive that takes effect now
+  /directive ambiguous <what is unresolved> | <what you said>
+                              record one you have not settled; it pauses the work it affects
+  /directive artifact <artifact> <what is unresolved> | <what changes>
+                              record one that changes a governed artifact; it pauses too
+  /resolve <directive-id> <how it was settled>
+                              settle a directive and let the work it paused carry on
   /help                       this list
   /exit                       end the conversation, stopping anything it is running
 
@@ -158,6 +167,39 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		id, direction, _ := strings.Cut(argument, " ")
 		directed, err := s.DirectWork(ctx, id, direction)
 		fmt.Fprint(out, directed.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/directives":
+		recorded, err := s.ReadDirectives(ctx)
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprint(out, renderDirectives(recorded))
+		fmt.Fprintln(out)
+		return false, nil
+	case "/directive":
+		request, err := parseDirectiveCommand(argument)
+		if err != nil {
+			return false, err
+		}
+		// A directive that pauses work is durable and in force the moment it is
+		// recorded, so what recording it achieved is printed before any failure
+		// that followed: a pause reported as a failed command would send the
+		// operator to record it a second time.
+		recorded, err := s.RecordDirective(ctx, request)
+		fmt.Fprint(out, recorded.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/resolve":
+		id, resolution, _ := strings.Cut(argument, " ")
+		resolved, err := s.ResolveDirective(ctx, id, resolution)
+		fmt.Fprint(out, resolved.Render())
 		if err != nil {
 			return false, err
 		}

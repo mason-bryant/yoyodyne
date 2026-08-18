@@ -178,6 +178,17 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			nonEmpty(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
 		return result, nil
 	}
+	// A run held up by an unresolved user directive is not an interrupted run
+	// either. It recorded the directive it stopped short for and is owed the rest
+	// of the gate once somebody settles it, so settling it here would cancel work
+	// the operator only paused — which is the one thing pausing for a directive
+	// must never turn into.
+	if pausedForDirective(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run is paused for unresolved directive %s and can continue once it is settled: %s",
+			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
+		return result, nil
+	}
 	// A run whose provider the harness stopped on time is not an interrupted run
 	// either: it recorded what stopped it and is owed the rest of the attempt it
 	// was making, in the worktree and session that attempt already established.

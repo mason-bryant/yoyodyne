@@ -74,8 +74,13 @@ type components struct {
 	// its own store for the same reason: a branch review outlives every run whose
 	// work it judged, and it belongs to no one of them.
 	branchReviews *runstate.BranchReviewStore
-	worktrees     *gitworktree.Manager
-	redactValues  []string
+	// directives is what the operator has told the harness. It is built beside
+	// the run store rather than inside it because that is what makes a directive
+	// reach work regardless of which agent received it: every command here
+	// addresses the same product-scoped records.
+	directives   *runstate.DirectiveStore
+	worktrees    *gitworktree.Manager
+	redactValues []string
 }
 
 func buildComponents(configPath string) (components, error) {
@@ -120,6 +125,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	directives, err := runstate.NewDirectiveStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -138,6 +147,7 @@ func buildComponents(configPath string) (components, error) {
 		store:         store,
 		reports:       reports,
 		branchReviews: branchReviews,
+		directives:    directives,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
@@ -202,6 +212,12 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// settled and its artifacts are removed, and what it reported is still
 		// waiting for somebody to read.
 		Reports: parts.reports,
+		// What the operator has directed is read from the product's own records
+		// every time a run is about to commit to work. It is wired here rather
+		// than delivered into a prompt because a directive that pauses work is not
+		// something an agent weighs: it is a reason the work must not proceed, and
+		// the harness is what enforces it.
+		Directives: parts.directives,
 		// What a run costs is already recorded in its event log, and the item it
 		// served is already recorded beside it. This is the join: as a run ends,
 		// the item it was for is priced across every run ever made for it, and the
@@ -313,30 +329,19 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// A paused run is neither a success nor a failure: it is in flight and
 		// owed a continuation. Reporting it as either would tell an operator to do
 		// something about a run that only needs to be started again.
-		fmt.Fprintf(stdout, "run paused: %s\n", outcome.RunID)
-		if outcome.ProviderStop != "" {
-			// A stall and an exhausted budget are different facts about the run,
-			// and only one of them is worth investigating.
-			if outcome.ProviderStop == runstate.ProviderStopStalled {
-				fmt.Fprintln(stdout, "the provider stopped emitting events and was stopped; it reported no failure")
-			} else {
-				fmt.Fprintln(stdout, "the provider was still working when its total budget ran out; it reported no failure")
+		//
+		// A directive pause is the one that can have no run behind it at all,
+		// because a directive stops work before it is claimed as readily as during
+		// it. So it is reported on its own terms: naming a run that was never
+		// started, or a preserved worktree that never existed, would send an
+		// operator looking for artifacts nothing made.
+		if outcome.PausedByDirective != nil {
+			reportDirectivePause(stdout, outcome)
+			if err != nil {
+				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
 			}
 		} else {
-			fmt.Fprintf(stdout, "waiting for the %s usage limit to reset\n", nonEmptyValue(outcome.UsageLimitKind, "provider"))
-			if outcome.UsageLimitResetsAt != nil {
-				fmt.Fprintf(stdout, "resets at: %s\n", outcome.UsageLimitResetsAt.Format(time.RFC3339))
-			}
-		}
-		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
-		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
-		if outcome.ProviderStop != "" {
-			fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run\n", outcome.WorkItemID)
-		} else {
-			fmt.Fprintf(stdout, "run yoyodyne on %s again after the reset time to continue this run\n", outcome.WorkItemID)
-		}
-		if err != nil {
-			fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
+			reportRunPause(stdout, stderr, outcome, err)
 		}
 	} else if err != nil {
 		fmt.Fprintf(stderr, "run failed: %v\n", err)
@@ -443,6 +448,58 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		return 1
 	}
 	return 0
+}
+
+// reportRunPause describes a run that is waiting on the provider: an exhausted
+// usage limit, or an invocation the harness stopped on time. Both leave a run in
+// flight with its artifacts preserved, and both are continued by starting the
+// item again.
+func reportRunPause(stdout, stderr io.Writer, outcome orchestrator.Outcome, err error) {
+	fmt.Fprintf(stdout, "run paused: %s\n", outcome.RunID)
+	if outcome.ProviderStop != "" {
+		// A stall and an exhausted budget are different facts about the run, and
+		// only one of them is worth investigating.
+		if outcome.ProviderStop == runstate.ProviderStopStalled {
+			fmt.Fprintln(stdout, "the provider stopped emitting events and was stopped; it reported no failure")
+		} else {
+			fmt.Fprintln(stdout, "the provider was still working when its total budget ran out; it reported no failure")
+		}
+	} else {
+		fmt.Fprintf(stdout, "waiting for the %s usage limit to reset\n", nonEmptyValue(outcome.UsageLimitKind, "provider"))
+		if outcome.UsageLimitResetsAt != nil {
+			fmt.Fprintf(stdout, "resets at: %s\n", outcome.UsageLimitResetsAt.Format(time.RFC3339))
+		}
+	}
+	fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+	fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+	if outcome.ProviderStop != "" {
+		fmt.Fprintf(stdout, "run yoyodyne on %s again to continue this run\n", outcome.WorkItemID)
+	} else {
+		fmt.Fprintf(stdout, "run yoyodyne on %s again after the reset time to continue this run\n", outcome.WorkItemID)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
+	}
+}
+
+// reportDirectivePause describes work held up by an unresolved user directive.
+// It names the directive in full, because what lifts the pause is somebody
+// reading it and deciding, and it says which of the two cases this is: a run
+// that was under way and is preserved, or work that was never started.
+func reportDirectivePause(stdout io.Writer, outcome orchestrator.Outcome) {
+	held := outcome.PausedByDirective
+	fmt.Fprintf(stdout, "%s is paused for an unresolved directive\n", outcome.WorkItemID)
+	fmt.Fprint(stdout, held.Render())
+	if outcome.RunID != "" {
+		fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
+		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		fmt.Fprintln(stdout, "the item stays claimed and its artifacts are preserved; nothing was cancelled")
+	} else {
+		fmt.Fprintln(stdout, "nothing was started for it, so there is nothing to clean up")
+	}
+	fmt.Fprintf(stdout, "`yoyo directive resolve %s` settles it, and running yoyodyne on %s after that carries on\n",
+		held.ID, outcome.WorkItemID)
 }
 
 // reportCollectedReports names what this run's agents reported without it

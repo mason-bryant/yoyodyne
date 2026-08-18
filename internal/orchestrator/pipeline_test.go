@@ -2414,8 +2414,25 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 	return Pipeline{
 		Tracker: tracker, Worktrees: worktrees, Store: store, Backend: provider,
 		Checks: checks.Runner{Process: processRunner}, NewRunID: func() (string, error) { return pipelineRunID, nil },
+		// Every pipeline reads what the operator has directed before it commits to
+		// work, so every test pipeline has somewhere to read it from. A store
+		// nobody recorded anything in is a product nobody has directed, which is
+		// what all but the directive tests are about.
+		Directives: newDirectiveStore(t),
 		Repository: repository, Config: cfg,
 	}
+}
+
+// newDirectiveStore builds the durable directive record a pipeline reads. A test
+// that drives a directive keeps its own reference and hands the same store to
+// the pipeline, because a directive recorded anywhere else is one no run sees.
+func newDirectiveStore(t *testing.T) *runstate.DirectiveStore {
+	t.Helper()
+	store, err := runstate.NewDirectiveStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDirectiveStore() error = %v", err)
+	}
+	return store
 }
 
 // roleBackend serves the developer and the reviewer from one fake provider, so

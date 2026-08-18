@@ -3,11 +3,14 @@ package cli
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -56,6 +59,52 @@ func newConversationWork(parts components) conversationWork {
 		reconciler: reconcilerFrom(parts),
 		timeout:    chatTrackerTimeout,
 	}
+}
+
+// conversationDirectives is the durable directive record a conversation reads
+// and writes: the same product-scoped store every run consults before it commits
+// to work. It is the one place the conversation supplies what the operator does
+// not get to assert — the directive's identity, when it was received, and which
+// product it belongs to.
+type conversationDirectives struct {
+	store     *runstate.DirectiveStore
+	productID domain.ProductID
+}
+
+// Record stamps a request with what the harness knows and makes it durable.
+// Every directive recorded here names the product manager as the role that
+// received it, because that is the agent the operator is talking to; a directive
+// given to any other agent is recorded by `yoyo directive record --received-by`
+// and lands in exactly the same place.
+func (d conversationDirectives) Record(_ context.Context, request chat.DirectiveRequest) (directive.Directive, error) {
+	id, err := directive.NewID()
+	if err != nil {
+		return directive.Directive{}, err
+	}
+	recorded := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            id,
+		ProductID:     d.productID,
+		Kind:          request.Kind,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    time.Now().UTC(),
+		Text:          strings.TrimSpace(request.Text),
+		Artifact:      strings.TrimSpace(request.Artifact),
+		Unresolved:    strings.TrimSpace(request.Unresolved),
+		Scope:         request.Scope,
+	}
+	if err := d.store.Record(recorded); err != nil {
+		return directive.Directive{}, err
+	}
+	return recorded, nil
+}
+
+func (d conversationDirectives) List(_ context.Context) ([]directive.Directive, error) {
+	return d.store.List()
+}
+
+func (d conversationDirectives) Resolve(_ context.Context, reference, resolution string) (directive.Directive, error) {
+	return d.store.Resolve(reference, resolution, time.Now())
 }
 
 // Survey reads what the harness has in flight from durable run state and what
@@ -254,6 +303,9 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 		StartedAt:  state.StartedAt,
 	}
 	switch {
+	case state.DirectivePause != nil:
+		snapshot.Detail = fmt.Sprintf("paused for unresolved directive %s: %s",
+			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
 	case state.UsageLimitResetsAt != nil:
 		snapshot.Detail = fmt.Sprintf("paused for the %s usage limit until %s",
 			nonEmptyValue(state.UsageLimitKind, "provider"), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
@@ -394,6 +446,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		report.Integrated = true
 		report.TargetBranch = outcome.Integration.TargetBranch
 		report.Commit = outcome.Integration.TargetCommit
+	}
+	// A directive pause is summarized to one line here rather than carried whole:
+	// what a conversation says about a paused run is a headline, and /directives
+	// is where the directive itself is read.
+	if outcome.PausedByDirective != nil {
+		report.DirectivePause = outcome.PausedByDirective.Summary()
 	}
 	return report
 }

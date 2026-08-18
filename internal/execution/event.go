@@ -66,6 +66,13 @@ const (
 	// recorded because it changes what the agent is reasoning from, which is
 	// otherwise the one thing about a conversation its log would not say.
 	EventContextRefreshed EventType = "context.refreshed"
+	// A directive the operator gave is recorded for the whole product rather than
+	// for this conversation, and enforced from there. These say that it passed
+	// through here: what was directed, and what settled it afterwards. Neither is
+	// where the directive lives, which is exactly why the conversation's own log
+	// has to say that the operator gave one.
+	EventDirectiveRecorded EventType = "directive.recorded"
+	EventDirectiveResolved EventType = "directive.resolved"
 )
 
 type Event struct {

@@ -108,6 +108,13 @@ type Options struct {
 	// already on. It is optional like the rest, and a conversation without one
 	// says so rather than showing an empty pile.
 	Reports Reports
+	// Directives is what the operator has told the harness, durable and
+	// product-scoped. It is here because this conversation is where most
+	// directives are received, and it is not the conversation's own memory:
+	// recording one here is what makes it reach every run of every item, in this
+	// process and in any other. It is optional like the rest, and a conversation
+	// without one says so rather than appearing to enforce something.
+	Directives Directives
 	// Goals are the goals the repository records, which is what work admitted
 	// here has to name. It is what makes traceability something the harness holds
 	// rather than something the product manager asserts: a goal named on an item
