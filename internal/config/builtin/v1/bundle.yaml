@@ -42,6 +42,12 @@ execution:
   # than failing. It spends the same maximum pause above, so an overload that
   # never lifts reaches that bound instead of reissuing forever.
   server_overload_pause: 90s
+  # The total budget one configured check gets: the whole time it may run, not
+  # the time it may stay quiet. It is generous because a check killed at this
+  # bound may have been passing the whole time. Raise it as the suite grows, and
+  # raise it again for concurrency -- N runs at once multiply the wall clock of
+  # every suite without multiplying the cores it runs on.
+  check_timeout: 30m
 
 # Conservative defaults: a project opts in to automatic integration, which the
 # harness then refuses unless deterministic checks and a reviewer agent exist.

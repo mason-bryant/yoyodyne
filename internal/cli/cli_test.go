@@ -12,6 +12,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -499,6 +500,29 @@ func TestRepositoryConfigurationEnforcesAutomaticIntegration(t *testing.T) {
 	}
 	if agentModel(cfg, domain.RoleDeveloper) == "" {
 		t.Fatal("developer model selector is not configured")
+	}
+}
+
+// The budget a project configures has to reach the runner that enforces it. The
+// field existed on the runner long before anything wired it, so every project
+// got the same flat ten minutes whatever it wrote down — which is how a run
+// whose suite was passing package by package under contention was killed.
+func TestPipelineGivesChecksTheConfiguredBudget(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := config.Load(filepath.Join("..", "..", config.DirectoryName, config.FileName))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	runner, ok := pipelineFrom(components{config: cfg}).Checks.(checks.Runner)
+	if !ok {
+		t.Fatal("the pipeline's check runner is not a checks.Runner")
+	}
+	if want := cfg.Execution.CheckTimeout.Duration(); runner.Timeout != want {
+		t.Fatalf("wired check timeout = %s, want the configured %s", runner.Timeout, want)
+	}
+	if runner.Timeout <= 0 {
+		t.Fatalf("wired check timeout = %s, which bounds nothing", runner.Timeout)
 	}
 }
 

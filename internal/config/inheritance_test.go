@@ -512,6 +512,56 @@ func TestServerOverloadPauseResolvesFromEveryLayer(t *testing.T) {
 	}
 }
 
+// The check budget is configurable through the same whole path, and for a
+// reason the pauses do not share: it is the one bound whose right value depends
+// on the project's own suite and on how many runs share the machine with it, so
+// a project that outgrows the default has to be able to say so.
+func TestCheckTimeoutResolvesFromEveryLayer(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if got := inherited.Config.Execution.CheckTimeout; got != Duration(30*time.Minute) {
+		t.Fatalf("inherited check_timeout = %s, want 30m", got)
+	}
+	if origin := inherited.Origins["execution.check_timeout"]; origin != BuiltinV1 {
+		t.Fatalf("check_timeout origin = %q, want %q", origin, BuiltinV1)
+	}
+
+	// A project whose suite has grown, or that runs several developers at once,
+	// raises it and keeps everything else it inherited.
+	overridden := loadProject(t, minimalProjectConfig+`execution:
+  check_timeout: 90m
+`, nil)
+	if got := overridden.Config.Execution.CheckTimeout; got != Duration(90*time.Minute) {
+		t.Fatalf("overridden check_timeout = %s, want 90m", got)
+	}
+	if origin := overridden.Origins["execution.check_timeout"]; origin == BuiltinV1 {
+		t.Fatalf("an overridden key kept the bundle's origin %q", origin)
+	}
+	if got := overridden.Config.Execution.ServerOverloadPause; got != Duration(90*time.Second) {
+		t.Fatalf("server_overload_pause = %s, want the inherited 90s", got)
+	}
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	if got := generated.Execution.CheckTimeout; got != Duration(30*time.Minute) {
+		t.Fatalf("generated check_timeout = %s, want 30m", got)
+	}
+}
+
+// A check with no budget at all is refused rather than treated as unbounded: it
+// would hold a worktree, a claim, and a run open for as long as it kept running,
+// and nothing else bounds a check.
+func TestCheckTimeoutMustBePositive(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"execution:\n  check_timeout: 0s\n", "execution:\n  check_timeout: -10m\n"} {
+		_, err := loadProjectError(t, minimalProjectConfig+body, nil)
+		if err == nil || !strings.Contains(err.Error(), "execution.check_timeout must be positive") {
+			t.Fatalf("LoadResolved() error = %v, want one refusing %q", err, strings.TrimSpace(body))
+		}
+	}
+}
+
 // A non-positive interval is refused, because the whole of an overload's wait is
 // this interval: there is no reset time underneath it to fall back on.
 func TestServerOverloadPauseMustBePositive(t *testing.T) {
