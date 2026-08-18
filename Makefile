@@ -13,7 +13,7 @@ LDFLAGS ?= -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist clean-dist
+.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist
 .NOTPARALLEL: check
 
 build:
@@ -56,9 +56,43 @@ dist: clean-dist
 		goos=$${platform%/*}; goarch=$${platform#*/}; \
 		stem=yoyo_$(VERSION)_$${goos}_$${goarch}; \
 		echo "building $$stem"; \
+		mkdir -p $(DIST)/$$stem; \
 		GOOS=$$goos GOARCH=$$goarch CGO_ENABLED=0 $(GO) build -trimpath \
 			-ldflags '$(LDFLAGS)' -o $(DIST)/$$stem/yoyo ./cmd/yoyo; \
 		tar -czf $(DIST)/$$stem.tar.gz -C $(DIST)/$$stem yoyo; \
 		rm -rf $(DIST)/$$stem; \
 	done
-	cd $(DIST) && shasum -a 256 *.tar.gz > checksums.txt
+	@set -e; cd $(DIST); \
+	if command -v shasum >/dev/null 2>&1; then \
+		shasum -a 256 *.tar.gz > checksums.txt; \
+	elif command -v sha256sum >/dev/null 2>&1; then \
+		sha256sum *.tar.gz > checksums.txt; \
+	else \
+		echo "dist needs shasum or sha256sum to write checksums" >&2; exit 1; \
+	fi
+	@echo "wrote $(DIST)/checksums.txt"
+
+# A release whose binaries do not name the tag they were built from is worse
+# than no release, because every report filed against it is unattributable.
+# This unpacks the archive for whatever platform it is running on and asks the
+# binary what it is, so the check that guards a release is the same one CI runs
+# on every change rather than a copy of it that first executes at a tag push.
+dist-verify: dist
+	@set -e; \
+	goos=$$($(GO) env GOOS); goarch=$$($(GO) env GOARCH); \
+	stem=yoyo_$(VERSION)_$${goos}_$${goarch}; \
+	archive=$(DIST)/$$stem.tar.gz; \
+	if [ ! -f "$$archive" ]; then \
+		echo "dist-verify: no $$archive; PLATFORMS does not cover $$goos/$$goarch" >&2; \
+		exit 1; \
+	fi; \
+	unpacked=$(DIST)/.verify; \
+	rm -rf "$$unpacked"; mkdir -p "$$unpacked"; \
+	trap 'rm -rf "$$unpacked"' EXIT; \
+	tar -xzf "$$archive" -C "$$unpacked"; \
+	reported=$$("$$unpacked/yoyo" version); \
+	if [ "$$reported" != "$(VERSION)" ]; then \
+		echo "dist-verify: yoyo version reported '$$reported', expected '$(VERSION)'" >&2; \
+		exit 1; \
+	fi; \
+	echo "$$stem reports version $$reported"

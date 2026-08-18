@@ -39,21 +39,12 @@ jobs:
       - name: Check
         run: make check
 
-      - name: Build the release binaries
-        run: make dist VERSION="$TAG"
-
-      # A release whose binaries do not name the tag they came from is worse
-      # than no release, because every bug report against it is unattributable.
-      # The runner can execute one of the three, so that one is executed.
-      - name: Verify the binary reports the tag
-        run: |
-          tar -xzf "dist/yoyo_${TAG}_linux_amd64.tar.gz" -C "$RUNNER_TEMP"
-          reported="$("$RUNNER_TEMP/yoyo" version)"
-          if [ "$reported" != "$TAG" ]; then
-            echo "yoyo version reported '$reported', expected '$TAG'" >&2
-            exit 1
-          fi
-          echo "yoyo version reports $reported"
+      # `dist-verify` builds every platform's archive and then asserts the
+      # runner's own binary reports the tag. It is the same target CI runs on
+      # every change, so a tag push is a rerun of a path already exercised
+      # rather than its first execution.
+      - name: Build the release binaries and verify they name the tag
+        run: make dist-verify VERSION="$TAG"
 
       - name: Publish the release
         env:

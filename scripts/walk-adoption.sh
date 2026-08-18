@@ -18,10 +18,18 @@
 # to a developer agent. Everything before it is free and deterministic.
 #
 # Requires go, git, bd, and python3. jq is optional and only the yoyo-status
-# cost report needs it. Nothing outside this script's own temporary directories
-# is written: the scratch project, the worktrees, the installed binary, and the
-# run state all live under one temporary root that is removed on exit, so an
-# operator's real state directory is never touched.
+# cost report needs it.
+#
+# No state an operator owns is written: the scratch project, the worktrees, the
+# binary `go install` produces, and the run state all live under one temporary
+# root that is removed on exit, so a real state directory is never touched. Two
+# things outside it are written, and both are caches rather than state. Go's
+# build cache goes to $GOCACHE, which defaults into the scratch root here and is
+# left alone when a caller already set one; Go's module cache is deliberately
+# shared, because isolating it would mean re-downloading the module graph on
+# every walk to protect a directory whose whole purpose is to be rebuilt. The
+# repository's own ./bin/yoyo is also rebuilt, which is what `make build` does
+# and what the step is there to check.
 #
 # The documented claims this cannot check are the ones that need the network:
 # whether the clone URL is reachable, and whether `go install` of a published tag
