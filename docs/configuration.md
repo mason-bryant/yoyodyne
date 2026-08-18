@@ -253,26 +253,49 @@ project with no brief or goals by asking what the product is for and offering to
 draft them, and a project that wants something else replaces that guidance like
 any other part of the persona.
 
-### What the product manager does not see
+### What the product manager sees besides them, and what it does not
 
-**Only the specifications directory and the tracker.** No `README.md`, no
-architecture or operator documentation, no source. This is a deliberate trade
-rather than an oversight, and it is worth knowing which half you are getting.
+**The specifications directory, the tracker, and a description of what the
+product ships today.** That last part is `README.md`, this file, and the help
+every command prints — carried in a section of its own, labeled as description
+of the implementation as built and never as authority about intent. No source,
+no design document, and no way to run a command.
 
-Product intent is what the specifications say. A README, a design document, and
-an operator guide describe how the product is built and run; they are owned by
-other roles, and they go stale against the code without anybody noticing.
-Handing all of them to the role that is authoritative about intent mixes intent
-with description and lets a stale description be reported as current product
-fact — which is exactly what happened here on 2026-08-16, when a sentence in
-`README.md` reached the operator as a statement about the product.
+The label is the whole of the arrangement, so it is worth reading twice. The
+specifications are the only statement of what the product is for; nothing in the
+shipped-surface section revises that, however emphatically it is written. Where
+the two disagree, the product manager **reports the conflict** rather than
+resolving it silently or repeating either side as settled product fact. That is
+what makes documentation safe to hand to the role that is authoritative about
+intent: it arrives as an answer to *what exists*, never to *what is wanted*.
 
-What is given up is real: reading all of `docs/` is what let the product manager
-notice a contradiction between documentation and reality, and it can no longer
-do that. Reconciling accumulated documentation against the code belongs to a
-role that reads the code, and the harness does not have one yet. Point
-`specifications` at a wider directory if you would rather have the breadth than
-the authority; the confinement rule is the only limit on where it points.
+**This reverses half of an earlier trade, openly.** Until 2026-08-18 the product
+manager saw the specifications and the tracker and nothing else, narrowed on
+2026-08-16 after a stale sentence in `README.md` reached the operator as a
+statement about the product. What that bought is real and is kept: description
+does not arrive labeled as intent, and it never will again while the section
+carries its label. What it cost was underestimated. On 2026-08-18 the product
+manager did not know `bin/yoyo-status` or `yoyo cost` existed until the operator
+described them, drafted a work item that mis-assumed which surfaces existed, and
+could not evaluate a formatting question about two real outputs it had never
+seen — three failures in one day of the operator's routine interface needing the
+operator to stand in as its eyes.
+
+What is still given up is also real. Reading all of `docs/` is what let the
+product manager notice a contradiction between documentation and reality, and
+what it reads now is narrower than that: the design document and the decision
+records are not there, because they say how the product is built and are the
+half of `docs/` that made description reachable as intent in the first place.
+Reconciling accumulated documentation against the code belongs to a role that
+reads the code, and the harness still does not have one. Point `specifications`
+at a wider directory if you would rather have the breadth than the authority;
+the confinement rule is the only limit on where it points.
+
+The documentation is read **after** the specifications have taken what they need
+of the context budget, so a repository too large for both keeps the half that is
+authoritative and the section names what did not fit. A repository that holds
+none of this documentation is told so rather than getting a section that quietly
+carries less than it says it does.
 
 ## Artifact identity and metadata
 

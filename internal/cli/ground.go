@@ -81,6 +81,7 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 		SpecificationsDirectory: g.specifications,
 		WorkItems:               items,
 		WorkItemsUnavailable:    unavailable,
+		CommandHelp:             commandHelp(),
 	})
 	if err != nil {
 		return chat.Briefing{}, fmt.Errorf("assemble product context: %w", err)
