@@ -28,7 +28,9 @@ import (
 // means what it always meant, which is that nothing summarized the change. The
 // count of retried promotions is the same again: absent means no promotion of
 // this run was ever re-prepared, which is what every run written before the
-// retry existed did.
+// retry existed did. The directive a run paused for is the same again: absent
+// means no user directive ever held this run up, which is what every run
+// written before directives were enforced meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -255,6 +257,39 @@ func boundChangeRecord(text string) string {
 
 const changeRecordCutNote = "\n[cut; the rest of this summary was not recorded]"
 
+// DirectivePause is the user directive a run stopped short for. It is recorded
+// before the run returns, for the same reason a usage-limit deadline is: the
+// pause has to survive the process, so a later invocation can tell a run that is
+// waiting from one that was interrupted, and can resume it rather than start a
+// second attempt at the same item.
+//
+// The directive itself lives in the product's own directive store, which is what
+// makes it reachable from every process. What is copied here is only what a
+// reader of this run needs in order to say what the run is waiting for without
+// going and finding it: which directive, and what about it is unresolved.
+type DirectivePause struct {
+	DirectiveID string `json:"directive_id"`
+	Kind        string `json:"kind"`
+	Unresolved  string `json:"unresolved"`
+}
+
+// Validate rejects a recorded pause that cannot say what the run is waiting for.
+func (d DirectivePause) Validate() error {
+	var problems []error
+	if strings.TrimSpace(d.DirectiveID) == "" {
+		problems = append(problems, errors.New("directive_id is required"))
+	}
+	if strings.TrimSpace(d.Kind) == "" {
+		problems = append(problems, errors.New("kind is required"))
+	}
+	// A pause nobody can name the reason for is a pause nobody can lift, which is
+	// exactly the state enforcing directives exists to prevent.
+	if strings.TrimSpace(d.Unresolved) == "" {
+		problems = append(problems, errors.New("unresolved is required"))
+	}
+	return errors.Join(problems...)
+}
+
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
 type Integration struct {
@@ -368,6 +403,14 @@ type State struct {
 	// a run owed a continuation, exactly as a recorded usage-limit deadline is.
 	// It is cleared by the next attempt, whichever way that one goes.
 	ProviderStop string `json:"provider_stop,omitempty"`
+	// DirectivePause records that an unresolved user directive stopped this run
+	// short of finishing: one that changes a governed artifact this work derives
+	// from, or one nobody can act on until the operator says what they meant. Like
+	// a recorded deadline it is an instruction to resume later rather than a
+	// failure, so a run carrying one keeps its claim, its worktree, and its
+	// branch, and is picked up again once the directive is resolved. It is cleared
+	// as the run resumes.
+	DirectivePause *DirectivePause `json:"directive_pause,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -544,6 +587,17 @@ func (s State) Validate() error {
 		// ever make.
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("provider_stop requires a run that is still in flight"))
+		}
+	}
+	if s.DirectivePause != nil {
+		if err := s.DirectivePause.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("directive_pause: %w", err))
+		}
+		// A directive pause is the same kind of instruction as the two above:
+		// resume this later. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("directive_pause requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

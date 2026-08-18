@@ -559,6 +559,11 @@ everything else is said to the product manager:
 /wait                    wait for the run this conversation started and report it
 /stop [reason]           stop that run and settle what it left behind
 /redirect <id> <what to do differently>
+/directives              what you have directed, and what is still unresolved
+/directive <what you have decided>
+/directive ambiguous <what is unresolved> | <what you said>
+/directive artifact <artifact> <what is unresolved> | <what changes>
+/resolve <directive-id> <how it was settled>
 /help                    the list
 /exit                    end the conversation, stopping anything it is running
 ```
@@ -738,6 +743,73 @@ context reads it on the next attempt, and stops the run first when the item you
 are redirecting is the one running. It never changes the item's status: saying
 what to do differently is not deciding that the work is done or blocked. Start
 it again with `/work` when you want it retried.
+
+### Directives, and the work they pause
+
+A redirection is about one item. A directive is about the product: it is
+recorded for the product rather than for the agent you happened to say it to, so
+it reaches every run of every item, in this process and in any other. That is
+what `yoyo directive` and `/directive` write, and it is the same record every
+run reads before it starts, before it resumes, and before it puts a change
+through the gate that would integrate it.
+
+Most directives are operational. They take effect from the moment they are
+recorded, and nothing waits for them:
+
+```text
+/directive prefer smaller pull requests
+```
+
+Two kinds pause the work they affect, because that work would otherwise be
+written and promoted against intent that is being rewritten or was never
+settled. One changes a governed artifact — the brief, a goal, a design — and the
+work derived from it waits until the change is decided. The other is one nobody
+can act on without deciding something you did not, and the work waits until you
+answer:
+
+```text
+/directive artifact docs/product/goals/v1-goals.md whether autonomy is still the goal | the autonomy goal is being rewritten
+/directive ambiguous which of the two publishing behaviours I meant | do publishing differently
+```
+
+You state which kind it is rather than the harness guessing. Pausing every run
+because something classified a sentence would be a worse failure than pausing
+none, so the kind is yours to say, and a directive that pauses work is refused
+unless it names what is unresolved: a pause nobody can name a reason for is a
+pause nobody can lift.
+
+A pause is not a cancellation. Work already under way keeps its claim, its
+branch, its worktree, and its developer session, and stops at its next gate —
+the point before its change could be checked, judged, or promoted. Work that has
+not started does not start. `yoyo reconcile` reports such a run as resumable and
+leaves it exactly where it is, so nothing settles it out from under you, and the
+item itself records which directive stopped it and what about that directive is
+unresolved.
+
+`/resolve <id> <how it was settled>` lifts the pause. The release is the record
+changing rather than anything done to a run: the next time the item is started,
+in whichever process, the same run continues from the gate it stopped at.
+`/directives` lists what is recorded and what is still unresolved. An identifier
+may be shortened to any prefix that names exactly one directive.
+
+From the command line the same records are reachable, which is how a directive
+you gave to an agent other than the product manager gets written down:
+
+```text
+./bin/yoyo directive list
+./bin/yoyo directive record --kind ambiguous \
+  --unresolved "which of the two publishing behaviours was meant" \
+  --received-by reviewer \
+  "do publishing differently"
+./bin/yoyo directive resolve --resolution "the second one" directive-3f2a
+```
+
+What the harness enforces is the pause; what it does not do yet is work out
+which items derive from a changed artifact. A directive that names no work
+therefore pauses all of it, which is the safe reading rather than a clever one.
+`yoyo directive record --scope` narrows it to the items you name; a directive
+recorded from the conversation names none, so it pauses everything and reports
+the work in flight and claimed as what it just stopped.
 
 Only you reach any of this. The product manager owns what the queue says and the
 order it is in; running, stopping, and redirecting the work itself stays yours,
@@ -1396,9 +1468,10 @@ process handle is not a reason to start a second developer for an item.
 Repeating it is safe — a settled run is no longer outstanding, and cleanup over
 artifacts that are already gone does nothing. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
-inside its repair loop, one paused for a provider usage limit, or one whose
-provider the harness stopped on time — is left exactly as it is for that command
-to pick up.
+inside its repair loop, one paused for a provider usage limit, one whose
+provider the harness stopped on time, or one paused for an [unresolved
+directive](#directives-and-the-work-they-pause) — is left exactly as it is for
+that command to pick up.
 
 ### Following a run, a conversation, or a branch review
 

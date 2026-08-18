@@ -16,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
@@ -114,6 +115,27 @@ type CheckRunner interface {
 	Run(ctx context.Context, runID, directory string, commands []string, lastSequence uint64, sink func(execution.Event) error) ([]checks.Result, uint64, error)
 }
 
+// Directives is what the operator has told the harness, as a run reads it.
+//
+// It is consulted rather than delivered. A directive that changes a governed
+// artifact this work derives from, or that nobody can act on until the operator
+// says what they meant, is not context for the developer to weigh — it is a
+// reason the work must not proceed at all, because the intent it would be
+// written against is being rewritten or was never settled. So the pipeline asks
+// this question at every point where it is about to commit to work: before it
+// claims an item, before it resumes a run, and before it puts a change through
+// the gate that would integrate it.
+//
+// It is read from durable records every time, never cached. The directive that
+// matters most is the one recorded by another process while this run was
+// developing, and a run that answered from what it read at the start would be
+// exactly the run this exists to stop.
+type Directives interface {
+	// Pausing lists the unresolved directives that pause one work item. An empty
+	// result is the ordinary answer and means the work may proceed.
+	Pausing(workItemID string) ([]directive.Directive, error)
+}
+
 type Pipeline struct {
 	Tracker   WorkTracker
 	Worktrees WorktreeManager
@@ -126,6 +148,12 @@ type Pipeline struct {
 	// Publisher is required only when publishing is automatic, because a project
 	// that has not opted in never opens a pull request.
 	Publisher PullRequests
+	// Directives is what the operator has told the harness. It is required rather
+	// than optional, unlike the two collectors below: a run that cannot find out
+	// what has been directed would proceed against intent that may already have
+	// been withdrawn, and a directive nothing enforces is the state this was built
+	// to end.
+	Directives Directives
 	// Reports is where what this run's agents noticed is collected. It is
 	// optional: a pipeline wired without one still runs exactly as it would
 	// have, and a report it cannot keep is named on the outcome rather than
@@ -210,11 +238,21 @@ type Outcome struct {
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
-	// preserved. Two things pause a run, and they are told apart by which of the
+	// preserved. Three things pause a run, and they are told apart by which of the
 	// fields below is set: an exhausted provider usage limit, whose deadline says
-	// when the run becomes runnable again, and a provider invocation the harness
-	// stopped on time, which is runnable immediately.
+	// when the run becomes runnable again; a provider invocation the harness
+	// stopped on time, which is runnable immediately; and an unresolved user
+	// directive, which is runnable once somebody settles the directive.
+	//
+	// The directive is the one of the three that can pause work before there is a
+	// run at all. Nothing is claimed and no worktree exists in that case, so the
+	// paused outcome names the work item and the directive and nothing else.
 	Paused bool `json:"paused,omitempty"`
+	// PausedByDirective is the unresolved directive this run or this work item
+	// stopped short for. It carries the directive itself rather than only its
+	// identifier, because what an operator has to do about it — answer the
+	// question, or decide the artifact change — is in the directive's own words.
+	PausedByDirective *directive.Directive `json:"paused_by_directive,omitempty"`
 	// UsageLimitResetsAt is when the provider said the exhausted limit resets,
 	// and UsageLimitKind is the provider's own name for it. They are reported on
 	// a paused run and on a run that stopped because the reset was unusable.
@@ -313,14 +351,30 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, fmt.Errorf("load work item: %w", err)
 	}
+	// What the operator has directed is read before anything is claimed, adopted,
+	// or resumed. A directive that changes the artifact this work derives from, or
+	// that nobody can act on until the operator says what they meant, stops the
+	// work here rather than after a developer has already written a change against
+	// intent that is being rewritten. Nothing has been claimed at this point, so
+	// the item is simply left where it is, and a run already in flight for it is
+	// left in flight rather than resumed.
+	pausing, err := p.pausingDirectives(workItemID)
+	if err != nil {
+		return Outcome{}, err
+	}
+	if len(pausing) > 0 {
+		return pauseWorkItem(workItemID, pausing[0]), nil
+	}
 	// An incomplete run for this item is either a run an interrupted process left
 	// behind, a run waiting out a provider usage limit, or a duplicate that must
 	// be refused. Adopting it takes the same exclusive lease a fresh reservation
 	// takes, so entering a run this process did not start can never put two
 	// developers on one item; a run another process is still holding is reported
 	// as existing rather than picked up. Only runs whose remaining work is fully
-	// described by durable state are continued: the repair loop, and a paused run
-	// that recorded the deadline it is waiting on.
+	// described by durable state are continued: the repair loop, a paused run that
+	// recorded the deadline it is waiting on, and a run that recorded the directive
+	// it stopped short for — which is reached only once that directive is settled,
+	// because the directives were read a moment ago.
 	inFlight, lease, err := p.Store.Adopt(ctx, workItemID)
 	switch {
 	case err == nil:
@@ -329,7 +383,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// resumable whatever the approval policy, because nothing about either
 		// depends on the repair loop: the first has not had its attempt served
 		// yet, and the second is owed the rest of an attempt it was making.
-		if !pausedForUsageLimit(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -519,6 +573,15 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			PublishSkipped: skipped,
 		},
 	}
+	// A recorded directive pause is lifted rather than honored. Nothing reaches
+	// this point while a directive still pauses the item — they were read before
+	// the run was adopted — so the pause is over, and clearing it is what keeps a
+	// running attempt from looking like a waiting one to the next process.
+	if state.DirectivePause != nil {
+		if err := run.clearDirectivePause(); err != nil {
+			return run.fail(err, runstate.StatusFailed)
+		}
+	}
 	// A recorded deadline is honored before anything else happens, so a restart
 	// during a pause waits out the rest of it rather than asking the provider
 	// again and being refused by the same limit.
@@ -663,6 +726,9 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 	// worktree is preserved for them either way, so a failing check ends the
 	// run exactly as it always has.
 	if !a.pipeline.automatic() {
+		if err := a.holdForDirective(); err != nil {
+			return a.stop(ctx, err)
+		}
 		if err := a.verify(ctx); err != nil {
 			return a.stop(ctx, err)
 		}
@@ -674,6 +740,13 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 	// and the approval was given for the old diff. Nothing about the loop
 	// weakens the gate — it re-earns it.
 	for {
+		// The gate is where a directive recorded while this run was working
+		// reaches it. It is asked again on every pass, because a promotion that
+		// lost its race goes back through the whole gate and a directive can
+		// arrive during any of it.
+		if err := a.holdForDirective(); err != nil {
+			return a.stop(ctx, err)
+		}
 		if err := a.repairLoop(ctx); err != nil {
 			return a.stop(ctx, err)
 		}
@@ -1328,6 +1401,114 @@ func pausedForUsageLimit(state runstate.State) bool {
 	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
 }
 
+// pausingDirectives asks what the operator has directed that stops this work. A
+// failure to read is a failure to run: a harness that cannot find out what has
+// been directed is indistinguishable from one that has been directed nothing,
+// and proceeding on that reading is the whole failure directives exist to
+// prevent.
+func (p Pipeline) pausingDirectives(workItemID string) ([]directive.Directive, error) {
+	pausing, err := p.Directives.Pausing(workItemID)
+	if err != nil {
+		return nil, fmt.Errorf("read what the operator has directed about %s: %w", workItemID, err)
+	}
+	return pausing, nil
+}
+
+// pauseWorkItem reports work the harness declined to start or resume because a
+// directive is unresolved. There is no run behind it: nothing was claimed, no
+// worktree exists, and a run already in flight for the item was left exactly as
+// it was. It is a pause rather than a failure because settling the directive is
+// all that stands between here and the work proceeding.
+func pauseWorkItem(workItemID string, paused directive.Directive) Outcome {
+	return Outcome{
+		WorkItemID:        workItemID,
+		Paused:            true,
+		PausedByDirective: &paused,
+	}
+}
+
+// holdForDirective stops a run in flight for an unresolved directive, and does
+// nothing at all when there is none, which is the ordinary case. What it returns
+// on the pausing path is a directivePause, which travels the path a stopped step
+// already travels.
+//
+// This is what makes a directive reach work that is already under way. The check
+// before a run starts covers work that has not begun; without this one, a
+// directive recorded while a developer was working would be enforced against
+// every item except the one it was about.
+func (a *activeRun) holdForDirective() error {
+	pausing, err := a.pipeline.pausingDirectives(a.state.WorkItemID)
+	if err != nil {
+		return err
+	}
+	if len(pausing) == 0 {
+		return nil
+	}
+	return a.recordDirectivePause(pausing[0])
+}
+
+// recordDirectivePause makes the pause durable and then reports it. The record
+// comes first for the same reason a usage-limit deadline is written before the
+// wait begins: a process that dies here must leave a run that can be told from
+// an interrupted one and picked up again, rather than one nothing will resume.
+func (a *activeRun) recordDirectivePause(paused directive.Directive) error {
+	// The developer's attempt is behind this run and the gate is what it stopped
+	// short of, so the recorded phase says so. Left at developing, a resumed run
+	// would be handed a second developer attempt it does not need.
+	if a.state.Phase == runstate.PhaseDeveloping {
+		a.state.Phase = runstate.PhaseChecking
+	}
+	a.state.DirectivePause = &runstate.DirectivePause{
+		DirectiveID: paused.ID,
+		Kind:        string(paused.Kind),
+		Unresolved:  paused.Unresolved,
+	}
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record the directive that paused this run: %w", err)
+	}
+	return directivePause{directive: paused}
+}
+
+// clearDirectivePause records that the run is no longer held up, before it
+// carries on. A pause left behind would make a running attempt look like a
+// waiting one to the next process that adopts the run.
+func (a *activeRun) clearDirectivePause() error {
+	if a.state.DirectivePause == nil {
+		return nil
+	}
+	a.state.DirectivePause = nil
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("clear the directive pause: %w", err)
+	}
+	return nil
+}
+
+// directivePause reports a run that stopped short of finishing because an
+// unresolved user directive affects its work item. Like a usage-limit pause it
+// is an error only so that it travels the path a stopped step already travels;
+// it is deliberately not a failure, and the run it leaves behind is still in
+// flight, still claimed, and still resumable.
+type directivePause struct {
+	directive directive.Directive
+}
+
+func (e directivePause) Error() string {
+	return "paused for an unresolved directive: " + e.directive.Summary()
+}
+
+// pausedForDirective reports a run held up by an unresolved user directive. The
+// recorded pause is what makes it a pause rather than an interruption, and the
+// worktree is what makes it resumable: the change every attempt shares is what
+// the run comes back to.
+func pausedForDirective(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.DirectivePause == nil {
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
+}
+
 // sleep waits out a pause, cut short by a cancelled context so a shutdown is
 // never held up by a deadline hours away.
 func (p Pipeline) sleep(ctx context.Context, duration time.Duration) error {
@@ -1550,6 +1731,10 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	if errors.As(cause, &stopped) {
 		return a.pauseForProviderStop(stopped)
 	}
+	var directed directivePause
+	if errors.As(cause, &directed) {
+		return a.pauseForDirective(directed)
+	}
 	return a.fail(cause, failureStatus(ctx, cause))
 }
 
@@ -1608,6 +1793,37 @@ func (a *activeRun) pauseForProviderStop(stopped providerStop) (Outcome, error) 
 	return a.outcome, nil
 }
 
+// pauseForDirective reports a run held up by an unresolved user directive. It is
+// the third of the pauses and behaves exactly as the other two: the pause was
+// made durable before this point, nothing is cleaned up, and nothing is made
+// terminal, so the change the run has already produced stays where the next
+// attempt continues it. What differs is only what lifts it — somebody answering
+// the question or deciding the artifact change, rather than a clock.
+func (a *activeRun) pauseForDirective(paused directivePause) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	held := paused.directive
+	a.outcome.PausedByDirective = &held
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderDirectivePauseNotes(a.outcome, held)); err != nil {
+		// The pause is already durable, so a note that could not be written costs
+		// the run nothing. It is still reported, for the same reason the other two
+		// pauses report it: an operator watching the tracker would otherwise see
+		// the item simply stop moving.
+		return a.outcome, fmt.Errorf("record the directive pause on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // fail records a terminal run failure everywhere it has to be visible: the
 // durable state, the reported outcome, and the work item when the run holds it.
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
@@ -1615,10 +1831,11 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	message := cause.Error()
 	completedAt := p.clock().Now()
 	// A recorded pause or stop is an instruction to resume later, and this run is
-	// ending now. Clearing both keeps the terminal record coherent; what stopped
-	// the run is still named by the recorded limit kind and by the failure.
+	// ending now. Clearing all three keeps the terminal record coherent; what
+	// stopped the run is still named by the recorded limit kind and by the failure.
 	a.state.UsageLimitResetsAt = nil
 	a.state.ProviderStop = ""
+	a.state.DirectivePause = nil
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
@@ -2017,6 +2234,9 @@ func (p Pipeline) validate() error {
 	if p.Checks == nil {
 		problems = append(problems, errors.New("check runner is required"))
 	}
+	if p.Directives == nil {
+		problems = append(problems, errors.New("durable user directives are required"))
+	}
 	if p.NewRunID == nil {
 		problems = append(problems, errors.New("run id generator is required"))
 	}
@@ -2371,6 +2591,40 @@ func renderProviderStopNotes(outcome Outcome) string {
 	lines = append(lines,
 		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
 		"Running Yoyodyne on this item again continues the same run from where it stopped; nothing needs to be restarted.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// renderDirectivePauseNotes describes a run held up by an unresolved directive.
+// It names the directive and what is unresolved about it, because those are the
+// two things somebody needs in order to lift the pause, and it says plainly that
+// the work was not abandoned: an operator reading a claimed item that has gone
+// quiet has to be able to tell waiting from stopped.
+func renderDirectivePauseNotes(outcome Outcome, held directive.Directive) string {
+	lines := []string{
+		"Yoyodyne paused this run: a user directive affects this work and is unresolved, so the run is waiting rather than failing.",
+		"Directive: " + held.ID + " (" + string(held.Kind) + "), received by the " + string(held.ReceivedBy),
+		"The operator said: " + held.Text,
+	}
+	if held.Artifact != "" {
+		lines = append(lines, "Governed artifact it changes: "+held.Artifact)
+	}
+	lines = append(lines,
+		"Unresolved: "+held.Unresolved,
+		"Run: "+outcome.RunID,
+	)
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch: "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+outcome.WorktreePath)
+	}
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"Resolving the directive is what lifts the pause; running Yoyodyne on this item after that continues the same run.",
 	)
 	return strings.Join(lines, "\n")
 }
