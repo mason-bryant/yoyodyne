@@ -115,11 +115,45 @@ fi
 # `module yoyodyne` was not.
 install_output="$(GOBIN="$scratch/gobin" go install "$readme_install_module/cmd/yoyo@latest" 2>&1 || true)"
 missing "$install_output" "malformed module path" "\`go install\` reaches the proxy rather than refusing the path"
-if [ -x "$scratch/gobin/yoyo" ]; then
-  pass "go install $readme_install_module/cmd/yoyo@latest produced a binary"
-  printf 'installed version: %s\n' "$("$scratch/gobin/yoyo" version)"
+
+# The README tells a reader where the binary went, because an install that
+# worked and a binary nobody can find look the same from the shell. The GOBIN
+# half of that claim is what the install above just exercised; the default it
+# names is go's own configuration, so it is read back rather than asserted, and
+# only where this environment has not overridden it.
+if [ -z "${GOBIN:-}" ] && [ -z "$(go env GOBIN)" ] && [ -z "${GOPATH:-}" ]; then
+  gopath="$(go env GOPATH)"
+  printf 'go env GOPATH: %s\n' "$gopath"
+  if [ "$gopath" = "$HOME/go" ]; then
+    pass "the documented default destination, ~/go/bin, is where go would install"
+  else
+    fail "README says the default is ~/go/bin, go reports $gopath/bin"
+  fi
 else
-  skip "go install of a published tag: needs network access and a pushed tag, neither assumed here"
+  skip "the ~/go/bin default: this environment sets GOPATH or GOBIN"
+fi
+
+if [ -x "$scratch/gobin/yoyo" ]; then
+  pass "go install $readme_install_module/cmd/yoyo@latest produced a binary in \$GOBIN"
+  # The README's verification step, run the way it is documented: put the
+  # install directory on PATH, then ask the binary its version. Both halves are
+  # the claim -- that the PATH addition is what makes `yoyo` resolvable at all,
+  # and that what it prints is the tag it was installed at rather than "dev",
+  # which is also the only check there is on the module-version stamping.
+  resolved="$(PATH="$scratch/gobin:$PATH" command -v yoyo || true)"
+  if [ "$resolved" = "$scratch/gobin/yoyo" ]; then
+    pass "the documented PATH addition is what puts yoyo on PATH"
+  else
+    fail "adding the install directory to PATH did not resolve yoyo -- got: ${resolved:-nothing}"
+  fi
+  installed_version="$(PATH="$scratch/gobin:$PATH" yoyo version 2>&1 || true)"
+  printf 'installed version: %s\n' "$installed_version"
+  case "$installed_version" in
+    (v*) pass "yoyo version prints the tag the module was installed at" ;;
+    (*)  fail "yoyo version printed no release tag -- got: $installed_version" ;;
+  esac
+else
+  skip "go install of a published tag, and the yoyo version check on it: needs network access and a pushed tag, neither assumed here"
 fi
 
 run make -C "$repository" build >/dev/null
