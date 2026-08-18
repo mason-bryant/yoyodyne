@@ -460,13 +460,23 @@ yoyo amendment approve <id> --reason ...  # record the change as authorized
 yoyo amendment decline <id> --reason ...  # turn it down, keeping why
 ```
 
-The owning role decides its own documents where it runs: proposals against the
-brief and the goals are carried into the product manager's conversation, where it
-argues for or against them. The architect agent does not execute yet, so you
-decide in its stead — the same override path `yoyo invariant` documents — and the
-record says you exercised its authority rather than that the architect answered.
-A decline keeps the reason it was turned down with, because a proposal refused
-silently is one the same argument arrives to make again.
+**Every decision is yours, whoever owns the document.** An owning role that runs
+is shown what has been proposed against its documents and argues for or against
+it — proposals against the brief and the goals are carried into the product
+manager's conversation, which is told in so many words that it cannot decide one
+and cannot edit anything. The architect does not execute at all yet. So no agent
+records a decision, `yoyo amendment` is the only thing that does, and the record
+says you exercised the owner's authority rather than that the owner answered —
+the same override path `yoyo invariant` documents. A decline keeps the reason it
+was turned down with, because a proposal refused silently is one the same
+argument arrives to make again.
+
+An owning role recording its own decision is vocabulary the record already has
+and nothing produces: what would make it real is a decision the harness carries
+out for a role from its own reply, the way it carries out the product manager's
+tracker actions. Until something does that, read "under the architect's
+authority" on a decision as your judgement standing in for a role that has not
+run, not as the architect having answered.
 
 The reviewer is deliberately not given this block. What it finds wrong with a
 change is a finding, which decides whether the change is repaired; a reviewer

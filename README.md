@@ -1016,12 +1016,13 @@ the run that argued the design was wrong is long finished before anybody decides
 what to do about it. A developer that makes the same argument again on a repair
 attempt raises one proposal rather than one per attempt.
 
-The owner hears it where it works. Proposals against the brief and the goals are
-carried into the product manager's conversation, which argues for or against them
-and cannot decide or edit anything. The architect agent does not execute yet, so
-you decide its documents in its stead — the same override path `yoyo invariant`
-takes — and the record says you exercised its authority rather than that the
-architect answered.
+The owner hears it where it works, and you are the one who decides. Proposals
+against the brief and the goals are carried into the product manager's
+conversation, which argues for or against them and cannot decide or edit
+anything; the architect agent does not execute at all yet. So every decision is
+recorded by you through `yoyo amendment` — the same override path
+`yoyo invariant` takes — and the record says you exercised the owner's authority
+rather than that the owner answered.
 
 ### How fresh the conversation's picture is, and how to refresh it
 

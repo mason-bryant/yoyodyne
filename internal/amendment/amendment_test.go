@@ -250,14 +250,20 @@ func TestARecordedProposalCannotClaimTheWrongOwner(t *testing.T) {
 	}
 }
 
-func TestRenderSaysWhatIsProposedAndWhoDecides(t *testing.T) {
+func TestRenderSaysWhatIsProposedAndWhoseAuthorityDecidesIt(t *testing.T) {
 	t.Parallel()
 
 	rendered := validProposal().Render()
-	for _, want := range []string{"v1-design", "the architect decides", "change:", "why:", "developer"} {
+	for _, want := range []string{"v1-design", "under the architect's authority", "change:", "why:", "developer"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("Render() = %q, want it to contain %q", rendered, want)
 		}
+	}
+	// The authority rather than a decider. Nothing produces a decision by an
+	// owning role, and this same line is shown to an owning role that is told in
+	// the same section that it cannot decide from there.
+	if strings.Contains(rendered, "decides") {
+		t.Fatalf("Render() promises a decision by the owner: %q", rendered)
 	}
 	// Everything but the harness's own first line came from a provider, so none
 	// of it is printed where the harness speaks.

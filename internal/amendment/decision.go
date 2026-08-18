@@ -43,9 +43,18 @@ type Decider string
 
 const (
 	// DeciderOperator is the person, deciding directly or in the stead of the
-	// owning role.
+	// owning role. It is the only one anything produces today: every decision is
+	// recorded through `yoyo amendment`, and an owning role that runs argues about
+	// a proposal rather than deciding it.
 	DeciderOperator Decider = "operator"
 	// DeciderOwner is the owning role itself, deciding about its own document.
+	// Nothing produces it yet, and it is here rather than added later because the
+	// distinction it draws is what the Authority field would otherwise lose: a
+	// record that said only "the architect's authority" could not tell an operator
+	// standing in for an absent role apart from that role having answered. What
+	// would make it real is the harness carrying out a decision for a role from
+	// its own reply, the way it already carries out the product manager's tracker
+	// actions.
 	DeciderOwner Decider = "owner"
 )
 

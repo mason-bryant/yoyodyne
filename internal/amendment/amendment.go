@@ -374,7 +374,11 @@ func (p Proposal) Render() string {
 		fmt.Fprintf(&rendered, " on %s", p.WorkItemID)
 	}
 	fmt.Fprintf(&rendered, " (%s)\n", p.RunID)
-	fmt.Fprintf(&rendered, "      the %s decides; raised %s\n", p.Owner, p.RaisedAt.UTC().Format(time.RFC3339))
+	// The authority rather than a decider, because no role records a decision:
+	// saying the owner decides would promise an answer nothing produces, and this
+	// same line is shown to the owning role itself, which is told in the same
+	// breath that it cannot decide from there.
+	fmt.Fprintf(&rendered, "      decided under the %s's authority; raised %s\n", p.Owner, p.RaisedAt.UTC().Format(time.RFC3339))
 	for _, line := range indent("change: " + p.Change) {
 		rendered.WriteString(line)
 	}

@@ -135,7 +135,10 @@ func showAmendment(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, decision.Render())
 		return 0
 	}
-	fmt.Fprintf(stdout, "      waiting on the %s or on you\n", found.Owner)
+	// Waiting on the operator rather than on the owner, because nothing records an
+	// owner's decision: the owning role argues about a proposal where it runs, and
+	// the decision is made here.
+	fmt.Fprintf(stdout, "      waiting on you, under the %s's authority\n", found.Owner)
 	return 0
 }
 
@@ -317,9 +320,12 @@ the document by the role that owns it, in a revision recorded under that role.
 Nothing an unapproved proposal contains ever reaches a document, and neither
 does anything an approved one contains.
 
-The owning role decides its own documents where it runs. The architect agent
-does not execute yet, so you decide in its stead and the record says you
-exercised its authority.
+Every decision is recorded here, by you, under the authority of the role that
+owns the document. No agent records one: an owning role that runs is shown the
+proposals against its documents and argues for or against them, and the product
+manager is told in so many words that it cannot decide one. So a proposal waits
+on you whoever owns the document, and the record says you exercised that role's
+authority.
 
   list [--all] [--owner <role>]   what is waiting to be decided
   show <id>                       one proposal and what became of it

@@ -31,7 +31,7 @@ func TestAProposalIsReadAndDecidedLongAfterTheRunThatRaisedIt(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("list code = %d, stderr = %q", code, stderr)
 	}
-	for _, want := range []string{proposal.ID, "v1-design", "the architect decides", "say which ordering holds"} {
+	for _, want := range []string{proposal.ID, "v1-design", "under the architect's authority", "say which ordering holds"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("list stdout = %q, want it to contain %q", stdout, want)
 		}
@@ -74,6 +74,67 @@ func TestAProposalIsReadAndDecidedLongAfterTheRunThatRaisedIt(t *testing.T) {
 		t.Fatal("declining a settled proposal succeeded")
 	} else if !strings.Contains(stderr, "already approved") {
 		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+// What the operator is told about who decides has to be what actually happens.
+// Nothing produces amendment.DeciderOwner, so a text saying the owning role
+// decides its own documents would have an operator with a goals proposal in the
+// queue waiting for a decision that can never be recorded. This pins the two
+// texts to that fact rather than to a wording.
+func TestNothingTellsTheOperatorAnOwningRoleWillDecide(t *testing.T) {
+	// The behaviour the texts have to match: every recorded decision is the
+	// operator's, under the owner's authority.
+	configPath, _ := amendmentProject(t)
+	proposal := recordProposal(t, "amendment-0123456789abcdef0123456789abcdef")
+
+	stdout, stderr, code := runCLI(t, "amendment", "show", "--config", configPath, proposal.ID)
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	// A pending proposal waits on the operator, not on a role that will never
+	// answer it.
+	if !strings.Contains(stdout, "waiting on you") {
+		t.Fatalf("show does not say who a pending proposal waits on: %q", stdout)
+	}
+	if strings.Contains(stdout, "waiting on the architect") {
+		t.Fatalf("show says a role that records no decisions is being waited on: %q", stdout)
+	}
+
+	usage, _, code := runCLI(t, "amendment", "help")
+	if code != 0 {
+		t.Fatalf("help code = %d", code)
+	}
+	if !strings.Contains(usage, "Every decision is recorded here, by you") {
+		t.Fatalf("the help does not say who records a decision: %q", usage)
+	}
+	if strings.Contains(usage, "The owning role decides its own documents") {
+		t.Fatalf("the help promises an owner decision nothing records: %q", usage)
+	}
+
+	// And the decision the command actually writes is the operator's, which is
+	// what makes the texts above true rather than merely reworded.
+	if _, stderr, code = runCLI(t, "amendment", "approve", "--config", configPath, "--reason", "yes", proposal.ID); code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		t.Fatalf("SystemDefaultRoot() error = %v", err)
+	}
+	store, err := runstate.NewAmendmentStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewAmendmentStore() error = %v", err)
+	}
+	records, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	decision, decided := amendment.DecisionOn(records, proposal.ID)
+	if !decided {
+		t.Fatal("nothing was recorded for the proposal")
+	}
+	if decision.Decider != amendment.DeciderOperator || decision.Authority != domain.RoleArchitect {
+		t.Fatalf("decision = %#v, want the operator deciding under the architect's authority", decision)
 	}
 }
 
