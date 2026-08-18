@@ -1565,9 +1565,12 @@ func (p Pipeline) reportOutstandingCleanup(state runstate.State, outcome Outcome
 // provider declined for want of capacity was never made, so it is waited out and
 // asked for again rather than ending the run: the reviewer is a provider
 // invocation like the developer's, and a run stopped there loses just as much
-// work. Nothing an unanswered review leaves behind is carried forward — the
-// retry starts from the same cleared evidence any review starts from.
+// work. A reply nothing could read as a verdict was not a review either, and it
+// is asked for once more for the same reason. Nothing an unanswered review
+// leaves behind is carried forward — the retry starts from the same cleared
+// evidence any review starts from.
 func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
+	reasked := false
 	for {
 		decision, reported, err := a.attemptReview(ctx)
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
@@ -1587,6 +1590,17 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			if resumable {
 				return "", providerStop{reason: reason}
 			}
+		}
+		// A reply the verdict contract could not read at all is a failed review
+		// invocation rather than a failed change: the reviewer said nothing about
+		// the work, and the change waiting to be judged is untouched by it. So it
+		// is asked once more, exactly as a declined review is. Two unreadable
+		// replies in a row is a reviewer that cannot answer the contract and the
+		// run ends on it; one is weather.
+		var undecodable review.UndecodableVerdictError
+		if !reasked && errors.As(err, &undecodable) {
+			reasked = true
+			continue
 		}
 		return decision, err
 	}

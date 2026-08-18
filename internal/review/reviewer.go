@@ -211,7 +211,21 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		}
 		return evidence(), fmt.Errorf("reviewer reported failure: %s", firstNonEmpty(providerResult.StopReason, providerResult.FinalText, "unknown provider failure"))
 	}
-	verdict, err := Decode([]byte(strings.TrimSpace(answer)))
+	verdict, unknown, err := Decode([]byte(strings.TrimSpace(answer)))
+	// A field the schema does not name is recorded rather than refused. The
+	// verdict itself is unharmed by it — nothing reads what the contract never
+	// defined — and the drift is exactly the evidence a prompt regression is
+	// diagnosed from, so it is written down whatever became of the verdict
+	// carrying it.
+	if len(unknown) > 0 {
+		if driftErr := r.emit(request, sequence, execution.EventReviewDrift, map[string]any{
+			"work_item_id": request.WorkItemID,
+			"fields":       unknown,
+		}); driftErr != nil {
+			return evidence(), driftErr
+		}
+		lastSequence = sequence.Last()
+	}
 	if err != nil {
 		return evidence(), err
 	}
@@ -325,7 +339,7 @@ Reply with a single JSON object and nothing else, except the one report block de
 
 {"decision":"approve|repair","summary":"one paragraph","findings":[{"severity":"blocker|major|minor","message":"what is wrong and what to do","location":{"file":"path","line":1}}]}
 
-"findings" may be omitted when approving with no observations. "location" is optional. Any other field is rejected.
+"findings" may be omitted when approving with no observations. "location" is optional. The schema is closed: those are the only fields it defines, at every level of the object, and you must not add another one. Anything else you want to say belongs in "summary" or in a finding's "message".
 
 ` + report.Contract + `
 
