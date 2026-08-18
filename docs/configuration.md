@@ -376,8 +376,8 @@ weaken.
 
 | Kind | Owner | Every other role |
 | --- | --- | --- |
-| `brief`, `goals`, `non-goals` | Product manager | Asks questions and proposes amendments |
-| `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and proposes amendments |
+| `brief`, `goals`, `non-goals` | Product manager | Asks questions and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
+| `design`, `specification`, `decision` | Architect | Identifies risks, asks questions, and [proposes amendments](#proposing-a-change-to-a-document-you-do-not-own) |
 
 The development manager appears in neither row, because it owns no repository
 document: its decomposition is Beads work rather than Markdown. Nothing here
@@ -412,6 +412,95 @@ What is still not enforced anywhere is an agent with an editor in its worktree
 changing a document without recording that it did — the same gap the design
 records for pushing and merging, where the contract in the prompt and the
 reviewer are what stand in the way.
+
+### Proposing a change to a document you do not own
+
+A role that may not edit a document and has no way to say it is wrong has two
+moves left, and both are bad: build against intent it believes is wrong, or edit
+the document anyway. So there is a third: one block, in the contract, carried by
+every role that has it. Today that is the developer, which is the role that meets
+the boundary while implementing against a document — a developer that finds the
+design contradicts the goal it serves ends its reply with it:
+
+````text
+```yoyodyne-amendment
+{"proposals":[{"artifact":"v1-design","change":"say which of the two orderings holds","why":"the work item cannot be implemented against both"}]}
+```
+````
+
+The harness resolves the document to its kind and its kind to its owner, so who
+is being asked follows from the document rather than from anything the agent
+claims. A proposal naming a document nobody records is refused, because there is
+no owner to decide a change to a document that does not exist, and a proposal
+from the role that already owns the document is refused too: that role amends
+it. **The refusal reaches you and not the agent that wrote it** — it is named on
+the run's outcome beside the proposals that were kept, and nothing carries it
+back into the agent's next attempt, so a role that misnames a document is not
+told and will misname it the same way again. The artifact ids are what
+`yoyo artifact list` prints.
+
+**Nothing an unapproved proposal contains reaches the document, and neither does
+anything an approved one contains.** A proposal carries what should become true
+and why, never replacement prose — the size bound on it is what keeps it an
+argument rather than an edit waiting to be pasted. Approving records that the
+owner's authority came down in favour of the change; the change itself is then
+made by the owner, in the document, in a revision recorded under that role.
+
+Like a report, a proposal costs its run nothing: the run integrates exactly as it
+would have, and a proposal the harness cannot read or cannot keep is named on the
+outcome rather than failing the attempt it arrived with. It is durable in the
+same place and for the same reason — the run that argued the design was wrong is
+finished and cleaned up long before anybody decides what to do about it.
+
+```sh
+yoyo amendment list                       # what is waiting to be decided
+yoyo amendment list --owner architect     # one owner's queue
+yoyo amendment show <id>                  # one proposal and what became of it
+yoyo amendment approve <id> --reason ...  # record the change as authorized
+yoyo amendment decline <id> --reason ...  # turn it down, keeping why
+```
+
+**Every decision is yours, whoever owns the document.** An owning role that runs
+is shown what has been proposed against its documents and argues for or against
+it — proposals against the brief and the goals are carried into the product
+manager's conversation, which is told in so many words that it cannot decide one
+and cannot edit anything. The architect does not execute at all yet. So no agent
+records a decision, `yoyo amendment` is the only thing that does, and the record
+says you exercised the owner's authority rather than that the owner answered —
+the same override path `yoyo invariant` documents. A decline keeps the reason it
+was turned down with, because a proposal refused silently is one the same
+argument arrives to make again.
+
+An owning role recording its own decision is vocabulary the record already has
+and nothing produces: what would make it real is a decision the harness carries
+out for a role from its own reply, the way it carries out the product manager's
+tracker actions. Until something does that, read "under the architect's
+authority" on a decision as your judgement standing in for a role that has not
+run, not as the architect having answered.
+
+The reviewer is deliberately not given this block. What it finds wrong with a
+change is a finding, which decides whether the change is repaired; a reviewer
+that could also propose amendments would have two ways to say one thing. The
+product manager raises what it cannot place under a goal as a concern, which
+stops and asks you, for the same reason.
+
+A developer that could not be talked out of its argument makes it again on every
+repair attempt, and the second and later copies within one run are dropped: one
+disagreement is one proposal, rather than one per attempt for whoever decides to
+answer several times over. Two proposals count as the same argument when they
+ask for the same change to the same document; restating the reasoning does not
+make a new one.
+
+**This is a second proposal path rather than a reuse of the one the conversation
+already has**, and that is worth knowing because it was not the first choice. The
+product manager's work-item proposals live in the conversation that raised them,
+in memory, decided inside a turn. A proposed amendment has to survive the run
+that raised it, is addressed to an owning role rather than to you alone, and is
+decided from the command line days later — so what carries over is the shape
+(propose, never defer an edit, decide explicitly, record the decision) rather
+than the code. The cost is two vocabularies for one idea: a proposal in the
+conversation is a work item, and a proposal in `yoyo amendment` is a change to a
+document. Consolidating them is not done.
 
 ### Traceability: references and orphans
 

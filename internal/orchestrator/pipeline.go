@@ -11,6 +11,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/amendment"
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
@@ -159,6 +161,12 @@ type Pipeline struct {
 	// have, and a report it cannot keep is named on the outcome rather than
 	// disappearing quietly.
 	Reports ReportCollector
+	// Amendments is where changes this run's agents propose to documents they do
+	// not own are kept, so the argument outlives the run that made it. It is
+	// optional in the same way as the reports and for the same reason: a proposal
+	// decides nothing about the run, so a pipeline wired without one still runs
+	// exactly as it would have and names the proposal it could not keep.
+	Amendments AmendmentRecorder
 	// Prices puts the price of this work item on the item itself as a run for it
 	// ends. It is optional in the same way and for the same reason: a run is not
 	// worth failing over a number nobody could write down, so a pipeline wired
@@ -201,6 +209,14 @@ type Outcome struct {
 	// because a report nobody collected would otherwise leave no trace at all.
 	Reports       []report.Report `json:"reports,omitempty"`
 	ReportProblem string          `json:"report_problem,omitempty"`
+	// Amendments are the changes this run's agents proposed to documents they do
+	// not own. Like the reports they are recorded beside the run and decided
+	// nothing about it: each one is waiting on the role that owns the document or
+	// on the operator, and nothing was written to any document.
+	// AmendmentProblem names a proposal that could not be read or could not be
+	// kept, because a proposal nobody recorded would otherwise leave no trace.
+	Amendments       []amendment.Proposal `json:"amendments,omitempty"`
+	AmendmentProblem string               `json:"amendment_problem,omitempty"`
 	// Cost is what every run made for this work item has cost, as the provider
 	// reported it: this run and every earlier one, the attempts that failed as
 	// well as the one that finished. It is absent when nothing priced the item,
@@ -648,6 +664,14 @@ type activeRun struct {
 	// for differently: the developer's set is what the work item names, and the
 	// reviewer's adds what the change turned out to touch.
 	invariants invariant.Set
+	// artifactSet is the recorded canonical documents, read only if something in
+	// this run proposes a change to one and kept so a second proposal in the same
+	// run does not read the repository again. Nil means nothing has needed it.
+	artifactSet *artifact.Set
+	// proposedAmendments is the changes this run has already recorded, by document
+	// and change, so a developer that makes the same argument again on a repair
+	// attempt raises one proposal rather than one per attempt.
+	proposedAmendments map[string]bool
 }
 
 // loadInvariants reads the architect's durable constraints. It is a hard failure
@@ -2350,17 +2374,21 @@ func (p Pipeline) clock() execution.Clock {
 // it works within.
 const developerContract = `You are the developer for one bounded Yoyodyne work item.
 
-Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; report a proposed upstream change instead. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
+Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
-Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, report the correction it needs in your summary.
+Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, propose the correction it needs.
 
 Any architectural invariant delivered with this work item is a constraint on your change rather than advice. Invariants exist because a change whose own work is correct can still break something the work item never mentioned, so each one holds even where nothing else you were given refers to it. They belong to the architect: do not create, amend, retire, or edit one. If your work cannot satisfy an invariant, or you believe one is wrong, leave it in force and put the amendment you would propose in your summary for the architect to decide.
 
 ` + report.Contract + `
 
-Your summary and a report do different jobs, and something can need both. The summary is your account of this work item, read by whoever looks at this run, and it is still where discovered work goes for the product manager to admit. A report outlives the run, so it is what you use for something that will still matter once this item is closed and nobody is reading its summary any more.`
+Your summary and a report do different jobs, and something can need both. The summary is your account of this work item, read by whoever looks at this run, and it is still where discovered work goes for the product manager to admit. A report outlives the run, so it is what you use for something that will still matter once this item is closed and nobody is reading its summary any more.
+
+` + amendment.Contract + `
+
+A proposal is not a report and not a work item. A report says what somebody should know and asks for nothing; a proposal asks the owner of one document for one change to it, and waits for their answer rather than yours. An architectural invariant is not one of these documents and has its own lifecycle, so the amendment you would propose to one still goes in your summary for the architect.`
 
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, then the architectural invariants that

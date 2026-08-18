@@ -77,11 +77,25 @@ type Conversation struct {
 	// to, and "what did that change" is a question about the run they last
 	// watched rather than about whichever process was holding it. It is empty on
 	// a conversation that has never started one.
-	LastRunWorkItemID string    `json:"last_run_work_item_id,omitempty"`
-	LastSequence      uint64    `json:"last_sequence"`
-	StartedAt         time.Time `json:"started_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	LastRunWorkItemID string `json:"last_run_work_item_id,omitempty"`
+	// DeliveredAmendmentIDs are the changes proposed to this role's documents
+	// that the conversation has already carried into a turn. A proposal stays
+	// pending until somebody decides it, so without a record of what was already
+	// said the same list would be delivered again on every turn — and, because
+	// the process that delivered it is usually not the one that resumes the
+	// conversation, it is durable for the same reason the provider session is.
+	// It is bounded, and an id dropped from it is delivered once more rather
+	// than lost, which is the right way for this to fail.
+	DeliveredAmendmentIDs []string  `json:"delivered_amendment_ids,omitempty"`
+	LastSequence          uint64    `json:"last_sequence"`
+	StartedAt             time.Time `json:"started_at"`
+	UpdatedAt             time.Time `json:"updated_at"`
 }
+
+// MaxDeliveredAmendmentIDs bounds that record. It is far above any plausible
+// backlog of undecided proposals, and it exists so a conversation's state file
+// cannot grow without limit on a queue nobody works through.
+const MaxDeliveredAmendmentIDs = 256
 
 // MaxPendingTrackerResultBytes bounds the results a conversation may carry
 // forward. The record has to stay reloadable, so what waits inside it is bounded
@@ -129,6 +143,10 @@ func (c Conversation) Validate() error {
 	if len(c.PendingTrackerResults) > MaxPendingTrackerResultBytes {
 		problems = append(problems, fmt.Errorf("pending tracker results are %d bytes, limit is %d",
 			len(c.PendingTrackerResults), MaxPendingTrackerResultBytes))
+	}
+	if len(c.DeliveredAmendmentIDs) > MaxDeliveredAmendmentIDs {
+		problems = append(problems, fmt.Errorf("%d delivered amendment ids are recorded, limit is %d",
+			len(c.DeliveredAmendmentIDs), MaxDeliveredAmendmentIDs))
 	}
 	// A picture is deliberately allowed to predate the conversation that carries
 	// it: it is assembled before the record exists, and a refresh moves it

@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
@@ -689,7 +690,12 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 		// Documentation the change falsifies is part of the work item itself, so
 		// it does not depend on a persona or on the bead author remembering it.
 		"Documentation that describes behavior you change is part of the assigned work",
-		"report the correction it needs in your summary",
+		// A document the developer may not edit is corrected by proposing the
+		// correction to the role that owns it, which is a channel out of the run
+		// rather than a line in a summary nobody surfaces.
+		"propose the correction it needs",
+		amendment.Fence,
+		"A proposal is not a report and not a work item",
 		// What is worth doing and in what order is the product manager's, so a
 		// developer reports the work it discovered rather than queueing it itself.
 		"do not admit work to it, reorder it, or retire anything from it",
@@ -2333,6 +2339,12 @@ type fakeBackend struct {
 	// developerFinalText replaces what a served developer attempt says about its
 	// work, which is what a test that cares about the summary itself sets.
 	developerFinalText string
+	// developerFinalTextByAttempt says it per attempt instead, for a test where
+	// what the developer says has to change between the first attempt and the
+	// repair. The last entry repeats once the list runs out, the way the review
+	// verdicts do.
+	developerFinalTextByAttempt []string
+	developerAttempts           int
 }
 
 func (f *fakeBackend) CheckAvailability(context.Context) (backend.Availability, error) {
@@ -2453,6 +2465,10 @@ func roleBackend(develop func(backend.RunRequest) error, verdicts ...string) *fa
 			if provider.developerFinalText != "" {
 				finalText = provider.developerFinalText
 			}
+			if texts := provider.developerFinalTextByAttempt; len(texts) > 0 {
+				finalText = texts[min(provider.developerAttempts, len(texts)-1)]
+			}
+			provider.developerAttempts++
 			return backend.RunResult{
 				Backend:       domain.BackendClaudeCode,
 				SessionID:     provider.developerSession,

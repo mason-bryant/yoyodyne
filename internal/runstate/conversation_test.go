@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,11 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	// change" is a question about the run the operator last watched, and the
 	// process that started it is often not the one they come back to.
 	conversation.LastRunWorkItemID = "yoyodyne-ifd.39"
+	// And so do the proposed changes the conversation has already put to the role
+	// that owns the documents: a pending proposal stays pending until somebody
+	// decides it, so a record that did not survive the process would deliver the
+	// whole undecided queue again on every restart.
+	conversation.DeliveredAmendmentIDs = []string{"amendment-0123456789abcdef0123456789abcdef"}
 	conversation.LastSequence = 4
 	conversation.UpdatedAt = conversation.StartedAt.Add(time.Minute)
 	if err := store.Save(conversation); err != nil {
@@ -51,7 +57,7 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if loaded != conversation {
+	if !reflect.DeepEqual(loaded, conversation) {
 		t.Fatalf("Load() = %#v, want %#v", loaded, conversation)
 	}
 }

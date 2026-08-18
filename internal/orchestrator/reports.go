@@ -9,6 +9,7 @@ package orchestrator
 import (
 	"fmt"
 
+	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
@@ -19,18 +20,28 @@ type ReportCollector interface {
 	Append(reported report.Report) error
 }
 
-// collectFromReply takes what an agent reported out of what it said, records it,
-// and returns the rest — which is the agent's own account, without the block the
-// operator was never meant to read as prose. A block that could not be read
-// leaves the text exactly as it arrived, because the summary is the run's
-// evidence and a report must not cost it.
+// collectFromReply takes what an agent reported and what it proposed out of what
+// it said, records both, and returns the rest — which is the agent's own account,
+// without the blocks the operator was never meant to read as prose. A block that
+// could not be read leaves the text exactly as it arrived, because the summary is
+// the run's evidence and neither channel must cost it.
+//
+// Reports are taken first and the proposals out of what is left, so a reply
+// carrying both loses neither, and an unreadable report block still has the
+// proposals in front of it read rather than swallowed with it.
 func (a *activeRun) collectFromReply(role domain.AgentRole, text string) string {
 	rest, entries, err := report.Extract(text)
 	if err != nil {
 		a.noteReportProblem(role, err)
+	} else {
+		a.collectReports(role, entries)
+	}
+	rest, proposed, err := amendment.Extract(rest)
+	if err != nil {
+		a.noteAmendmentProblem(role, err)
 		return rest
 	}
-	a.collectReports(role, entries)
+	a.collectAmendments(role, proposed)
 	return rest
 }
 

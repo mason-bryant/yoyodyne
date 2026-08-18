@@ -825,7 +825,8 @@ operating system's state directory, so leaving and running `yoyo chat` again
 resumes the same conversation; `--new` starts a fresh one instead. The record
 keeps the requested model selector, the model the provider reported serving, the
 provider session identifier, any action results the product manager has not been
-told about yet, the work item it last ran, and when its picture of the
+told about yet, the work item it last ran, which proposed changes to its own
+documents it has already been shown, and when its picture of the
 repository and tracker was gathered and against what commit, and the normalized
 event stream is stored beside it — including what the operator asked the harness
 to do, which is recorded in the conversation's own log beside the runs' logs.
@@ -972,6 +973,56 @@ The pile lives outside the repository under the operating system's state
 directory, beside the run and conversation records rather than among them. It
 outlives them: a run is settled and its worktree and branch are removed, and
 what it reported is still there for you to read.
+
+### What agents propose changing, and who decides
+
+The canonical documents each belong to one role, and that boundary is enforced
+rather than asked for. A role that meets it and has nothing else to say has two
+moves left, both bad: build against intent it believes is wrong, or edit the
+document anyway. So it has a third — it proposes the change, in one small block
+like the report block, and the harness carries it to the role that owns the
+document and to you. The developer carries that block today, being the role that
+meets the boundary while implementing against a document; the reviewer says what
+is wrong with a change as a finding instead, and the product manager stops and
+asks you.
+
+```sh
+yoyo amendment list                       # what is waiting to be decided
+yoyo amendment show <id>                  # one proposal and what became of it
+yoyo amendment approve <id> --reason ...  # record the change as authorized
+yoyo amendment decline <id> --reason ...  # turn it down, keeping why
+```
+
+Who is being asked follows from the document rather than from anything the agent
+says: the harness resolves the artifact it names to its kind, and the kind to its
+owner. A proposal about a document nobody records is refused, because there is
+nobody to decide it, and a proposal from the role that owns the document is
+refused too — that role amends it.
+
+**A proposal is never a deferred edit.** It carries what should become true and
+why, not replacement prose, and nothing in one ever reaches the document —
+approved or not. Approving records that the owner's authority came down in
+favour of the change; the change is then made by the owner, in the document, in
+a revision recorded under that role. That is what keeps this from becoming the
+slow path by which a downstream role redefines upstream intent: the only thing a
+proposal can produce on its own is a decision.
+
+Like a report, it costs the run nothing. The run integrates exactly as it would
+have, and a proposal the harness cannot read or cannot keep is named on the
+outcome rather than failing the attempt it arrived with — that naming reaches
+you and not the agent, so a role that misnames a document is not told and
+repeats the mistake. It is durable in the same place and for the same reason:
+the run that argued the design was wrong is long finished before anybody decides
+what to do about it. A developer that makes the same argument again on a repair
+attempt raises one proposal rather than one per attempt.
+
+The owner hears it where it works, and you are the one who decides. Proposals
+against the brief and the goals are carried into the product manager's
+conversation, which argues for or against them and cannot decide or edit
+anything; the architect agent does not execute at all yet. So every decision is
+recorded by you through `yoyo amendment` — the same override path
+`yoyo invariant` takes — and the record says you exercised the owner's authority
+rather than that the owner answered.
 
 ### How fresh the conversation's picture is, and how to refresh it
 
@@ -1298,6 +1349,11 @@ naming the file and the entries that crossed. It is reported rather than refused
 because the log is append-only, so losing the document would leave one that could
 neither load nor be corrected. None of it constrains you: the boundary is between
 agent roles, and you direct any of them.
+
+A role that meets that boundary is not left with nothing to say. It proposes the
+change instead, the proposal reaches the owner and you, and only a decision on it
+is ever recorded — see [what agents propose changing, and who
+decides](#what-agents-propose-changing-and-who-decides).
 
 The chain that identity makes expressible is then checked, every time the
 artifacts are loaded: a `supports` entry naming an id no artifact answers to is
