@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -125,11 +126,91 @@ func TestRunnerRedactsSensitiveCheckOutputBeforeEvents(t *testing.T) {
 	}
 }
 
+func TestRunnerGivesEveryCheckTheConfiguredBudget(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name      string
+		configure time.Duration
+		want      time.Duration
+	}{
+		{name: "configured", configure: 45 * time.Minute, want: 45 * time.Minute},
+		{name: "unset falls back", configure: 0, want: defaultTimeout},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			process := &recordingRunner{}
+			results, _, err := (Runner{Process: process, Timeout: test.configure}).Run(
+				context.Background(),
+				"run-0123456789abcdef0123456789abcdef",
+				t.TempDir(),
+				[]string{"true"},
+				0,
+				nil,
+			)
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if process.command.Timeout != test.want {
+				t.Fatalf("command timeout = %s, want %s", process.command.Timeout, test.want)
+			}
+			if len(results) != 1 || results[0].Timeout != test.want {
+				t.Fatalf("Run() results = %#v, want the budget recorded as %s", results, test.want)
+			}
+		})
+	}
+}
+
+func TestRunnerReportsElapsedAgainstTheBudgetOnEveryCheck(t *testing.T) {
+	t.Parallel()
+
+	started := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
+	process := &recordingRunner{result: execution.ProcessResult{
+		Status:     execution.ProcessTimedOut,
+		ExitCode:   -1,
+		StartedAt:  started,
+		FinishedAt: started.Add(11 * time.Minute),
+	}}
+	var completed []execution.Event
+	results, _, err := (Runner{Process: process, Timeout: 10 * time.Minute}).Run(
+		context.Background(),
+		"run-0123456789abcdef0123456789abcdef",
+		t.TempDir(),
+		[]string{"make test"},
+		0,
+		func(event execution.Event) error {
+			if event.Type == execution.EventCommandCompleted {
+				completed = append(completed, event)
+			}
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Elapsed() != 11*time.Minute || results[0].Timeout != 10*time.Minute {
+		t.Fatalf("Run() results = %#v", results)
+	}
+	if len(completed) != 1 {
+		t.Fatalf("completion events = %d, want 1", len(completed))
+	}
+	payload := string(completed[0].Payload)
+	for _, want := range []string{`"elapsed":"11m0s"`, `"timeout":"10m0s"`} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("completion payload = %s, want it to contain %s", payload, want)
+		}
+	}
+}
+
 type recordingRunner struct {
 	command execution.Command
+	result  execution.ProcessResult
 }
 
 func (r *recordingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
 	r.command = command
-	return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
+	if r.result.Status == "" {
+		return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
+	}
+	return r.result, nil
 }

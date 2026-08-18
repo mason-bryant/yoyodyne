@@ -137,6 +137,15 @@ type Execution struct {
 	// UsageLimitMaxPause, so a provider that keeps refusing walks into that bound
 	// rather than polling forever.
 	UsageLimitUnknownResetPause Duration `yaml:"usage_limit_unknown_reset_pause" json:"usage_limit_unknown_reset_pause"`
+	// CheckTimeout is the total budget one configured check gets: the whole time
+	// it may run, not the time it may stay quiet. It scales with the work rather
+	// than with the machine, so it is configured rather than fixed — a suite
+	// grows, and N runs at once multiply its wall clock without multiplying the
+	// cores it runs on, so the budget has to be raised or the runs serialized.
+	// A check killed at this bound is not a check that failed: it is work that
+	// may have been passing the whole time, which is why every check reports
+	// what it spent against this budget rather than only the one that ran out.
+	CheckTimeout Duration `yaml:"check_timeout" json:"check_timeout"`
 	// ServerOverloadPause is how long a run waits before reissuing an attempt the
 	// provider refused because its own servers were transiently overloaded. It is
 	// the same polling discipline as an exhausted limit with a different clock:
@@ -171,6 +180,14 @@ const (
 	// reset, because a quoted reset can be overtaken by a window that rolls or by
 	// capacity somebody bought.
 	defaultUsageLimitUnknownResetPause = Duration(30 * time.Minute)
+	// defaultCheckTimeout has room for a suite several times the size of the one
+	// that provoked it. The flat ten minutes it replaces killed a run whose
+	// tests were passing package by package under the contention of two
+	// concurrent runs, so the default is set against the contended case rather
+	// than the single-run one: this repository's own suite takes well under two
+	// minutes with two of them running at once, and a project that outgrows
+	// thirty minutes raises this rather than meeting it as a failed run.
+	defaultCheckTimeout = Duration(30 * time.Minute)
 	// defaultServerOverloadPause is long enough to be worth waiting — the
 	// provider CLI has already spent its own ten retries on the condition before
 	// the harness ever sees it — and short enough that a run resumes within a
@@ -287,6 +304,12 @@ func (c Config) Validate() error {
 	}
 	if c.Execution.UsageLimitInProcessPause < 0 {
 		problems = append(problems, "usage_limit_in_process_pause cannot be negative")
+	}
+	// Zero is not a deliberate choice here, unlike the pauses above: a check with
+	// no budget at all holds a worktree, a claim, and a run open for as long as
+	// it keeps running, and nothing else bounds it.
+	if c.Execution.CheckTimeout <= 0 {
+		problems = append(problems, "execution.check_timeout must be positive")
 	}
 	// An overload names no reset time, so this interval is the whole of the wait
 	// rather than a bound on it. Zero would mean reissuing straight back into the

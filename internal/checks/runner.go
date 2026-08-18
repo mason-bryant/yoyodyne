@@ -10,18 +10,36 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
-const defaultTimeout = 10 * time.Minute
+// defaultTimeout is what a runner built without a budget gives each check. The
+// harness wires execution.check_timeout into every runner it builds, so this
+// only covers a runner assembled in code, and it matches that configured
+// default so the two never describe different behavior.
+const defaultTimeout = 30 * time.Minute
 
 type Result struct {
 	Command string                  `json:"command"`
 	Process execution.ProcessResult `json:"process"`
 	Passed  bool                    `json:"passed"`
+	// Timeout is the budget this check was given. It is recorded beside the
+	// result rather than left implicit because elapsed time alone says nothing
+	// about how close a suite is to the ceiling: a check that grows past the
+	// budget kills work that was passing, and the only warning is the two
+	// numbers side by side before it happens.
+	Timeout time.Duration `json:"timeout"`
+}
+
+// Elapsed is how long the check actually ran.
+func (r Result) Elapsed() time.Duration {
+	return r.Process.FinishedAt.Sub(r.Process.StartedAt)
 }
 
 type Runner struct {
-	Process      execution.ProcessRunner
-	Clock        execution.Clock
-	Shell        string
+	Process execution.ProcessRunner
+	Clock   execution.Clock
+	Shell   string
+	// Timeout is the total budget each check gets, the whole time it may run
+	// rather than the time it may stay quiet: a suite that keeps printing is
+	// still spending it. Zero falls back to defaultTimeout.
 	Timeout      time.Duration
 	RedactValues []string
 }
@@ -87,14 +105,19 @@ func (r Runner) Run(ctx context.Context, runID, directory string, commands []str
 			return results, lastAccepted, errors.Join(observerErrors...)
 		}
 		passed := processResult.Status == execution.ProcessSucceeded
-		result := Result{Command: safeCommand, Process: processResult, Passed: passed}
+		result := Result{Command: safeCommand, Process: processResult, Passed: passed, Timeout: timeout}
 		results = append(results, result)
+		// Every check reports what it spent against what it was allowed, not
+		// only the one that ran out: a suite walking toward its ceiling is
+		// visible in the event stream long before it reaches it.
 		if err := emit(runID, sequence, clock, sink, execution.EventCommandCompleted, map[string]any{
 			"command":   safeCommand,
 			"kind":      "check",
 			"passed":    passed,
 			"status":    processResult.Status,
 			"exit_code": processResult.ExitCode,
+			"elapsed":   result.Elapsed().String(),
+			"timeout":   timeout.String(),
 		}); err != nil {
 			return results, lastAccepted, err
 		}

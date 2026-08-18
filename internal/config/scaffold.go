@@ -196,6 +196,12 @@ execution:
   # again. It spends the same maximum above, so an overload that never lifts
   # reaches that bound rather than reissuing forever.
   server_overload_pause: %s
+  # The total budget one check below gets: the whole time it may run, not the
+  # time it may stay quiet. Raise it as the suite grows, and raise it again for
+  # concurrency -- N runs at once multiply the wall clock of every suite without
+  # multiplying the cores it runs on, so either this scales with
+  # max_concurrent_developers or the checks are left to serialize themselves.
+  check_timeout: %s
 
 # Conservative by default: integration and publishing are opted in to
 # separately. Automatic integration is refused unless it is actually gated by
@@ -221,6 +227,7 @@ approvals:
 		renderScaffoldDuration(effective.Execution.UsageLimitInProcessPause),
 		renderScaffoldDuration(effective.Execution.UsageLimitUnknownResetPause),
 		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
+		renderScaffoldDuration(effective.Execution.CheckTimeout),
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,

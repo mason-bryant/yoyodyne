@@ -1801,8 +1801,18 @@ func (a *activeRun) verify(ctx context.Context) error {
 		// was stopped, so it ends the run rather than spending an attempt on a
 		// developer that would be stopped the same way.
 		var cause error = fmt.Errorf("verification failed: %s exited with %d", check.Command, check.Process.ExitCode)
-		if check.Process.Status == execution.ProcessFailed {
+		switch check.Process.Status {
+		case execution.ProcessFailed:
 			cause = checkFailure{result: check}
+		case execution.ProcessTimedOut:
+			// A check stopped on time says nothing about the change: the work
+			// may have been passing the whole way, as it was when this bound
+			// was flat and a contended suite grew past it. So the failure names
+			// both numbers and the setting that moves the ceiling, rather than
+			// reporting the kill as an exit code nobody chose.
+			cause = fmt.Errorf(
+				"verification timed out: %s ran for %s and was stopped at its %s execution.check_timeout budget; raise that budget or lower execution.max_concurrent_developers, because concurrent runs multiply the wall clock of every suite",
+				check.Command, check.Elapsed().Round(time.Second), check.Timeout)
 		}
 		return phaseError{status: statusForProcess(check.Process.Status), cause: cause}
 	}
@@ -2978,7 +2988,11 @@ func renderOutcomeNotes(outcome Outcome) string {
 		lines = append(lines, "Diff stat:\n"+outcome.Changes.DiffStat)
 	}
 	for _, check := range outcome.Checks {
-		lines = append(lines, fmt.Sprintf("Check: %s (passed=%t, exit=%d)", check.Command, check.Passed, check.Process.ExitCode))
+		// What a check spent against what it was allowed is recorded on the item
+		// itself, so a suite growing toward its budget is visible run after run
+		// rather than only in the run the budget finally stops.
+		lines = append(lines, fmt.Sprintf("Check: %s (passed=%t, exit=%d, %s of %s)",
+			check.Command, check.Passed, check.Process.ExitCode, check.Elapsed().Round(time.Second), check.Timeout))
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }

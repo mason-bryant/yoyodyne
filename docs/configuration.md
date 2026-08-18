@@ -89,6 +89,7 @@ execution:
   usage_limit_in_process_pause: 6h
   usage_limit_unknown_reset_pause: 30m
   server_overload_pause: 90s
+  check_timeout: 30m
 
 approvals:
   brief: human
@@ -166,6 +167,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.usage_limit_in_process_pause` (`6h` each),
    `execution.usage_limit_unknown_reset_pause` (`30m`),
    `execution.server_overload_pause` (`90s`),
+   `execution.check_timeout` (`30m`),
    `approvals.publishing` (`human`), and an agent's `instances` (1).
    `approvals.publishing` is the only approval with a harness default, because
    it was added after configurations existed: a file written before it keeps the
@@ -753,6 +755,46 @@ by integrating an unformatted file through a green check run.
 Prefer the non-interactive, non-daemon, pinned-install form of each tool. A
 check that prompts, starts a watcher, or resolves dependencies differently
 between runs makes the integration gate nondeterministic.
+
+### How long a check may take
+
+Each check gets a budget, and a check that exceeds it is killed and ends the run:
+
+```yaml
+execution:
+  check_timeout: 30m   # the default; per check, not for the list
+```
+
+It is the *total* time a check may run rather than the time it may stay quiet: a
+suite printing a result every second is spending it just as fast as one that has
+gone silent. The `30m` default is deliberately generous, because a check stopped
+at this bound is not a check that judged the change — the work may have been
+passing the whole way, and killing it costs a run that had nothing wrong with it.
+
+**Concurrency multiplies what a suite takes, so this has to scale with it.**
+`max_concurrent_developers: 2` does not give each run its own machine: two suites
+contend for the same cores, and each one's wall clock grows accordingly — about
+twofold for this repository's own suite, and further under whatever else the
+machine is doing, including the provider processes the runs themselves keep busy.
+The budget is spent in wall clock, so N concurrent runs need a budget set against
+what the suite takes with N of them running, not against what it takes alone.
+Either raise `check_timeout` to match, or lower `max_concurrent_developers` so
+the suites serialize; leaving both at values chosen independently is how a
+passing suite gets killed. This is the failure that produced the setting: a flat
+ten minutes, a suite past forty packages with real Git integration tests, and two
+concurrent runs — the tests were passing package by package when the bound
+stopped them.
+
+Every check reports what it spent against what it was allowed, whether it passed
+or not. The completion event carries `elapsed` and `timeout`, and the run's notes
+on the work item carry the same pair per check, so a suite growing toward its
+ceiling is visible run after run rather than only in the run the ceiling finally
+stops. When one does time out, the failure names both numbers and the two
+settings that move them.
+
+A budget of `0` is refused rather than read as "unbounded": nothing else bounds a
+check, so one that never returns would hold a worktree, a claim, and a run open
+indefinitely.
 
 ## Publishing through pull requests
 

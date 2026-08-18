@@ -211,6 +211,12 @@ non-interactive and must exit non-zero on failure — a check that prints a
 complaint and exits 0 is not a gate. Prefer the pinned, non-daemon,
 non-interactive form of each tool, so the same commit checks the same way twice.
 
+Each check also gets a wall-clock budget, `execution.check_timeout`, thirty
+minutes by default. Raise it as your suite grows, and raise it again if you run
+several developers at once: concurrent runs share the machine, so each suite's
+wall clock grows without its work doing so. See
+[How long a check may take](docs/configuration.md#how-long-a-check-may-take).
+
 **Then validate what you wrote:**
 
 ```sh

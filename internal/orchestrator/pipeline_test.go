@@ -762,6 +762,59 @@ func TestPipelineSkipsReviewAndIntegrationWhenChecksFail(t *testing.T) {
 	}
 }
 
+// A check stopped at its budget is not a check that judged the change: the work
+// may have been passing the whole time, as it was when a contended suite grew
+// past a flat ten minutes. So the run ends rather than spending a repair attempt
+// on a developer that would be stopped the same way, and what it reports is the
+// two numbers a reader needs — what the check spent, and what it was allowed.
+func TestPipelineReportsElapsedAndBudgetWhenACheckTimesOut(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"sleep 30"})
+	runner, ok := pipeline.Checks.(checks.Runner)
+	if !ok {
+		t.Fatal("the test pipeline's check runner is not a checks.Runner")
+	}
+	runner.Timeout = 100 * time.Millisecond
+	pipeline.Checks = runner
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() error = nil, want the run stopped at the check budget")
+	}
+	for _, want := range []string{"verification timed out", "sleep 30", "ran for", "100ms execution.check_timeout", "max_concurrent_developers"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("Run() error = %v, want it to name %q", err, want)
+		}
+	}
+	// The developer is never asked to repair a check that never judged its
+	// change, so the run stops on the first attempt rather than spending the
+	// repair budget.
+	if runs := len(provider.requestsForRole(domain.RoleDeveloper)); runs != 1 {
+		t.Fatalf("developer invocations = %d, want only the first attempt", runs)
+	}
+	if len(outcome.Checks) != 1 || outcome.Checks[0].Timeout != 100*time.Millisecond {
+		t.Fatalf("outcome checks = %#v, want the budget recorded", outcome.Checks)
+	}
+	if elapsed := outcome.Checks[0].Elapsed(); elapsed <= 0 {
+		t.Fatalf("check elapsed = %s, want what the check actually spent", elapsed)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// A check the harness stopped on time is recorded as such rather than as a
+	// change that failed its checks, and nothing is left waiting to be repaired.
+	if state.Status != runstate.StatusTimedOut || state.Phase != runstate.PhaseChecking || state.CheckFailure != nil {
+		t.Fatalf("state = %#v", state)
+	}
+}
+
 func TestPipelineNeverIntegratesWithoutAnApprovingVerdict(t *testing.T) {
 	t.Parallel()
 
@@ -2414,6 +2467,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			Remote:                                 "origin",
 			UsageLimitUnknownResetPause:            config.Duration(30 * time.Minute),
 			ServerOverloadPause:                    config.Duration(90 * time.Second),
+			CheckTimeout:                           config.Duration(30 * time.Minute),
 		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,

@@ -191,7 +191,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			Runner: processRunner,
 		},
 		Checks: checks.Runner{
-			Process:      processRunner,
+			Process: processRunner,
+			// The budget every check gets is configured rather than fixed,
+			// because it is a property of the project's suite and of how many
+			// runs share the machine with it, neither of which the harness knows.
+			Timeout:      cfg.Execution.CheckTimeout.Duration(),
 			RedactValues: redactValues,
 		},
 		// The reviewer runs its own provider invocation, so it is built from a
