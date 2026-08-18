@@ -200,11 +200,14 @@ git add -A && git commit -m "adopt Yoyodyne"
 yoyo chat
 ```
 
-**What the product manager can see.** It reads the Markdown under
+**What the product manager can see.** Product intent is the Markdown under
 `product.specifications` — `docs/product` by default — and nothing else in the
-repository: not the README, not the source, not the configuration. A
-specification opens with an introduction saying what the thing is and why it
-exists, and states the goals that serve it after that introduction:
+repository is read as intent. Beside it, and labeled as description rather than
+intent, it is given the documentation of what the product ships today: this
+README, the configuration guide, and the help the commands print. Not the
+source, and not the design document. A specification opens with an introduction
+saying what the thing is and why it exists, and states the goals that serve it
+after that introduction:
 
 ```markdown
 # Calc
@@ -378,16 +381,18 @@ asking is persona guidance, so a project that wants a different opening
 [replaces it](docs/configuration.md#personas) like any other part of the
 persona.
 
-That is all it sees of the repository. Not this README, not the design document,
-not the source: those describe how the product is built and run, they are owned
-by other roles, and they go stale against the code without anybody noticing —
-which is how a stale sentence in this file reached the operator as current
-product fact on 2026-08-16. Narrowing the inputs makes the product manager
-authoritative about intent and blind to everything else, and the second half is
-a real loss: reading all of `docs/` is what let it notice a contradiction
-between documentation and reality, and nothing in the harness does that now. See
-the [configuration guide](docs/configuration.md#product-specifications) for the
-setting and the reasoning.
+One more section sits below those, and it is a different kind of thing: **what
+the product ships today**, which is this README, the configuration guide, and
+the help every command prints. It is labeled as exactly that — a description of
+the implementation as built, never authority about what the product is for — so
+that the role deciding what to build next can say which surfaces already exist
+without you having to tell it. Where that description and a specification
+disagree, the product manager reports the conflict rather than settling it.
+
+Not the source, not the design document, and no way to run a command: those say
+how the product is built rather than what it is for or what it ships. The
+narrowing this partially undoes is described, with what it bought and what it
+cost, in the [configuration guide](docs/configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries

@@ -31,7 +31,7 @@ func TestAssembleProductReadsSpecificationsAndTrackerState(t *testing.T) {
 	writeProductFile(t, root, "docs/product/goals/autonomy.md", "# Autonomy\n\nThe operator states intent and approves it.\n\n## Goals\n\n- Routine work needs no per-change gate.\n")
 	// Only Markdown inside the configured directory is product evidence.
 	writeProductFile(t, root, "docs/product/diagram.png", "not markdown")
-	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nA stale sentence about the product.\n")
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nWhat the product ships, described to whoever uses it.\n")
 	writeProductFile(t, root, "docs/v1-harness-design.md", "# Design\n\nArchitecture, not intent.\n")
 	writeProductFile(t, root, "internal/notes.md", "implementation notes")
 
@@ -63,13 +63,20 @@ func TestAssembleProductReadsSpecificationsAndTrackerState(t *testing.T) {
 			t.Fatalf("product context is missing %q:\n%s", required, bundle.Text)
 		}
 	}
-	// The narrowing is the point of the directory: documentation outside it
-	// describes how the product is built, not what it is for, and is no longer
-	// evidence the product manager can report as current product fact.
-	for _, excluded := range []string{"A stale sentence about the product.", "Architecture, not intent.", "implementation notes", "not markdown"} {
+	// What is outside the specifications directory and is still not evidence: the
+	// design document and the source say how the product is built rather than
+	// what it is for or what it ships, and nothing that is not Markdown is read
+	// at all.
+	for _, excluded := range []string{"Architecture, not intent.", "implementation notes", "not markdown"} {
 		if strings.Contains(bundle.Text, excluded) {
-			t.Fatalf("product context read outside the specifications directory (%q):\n%s", excluded, bundle.Text)
+			t.Fatalf("product context read outside what it is given (%q):\n%s", excluded, bundle.Text)
 		}
+	}
+	// The specifications are what the references are, whatever else the context
+	// carries: a repository with a README and no specification has no recorded
+	// intent, and a caller counting references is asking about intent.
+	if len(bundle.References) != 2 {
+		t.Fatalf("references = %d, want the 2 specifications alone", len(bundle.References))
 	}
 	if len(bundle.SpecificationProblems) != 0 {
 		t.Fatalf("well-formed specifications reported problems: %v", bundle.SpecificationProblems)
@@ -506,6 +513,156 @@ func TestProseWords(t *testing.T) {
 				t.Fatalf("proseWords() = %d, want %d", words, testCase.words)
 			}
 		})
+	}
+}
+
+// What the product ships is carried so the role deciding what to build next can
+// name the surfaces that already exist. It is labeled as description, because
+// the same documentation read as authority is what let a stale README sentence
+// reach the operator as current product fact on 2026-08-16.
+func TestAssembleProductDescribesWhatIsShipped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\n`bin/yoyo-status` follows a run as it happens.\n")
+	writeProductFile(t, root, "docs/configuration.md", "# Configuration\n\nA project owns its configuration outright.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		CommandHelp:             "Usage: yoyo <command>\n\n  cost  price work items from the runs made for them\n",
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"## What the product ships today",
+		"### Shipped documentation: README.md",
+		"`bin/yoyo-status` follows a run as it happens.",
+		"### Shipped documentation: docs/configuration.md",
+		"A project owns its configuration outright.",
+		"### Command help",
+		"cost  price work items from the runs made for them",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("the shipped surface is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+	// The label is as much the point as the content: what it is, what it is not,
+	// and what to do when it disagrees with the specifications.
+	for _, required := range []string{
+		"It describes the implementation as built.",
+		"It is not authority about intent",
+		"the specifications above remain\nthe only statement of that",
+		"report the conflict",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("the shipped surface is not labeled as description (%q):\n%s", required, bundle.Text)
+		}
+	}
+	// Intent is stated before what was built from it, so the section that decides
+	// nothing cannot be read first and become the frame for the one that does.
+	if strings.Index(bundle.Text, "## Specification: docs/product/brief.md") > strings.Index(bundle.Text, "## What the product ships today") {
+		t.Fatalf("the shipped surface is rendered before the specifications:\n%s", bundle.Text)
+	}
+}
+
+// A project ships whatever documentation it wrote. A repository holding none of
+// what is looked for is told so, rather than getting a section that quietly
+// carries less than it says it does.
+func TestAssembleProductStatesWhenNothingDescribesWhatIsShipped(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "This repository holds none of the operator-facing documentation looked for here") {
+		t.Fatalf("missing documentation is not stated:\n%s", bundle.Text)
+	}
+	// One document present and the other missing is neither of those cases: what
+	// is there is carried, and nothing claims the rest was found.
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nWhat it does.\n")
+	partial, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(partial.Text, "### Shipped documentation: README.md") {
+		t.Fatalf("the documentation that is there was not read:\n%s", partial.Text)
+	}
+	if strings.Contains(partial.Text, "docs/configuration.md") {
+		t.Fatalf("documentation that is not there is named as read:\n%s", partial.Text)
+	}
+}
+
+// Intent wins the budget over description, by construction rather than by the
+// order the sections happen to be written in: the specifications are read first
+// and the documentation takes what is left, so a repository too large for both
+// keeps the half that is authoritative.
+func TestAssembleProductSpendsTheBudgetOnIntentFirst(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	writeProductFile(t, root, "README.md", "# Yoyodyne\n\n"+strings.Repeat("described ", 512))
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", MaxBytes: 6144})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "# Bounded runs") {
+		t.Fatalf("a specification was dropped for documentation:\n%s", bundle.Text)
+	}
+	if !strings.Contains(bundle.Text, "This documentation did not fit and is not included above:\n\n- README.md") {
+		t.Fatalf("documentation that did not fit is not named:\n%s", bundle.Text)
+	}
+	if bundle.Bytes > 6144 {
+		t.Fatalf("bundle is %d bytes, over the %d it was assembled to", bundle.Bytes, 6144)
+	}
+}
+
+// The note is written after the budget has been spent, so what it can cost is
+// charged before it. Every path it can name is one of a fixed set, so the
+// reserve is exact rather than an allowance -- but only while it stays that way.
+func TestShippedDocumentationNoteFitsWhatIsReservedForIt(t *testing.T) {
+	t.Parallel()
+
+	reserved := longestShippedDocumentationNote()
+	for _, note := range []string{
+		noShippedDocumentation,
+		renderShippedDocumentationNote("", shippedDocumentation),
+		renderShippedDocumentationNote("### Shipped documentation: README.md", shippedDocumentation[1:]),
+		renderShippedDocumentationNote("### Shipped documentation: README.md", nil),
+	} {
+		if len(note) > reserved {
+			t.Fatalf("a note renders %d bytes against a reserve of %d:\n%s", len(note), reserved, note)
+		}
+	}
+}
+
+// Help is compiled into the product rather than read from it, so a caller that
+// supplies far too much of it is a mistake in the caller. It is cut rather than
+// carried, and cut at a line, so what survives is still help.
+func TestCommandHelpIsBounded(t *testing.T) {
+	t.Parallel()
+
+	help := strings.Repeat("  run   run one Beads work item in an isolated worktree\n", 4096)
+	bounded := boundedCommandHelp(help)
+	if len(bounded) > maxCommandHelpBytes+len("\n[the rest of the command help is not included here]") {
+		t.Fatalf("bounded help is %d bytes, over the %d bound", len(bounded), maxCommandHelpBytes)
+	}
+	if !strings.Contains(bounded, "[the rest of the command help is not included here]") {
+		t.Fatal("help was cut without saying so")
+	}
+	if strings.HasSuffix(strings.TrimSuffix(bounded, "\n[the rest of the command help is not included here]"), "worktre") {
+		t.Fatal("help was cut mid-line")
+	}
+	if unbounded := "Usage: yoyo <command>\n"; boundedCommandHelp(unbounded) != strings.TrimSpace(unbounded) {
+		t.Fatalf("help inside the bound was changed: %q", boundedCommandHelp(unbounded))
 	}
 }
 
