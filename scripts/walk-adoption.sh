@@ -258,7 +258,7 @@ contains "$refusal" "docs/product/calc.md" "the refusal names every file that is
 pass ".beads/issues.jsonl and .beads/interactions.jsonl are excepted from that refusal"
 
 git add -A
-git commit -qm "adopt Yoyodyne"
+git commit -qm "adopt yoyo"
 pass "committed the adoption"
 
 step "9. the commands the README points a new project at"
