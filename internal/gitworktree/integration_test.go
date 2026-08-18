@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -1124,4 +1125,317 @@ func (r *driftingRunner) Run(ctx context.Context, command execution.Command, obs
 		drift()
 	}
 	return r.delegate.Run(ctx, command, observer)
+}
+
+// Two runs promoting into one target branch is the case concurrency makes
+// ordinary and an operator moving the target already makes real. Exactly one of
+// them may promote, the other must lose without losing its work, and the loser
+// must then be able to replay onto what the target became and promote after all.
+// Both promotion paths are driven, because they fail closed by different
+// mechanisms: a fast-forward-only merge in the primary checkout, and a
+// compare-and-swap on the ref when the target is checked out nowhere.
+func TestManagerIntegrateAdmitsOnePromotionAndReplaysTheLoser(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		// parked leaves the primary checkout on another branch, so the target is
+		// advanced by a bare compare-and-swap rather than by a merge.
+		parked bool
+	}{
+		{name: "target checked out in the primary repository"},
+		{name: "target checked out nowhere", parked: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			repository := newRepository(t)
+			if testCase.parked {
+				runGit(t, repository, "checkout", "-b", "parking")
+			}
+			worktreeRoot := filepath.Join(t.TempDir(), "worktrees")
+			held := &heldRunner{delegate: execution.OSProcessRunner{}, holding: make(chan struct{}), release: make(chan struct{})}
+			loserManager, err := New(Options{Runner: held, RepositoryRoot: repository, WorktreeRoot: worktreeRoot})
+			if err != nil {
+				t.Fatalf("New() error = %v", err)
+			}
+			winnerManager := newManager(t, repository, worktreeRoot)
+			base := gitLine(t, repository, "rev-parse", "refs/heads/main")
+
+			loser, err := loserManager.Create(context.Background(), CreateRequest{
+				RunID: testRunID, WorkItemID: "yoyodyne-loser", BaseRef: "main", TargetBranch: "main",
+			})
+			if err != nil {
+				t.Fatalf("Create() loser error = %v", err)
+			}
+			winner, err := winnerManager.Create(context.Background(), CreateRequest{
+				RunID: testRunID, WorkItemID: "yoyodyne-winner", BaseRef: "main", TargetBranch: "main",
+			})
+			if err != nil {
+				t.Fatalf("Create() winner error = %v", err)
+			}
+			writeFile(t, loser.Path, "loser.txt", "loser work\n")
+			writeFile(t, winner.Path, "winner.txt", "winner work\n")
+
+			// The loser is held after it has read where the target is and before it
+			// advances anything, which is exactly the window two concurrent
+			// promotions overlap in.
+			held.holdAfter = func(arguments []string) bool {
+				return hasArgument(arguments, "rev-parse") && hasArgument(arguments, "refs/heads/main^{commit}")
+			}
+			type promotion struct {
+				integration Integration
+				err         error
+			}
+			lost := make(chan promotion, 1)
+			go func() {
+				integration, err := loserManager.Integrate(context.Background(), loser, "")
+				lost <- promotion{integration: integration, err: err}
+			}()
+			<-held.holding
+			promoted, err := winnerManager.Integrate(context.Background(), winner, "")
+			if err != nil {
+				t.Fatalf("Integrate() winner error = %v", err)
+			}
+			close(held.release)
+			refused := <-lost
+
+			if !errors.Is(refused.err, ErrNotFastForward) {
+				t.Fatalf("Integrate() loser error = %v, want ErrNotFastForward", refused.err)
+			}
+			if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != promoted.TargetCommit {
+				t.Fatalf("main = %q after both promotions, want the one that won (%q)", head, promoted.TargetCommit)
+			}
+			// The refusal still reports the commit the harness made, or the losing
+			// run would be left holding a HEAD nothing recorded.
+			if refused.integration.SourceCommit == "" || refused.integration.TargetCommit != "" {
+				t.Fatalf("refused promotion = %#v", refused.integration)
+			}
+			if head := gitLine(t, loser.Path, "rev-parse", "HEAD"); head != refused.integration.SourceCommit {
+				t.Fatalf("loser HEAD = %q, want the reported commit %q", head, refused.integration.SourceCommit)
+			}
+
+			// Replaying the loser onto what the target became is what lets it try
+			// again. Only its own branch moves.
+			loser.HarnessCommit = refused.integration.SourceCommit
+			replay, err := loserManager.RebaseOntoTarget(context.Background(), loser, "")
+			if err != nil {
+				t.Fatalf("RebaseOntoTarget() error = %v", err)
+			}
+			if !replay.Moved() || replay.BaseCommit != promoted.TargetCommit {
+				t.Fatalf("RebaseOntoTarget() = %#v, want the change replayed onto %q", replay, promoted.TargetCommit)
+			}
+			if replay.HeadCommit == replay.PreviousHeadCommit || replay.PreviousHeadCommit != refused.integration.SourceCommit {
+				t.Fatalf("replayed commits = %#v", replay)
+			}
+			if identity := gitLine(t, loser.Path, "log", "-1", "--format=%ae %ce", replay.HeadCommit); identity != harnessCommitAuthorEmail+" "+harnessCommitAuthorEmail {
+				t.Fatalf("replayed commit identity = %q, want the harness identity", identity)
+			}
+
+			loser.BaseCommit = replay.BaseCommit
+			loser.HarnessCommit = replay.HeadCommit
+			retried, err := loserManager.Integrate(context.Background(), loser, "")
+			if err != nil {
+				t.Fatalf("Integrate() retry error = %v", err)
+			}
+			if retried.PreviousTargetCommit != promoted.TargetCommit {
+				t.Fatalf("retried promotion = %#v, want it made from %q", retried, promoted.TargetCommit)
+			}
+			if head := gitLine(t, repository, "rev-parse", "refs/heads/main"); head != retried.TargetCommit {
+				t.Fatalf("main = %q after the retry, want %q", head, retried.TargetCommit)
+			}
+
+			// Nothing was lost and nothing was forced: main is the base, then the
+			// commit that won the race, then the replayed one, in a straight line.
+			history := strings.Fields(gitOutput(t, repository, "rev-list", "refs/heads/main"))
+			if len(history) != 3 || history[0] != retried.TargetCommit || history[1] != promoted.TargetCommit || history[2] != base {
+				t.Fatalf("main history = %v, want %q, %q, %q", history, retried.TargetCommit, promoted.TargetCommit, base)
+			}
+			listing := gitOutput(t, repository, "ls-tree", "--name-only", "-r", "refs/heads/main")
+			for _, name := range []string{"winner.txt", "loser.txt"} {
+				if !strings.Contains(listing, name) {
+					t.Fatalf("main is missing %q: %q", name, listing)
+				}
+			}
+		})
+	}
+}
+
+// A replay that conflicts is the one integration outcome the harness must not
+// resolve. It refuses, abandons the replay, and leaves the branch and the
+// worktree exactly as they were, so the conflict reaches whoever owns it with
+// both sides intact.
+func TestManagerRebaseOntoTargetRefusesAConflictAndKeepsTheChange(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID: testRunID, WorkItemID: "yoyodyne-conflict", BaseRef: "main", TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "README.txt", "this run's answer\n")
+
+	// The target moves onto the same line this change rewrote, which is what
+	// makes the replay a decision rather than a mechanical replay.
+	writeFile(t, repository, "README.txt", "somebody else's answer\n")
+	runGit(t, repository, "add", "README.txt")
+	runGit(t, repository, "commit", "-m", "conflicting target change")
+
+	replay, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+	if !errors.Is(err, ErrRebaseConflict) {
+		t.Fatalf("RebaseOntoTarget() error = %v, want ErrRebaseConflict", err)
+	}
+	// The commit made of the developer's work is reported even though the replay
+	// was refused: it is the HEAD every later inspection has to accept.
+	if replay.HeadCommit == "" || replay.BaseCommit != worktree.BaseCommit || replay.Moved() {
+		t.Fatalf("refused replay = %#v", replay)
+	}
+	if head := gitLine(t, worktree.Path, "rev-parse", "HEAD"); head != replay.HeadCommit {
+		t.Fatalf("worktree HEAD = %q, want the reported commit %q", head, replay.HeadCommit)
+	}
+	if branch := gitLine(t, worktree.Path, "rev-parse", "--abbrev-ref", "HEAD"); branch != worktree.Branch {
+		t.Fatalf("worktree is not on its branch after the refusal: %q", branch)
+	}
+	if status := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+		t.Fatalf("worktree is dirty after the refusal: %q", status)
+	}
+	if content := readFile(t, worktree.Path, "README.txt"); content != "this run's answer\n" {
+		t.Fatalf("the change was not preserved: %q", content)
+	}
+	if content := readFile(t, repository, "README.txt"); content != "somebody else's answer\n" {
+		t.Fatalf("the target change was not preserved: %q", content)
+	}
+	worktree.HarnessCommit = replay.HeadCommit
+	if _, err := manager.Integrate(context.Background(), worktree, ""); !errors.Is(err, ErrTargetDrift) {
+		t.Fatalf("Integrate() after a refused replay error = %v, want ErrTargetDrift", err)
+	}
+}
+
+// A replay onto a target that never moved is a no-op rather than a failure: a
+// promotion can lose to a held lock rather than to a commit, and that one is
+// simply worth trying again.
+func TestManagerRebaseOntoTargetIsANoOpWhenTheTargetHasNotMoved(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID: testRunID, WorkItemID: "yoyodyne-still", BaseRef: "main", TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "work.txt", "developer work\n")
+
+	replay, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("RebaseOntoTarget() error = %v", err)
+	}
+	if replay.Moved() || replay.BaseCommit != worktree.BaseCommit || replay.HeadCommit == worktree.BaseCommit {
+		t.Fatalf("RebaseOntoTarget() = %#v", replay)
+	}
+	worktree.HarnessCommit = replay.HeadCommit
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() after a no-op replay error = %v", err)
+	}
+	if integration.SourceCommit != replay.HeadCommit {
+		t.Fatalf("promotion = %#v, want the commit the replay reported (%q)", integration, replay.HeadCommit)
+	}
+}
+
+// heldRunner runs Git normally and holds the first command matching holdAfter
+// open until the test releases it, so a second promotion can complete while the
+// first is genuinely in flight.
+type heldRunner struct {
+	delegate  execution.ProcessRunner
+	holdAfter func(arguments []string) bool
+	holding   chan struct{}
+	release   chan struct{}
+	once      sync.Once
+}
+
+func (r *heldRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	result, err := r.delegate.Run(ctx, command, observer)
+	if r.holdAfter != nil && r.holdAfter(command.Args) {
+		r.once.Do(func() {
+			close(r.holding)
+			<-r.release
+		})
+	}
+	return result, err
+}
+
+// A rebase Git refuses outright is not a conflict. It exits exactly as a
+// conflicted one does, and calling it a conflict would send somebody to settle
+// a disagreement that does not exist — on a worktree where nothing was applied
+// and nothing needs settling.
+func TestManagerRebaseOntoTargetReportsARefusalThatIsNotAConflict(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	refusing := &refusingRebaseRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{Runner: refusing, RepositoryRoot: repository, WorktreeRoot: filepath.Join(t.TempDir(), "worktrees")})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID: testRunID, WorkItemID: "yoyodyne-refused", BaseRef: "main", TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "work.txt", "developer work\n")
+	writeFile(t, repository, "concurrent.txt", "somebody else's work\n")
+	runGit(t, repository, "add", "concurrent.txt")
+	runGit(t, repository, "commit", "-m", "concurrent target change")
+
+	refusing.armed = true
+	replay, err := manager.RebaseOntoTarget(context.Background(), worktree, "")
+	if err == nil || !strings.Contains(err.Error(), "invalid upstream") {
+		t.Fatalf("RebaseOntoTarget() error = %v, want the refusal Git reported", err)
+	}
+	if errors.Is(err, ErrRebaseConflict) {
+		t.Fatalf("a rebase that never started was reported as a conflict: %v", err)
+	}
+	// The commit the harness made before the refusal is still reported, and the
+	// worktree is exactly where that commit left it.
+	if replay.HeadCommit == "" || replay.Moved() {
+		t.Fatalf("refused replay = %#v", replay)
+	}
+	if head := gitLine(t, worktree.Path, "rev-parse", "HEAD"); head != replay.HeadCommit {
+		t.Fatalf("worktree HEAD = %q, want the reported commit %q", head, replay.HeadCommit)
+	}
+	if status := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); strings.TrimSpace(status) != "" {
+		t.Fatalf("worktree is dirty after the refusal: %q", status)
+	}
+	if state := gitLine(t, worktree.Path, "rev-parse", "--git-path", "rebase-merge"); dirExists(state) {
+		t.Fatalf("a replay state directory survived a rebase that never started: %q", state)
+	}
+}
+
+// refusingRebaseRunner makes `git rebase` refuse the way an unusable revision
+// does: a non-zero exit with nothing half-applied behind it.
+type refusingRebaseRunner struct {
+	delegate execution.ProcessRunner
+	armed    bool
+}
+
+func (r *refusingRebaseRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if r.armed && hasArgument(command.Args, "rebase") && !hasArgument(command.Args, "--abort") {
+		return execution.ProcessResult{
+			Status:   execution.ProcessFailed,
+			ExitCode: 128,
+			Stderr:   "fatal: invalid upstream\n",
+		}, nil
+	}
+	return r.delegate.Run(ctx, command, observer)
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

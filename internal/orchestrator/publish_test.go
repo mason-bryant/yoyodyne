@@ -1330,3 +1330,66 @@ func TestPublishedWorkStillReachesTheReviewer(t *testing.T) {
 		t.Errorf("the reviewer was given no patch for a published change:\n%s", reviewPrompt)
 	}
 }
+
+// A promotion that lost its target is replayed, and the branch the pull request
+// carries has to become the replayed one: what the forge merges is that head,
+// so a request left at the pre-replay commit would put work on the remote that
+// the authoritative local branch does not have. The remote branch is replaced
+// from exactly the commit the harness published there, never blindly.
+func TestPipelineRepublishesAReplayedChangeOntoItsPullRequest(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	published := ""
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	// The target moves once the branch is published and the pull request exists,
+	// which is the window a losing promotion opens for a published run.
+	forge.onEnsure = func() {
+		if published != "" {
+			return
+		}
+		published = publishedCommit(t, remote, "yoyodyne/yoyodyne-task/01234567")
+		writePipelineFile(t, repository, "elsewhere.txt", "somebody else's work\n")
+		runPipelineGit(t, repository, "add", "elsewhere.txt")
+		runPipelineGit(t, repository, "commit", "-m", "concurrent target change")
+		runPipelineGit(t, repository, "push", "origin", "refs/heads/main:refs/heads/main")
+	}
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.IntegrationRetries != 1 || outcome.Integration == nil {
+		t.Fatalf("Run() outcome = %#v, want one retried promotion", outcome)
+	}
+	if outcome.PublishFailure != "" {
+		t.Fatalf("publication failed: %q", outcome.PublishFailure)
+	}
+	// The pull request is the one that was opened, carrying the replayed commit
+	// rather than the one it was opened with.
+	if len(forge.opened) != 1 || forge.number != 1 {
+		t.Fatalf("forge saw %d requests, want the one request updated in place", len(forge.opened))
+	}
+	if published == "" || outcome.PullRequest.HeadCommit == published {
+		t.Fatalf("published head = %q, want the replayed commit rather than %q", outcome.PullRequest.HeadCommit, published)
+	}
+	if outcome.PullRequest.HeadCommit != outcome.Integration.SourceCommit {
+		t.Fatalf("published head = %q, want the promoted commit %q", outcome.PullRequest.HeadCommit, outcome.Integration.SourceCommit)
+	}
+	if len(forge.merges) != 1 || forge.merges[0].HeadCommit != outcome.Integration.SourceCommit {
+		t.Fatalf("forge merges = %#v, want the replayed commit merged", forge.merges)
+	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PullRequest == nil || state.PullRequest.HeadCommit != outcome.Integration.SourceCommit {
+		t.Fatalf("durable pull request = %#v", state.PullRequest)
+	}
+}

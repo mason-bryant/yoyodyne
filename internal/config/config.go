@@ -90,9 +90,17 @@ type Product struct {
 }
 
 type Execution struct {
-	MaxConcurrentDevelopers    int    `yaml:"max_concurrent_developers" json:"max_concurrent_developers"`
-	RepairAttemptsBeforeReplan int    `yaml:"repair_attempts_before_replan" json:"repair_attempts_before_replan"`
-	WorktreeRoot               string `yaml:"worktree_root" json:"worktree_root"`
+	MaxConcurrentDevelopers    int `yaml:"max_concurrent_developers" json:"max_concurrent_developers"`
+	RepairAttemptsBeforeReplan int `yaml:"repair_attempts_before_replan" json:"repair_attempts_before_replan"`
+	// IntegrationRetriesBeforeReconciliation bounds how many times a run whose
+	// promotion lost a race — to another run, or to whoever moved the target
+	// branch mid-run — replays its change onto where the target went and tries
+	// again. Each retry re-runs the deterministic checks and obtains a fresh
+	// independent review, because the reviewed change is not the change that
+	// would now be promoted. Zero never retries, which is the behavior a run had
+	// before this bound existed: the first refusal ends it.
+	IntegrationRetriesBeforeReconciliation int    `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
+	WorktreeRoot                           string `yaml:"worktree_root" json:"worktree_root"`
 	// Remote names the Git remote publishing pushes to and opens pull requests
 	// against. It is only consulted when `approvals.publishing` is automatic, and
 	// a repository that has no remote by this name publishes nothing rather than
@@ -227,6 +235,12 @@ func (c Config) Validate() error {
 	}
 	if c.Execution.RepairAttemptsBeforeReplan < 0 {
 		problems = append(problems, "repair_attempts_before_replan cannot be negative")
+	}
+	// Zero is a deliberate choice here too — never retry a refused promotion —
+	// so only a negative bound, which describes no retry anybody could take, is
+	// refused.
+	if c.Execution.IntegrationRetriesBeforeReconciliation < 0 {
+		problems = append(problems, "integration_retries_before_reconciliation cannot be negative")
 	}
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")
