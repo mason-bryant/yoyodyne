@@ -37,6 +37,30 @@ func TestRunHelp(t *testing.T) {
 	}
 }
 
+// TestRunVersionPrintsTheBareVersion pins the exact bytes of `yoyo version`,
+// because two things outside this package compare them literally: `make
+// dist-verify` refuses to package a release whose binary does not report the
+// tag it was built from, and the release workflow runs that target. A banner, a
+// "yoyo " prefix, or a second line here would not fail any other test and would
+// instead fail at a tag push, which is the one place a failure means a botched
+// or missing release.
+func TestRunVersionPrintsTheBareVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run([]string{"version"}, &stdout, &stderr, "v0.1.0")
+	if code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if stdout.String() != "v0.1.0\n" {
+		t.Fatalf("stdout = %q, want exactly %q", stdout.String(), "v0.1.0\n")
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want nothing", stderr.String())
+	}
+}
+
 func TestRunVersionJSON(t *testing.T) {
 	t.Parallel()
 

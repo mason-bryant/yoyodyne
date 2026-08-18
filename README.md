@@ -54,17 +54,21 @@ go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
 ```
 
 That writes `yoyo` into `$(go env GOPATH)/bin`, which needs to be on your
-`PATH`. Replace `@latest` with a tag — `@v0.1.0` — to pin a release rather than
-follow the newest one.
+`PATH`. Replacing `@latest` with a version — `@v1.2.3` — pins that release
+rather than following the newest one.
 
 **From a release download**, if you would rather not have Go at all. Each tag on
 [the releases page](https://github.com/mason-bryant/yoyodyne/releases) carries a
-binary per platform and a `checksums.txt` covering them:
+binary per platform and a `checksums.txt` covering them. Set `tag` to the
+version you want from that page, and `platform` to yours:
 
 ```sh
-tag=v0.1.0
-curl -fsSLO "https://github.com/mason-bryant/yoyodyne/releases/download/$tag/yoyo_${tag}_darwin_arm64.tar.gz"
-tar -xzf "yoyo_${tag}_darwin_arm64.tar.gz"
+tag=<the tag from the releases page>
+platform=darwin_arm64   # or darwin_amd64, or linux_amd64
+base="https://github.com/mason-bryant/yoyodyne/releases/download/$tag"
+curl -fsSLO "$base/yoyo_${tag}_${platform}.tar.gz"
+curl -fsSL "$base/checksums.txt" | shasum -a 256 -c --ignore-missing
+tar -xzf "yoyo_${tag}_${platform}.tar.gz"
 install -m 0755 yoyo /usr/local/bin/yoyo
 ```
 
