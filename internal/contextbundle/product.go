@@ -234,7 +234,7 @@ var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?\b`)
 // it here rather than only in prose is what makes a specification that ignores
 // it surface instead of quietly becoming evidence of a shape nobody agreed to.
 func specificationStructureProblem(content string) string {
-	lines := strings.Split(content, "\n")
+	lines := strings.Split(withoutFrontmatter(content), "\n")
 	introduction := false
 	inFence := false
 	goalsLine := -1
@@ -283,6 +283,29 @@ func specificationStructureProblem(content string) string {
 		return "its `Goals` section is empty; the goals that serve the introduction are missing"
 	}
 	return ""
+}
+
+// withoutFrontmatter drops the artifact identity metadata a specification
+// carries at the top of the file. The structure contract is about the document
+// a person reads, and frontmatter is neither an introduction nor a goal: left
+// in, it would count as prose and quietly stop a specification that opens with
+// its goals from being reported for it. The metadata itself is validated where
+// artifact identity is loaded, and stays in what the product manager is shown.
+func withoutFrontmatter(content string) string {
+	trimmed := strings.TrimPrefix(content, "\ufeff")
+	lines := strings.Split(trimmed, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
+		return trimmed
+	}
+	for index := 1; index < len(lines); index++ {
+		if strings.TrimSpace(lines[index]) == "---" {
+			return strings.Join(lines[index+1:], "\n")
+		}
+	}
+	// Unclosed frontmatter is a malformed artifact rather than a specification
+	// with no introduction, and it is reported as one where identity is loaded.
+	// Here the document is read as written.
+	return trimmed
 }
 
 // goalsSectionHasContent reports whether anything follows the goals heading

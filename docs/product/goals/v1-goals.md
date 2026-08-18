@@ -1,3 +1,17 @@
+---
+id: v1-goals
+kind: goals
+title: V1 goals
+supports:
+    - brief
+status: active
+revisions:
+    - action: created
+      by: product-manager
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the prose is unchanged
+---
+
 # V1 goals
 
 These are the outcomes Yoyodyne's first version is built to reach: what has to

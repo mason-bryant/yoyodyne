@@ -1,3 +1,15 @@
+---
+id: brief
+kind: brief
+title: Product brief
+status: active
+revisions:
+    - action: created
+      by: product-manager
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the prose is unchanged
+---
+
 # Product brief
 
 Yoyodyne turns product intent into shipped software. Someone with a repository

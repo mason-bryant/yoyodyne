@@ -31,6 +31,8 @@ type productDocument struct {
 	Repository     *string              `yaml:"repository"`
 	Specifications *string              `yaml:"specifications"`
 	Invariants     *string              `yaml:"invariants"`
+	Designs        *string              `yaml:"designs"`
+	Decisions      *string              `yaml:"decisions"`
 }
 
 type executionDocument struct {

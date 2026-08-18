@@ -1055,6 +1055,31 @@ See the [configuration guide](docs/configuration.md) for the full layout, the
 `init` flags, precedence, merge and removal semantics, persona rules, extending
 a bundle, and migration from `.yoyodyne.yaml`.
 
+## Artifact identity
+
+The documents upstream of a work item — the brief, the goals, the designs and
+specifications under `product.designs`, and the decision records under
+`product.decisions` — each carry a stable identity in frontmatter: an id, a
+kind, a lifecycle status, what they support upstream, and a revision log. It is
+the same model the invariants use rather than a second one beside it. The file
+name is the id, an id that disagrees with its file name is refused, and two
+files claiming one id refuse both, each naming the other.
+
+```sh
+./bin/yoyo artifact list
+./bin/yoyo artifact show v1-goals
+```
+
+A document in one of those directories with no usable identity is named on
+stderr rather than governed under a guessed id, so a home you have not given
+identity to yet says so. Nothing else changes for it: a specification with no
+frontmatter is still read as product intent, because refusing intent somebody
+wrote down is worse than reading it and saying its identity is missing. What
+identity does not buy yet is validation of the relationships it makes
+expressible — an artifact that names an upstream nothing answers to still loads,
+and nothing reports it. The [configuration guide](docs/configuration.md#artifact-identity-and-metadata)
+is the reference for the schema and the fields.
+
 ## Architectural invariants
 
 Some constraints outlive the work item that established them: a contract one

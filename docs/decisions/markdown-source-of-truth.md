@@ -1,3 +1,15 @@
+---
+id: markdown-source-of-truth
+kind: decision
+title: Repository Markdown is the human-readable source of truth
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the record itself is unchanged
+---
+
 # Repository Markdown is the human-readable source of truth
 
 **Status:** Accepted. Recorded by the operator, ratifiable by the architect when

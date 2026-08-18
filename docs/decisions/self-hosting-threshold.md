@@ -1,3 +1,15 @@
+---
+id: self-hosting-threshold
+kind: decision
+title: "Milestone reached: useful self-hosting before the full management hierarchy"
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-17T00:00:00Z
+      reason: identity added with the artifact metadata schema; the record itself is unchanged
+---
+
 # Milestone reached: useful self-hosting before the full management hierarchy
 
 **Status:** Reached. Recorded by the operator, ratifiable by the architect when

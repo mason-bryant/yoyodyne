@@ -167,11 +167,16 @@ type personaReference struct {
 func newResolution() *resolution {
 	return &resolution{
 		config: Config{
-			// The specifications and invariants directories are harness defaults
-			// rather than bundle values for the same reason the rest of `product`
-			// is absent from the bundle: they describe the project. A project that
-			// follows the recommended layout never writes either one down.
-			Product: Product{Specifications: DefaultSpecifications, Invariants: DefaultInvariants},
+			// The artifact directories are harness defaults rather than bundle
+			// values for the same reason the rest of `product` is absent from the
+			// bundle: they describe the project. A project that follows the
+			// recommended layout never writes any of them down.
+			Product: Product{
+				Specifications: DefaultSpecifications,
+				Invariants:     DefaultInvariants,
+				Designs:        DefaultDesigns,
+				Decisions:      DefaultDecisions,
+			},
 			Execution: Execution{
 				MaxConcurrentDevelopers:     1,
 				RepairAttemptsBeforeReplan:  2,
@@ -191,6 +196,8 @@ func newResolution() *resolution {
 		origins: map[string]string{
 			"product.specifications":                  OriginDefault,
 			"product.invariants":                      OriginDefault,
+			"product.designs":                         OriginDefault,
+			"product.decisions":                       OriginDefault,
 			"approvals.publishing":                    OriginDefault,
 			"execution.max_concurrent_developers":     OriginDefault,
 			"execution.repair_attempts_before_replan": OriginDefault,
@@ -214,6 +221,8 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "product.repository", product.Repository, &r.config.Product.Repository, applied.origin)
 		setValue(r.origins, "product.specifications", product.Specifications, &r.config.Product.Specifications, applied.origin)
 		setValue(r.origins, "product.invariants", product.Invariants, &r.config.Product.Invariants, applied.origin)
+		setValue(r.origins, "product.designs", product.Designs, &r.config.Product.Designs, applied.origin)
+		setValue(r.origins, "product.decisions", product.Decisions, &r.config.Product.Decisions, applied.origin)
 	}
 	if execution := document.Execution; execution != nil {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
