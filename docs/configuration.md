@@ -812,13 +812,20 @@ the same suite is the suite run twice. Nothing about that is undecided, so
 nothing about it demands a decision.
 
 **What cannot be settled is not settled**, which is the first two headings. The
-cases that reach them today are Python tests with no runner named anywhere —
-unittest discovery over pytest-style tests collects nothing and exits 0, which is
-a gate that passes everything — a `package.json` with no lockfile or with
-several, one whose only test script is npm's `exit 1` placeholder, and a Gradle
-build with no wrapper to pin its version. Which of the two headings they land
-under depends only on whether anything else in the project produced a `checks`
-list to stand on.
+cases that reach them today are:
+
+- Python tests with no runner named anywhere. unittest discovery over
+  pytest-style tests collects nothing and exits 0, which is a gate that passes
+  everything, so neither runner is written.
+- A `package.json` with no lockfile beside it, or with more than one, which
+  leaves how the project installs unsettled.
+- A `package.json` that declares no `test` script at all, or whose only one is
+  npm's `exit 1` placeholder: nothing there says how the project is tested.
+- A Gradle build script with no `gradlew` wrapper to pin the version a check
+  would run under.
+
+Which of the two headings they land under depends only on whether anything else
+in the project produced a `checks` list to stand on.
 
 A repository that announces none of this keeps `checks: []` and the commented
 per-language examples above, which is what it always did.

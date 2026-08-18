@@ -212,26 +212,28 @@ checks:
   - python3 -m pytest -q
 ```
 
-What it could not settle is written beside the list, commented out, never in it.
-Where detection found a toolchain and could not tell which command is the gate —
-tests with no runner named anywhere, a `package.json` with no lockfile beside it,
-a Gradle build with no wrapper — it comments those candidates under a heading
-that says which of two situations you are in, because only one of them needs
-anything from you:
+Everything `init` did not write into `checks` is written beside the list,
+commented out, under one of three headings. Only the first asks anything of you:
 
-- **`YOU MUST CHOOSE`** — `checks` is empty, so a run is refused until you settle
-  it. This is the only heading that asks for something.
-- **`ALSO FOUND, AND NOT DECIDED`** — `checks` was written and works; something
-  else about the toolchain is merely still open, and you can ignore it.
-- **`ALSO FOUND, AND NOT NEEDED`** — commands `init` read and deliberately left
-  out, because what it wrote already covers them. A `Makefile` with a `check`
-  target beside a `go.mod` gets `make check`, with `go test ./...` and
-  `go vet ./...` offered here rather than added, since two gates running the
-  same suite is the suite run twice.
+- **`YOU MUST CHOOSE`** — detection found a toolchain and could not tell which
+  command is the gate, and `checks` is empty, so a run is refused until you
+  settle it.
+- **`ALSO FOUND, AND NOT DECIDED`** — the same open question, except `checks` was
+  written from something else and already works, so you can leave this alone.
+- **`ALSO FOUND, AND NOT NEEDED`** — nothing open at all: commands `init` read
+  and deliberately left out, because what it wrote already covers them. A
+  `Makefile` with a `check` target beside a `go.mod` gets `make check`, with
+  `go test ./...` and `go vet ./...` offered here rather than added, since two
+  gates running the same suite is the suite run twice.
 
-Under any of them, taking one costs a character: delete its leading `#`. A
-repository that announces nothing keeps `checks: []` and the commented examples
-for Go, TypeScript, Python, and Java that have always been there; the
+The open questions that reach the first two headings today are tests with no
+runner named anywhere, a `package.json` with no lockfile beside it or with
+several, one that declares no test script at all, and a Gradle build with no
+wrapper. Each says which it is and why.
+
+Taking any of them costs a character: delete its leading `#`. A repository that
+announces nothing keeps `checks: []` and the commented examples for Go,
+TypeScript, Python, and Java that have always been there; the
 [configuration guide](docs/configuration.md#checks) has the same examples with
 the reasoning.
 
@@ -1342,9 +1344,10 @@ product:
   specifications: docs/product
   invariants: docs/decisions/invariants
 
-checks:             # proposed by init from this project's own files
+checks:
   # from go.mod
   - go test ./...
+  - go vet ./...
 
 agents:
   developer:

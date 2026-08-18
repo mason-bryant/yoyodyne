@@ -44,6 +44,9 @@ readme_install_module="github.com/mason-bryant/yoyodyne"
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/yoyodyne-walk.XXXXXX")"
+# TMPDIR often ends in a slash on macOS; normalize so path assertions compare
+# against the same spelling the harness prints.
+scratch="$(cd "$scratch" && pwd)"
 project="$scratch/calc"
 failures=0
 skips=0

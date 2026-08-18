@@ -135,6 +135,54 @@ func TestRunInitProposesChecksFromTheProjectsOwnFiles(t *testing.T) {
 	}
 }
 
+// The adoption walkthrough chooses a candidate by deleting one "#" and then asks
+// `config show --effective` whether that took. Both halves are checked here as
+// well, so the claim rests on the supplied checks rather than only on a script
+// none of them runs.
+func TestUncommentingACandidateMakesItTheEffectiveChecksList(t *testing.T) {
+	t.Parallel()
+
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.MkdirAll(filepath.Join(project, "tests"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "tests", "test_calc.py"), []byte("import unittest\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	path := filepath.Join(project, config.DirectoryName, config.FileName)
+	generated, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	const chosen = "python3 -m unittest discover -q -s tests -t ."
+	if !strings.Contains(string(generated), "#  - "+chosen+"\n") {
+		t.Fatalf("no candidate was offered for %q:\n%s", chosen, generated)
+	}
+	// Exactly the gesture the file asks for: open the empty list, delete one
+	// leading "#", change nothing else.
+	edited := strings.Replace(string(generated), "checks: []\n", "checks:\n", 1)
+	edited = strings.Replace(edited, "#  - "+chosen+"\n", "  - "+chosen+"\n", 1)
+	if err := os.WriteFile(path, []byte(edited), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"config", "show", "--config", path, "--effective"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("config show --effective code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), chosen) {
+		t.Errorf("config show --effective does not report the uncommented check:\n%s", stdout.String())
+	}
+}
+
 // A repository that announces nothing keeps the placeholder it always had, and
 // is told where the per-language examples are.
 func TestRunInitKeepsThePlaceholderWhenNothingIsDetected(t *testing.T) {
