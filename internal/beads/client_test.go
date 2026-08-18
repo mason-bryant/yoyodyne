@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -217,6 +218,35 @@ func TestClientListsWorkItemsWithoutChangingAnything(t *testing.T) {
 	// A status is a filter, never an argument smuggled onto the command line.
 	if _, err := (Client{Runner: &fakeRunner{}}).List(context.Background(), "--dangerous"); err == nil {
 		t.Fatal("List() invalid status error = nil")
+	}
+}
+
+func TestClientReadsWhenAnItemWasAdmittedAndSaysNothingWhenItCannot(t *testing.T) {
+	t.Parallel()
+
+	// When an item was admitted is what says which wording the work was pulled
+	// under, so a listing that dropped it would report every item as one nothing
+	// upstream can be compared against. The real bd emits it as RFC 3339.
+	listed := `[{"id":"yoyodyne-1","title":"First","status":"open","priority":1,"issue_type":"task","created_at":"2026-08-17T03:55:26Z"},
+	            {"id":"yoyodyne-2","title":"Second","status":"open","priority":2,"issue_type":"task"},
+	            {"id":"yoyodyne-3","title":"Third","status":"open","priority":2,"issue_type":"task","created_at":"last Tuesday"}]`
+	client := Client{Runner: &fakeRunner{responses: []string{listed}}, Binary: "bd-test", Dir: "/repo"}
+
+	items, err := client.List(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("List() = %#v", items)
+	}
+	if want := time.Date(2026, 8, 17, 3, 55, 26, 0, time.UTC); !items[0].CreatedAt.Equal(want) {
+		t.Fatalf("CreatedAt = %v, want %v", items[0].CreatedAt, want)
+	}
+	// A tracker that says nothing, and one that says something this cannot read,
+	// both leave the admission time unknown. Neither costs the read: the item is
+	// still the item, and whatever needs the time reports that it does not have it.
+	if !items[1].CreatedAt.IsZero() || !items[2].CreatedAt.IsZero() {
+		t.Fatalf("List() = %#v, want an unknown admission time rather than a guessed one", items[1:])
 	}
 }
 

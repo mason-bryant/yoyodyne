@@ -36,6 +36,11 @@ type WorkItem struct {
 	Assignee           string
 	Parent             string
 	Dependencies       []Dependency
+	// CreatedAt is when the tracker recorded this item, which is what says what
+	// the work was admitted knowing. It is the zero time where the tracker did not
+	// say, and a caller that needs it reports that it does not know rather than
+	// treating an unknown admission time as the beginning of time.
+	CreatedAt time.Time
 	// Cost is what the runs made for this item have cost, as the tracker holds
 	// it. It is absent from an item nothing has ever priced, which is a different
 	// fact from an item that cost nothing.
@@ -479,6 +484,11 @@ type rawWorkItem struct {
 	Assignee           string          `json:"assignee"`
 	Parent             string          `json:"parent"`
 	Dependencies       []rawDependency `json:"dependencies"`
+	// CreatedAt is read as text and parsed here rather than decoded as a time,
+	// because it is one field of an item and not the item: a tracker that wrote a
+	// timestamp this cannot read must leave the admission time unknown, not fail
+	// every read of the work it belongs to.
+	CreatedAt string `json:"created_at"`
 	// Metadata is the tracker's own key-value store on an item. Only the keys
 	// the harness writes are read out of it; everything else in there belongs to
 	// whoever put it there.
@@ -543,6 +553,7 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 		IssueType:          raw.IssueType,
 		Assignee:           raw.Assignee,
 		Parent:             raw.Parent,
+		CreatedAt:          admittedAt(raw.CreatedAt),
 		Dependencies:       make([]Dependency, 0, len(raw.Dependencies)),
 	}
 	for _, dependency := range raw.Dependencies {
@@ -560,6 +571,18 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 	}
 	item.Cost = costFromMetadata(raw.Metadata)
 	return item, nil
+}
+
+// admittedAt reads when the tracker says an item was recorded, and returns the
+// zero time when it says nothing this can read. An unknown admission time is a
+// fact a caller can report; a guessed one would date work to whenever the format
+// happened to fail.
+func admittedAt(recorded string) time.Time {
+	admitted, err := time.Parse(time.RFC3339, strings.TrimSpace(recorded))
+	if err != nil {
+		return time.Time{}
+	}
+	return admitted.UTC()
 }
 
 // costFromMetadata reads the price the tracker carries, or nothing at all when

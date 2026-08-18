@@ -43,6 +43,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runAmendment(args[1:], stdout, stderr)
 	case "goals":
 		return runGoals(ctx, args[1:], stdout, stderr)
+	case "stale":
+		return reportStaleness(ctx, args[1:], stdout, stderr)
 	case "invariant":
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
@@ -265,6 +267,7 @@ Commands:
   artifact          read the canonical artifacts and their identity metadata
   amendment         read changes proposed to artifacts, and decide them
   goals             read the recorded goals, and what admitted work serves
+  stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
   run               run one Beads work item in an isolated worktree
