@@ -334,10 +334,21 @@ func fold(statement string) string {
 var headingPattern = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 
 // goalsHeadingPattern matches the heading a goals document states its goals
-// under. It anchors at the start so a `Non-goals` heading is not read as the
-// goals: a non-goal is the opposite of a goal, and attributing work to one
-// would be worse than attributing it to nothing.
-var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?\b`)
+// under. It matches the heading's whole text rather than its start, so a title
+// that merely opens with the word — `# Goals for V1`, `# Goals of some
+// product` — is a title rather than the section. A prefix match reads such a
+// title as the goals heading, at level 1, and then nothing nested below it can
+// end the section: every top-level entry in the rest of the document, under any
+// heading, becomes a goal work may be attributed to.
+var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?$`)
+
+// negatedGoalsHeadingPattern matches a heading stating what the product will
+// not do. Such a heading ends the goals section at whatever level it is written
+// at, including one nested inside it: a non-goal is the opposite of a goal, and
+// attributing work to one is worse than attributing it to nothing, so a
+// document that files its non-goals under its goals rather than beside them is
+// read as ending the goals there rather than as stating more of them.
+var negatedGoalsHeadingPattern = regexp.MustCompile(`(?i)^non-?\s*goals?\b`)
 
 // listItemPattern matches a top-level Markdown list item and captures its text.
 // Only unindented items are goals: a goals document states each goal as one
@@ -349,6 +360,12 @@ var listItemPattern = regexp.MustCompile(`^[-*+]\s+(.*)$`)
 // A goal is one top-level entry under the `Goals` heading, and its first line is
 // the statement: the entry may say more about the goal underneath, and that
 // prose supports the goal rather than being a second one.
+//
+// The section runs to the next heading at the same level or above, or to any
+// heading stating what the product will not do. Both bounds exist because
+// collecting the wrong prose is worse here than collecting none: what this
+// returns is what work may be attributed to, so a sentence read out of the
+// wrong section becomes a goal somebody can admit work under.
 func statements(content string) ([]string, string) {
 	lines := strings.Split(withoutFrontmatter(content), "\n")
 	level := 0
@@ -365,12 +382,20 @@ func statements(content string) ([]string, string) {
 			continue
 		}
 		if heading := headingPattern.FindStringSubmatch(line); heading != nil {
+			text := strings.TrimSpace(heading[2])
 			switch {
+			case negatedGoalsHeadingPattern.MatchString(text):
+				// What the product will not do ends the goals wherever it is
+				// written, level or no level. This is the one heading a level test
+				// alone cannot be trusted with: filed under the goals rather than
+				// beside them, it is nested, and every non-goal below it would be
+				// collected as something work may serve.
+				inGoals = false
 			case inGoals && len(heading[1]) <= level:
 				// The section ended. A heading below it divides the goals rather
 				// than ending them, exactly as it does in the structure contract.
 				inGoals = false
-			case !inGoals && goalsHeadingPattern.MatchString(strings.TrimSpace(heading[2])):
+			case !inGoals && goalsHeadingPattern.MatchString(text):
 				inGoals, level = true, len(heading[1])
 			}
 			continue
@@ -390,7 +415,7 @@ func statements(content string) ([]string, string) {
 	}
 	switch {
 	case level == 0:
-		return nil, "it states no goals under a `Goals` heading, so nothing in it is a goal work can be attributed to"
+		return nil, "it states no goals under a `Goals` heading — that is a heading whose whole text is `Goals`, so a title merely opening with the word is not one — and nothing in it is a goal work can be attributed to"
 	case len(stated) == 0:
 		return nil, "its `Goals` section states no goals as list entries, so nothing in it is a goal work can be attributed to"
 	default:

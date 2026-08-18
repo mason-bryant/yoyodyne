@@ -235,6 +235,72 @@ An introduction.
 	}
 }
 
+func TestANonGoalIsNeverReadAsSomethingWorkMayServe(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The case a level test alone cannot catch: the document's title is the
+	// goals heading, so everything after it is nested below level 1 and no
+	// heading can end the section by level. Filed this way, every non-goal would
+	// be collected as a goal work may be admitted under — the opposite of what
+	// the document says, and worse than reading no goals at all.
+	write(t, root, "docs/product/goals/v1-goals.md", `# Goals
+
+- Maintain a traceable chain.
+
+## Non-goals
+
+- Support every provider.
+- Replace the operator's judgement.
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if statements := stated(set.Goals); len(statements) != 1 || statements[0] != "Maintain a traceable chain." {
+		t.Fatalf("goals = %q", statements)
+	}
+	if set.Attribute("Support every provider.").State != StateUnresolved {
+		t.Fatalf("a non-goal resolved as a goal work may serve")
+	}
+}
+
+func TestATitleThatOpensWithTheWordIsATitleRatherThanTheGoalsSection(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// `# Goals for V1` is what the document is called. Reading it as the section
+	// would open the goals at level 1 and collect every top-level entry below,
+	// whatever heading it was written under.
+	write(t, root, "docs/product/goals/v1-goals.md", `# Goals for V1
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain.
+
+## Open questions
+
+- Whether to support a second tracker.
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if statements := stated(set.Goals); len(statements) != 1 || statements[0] != "Maintain a traceable chain." {
+		t.Fatalf("goals = %q", statements)
+	}
+
+	// A document with no such section at all states no goals, and is reported
+	// rather than read as though its title were the heading.
+	titleOnly := newRepository(t)
+	write(t, titleOnly, "docs/product/goals/v1-goals.md", "# Goals for V1\n\n- Maintain a traceable chain.\n")
+	reported := Collect(titleOnly, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(reported.Goals) != 0 || len(reported.Problems) != 1 {
+		t.Fatalf("set = %#v", reported)
+	}
+	if !strings.Contains(reported.Problems[0].Reason, "whole text is `Goals`") {
+		t.Fatalf("problem = %v", reported.Problems[0])
+	}
+}
+
 func TestOnlyTopLevelEntriesAreGoals(t *testing.T) {
 	t.Parallel()
 
@@ -348,7 +414,7 @@ func setWithGoals(t *testing.T, statements ...string) Set {
 
 func goalsDocument(statements ...string) string {
 	var rendered strings.Builder
-	rendered.WriteString("# Goals of some product\n\nAn introduction saying what this covers.\n\n## Goals\n\n")
+	rendered.WriteString("# The goals of some product\n\nAn introduction saying what this covers.\n\n## Goals\n\n")
 	for _, statement := range statements {
 		rendered.WriteString("- " + statement + "\n")
 	}

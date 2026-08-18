@@ -421,11 +421,24 @@ heading of its own states no goals work may be attributed to — the goals are t
 product manager's document, and reading intent out of anything with the right
 heading is how a design comes to authorize its own work.
 
+The `Goals` heading is the heading whose **whole text** is `Goals`, at any
+level. A title that merely opens with the word — `# Goals for V1` — is a title,
+and a document with no such heading states no goals and is reported as stating
+none. The exactness is load-bearing rather than pedantic: a title read as the
+section opens the goals at the document's top level, and nothing written below
+it can then end them by level, so everything in the file becomes something work
+may be admitted under.
+
 Each goal is one top-level list entry under that heading. Prose indented under
-an entry describes that goal rather than being another, a heading below the
-`Goals` heading divides the goals rather than ending them, and a heading at the
-same level or above ends the section — so a `Non-goals` section beside them is
-never read as something work can serve.
+an entry describes that goal rather than being another, and a heading below the
+`Goals` heading divides the goals rather than ending them. The section ends at
+the next heading at the same level or above, **or at any heading stating what
+the product will not do** — a `Non-goals` heading ends it wherever it is
+written, including nested inside it, so a document that files its non-goals
+under its goals rather than beside them is read as ending the goals there rather
+than as stating more of them. Attributing work to a non-goal is worse than
+attributing it to nothing, so that bound does not depend on how the document was
+nested.
 
 | Reported as | What it is | What it means for the work |
 | --- | --- | --- |
@@ -457,6 +470,15 @@ that failed every one of them would stop a backlog to close a gap that has cost
 nothing yet. Attributing one is a judgement about what the work is for, so it is
 the product manager's to make in conversation and there is no command here that
 makes it.
+
+That leaves a pass still to be made. When this arrived, Yoyodyne's own backlog
+carried one attribution across seventeen open items, and **attributing the rest
+is deliberately not part of the change that added the check**: it is a
+conversation with the product manager, working from `yoyo goals attribution`,
+not a migration the harness ran. The work is deferred rather than dropped, and
+until it is done that command is expected to report most of the queue as naming
+no goal. Nothing is blocked in the meantime, which is the whole point of
+grandfathering it.
 
 ## Architectural invariants
 
