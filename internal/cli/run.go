@@ -69,9 +69,13 @@ type components struct {
 	// reports is the collected pile of what agents noticed while their work
 	// carried on. It is built beside the run store because it is durable in the
 	// same way and outlives the runs that fill it.
-	reports      *runstate.ReportStore
-	worktrees    *gitworktree.Manager
-	redactValues []string
+	reports *runstate.ReportStore
+	// branchReviews is where verdicts on accumulated changes are recorded. It is
+	// its own store for the same reason: a branch review outlives every run whose
+	// work it judged, and it belongs to no one of them.
+	branchReviews *runstate.BranchReviewStore
+	worktrees     *gitworktree.Manager
+	redactValues  []string
 }
 
 func buildComponents(configPath string) (components, error) {
@@ -112,6 +116,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	branchReviews, err := runstate.NewBranchReviewStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -123,14 +131,15 @@ func buildComponents(configPath string) (components, error) {
 		return components{}, err
 	}
 	return components{
-		config:       cfg,
-		repository:   repository,
-		stateRoot:    stateRoot,
-		runner:       processRunner,
-		store:        store,
-		reports:      reports,
-		worktrees:    worktrees,
-		redactValues: execution.SensitiveEnvironmentValues(os.Environ()),
+		config:        cfg,
+		repository:    repository,
+		stateRoot:     stateRoot,
+		runner:        processRunner,
+		store:         store,
+		reports:       reports,
+		branchReviews: branchReviews,
+		worktrees:     worktrees,
+		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
 }
 

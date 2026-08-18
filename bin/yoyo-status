@@ -2,9 +2,10 @@
 #
 # yoyo-status - follow the event stream of a Yoyodyne run or conversation.
 #
-# A conversation is recorded beside runs rather than among them, but it is the
-# same question being asked of both - is this alive, and what is it doing - so
-# every mode here covers both and the default never asks which kind you meant.
+# A conversation and a branch review are each recorded beside runs rather than
+# among them, but it is the same question being asked of all three - is this
+# alive, what is it doing, and what did it cost - so every mode here covers all
+# of them and the default never asks which kind you meant.
 # The state directory is resolved the same way the harness resolves it, so this
 # keeps working when YOYODYNE_STATE_HOME or XDG_STATE_HOME is set, and on Linux
 # and Windows checkouts as well as macOS.
@@ -18,6 +19,7 @@
 #   yoyo-status -n 200           replay the last 200 events before following
 #   yoyo-status --runs           runs only
 #   yoyo-status --chats          conversations only
+#   yoyo-status --reviews        branch reviews only
 #   yoyo-status --all            include thinking-token noise
 #   yoyo-status --raw            emit raw JSONL, no jq shaping
 #   yoyo-status --no-follow      print and exit instead of following
@@ -39,6 +41,7 @@ raw=0
 include_all=0
 want_runs=1
 want_chats=1
+want_reviews=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -47,8 +50,9 @@ while [ $# -gt 0 ]; do
     -c|--cost) cost_only=1; shift ;;
     -L|--follow-latest) follow_latest=1; shift ;;
     -n|--lines) lines="${2:?-n needs a value}"; shift 2 ;;
-    --runs) want_chats=0; shift ;;
-    --chats|--conversations) want_runs=0; shift ;;
+    --runs) want_chats=0; want_reviews=0; shift ;;
+    --chats|--conversations) want_runs=0; want_reviews=0; shift ;;
+    --reviews|--branch-reviews) want_runs=0; want_chats=0; shift ;;
     --raw) raw=1; shift ;;
     --all) include_all=1; shift ;;
     --no-follow) follow=0; shift ;;
@@ -94,18 +98,21 @@ fi
 
 runs="$products/$product/runs"
 conversations="$products/$product/conversations"
+reviews="$products/$product/branch-reviews"
 
-# A product that has only ever chatted has no runs directory, and one that has
-# only ever run has no conversations directory. Either on its own is enough to
-# work with, so only having neither of the selected kinds is a refusal.
+# A product that has only ever chatted has no runs directory, one that has only
+# ever run has no conversations directory, and one whose branches have never
+# been reviewed has no branch-reviews directory. Any one on its own is enough to
+# work with, so only having none of the selected kinds is a refusal.
 have_kind() {
   case "$1" in
     runs) [ "$want_runs" = "1" ] && [ -d "$runs" ] ;;
     chats) [ "$want_chats" = "1" ] && [ -d "$conversations" ] ;;
+    reviews) [ "$want_reviews" = "1" ] && [ -d "$reviews" ] ;;
   esac
 }
-if ! have_kind runs && ! have_kind chats; then
-  echo "no runs or conversations under $products/$product" >&2
+if ! have_kind runs && ! have_kind chats && ! have_kind reviews; then
+  echo "no runs, conversations, or branch reviews under $products/$product" >&2
   exit 1
 fi
 
@@ -118,17 +125,19 @@ event_logs() {
   set --
   if have_kind runs; then set -- "$@" "$runs"/*"$pattern"*.events.jsonl; fi
   if have_kind chats; then set -- "$@" "$conversations"/*"$pattern"*.events.jsonl; fi
+  if have_kind reviews; then set -- "$@" "$reviews"/*"$pattern"*.events.jsonl; fi
   [ $# -gt 0 ] || return 0
   ls "$order" "$@" 2>/dev/null || true
 }
 
 newest() { event_logs | head -1; }
 
-# Runs and conversations are told apart by their id, which is the same thing
-# their state records are named for.
+# The three kinds are told apart by their id, which is the same thing their
+# records are named for.
 kind_of() {
   case "$(basename "$1")" in
     chat-*) echo conversation ;;
+    review-*) echo review ;;
     *) echo run ;;
   esac
 }
@@ -176,10 +185,19 @@ conversation_status() {
   esac
 }
 
+# A branch review has no state file: the verdict log is one shared file rather
+# than one record per review, so what a review is doing is read from its own
+# event stream. A completed review has emitted its verdict event; anything else
+# is still being made.
+review_status() {
+  if grep -q '"type":"review.completed"' "$1" 2>/dev/null; then echo "reviewed"; else echo "reviewing"; fi
+}
+
 # The state file is pretty-printed and has nested "status" keys, so match the
 # top-level one by its indent rather than the first occurrence anywhere.
 status_of() {
   if [ "$(kind_of "$1")" = "conversation" ]; then conversation_status "$1"; return; fi
+  if [ "$(kind_of "$1")" = "review" ]; then review_status "$1"; return; fi
   local state="${1%.events.jsonl}.json"
   [ -f "$state" ] || { echo "?"; return; }
   if command -v jq >/dev/null 2>&1; then
@@ -190,12 +208,12 @@ status_of() {
 }
 
 # When it started, in local time, to the minute. A run records that in its state
-# file; a conversation's is the timestamp of its first event, which is the same
-# moment and needs no state file to find.
+# file; a conversation's and a branch review's are the timestamp of their first
+# event, which is the same moment and needs no state file to find.
 started_of() {
   command -v jq >/dev/null 2>&1 || { echo "-"; return; }
   local stamp="" state
-  if [ "$(kind_of "$1")" = "conversation" ]; then
+  if [ "$(kind_of "$1")" != "run" ]; then
     stamp="$(head -1 "$1" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null || true)"
   else
     state="${1%.events.jsonl}.json"
@@ -231,7 +249,7 @@ cost_report() {
   command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
   local files
   files=$(event_logs "${1:-}" -tr)
-  [ -n "$files" ] || { echo "no runs or conversations found" >&2; exit 1; }
+  [ -n "$files" ] || { echo "no runs, conversations, or branch reviews found" >&2; exit 1; }
 
   # Aggregate per run at full precision first. Totalling the displayed values
   # instead would accumulate the rounding error from each row.
@@ -254,22 +272,31 @@ cost_report() {
                             id, ts, n, in_, out, cw, cr, cost, st }'
   done > "$tmp"
 
-  printf '%-38s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
-  awk -F'\t' '{ printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9 }' "$tmp"
+  printf '%-39s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
+  awk -F'\t' '{ printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9 }' "$tmp"
   awk -F'\t' '
     { n+=$3; in_+=$4; out+=$5; cw+=$6; cr+=$7; cost+=$8;
-      if ($1 ~ /^chat-/) { chats+=$3; chat_cost+=$8 } else { plain+=$3; run_cost+=$8 } }
+      if ($1 ~ /^chat-/) { chats+=$3; chat_cost+=$8 }
+      else if ($1 ~ /^review-/) { revs+=$3; rev_cost+=$8 }
+      else { plain+=$3; run_cost+=$8 } }
     END {
       if (n==0) { print "no completed provider invocations yet"; exit }
       print  "----------------------------------------------------------------------------------------------------------------";
-      printf "%-38s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", "", n, in_, out, cw, cr, cost;
+      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", "", n, in_, out, cw, cr, cost;
       t=in_+out+cw+cr;
       printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
       # Split the total only when it is actually mixed, so the one number is
-      # never left ambiguous about which kinds of work went into it.
-      if (chats>0 && plain>0)
-        printf "runs: $%.2f from %d invocation(s)   conversations: $%.2f from %d turn(s)\n",
-               run_cost, plain, chat_cost, chats
+      # never left ambiguous about which kinds of work went into it. A branch
+      # review is a provider invocation like the others and is priced beside
+      # them: a total that skipped it would be wrong rather than unattributed.
+      kinds=(chats>0)+(plain>0)+(revs>0);
+      if (kinds>1) {
+        line="";
+        if (plain>0) line=line sprintf("runs: $%.2f from %d invocation(s)", run_cost, plain);
+        if (chats>0) line=line (line==""?"":"   ") sprintf("conversations: $%.2f from %d turn(s)", chat_cost, chats);
+        if (revs>0)  line=line (line==""?"":"   ") sprintf("branch reviews: $%.2f from %d invocation(s)", rev_cost, revs);
+        print line;
+      }
     }' "$tmp"
 }
 
@@ -281,7 +308,7 @@ fi
 if [ -n "$run_arg" ]; then
   # Newest first, so an ambiguous prefix lands on the one most likely meant.
   target="$(event_logs "$run_arg" | head -1)"
-  [ -n "$target" ] || { echo "no run or conversation matching '$run_arg' under $products/$product" >&2; exit 1; }
+  [ -n "$target" ] || { echo "no run, conversation, or branch review matching '$run_arg' under $products/$product" >&2; exit 1; }
 else
   target="$(newest)"
   # Nothing yet is normal when a run is about to start, so wait rather than fail.

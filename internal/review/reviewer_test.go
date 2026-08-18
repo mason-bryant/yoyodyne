@@ -677,7 +677,7 @@ func TestReviewRejectsIncompleteRequestsAndOversizedInput(t *testing.T) {
 	if _, err := (Reviewer{Backend: provider, Model: testReviewModel}).Review(context.Background(), Request{RunID: reviewRunID}); err == nil {
 		t.Fatal("Review() incomplete request error = nil")
 	} else {
-		for _, want := range []string{"work item id is required", "work item context is required", "worktree path is required"} {
+		for _, want := range []string{"work item id is required", "review context is required", "worktree path is required"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("Review() error = %v, want it to contain %q", err, want)
 			}
