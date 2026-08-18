@@ -19,18 +19,22 @@ type CheckProposal struct {
 	Command string `json:"command"`
 	// Source is the repository-relative artifact the command was read out of.
 	Source string `json:"source"`
-	// Reason is why a candidate could not be proposed outright. It is empty on a
+	// Reason is why a command was not proposed outright. It is empty on a
 	// confident proposal, which needs no excuse.
 	Reason string `json:"reason,omitempty"`
 }
 
-// Detection is what reading a project's own files proposed. Checks are written
-// into the configuration; Candidates are written beside them, commented out and
-// marked, because detection found a toolchain and could not tell which command
-// is this project's gate.
+// Detection is what reading a project's own files proposed, in three kinds that
+// ask three different things of the operator. Checks are written into the
+// configuration. Candidates are written beside them, commented out, because
+// detection could not tell which command is the gate — those are a decision
+// somebody still owes. Alternatives are commands detection read and decided
+// against, because what it did write already covers them; nothing is owed there,
+// and they are offered only so the operator can swap one in.
 type Detection struct {
-	Checks     []CheckProposal `json:"checks"`
-	Candidates []CheckProposal `json:"candidates"`
+	Checks       []CheckProposal `json:"checks"`
+	Candidates   []CheckProposal `json:"candidates"`
+	Alternatives []CheckProposal `json:"alternatives"`
 }
 
 // Commands is the check list a detection proposes, in the order it proposed it.
@@ -45,7 +49,7 @@ func (d Detection) Commands() []string {
 // Empty reports whether detection found nothing at all, which is the case a
 // generated configuration handles by leaving its placeholder in place.
 func (d Detection) Empty() bool {
-	return len(d.Checks) == 0 && len(d.Candidates) == 0
+	return len(d.Checks) == 0 && len(d.Candidates) == 0 && len(d.Alternatives) == 0
 }
 
 // DetectChecks proposes checks by reading what a project already declares about
@@ -63,9 +67,13 @@ func (d Detection) Empty() bool {
 // convenience defaults derived from the project's own files, which an operator
 // reads, edits, or deletes before any of them runs.
 func DetectChecks(root string) Detection {
-	// Both lists are empty rather than absent, so a caller reading the reported
-	// JSON iterates two lists in every case instead of two or null.
-	detection := Detection{Checks: []CheckProposal{}, Candidates: []CheckProposal{}}
+	// Every list is empty rather than absent, so a caller reading the reported
+	// JSON iterates three lists in every case instead of three or null.
+	detection := Detection{
+		Checks:       []CheckProposal{},
+		Candidates:   []CheckProposal{},
+		Alternatives: []CheckProposal{},
+	}
 	// A Makefile is the project naming its own entry point, so it is read first
 	// and the language-native commands defer to it below.
 	makeChecks, makeCandidates := detectMake(root)
@@ -82,9 +90,12 @@ func DetectChecks(root string) Detection {
 		checks, candidates := detect(root)
 		if len(makeChecks) > 0 {
 			// Two gates running the same suite is the suite run twice, so what the
-			// Makefile supersedes is offered rather than added. The operator can
-			// still read it and swap.
-			candidates = append(supersede(checks, "the Makefile above already names this project's entry point"), candidates...)
+			// Makefile supersedes becomes an alternative rather than an addition.
+			// It is not a candidate: nothing about it is undecided, and asking the
+			// operator to choose between a decision already made and its own
+			// runner-up is asking for a decision nobody owes.
+			detection.Alternatives = append(detection.Alternatives,
+				restate(checks, "the Makefile above already names this project's entry point")...)
 			checks = nil
 		}
 		detection.Checks = append(detection.Checks, checks...)
@@ -105,15 +116,16 @@ func ProposalSources(proposals []CheckProposal) []string {
 	return sources
 }
 
-// supersede restates confident proposals as candidates, keeping their
-// provenance and naming what displaced them.
-func supersede(proposals []CheckProposal, reason string) []CheckProposal {
-	superseded := make([]CheckProposal, 0, len(proposals))
+// restate copies proposals with a reason attached, keeping their provenance. It
+// is how a proposal moves out of the written list, whether because nothing here
+// could decide it or because something else already did.
+func restate(proposals []CheckProposal, reason string) []CheckProposal {
+	restated := make([]CheckProposal, 0, len(proposals))
 	for _, proposal := range proposals {
 		proposal.Reason = reason
-		superseded = append(superseded, proposal)
+		restated = append(restated, proposal)
 	}
-	return superseded
+	return restated
 }
 
 // makefileNames are the names make itself looks for, in make's own order, so a
@@ -268,7 +280,7 @@ func detectNode(root string) ([]CheckProposal, []CheckProposal) {
 		reason = "more than one lockfile is present, so which package manager installs this project is unsettled"
 	}
 	if reason != "" {
-		return nil, supersede(proposals, reason)
+		return nil, restate(proposals, reason)
 	}
 	return proposals, nil
 }

@@ -140,7 +140,10 @@ git config user.email walk@example.invalid
 git config user.name "Adoption Walk"
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 : > tests/__init__.py
-cat > tests/test_calc.py <<'PY'
+# Step 4 asserts that init names this file as where it read the project's tests,
+# so the path is named once here and used there rather than spelled twice.
+fixture_test_file="tests/test_calc.py"
+cat > "$fixture_test_file" <<'PY'
 import unittest
 
 from calc import add
@@ -194,10 +197,10 @@ for candidate in "#  - python3 -m pytest -q" "#  - python3 -m unittest discover 
     fail "offers no candidate: $candidate"
   fi
 done
-if grep -qF "tests/test_calc.py" .yoyodyne/config.yaml; then
-  pass "names the file the candidates were derived from"
+if grep -qF "$fixture_test_file" .yoyodyne/config.yaml; then
+  pass "names $fixture_test_file as where the candidates were derived from"
 else
-  fail "names nothing the candidates were derived from"
+  fail "does not name $fixture_test_file as where the candidates came from"
 fi
 for language in "# Go" "# TypeScript / Node" "# Python" "# Java (Maven)"; do
   if grep -qF "$language" .yoyodyne/config.yaml; then
@@ -214,7 +217,7 @@ done
 decided="$scratch/decided"
 mkdir -p "$decided"
 printf '[tool.pytest.ini_options]\naddopts = "-q"\n' > "$decided/pyproject.toml"
-report="$("$yoyo" init --directory "$decided" --product decided --json)"
+report="$("$yoyo" init --directory "$decided" --product decided --json || true)"
 printf '%s\n' "$report"
 summary="$(printf '%s' "$report" | python3 -c '
 import json, sys
@@ -223,7 +226,7 @@ payload = json.load(sys.stdin)
 written = ";".join(payload["checks"])
 sources = ";".join(entry["source"] for entry in payload["detected"]["checks"])
 print("written: %s from: %s" % (written, sources))
-')"
+' || true)"
 contains "$summary" "python3 -m pytest -q" "a project that names pytest gets a runnable check written"
 contains "$summary" "pyproject.toml" "the report names the file the check was derived from"
 if grep -q '^  # from pyproject.toml' "$decided/.yoyodyne/config.yaml"; then
@@ -234,12 +237,16 @@ fi
 
 # Detection reads; it does not run. A Makefile whose target would leave a trace
 # is how that is checked from outside: the target is detected and its trace is
-# never written.
+# never written. The go.mod beside it makes this the supersede case too -- the
+# Makefile is the project's own entry point, so the Go commands are offered
+# rather than added, and offered is not the same as asked about.
 untrusted="$scratch/untrusted"
 mkdir -p "$untrusted"
 printf 'check:\n\ttouch %s/ran\n' "$untrusted" > "$untrusted/Makefile"
-"$yoyo" init --directory "$untrusted" --product untrusted >/dev/null
-if grep -q '^  - make check$' "$untrusted/.yoyodyne/config.yaml"; then
+printf 'module untrusted\n\ngo 1.24\n' > "$untrusted/go.mod"
+"$yoyo" init --directory "$untrusted" --product untrusted >/dev/null || true
+untrusted_config="$untrusted/.yoyodyne/config.yaml"
+if grep -q '^  - make check$' "$untrusted_config"; then
   pass "a Makefile's check target is proposed as the project's gate"
 else
   fail "a Makefile's check target was not proposed"
@@ -248,6 +255,23 @@ if [ -e "$untrusted/ran" ]; then
   fail "init executed a target from the project it was configuring"
 else
   pass "init read the Makefile without running anything in it"
+fi
+if grep -q '^# ALSO FOUND, AND NOT NEEDED' "$untrusted_config"; then
+  pass "the superseded Go commands are headed as offered, not as owed"
+else
+  fail "the superseded Go commands carry no not-needed heading"
+fi
+if grep -qF '#  - go test ./...' "$untrusted_config"; then
+  pass "the superseded Go commands are still shown, commented out"
+else
+  fail "the superseded Go commands were dropped rather than offered"
+fi
+# The demand to choose belongs only where a run cannot happen until somebody
+# does. This configuration already runs, so it must not carry one.
+if grep -q '^# YOU MUST CHOOSE' "$untrusted_config"; then
+  fail "a configuration with a written checks list still demands a choice"
+else
+  pass "a configuration that already runs demands nothing"
 fi
 
 step "5. an empty checks list validates, but a run refuses it"
@@ -276,7 +300,9 @@ step "6. choose one of the candidates init offered"
 # written rather than by writing the line out again, because the claim being
 # checked is that the generated file can be edited that way.
 chosen="python3 -m unittest discover -q -s tests -t ."
-python3 - "$chosen" <<'PY'
+# The edit runs as an `if` condition so a candidate that was never offered is
+# reported as the failed claim it is, rather than aborting the walk under set -e.
+if python3 - "$chosen" <<'PY'
 import pathlib
 import sys
 
@@ -289,8 +315,14 @@ text = text.replace("checks: []\n", "checks:\n", 1)
 text = text.replace("#  - " + chosen + "\n", "  - " + chosen + "\n", 1)
 path.write_text(text)
 PY
-pass "uncommented the chosen candidate in place"
-effective="$("$yoyo" config show --effective 2>&1)"
+then
+  pass "uncommented the chosen candidate in place"
+else
+  fail "could not uncomment the chosen candidate"
+fi
+# `|| true` so a command that fails is reported as the claim it broke rather than
+# aborting the walk under set -e with nothing said about which step it was.
+effective="$("$yoyo" config show --effective 2>&1 || true)"
 contains "$effective" "$chosen" "the uncommented candidate is the effective checks list"
 # The README says each entry runs through /bin/sh -c and must exit non-zero on
 # failure, so the declared command is executed exactly that way.

@@ -123,10 +123,15 @@ func TestRunInitProposesChecksFromTheProjectsOwnFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
 	}
-	for _, want := range []string{"# from go.mod", config.CandidateMarker, "python3 -m pytest -q"} {
+	for _, want := range []string{"# from go.mod", config.UndecidedMarker, "python3 -m pytest -q"} {
 		if !strings.Contains(string(contents), want) {
 			t.Errorf("the generated configuration does not contain %q", want)
 		}
+	}
+	// The Go commands are a usable gate on their own, so nothing here has to be
+	// chosen before work can run and the file does not say otherwise.
+	if strings.Contains(string(contents), config.CandidateMarker) {
+		t.Error("a configuration that already runs demands a choice anyway")
 	}
 }
 

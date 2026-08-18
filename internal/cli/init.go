@@ -52,7 +52,9 @@ func runInit(args []string, stdout, stderr io.Writer) int {
 			"files":  written,
 			// What was written, and what was detected, are reported separately:
 			// a candidate is detected and deliberately not written, and a caller
-			// that could not tell them apart could not check either.
+			// that could not tell them apart could not check either. The three
+			// detected lists are kept apart for the same reason -- they ask the
+			// operator for a decision, for an optional one, and for nothing.
 			"checks":   detection.Commands(),
 			"detected": detection,
 		})
@@ -72,8 +74,11 @@ func describeDetection(detection config.Detection, path string) string {
 	case len(detection.Checks) > 0:
 		reported := fmt.Sprintf("proposed %s from %s; review the checks in %s before running work",
 			countOf(len(detection.Checks), "check"), strings.Join(config.ProposalSources(detection.Checks), ", "), path)
+		// Alternatives are not counted here: nothing is owed on them, and a line
+		// that counts what needs no decision alongside what does is a line that
+		// stops distinguishing them.
 		if len(detection.Candidates) > 0 {
-			reported += fmt.Sprintf(", with %s left commented out beside them",
+			reported += fmt.Sprintf(", with %s it could not settle left commented out beside them",
 				countOf(len(detection.Candidates), "candidate"))
 		}
 		return reported

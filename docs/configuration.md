@@ -46,9 +46,10 @@ for what it reads and what it does with an answer it cannot settle. A run with
 nothing to verify has no gate to integrate behind, so `yoyo run` refuses one
 whatever `init` found; read what it proposed before running work.
 
-`init --json` reports it: `checks` is the list that was written, and `detected`
-carries every proposal with the artifact it came from, including the candidates
-that were deliberately not written.
+`init --json` reports it. `checks` is the list that was written; `detected`
+carries every proposal with the artifact it came from, in the three lists the
+generated file keeps apart — `checks` written, `candidates` found and not
+settled, `alternatives` read and deliberately left out.
 
 ## Layout
 
@@ -785,21 +786,39 @@ default derived from the project's own files rather than an understanding of
 toolchains in the harness: what runs is still only the shell commands this list
 declares, judged by their exit codes.
 
-**A Makefile supersedes the language-native commands.** A project with a
-`check` target and a `go.mod` gets `make check`, and the Go commands are offered
-as commented candidates rather than added, because two gates running the same
-suite is the suite run twice.
+**Whatever is not written into `checks` is written beside it, commented out,
+under a heading that says what it wants from you.** There are three, and only the
+first asks for anything:
 
-**What cannot be settled is not settled.** Where detection finds a toolchain and
-cannot tell which command is the gate, it writes nothing into `checks` and
-comments the candidates underneath a `YOU MUST CHOOSE` marker, each with the
-reason it could not be chosen. Uncommenting one is the whole gesture: delete the
-leading `#` and nothing else, and open the list above with `checks:` if it is
-still `checks: []`. The cases that reach it today are Python tests with no
-runner named anywhere — unittest discovery over pytest-style tests collects
-nothing and exits 0, which is a gate that passes everything — a `package.json`
-with no lockfile or with several, one whose only test script is npm's
-`exit 1` placeholder, and a Gradle build with no wrapper to pin its version.
+| Heading | What it means | What you owe |
+| --- | --- | --- |
+| `YOU MUST CHOOSE` | detection could not tell which command is the gate, and `checks` is empty | a choice: a run is refused until there is one |
+| `ALSO FOUND, AND NOT DECIDED` | the same, except `checks` was written from something else and works | nothing; the question is open, not blocking |
+| `ALSO FOUND, AND NOT NEEDED` | commands detection read and decided against, because what it wrote covers them | nothing |
+
+The distinction is the point. A demand to choose is worth reading only where a
+run cannot happen until somebody does; putting it over an already-runnable file
+teaches an operator to scroll past it.
+
+Taking any of them is the same gesture: delete the leading `#` and nothing else,
+and open the list above with `checks:` if it is still `checks: []`. Each carries
+the reason it is where it is.
+
+**A Makefile supersedes the language-native commands**, which is the ordinary way
+into the third heading. A project with a `check` target and a `go.mod` gets
+`make check`, and `go test ./...` and `go vet ./...` appear under
+`ALSO FOUND, AND NOT NEEDED` rather than being added, because two gates running
+the same suite is the suite run twice. Nothing about that is undecided, so
+nothing about it demands a decision.
+
+**What cannot be settled is not settled**, which is the first two headings. The
+cases that reach them today are Python tests with no runner named anywhere —
+unittest discovery over pytest-style tests collects nothing and exits 0, which is
+a gate that passes everything — a `package.json` with no lockfile or with
+several, one whose only test script is npm's `exit 1` placeholder, and a Gradle
+build with no wrapper to pin its version. Which of the two headings they land
+under depends only on whether anything else in the project produced a `checks`
+list to stand on.
 
 A repository that announces none of this keeps `checks: []` and the commented
 per-language examples above, which is what it always did.

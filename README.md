@@ -212,11 +212,24 @@ checks:
   - python3 -m pytest -q
 ```
 
+What it could not settle is written beside the list, commented out, never in it.
 Where detection found a toolchain and could not tell which command is the gate —
 tests with no runner named anywhere, a `package.json` with no lockfile beside it,
-a Gradle build with no wrapper — it writes nothing into `checks` and comments the
-candidates underneath a `YOU MUST CHOOSE` marker instead, each with the reason it
-could not be settled. Choosing one costs a character: delete its leading `#`. A
+a Gradle build with no wrapper — it comments those candidates under a heading
+that says which of two situations you are in, because only one of them needs
+anything from you:
+
+- **`YOU MUST CHOOSE`** — `checks` is empty, so a run is refused until you settle
+  it. This is the only heading that asks for something.
+- **`ALSO FOUND, AND NOT DECIDED`** — `checks` was written and works; something
+  else about the toolchain is merely still open, and you can ignore it.
+- **`ALSO FOUND, AND NOT NEEDED`** — commands `init` read and deliberately left
+  out, because what it wrote already covers them. A `Makefile` with a `check`
+  target beside a `go.mod` gets `make check`, with `go test ./...` and
+  `go vet ./...` offered here rather than added, since two gates running the
+  same suite is the suite run twice.
+
+Under any of them, taking one costs a character: delete its leading `#`. A
 repository that announces nothing keeps `checks: []` and the commented examples
 for Go, TypeScript, Python, and Java that have always been there; the
 [configuration guide](docs/configuration.md#checks) has the same examples with
@@ -1349,11 +1362,11 @@ agents:
 its template: it reads the project's Makefile targets, module and manifest
 files, lockfiles, and build wrappers, and proposes the commands that follow,
 naming the file each came from. It executes none of them, and it decides nothing
-it cannot decide — an ambiguous toolchain gets commented candidates under a
-`YOU MUST CHOOSE` marker, and a repository that announces nothing keeps
-`checks: []` and the commented examples for Go, TypeScript, Python, and Java. A
-run with nothing to verify has no gate to integrate behind, so `yoyo run`
-refuses one either way.
+it cannot decide — what it could not settle, and what it settled by leaving a
+command out, are commented beside the list under headings that say which of the
+two happened, and a repository that announces nothing keeps `checks: []` and the
+commented examples for Go, TypeScript, Python, and Java. A run with nothing to
+verify has no gate to integrate behind, so `yoyo run` refuses one either way.
 
 Personas specialize how an agent works and never grant it authority. The harness
 contracts — agent authority, worktree sandboxing, the review verdict contract,

@@ -219,6 +219,76 @@ func TestScaffoldWritesCandidatesCommentedUnderAMarker(t *testing.T) {
 	}
 }
 
+// A demand to choose is only honest where a run cannot happen until somebody
+// does. Where init wrote a usable list and something else about the toolchain is
+// merely open, the file says so without demanding anything.
+func TestScaffoldDemandsAChoiceOnlyWhereTheListIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{
+		ProductID:  "example",
+		Repository: ".",
+		Detection: Detection{
+			Checks: []CheckProposal{{Command: "make check", Source: `Makefile (its "check" target)`}},
+			Candidates: []CheckProposal{
+				{Command: "python3 -m pytest -q", Source: "tests/test_calc.py", Reason: "nothing here names the test runner"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	if strings.Contains(rendered, CandidateMarker) {
+		t.Errorf("a configuration that already runs still demands a choice:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, UndecidedMarker) {
+		t.Errorf("the open question is not named at all:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "#  - python3 -m pytest -q\n") {
+		t.Error("the undecided command is not offered")
+	}
+}
+
+// A command init read and decided against is not a decision the operator owes,
+// so it is written under its own heading rather than under the one that means a
+// run is blocked until somebody answers.
+func TestScaffoldWritesSupersededCommandsAsAlternativesRatherThanDemands(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := NewScaffold(BuiltinV1, ScaffoldOptions{
+		ProductID:  "example",
+		Repository: ".",
+		Detection: Detection{
+			Checks: []CheckProposal{{Command: "make check", Source: `Makefile (its "check" target)`}},
+			Alternatives: []CheckProposal{
+				{Command: "go test ./...", Source: "go.mod", Reason: "the Makefile above already names this project's entry point"},
+				{Command: "go vet ./...", Source: "go.mod", Reason: "the Makefile above already names this project's entry point"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := string(scaffold.Config.Content)
+	for _, unwanted := range []string{CandidateMarker, UndecidedMarker} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("a settled configuration carries %q:\n%s", unwanted, rendered)
+		}
+	}
+	if !strings.Contains(rendered, AlternativeMarker) {
+		t.Errorf("the superseded commands are not headed as alternatives:\n%s", rendered)
+	}
+	for _, alternative := range []string{"#  - go test ./...\n", "#  - go vet ./...\n"} {
+		if !strings.Contains(rendered, alternative) {
+			t.Errorf("alternative %q was dropped rather than offered", strings.TrimSpace(alternative))
+		}
+	}
+	if !strings.Contains(rendered, "the Makefile above already names this project's entry point") {
+		t.Error("the alternatives do not say what displaced them")
+	}
+}
+
 // A project that proposed nothing keeps the placeholder and the examples that
 // were there before detection existed, plus somewhere to read about them.
 func TestScaffoldKeepsThePlaceholderWhenNothingWasDetected(t *testing.T) {
@@ -234,8 +304,10 @@ func TestScaffoldKeepsThePlaceholderWhenNothingWasDetected(t *testing.T) {
 			t.Errorf("rendered configuration does not contain %q", want)
 		}
 	}
-	if strings.Contains(rendered, CandidateMarker) {
-		t.Error("a project with nothing detected was still told to choose something")
+	for _, unwanted := range []string{CandidateMarker, UndecidedMarker, AlternativeMarker} {
+		if strings.Contains(rendered, unwanted) {
+			t.Errorf("a project with nothing detected carries %q", unwanted)
+		}
 	}
 }
 

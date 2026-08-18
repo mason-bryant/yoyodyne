@@ -82,8 +82,9 @@ func TestDetectChecksProposesFromWhatAProjectDeclares(t *testing.T) {
 			if !reflect.DeepEqual(detection.Checks, test.want) {
 				t.Errorf("checks = %+v, want %+v", detection.Checks, test.want)
 			}
-			if len(detection.Candidates) != 0 {
-				t.Errorf("candidates = %+v, want none for a project that says what it is", detection.Candidates)
+			if len(detection.Candidates) != 0 || len(detection.Alternatives) != 0 {
+				t.Errorf("candidates = %+v, alternatives = %+v, want none for a project that says what it is",
+					detection.Candidates, detection.Alternatives)
 			}
 		})
 	}
@@ -144,6 +145,9 @@ func TestDetectChecksLeavesWhatItCannotDecideAsCandidates(t *testing.T) {
 			if len(detection.Checks) != 0 {
 				t.Errorf("checks = %+v, want nothing written for an undecidable toolchain", detection.Checks)
 			}
+			if len(detection.Alternatives) != 0 {
+				t.Errorf("alternatives = %+v, want nothing displaced where nothing was written", detection.Alternatives)
+			}
 			var commands []string
 			for _, candidate := range detection.Candidates {
 				commands = append(commands, candidate.Command)
@@ -163,7 +167,8 @@ func TestDetectChecksLeavesWhatItCannotDecideAsCandidates(t *testing.T) {
 
 // A Makefile is the project naming its own entry point. Running the suite twice
 // is not a stronger gate, so the language-native commands are offered rather
-// than added.
+// than added -- as alternatives rather than candidates, because a decision that
+// has been made is not one the operator owes.
 func TestDetectChecksLetsAMakefileSupersedeTheLanguageCommands(t *testing.T) {
 	t.Parallel()
 
@@ -175,14 +180,17 @@ func TestDetectChecksLetsAMakefileSupersedeTheLanguageCommands(t *testing.T) {
 		t.Fatalf("checks = %v, want only the Makefile entry point", got)
 	}
 	var superseded []string
-	for _, candidate := range detection.Candidates {
-		superseded = append(superseded, candidate.Command)
-		if !strings.Contains(candidate.Reason, "Makefile") {
-			t.Errorf("candidate %q does not say what displaced it", candidate.Command)
+	for _, alternative := range detection.Alternatives {
+		superseded = append(superseded, alternative.Command)
+		if !strings.Contains(alternative.Reason, "Makefile") {
+			t.Errorf("alternative %q does not say what displaced it", alternative.Command)
 		}
 	}
 	if !reflect.DeepEqual(superseded, []string{"go test ./...", "go vet ./..."}) {
-		t.Errorf("candidates = %v, want the Go commands offered rather than dropped", superseded)
+		t.Errorf("alternatives = %v, want the Go commands offered rather than dropped", superseded)
+	}
+	if len(detection.Candidates) != 0 {
+		t.Errorf("candidates = %+v, want nothing awaiting a decision that init already made", detection.Candidates)
 	}
 }
 

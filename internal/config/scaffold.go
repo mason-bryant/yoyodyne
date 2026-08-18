@@ -269,11 +269,24 @@ func renderScaffoldDuration(duration Duration) string {
 	}
 }
 
-// CandidateMarker heads the commented candidate list a generated configuration
-// carries when detection found a toolchain and could not tell which command is
-// the project's gate. It is deliberately unmissable, and deliberately stable:
-// this is the string that says a decision is owed rather than made.
-const CandidateMarker = "# YOU MUST CHOOSE"
+// The headings a generated configuration puts over commented commands. They are
+// deliberately unmissable and deliberately stable, and they are three rather
+// than one because they ask three different things: a demand to choose belongs
+// only where a run cannot happen until somebody does, and putting it anywhere
+// else teaches an operator to skip past it.
+const (
+	// CandidateMarker heads candidates when nothing was written into "checks":
+	// a run is refused until one of them is chosen, so a decision is owed now.
+	CandidateMarker = "# YOU MUST CHOOSE"
+	// UndecidedMarker heads the same candidates when a checks list was written
+	// anyway. The question is still open, but the file already runs, so nothing
+	// waits on the answer.
+	UndecidedMarker = "# ALSO FOUND, AND NOT DECIDED"
+	// AlternativeMarker heads commands detection read and decided against,
+	// because what it wrote already covers them. Nothing is owed here at all;
+	// they are shown so an operator can swap one in.
+	AlternativeMarker = "# ALSO FOUND, AND NOT NEEDED"
+)
 
 // checksGuide points at the per-language examples and the reasoning behind them,
 // for a project that has no checkout of Yoyodyne to look them up in.
@@ -294,7 +307,7 @@ func renderScaffoldChecks(builder *strings.Builder, detection Detection) {
 		fmt.Fprintf(builder, `#
 # "yoyo init" proposed the list below from files this project already has, named
 # against each entry. It executed nothing to find them: they are what this
-# repository announces about itself rather than what it is known to need, so read
+# repository announces about itself rather than what it is known to need. Read
 # them before the first run and edit or delete whatever does not belong. The
 # configuration guide has per-language examples and the reasoning behind them:
 # %s
@@ -351,34 +364,67 @@ checks:
 checks: []
 `, found, checksGuide)
 	}
-	renderScaffoldCandidates(builder, detection.Candidates, len(detection.Checks) > 0)
+	listed := len(detection.Checks) > 0
+	renderScaffoldCandidates(builder, detection.Candidates, listed)
+	renderScaffoldAlternatives(builder, detection.Alternatives)
 }
 
 // renderScaffoldCandidates writes what detection found and would not choose
-// between. Every candidate is commented out, and each line is written so that
-// deleting its leading "#" leaves a valid entry of the list above: the operator
-// chooses, and choosing costs one character.
+// between. Which heading it writes turns on whether a checks list was written at
+// all: with an empty list a run is refused until somebody chooses, and with a
+// written one the file already works and the question is merely open. Demanding
+// a choice in both cases would make the demand mean nothing in either.
 func renderScaffoldCandidates(builder *strings.Builder, candidates []CheckProposal, listed bool) {
 	if len(candidates) == 0 {
 		return
 	}
-	builder.WriteString("\n" + CandidateMarker + ` -- nothing below runs. "yoyo init" found these and could not
+	if listed {
+		builder.WriteString("\n" + UndecidedMarker + ` -- nothing below runs, and the list above stands
+# without it. "yoyo init" read these out of this project too and could not tell
+# whether or which of them belongs, so it wrote none of them into "checks"
+# above. Uncomment what does belong -- delete the leading "#" and nothing else
+# -- and delete the rest.
+`)
+	} else {
+		builder.WriteString("\n" + CandidateMarker + ` -- nothing below runs, and the list above is empty, so a
+# run is refused until this is settled. "yoyo init" found these and could not
 # tell which one is this project's gate, so it wrote none of them into "checks"
 # above. Uncomment what belongs here -- delete the leading "#" and nothing else
-# -- then delete the rest, or write your own instead.
+# -- then delete the rest, or write your own instead. Replace "checks: []"
+# above with "checks:" first, so the list can take the entry.
 `)
-	if !listed {
-		builder.WriteString("# The list above is empty, so replace \"checks: []\" with \"checks:\" first.\n")
 	}
-	// Candidates are grouped by what could not be decided about them rather than
-	// by artifact: one undecided question is one paragraph, however many files
-	// went into it.
-	for start := 0; start < len(candidates); {
+	renderScaffoldCommented(builder, candidates)
+}
+
+// renderScaffoldAlternatives writes what detection read and decided against.
+// Nothing here is owed an answer: the list above already covers it, and this
+// exists so an operator who would rather have one of these can see it and swap.
+func renderScaffoldAlternatives(builder *strings.Builder, alternatives []CheckProposal) {
+	if len(alternatives) == 0 {
+		return
+	}
+	builder.WriteString("\n" + AlternativeMarker + ` -- nothing below runs, and nothing below has to be
+# chosen. "yoyo init" read these out of this project as well and left them out
+# for the reason given against each, because what is in "checks" above already
+# covers them. Swap one in only if you would rather have it.
+`)
+	renderScaffoldCommented(builder, alternatives)
+}
+
+// renderScaffoldCommented writes commands commented out beneath their
+// provenance, grouped by the reason they were not written rather than by
+// artifact: one question is one paragraph, however many files went into it.
+// Every command line is written so that deleting its leading "#" leaves a valid
+// entry of the checks list above, because that is the whole gesture the headings
+// above ask for.
+func renderScaffoldCommented(builder *strings.Builder, proposals []CheckProposal) {
+	for start := 0; start < len(proposals); {
 		end := start
-		for end < len(candidates) && candidates[end].Reason == candidates[start].Reason {
+		for end < len(proposals) && proposals[end].Reason == proposals[start].Reason {
 			end++
 		}
-		group := candidates[start:end]
+		group := proposals[start:end]
 		builder.WriteString("#\n")
 		header := "#  # from " + strings.Join(ProposalSources(group), ", ")
 		if group[0].Reason == "" {
@@ -386,8 +432,8 @@ func renderScaffoldCandidates(builder *strings.Builder, candidates []CheckPropos
 		} else {
 			wrapScaffoldComment(builder, header+" -- ", "#  # ", group[0].Reason)
 		}
-		for _, candidate := range group {
-			fmt.Fprintf(builder, "#  - %s\n", candidate.Command)
+		for _, proposal := range group {
+			fmt.Fprintf(builder, "#  - %s\n", proposal.Command)
 		}
 		start = end
 	}
