@@ -127,6 +127,10 @@ func (s Store) Load() (Set, error) {
 
 	sort.Slice(set.Artifacts, func(first, second int) bool { return set.Artifacts[first].ID < set.Artifacts[second].ID })
 	sort.Slice(set.Problems, func(first, second int) bool { return set.Problems[first].Path < set.Problems[second].Path })
+	// The relationships are checked here rather than by each caller remembering
+	// to: a chain validated only when somebody asked is a chain that holds only
+	// where somebody asked. Nothing loaded above is dropped over what this finds.
+	set.ReferenceProblems = referenceProblems(set.Artifacts, set.Problems)
 	return set, nil
 }
 
@@ -178,6 +182,16 @@ func discover(root, home string, excluded []string) ([]string, error) {
 	return found, nil
 }
 
+// idForPath is the id a file in an artifact home has to answer to: its own
+// name. It is one function rather than the same expression in two places
+// because a reference that names a refused file is reported by matching the two
+// against each other, and two rules that drifted apart would report a document
+// that is on disk as one nobody wrote.
+func idForPath(relative string) string {
+	base := filepath.Base(relative)
+	return strings.TrimSuffix(base, filepath.Ext(base))
+}
+
 func isExcluded(directory string, excluded []string) bool {
 	for _, entry := range excluded {
 		if directory == entry {
@@ -222,7 +236,7 @@ func (s Store) read(path, relative string) (Artifact, error) {
 	// claims another id is refused rather than read as either: two names for one
 	// artifact is how something downstream ends up referring to a document that
 	// is not the one anybody edited.
-	expected := strings.TrimSuffix(filepath.Base(relative), filepath.Ext(relative))
+	expected := idForPath(relative)
 	if parsed.ID != expected {
 		return Artifact{}, unreadableError{reason: fmt.Sprintf("its id %q does not match its file name; an artifact with that id lives in %s.md", parsed.ID, parsed.ID)}
 	}

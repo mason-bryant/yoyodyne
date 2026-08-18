@@ -106,6 +106,87 @@ revisions:
 	}
 }
 
+func TestBrokenArtifactRelationshipsAreReportedRatherThanRefused(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	// A design naming a goal nobody wrote, and a goal naming nothing at all.
+	writeArtifact(t, project, "docs/designs/v1-harness.md", artifactDocument("v1-harness", "design", "V1 harness design", []string{"goals-that-moved"}))
+	writeArtifact(t, project, "docs/product/goals/loose-goals.md", artifactDocument("loose-goals", "goals", "Goals nobody tied to the brief", nil))
+
+	stdout, stderr, code := runCLI(t, "artifact", "list", "--config", configPath)
+	// Surfacing rather than refusing: the listing succeeds and still holds every
+	// document, and what is wrong with the chain goes to stderr beside it.
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{"brief [brief, active]", "v1-harness [design, active]", "loose-goals [goals, active]"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("list stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+	for _, want := range []string{
+		`dangling-reference: v1-harness (docs/designs/v1-harness.md)`,
+		`"goals-that-moved"`,
+		`orphan: loose-goals (docs/product/goals/loose-goals.md)`,
+		"names nothing upstream",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("list stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+	// The brief is the root and is not reported for supporting nothing.
+	if strings.Contains(stderr, "orphan: brief") {
+		t.Fatalf("the brief was reported as an orphan: %q", stderr)
+	}
+
+	// Asking after one document says what is wrong with that one document.
+	stdout, stderr, code = runCLI(t, "artifact", "show", "--config", configPath, "--json", "v1-harness")
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	var shown struct {
+		ReferenceProblems []struct {
+			Kind   string `json:"kind"`
+			ID     string `json:"id"`
+			Path   string `json:"path"`
+			Reason string `json:"reason"`
+		} `json:"reference_problems"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &shown); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	// Both a dangling reference and, because that reference was its only way
+	// upstream, nothing connecting it to the brief.
+	if len(shown.ReferenceProblems) != 2 {
+		t.Fatalf("reference problems = %#v", shown.ReferenceProblems)
+	}
+	for _, problem := range shown.ReferenceProblems {
+		if problem.ID != "v1-harness" || problem.Path != "docs/designs/v1-harness.md" {
+			t.Fatalf("problem = %#v", problem)
+		}
+	}
+}
+
+// artifactDocument renders a well-formed artifact's frontmatter, so a test about
+// the relationships between documents says only what they support.
+func artifactDocument(id, kind, title string, supports []string) string {
+	var rendered strings.Builder
+	rendered.WriteString("---\nid: " + id + "\nkind: " + kind + "\ntitle: " + title + "\n")
+	if len(supports) > 0 {
+		rendered.WriteString("supports:\n")
+		for _, reference := range supports {
+			rendered.WriteString("    - " + reference + "\n")
+		}
+	}
+	rendered.WriteString("status: active\nrevisions:\n")
+	rendered.WriteString("    - action: created\n      by: architect\n      at: 2026-08-17T12:00:00Z\n      reason: recorded when identity arrived\n")
+	rendered.WriteString("---\n")
+	return rendered.String()
+}
+
 func writeArtifact(t *testing.T, project, relative, content string) {
 	t.Helper()
 	path := filepath.Join(project, filepath.FromSlash(relative))

@@ -1180,11 +1180,17 @@ A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given
 identity to yet says so. Nothing else changes for it: a specification with no
 frontmatter is still read as product intent, because refusing intent somebody
-wrote down is worse than reading it and saying its identity is missing. What
-identity does not buy yet is validation of the relationships it makes
-expressible — an artifact that names an upstream nothing answers to still loads,
-and nothing reports it. The [configuration guide](docs/configuration.md#artifact-identity-and-metadata)
-is the reference for the schema and the fields.
+wrote down is worse than reading it and saying its identity is missing.
+
+The chain that identity makes expressible is then checked, every time the
+artifacts are loaded: a `supports` entry naming an id no artifact answers to is
+reported with both ends named, and an artifact that nothing connects back to the
+brief is reported as an orphan. Neither refuses the document — a broken
+relationship is a name to correct, not a reason to lose what somebody wrote. The
+brief is the root and a decision record is not downstream of intent, so neither
+is asked to support anything. The
+[configuration guide](docs/configuration.md#traceability-references-and-orphans)
+is the reference for the schema, the fields, and what is reported.
 
 ## Architectural invariants
 
