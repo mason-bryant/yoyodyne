@@ -48,10 +48,15 @@ type BranchChangeReader interface {
 	BranchChanges(ctx context.Context, request gitworktree.BranchRequest, limits gitworktree.DiffLimits) (gitworktree.BranchChange, error)
 }
 
-// BranchReviewRecorder keeps the durable record of a branch review. It is
-// satisfied by runstate.BranchReviewStore.
+// BranchReviewRecorder keeps the durable record of a branch review: the verdict
+// itself, and the event stream the provider invocation that produced it emitted.
+// Both halves are one store's job because they are the same record of the same
+// review — the verdict says what was decided, and the events are the only place
+// what the provider reported it cost is ever written down. It is satisfied by
+// runstate.BranchReviewStore.
 type BranchReviewRecorder interface {
 	Append(reviewed runstate.BranchReview) error
+	AppendEvent(event execution.Event) error
 }
 
 // BranchReviewer runs one independent review of what a branch accumulated over
@@ -168,6 +173,12 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		WorktreePath: b.Repository,
 		Changes:      change.Changes,
 		RedactValues: b.RedactValues,
+		// A branch review is a provider invocation like any other the harness
+		// makes, so it records one like any other: this is what lets it be
+		// followed while it runs and priced afterwards. The sequence starts at
+		// zero because this review is the whole of its own event stream rather
+		// than a step inside a longer one.
+		EventSink: b.sink,
 	})
 	outcome.SessionID = result.SessionID
 	outcome.Model = result.RequestedModel
@@ -213,10 +224,24 @@ func (b BranchReviewer) clock() execution.Clock {
 	return b.Clock
 }
 
+// sink persists one event of this review's own stream. A store that cannot keep
+// an event fails the review the same way it fails a run's: the event log is the
+// evidence the invocation happened and what it cost, and a review nobody can
+// account for afterwards is not one to report as having been made.
+func (b BranchReviewer) sink(event execution.Event) error {
+	if b.Reviews == nil {
+		return errors.New("nothing records branch reviews for this product, so this review would leave no event stream")
+	}
+	if err := b.Reviews.AppendEvent(event); err != nil {
+		return fmt.Errorf("persist branch review event: %w", err)
+	}
+	return nil
+}
+
 func (b BranchReviewer) newReviewID() (string, error) {
 	mint := b.NewReviewID
 	if mint == nil {
-		mint = runstate.NewRunID
+		mint = runstate.NewBranchReviewID
 	}
 	id, err := mint()
 	if err != nil {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # yoyo-status-test.sh - exercise bin/yoyo-status against a fabricated state
-# directory holding both runs and conversations.
+# directory holding runs, conversations, and branch reviews.
 #
 #   scripts/yoyo-status-test.sh
 #
@@ -43,7 +43,7 @@ missing() {
 
 demo="$YOYODYNE_STATE_HOME/products/demo"
 chatty="$YOYODYNE_STATE_HOME/products/chatty"
-mkdir -p "$demo/runs" "$demo/conversations" "$chatty/conversations"
+mkdir -p "$demo/runs" "$demo/conversations" "$demo/branch-reviews" "$chatty/conversations"
 
 # One completed provider invocation, in the shape both a run and a conversation
 # turn record it: the usage and the provider's own cost report.
@@ -108,6 +108,20 @@ conversation_state "$demo/conversations" product-manager "$waiting_chat"
   > "$demo/conversations/$answering_chat.events.jsonl"
 conversation_state "$demo/conversations" architect "$answering_chat"
 
+# A branch review is recorded in its own directory with its own id prefix and no
+# state file of its own, so what it is doing is read from its own events.
+reviewed_branch="review-6666666666666666666666666666666f"
+reviewing_branch="review-77777777777777777777777777777770"
+review_event() {
+  printf '{"schema_version":1,"run_id":"%s","sequence":%s,"timestamp":"2026-08-01T10:0%s:00.123456Z","type":"%s","source":"harness.review","payload":{"scope":"branch","branch":"milestone"}}\n' \
+    "$1" "$2" "$2" "$3"
+}
+{ review_event "$reviewed_branch" 1 "review.started"; completed "$reviewed_branch" 2 0.75
+  review_event "$reviewed_branch" 3 "review.completed"; } \
+  > "$demo/branch-reviews/$reviewed_branch.events.jsonl"
+{ review_event "$reviewing_branch" 1 "review.started"; } \
+  > "$demo/branch-reviews/$reviewing_branch.events.jsonl"
+
 cp "$demo/conversations/$waiting_chat.events.jsonl" "$chatty/conversations/"
 conversation_state "$chatty/conversations" product-manager "$waiting_chat"
 
@@ -117,9 +131,11 @@ touch -t 202608010900 "$demo/runs/$one_run.events.jsonl"
 touch -t 202608010910 "$demo/conversations/$ended_chat.events.jsonl"
 touch -t 202608010920 "$demo/conversations/$waiting_chat.events.jsonl"
 touch -t 202608010930 "$demo/conversations/$answering_chat.events.jsonl"
+touch -t 202608010935 "$demo/branch-reviews/$reviewed_branch.events.jsonl"
+touch -t 202608010936 "$demo/branch-reviews/$reviewing_branch.events.jsonl"
 touch -t 202608010940 "$demo/runs/$other_run.events.jsonl"
 
-step "listing covers runs and conversations together, newest first"
+step "listing covers runs, conversations, and branch reviews together, newest first"
 listing="$("$status" --product demo -l 2>&1)"
 printf '%s\n' "$listing"
 contains "$listing" "$one_run" "the listing includes a run"
@@ -136,7 +152,12 @@ contains "$listing" "$answering_chat    answering" "a conversation with a turn i
 contains "$listing" "$waiting_chat    waiting" "a conversation between turns is waiting"
 contains "$listing" "$ended_chat    ended" "a conversation no role is in any more has ended"
 
-step "either kind can be selected by id or by prefix"
+step "a branch review's status comes from its own events, having no state file"
+contains "$listing" "$reviewed_branch  reviewed" "a review that reached a verdict is reviewed"
+contains "$listing" "$reviewing_branch  reviewing" "a review still being made is reviewing"
+contains "$listing" "$reviewed_branch" "the listing includes a branch review"
+
+step "any kind can be selected by id or by prefix"
 selected="$("$status" --product demo --no-follow "$waiting_chat" 2>&1)"
 contains "$selected" "==> $waiting_chat [waiting]" "a conversation is selected by its full id"
 selected="$("$status" --product demo --no-follow 3333 2>&1)"
@@ -145,15 +166,19 @@ contains "$selected" '"type":"run.completed"' "following a conversation prints i
 selected="$("$status" --product demo --no-follow 1111 2>&1)"
 contains "$selected" "==> $one_run [succeeded]" "a run is still selected by an id prefix"
 selected="$("$status" --product demo --no-follow nosuchthing 2>&1 || true)"
-contains "$selected" "no run or conversation matching 'nosuchthing'" "an id that matches neither is refused by name"
+contains "$selected" "no run, conversation, or branch review matching 'nosuchthing'" "an id that matches nothing is refused by name"
 
-step "either kind can be asked for on its own"
+step "any one kind can be asked for on its own"
 runs_only="$("$status" --product demo -l --runs 2>&1)"
 contains "$runs_only" "$one_run" "--runs lists runs"
 missing "$runs_only" "chat-" "--runs lists no conversations"
+missing "$runs_only" "review-" "--runs lists no branch reviews"
 chats_only="$("$status" --product demo -l --chats 2>&1)"
 contains "$chats_only" "$waiting_chat" "--chats lists conversations"
 missing "$chats_only" "run-" "--chats lists no runs"
+reviews_only="$("$status" --product demo -l --reviews 2>&1)"
+contains "$reviews_only" "$reviewed_branch" "--reviews lists branch reviews"
+missing "$reviews_only" "chat-" "--reviews lists no conversations"
 
 step "a product that has only ever chatted still works"
 chatty_listing="$("$status" --product chatty -l 2>&1)"
@@ -171,13 +196,14 @@ else
     (*"mkstemp failed"*|*"Operation not permitted"*)
       skip "the cost totals: this environment denies the temporary file the report needs" ;;
     (*)
-      # The run is $3.00 and the conversations are $2.25 between them, so a
-      # report that left conversations out would say $3.00 and be wrong by the
-      # whole of the chat spend.
+      # The run is $3.00, the conversations are $2.25 between them, and the
+      # branch review is $0.75, so a report that left either of the other two
+      # kinds out would understate the total by exactly what it skipped.
       contains "$cost" "$one_run" "the report prices runs"
       contains "$cost" "$waiting_chat" "the report prices conversations"
-      contains "$cost" "cost: \$5.25" "the total is runs and conversations together"
-      contains "$cost" "runs: \$3.00 from 2 invocation(s)   conversations: \$2.25 from 4 turn(s)" \
+      contains "$cost" "$reviewed_branch" "the report prices branch reviews"
+      contains "$cost" "cost: \$6.00" "the total is every kind of invocation together"
+      contains "$cost" "runs: \$3.00 from 2 invocation(s)   conversations: \$2.25 from 4 turn(s)   branch reviews: \$0.75 from 1 invocation(s)" \
         "a mixed total says how much of it was each"
       missing "$cost" "$other_run" "a run with no completed invocation is not priced"
 
@@ -193,7 +219,7 @@ fi
 
 printf '\n=== result\n'
 if [ "$failures" = "0" ]; then
-  printf 'yoyo-status reports runs and conversations as documented\n'
+  printf 'yoyo-status reports runs, conversations, and branch reviews as documented\n'
 else
   printf '%d claim(s) did not hold\n' "$failures"
 fi

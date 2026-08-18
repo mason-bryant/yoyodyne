@@ -12,16 +12,20 @@ package runstate
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
 	"yoyodyne/internal/domain"
+	"yoyodyne/internal/execution"
 )
 
 // maxEncodedBranchReviewBytes bounds one encoded record, including the trailing
@@ -33,6 +37,22 @@ const maxEncodedBranchReviewBytes = 256 << 10
 
 // BranchReviewSchemaVersion is the version of the durable branch review record.
 const BranchReviewSchemaVersion = 1
+
+// branchReviewIDPattern is the shape of a branch review's identity. It carries
+// its own prefix rather than a run's, for the same reason a conversation does:
+// the identifier is what tells a reader which kind of thing it is looking at,
+// and a branch review that borrowed a run's prefix would read as a run in every
+// listing that sorts them by name.
+var branchReviewIDPattern = regexp.MustCompile(`^review-[a-f0-9]{32}$`)
+
+// NewBranchReviewID mints the identity of one branch review.
+func NewBranchReviewID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate branch review id: %w", err)
+	}
+	return "review-" + hex.EncodeToString(bytes), nil
+}
 
 // BranchReview is one independent review of a branch against a base commit: the
 // change that was judged, the verdict, and the provider identity that produced
@@ -71,7 +91,7 @@ func (b BranchReview) Validate() error {
 	if b.SchemaVersion != BranchReviewSchemaVersion {
 		problems = append(problems, fmt.Errorf("schema_version must be %d", BranchReviewSchemaVersion))
 	}
-	if !runIDPattern.MatchString(b.ReviewID) {
+	if !branchReviewIDPattern.MatchString(b.ReviewID) {
 		problems = append(problems, errors.New("review id is invalid"))
 	}
 	if err := domain.ValidateIdentifier("product id", string(b.ProductID)); err != nil {
@@ -137,10 +157,11 @@ func (b BranchReview) Approved() bool {
 	return b.Decision == ReviewApprove
 }
 
-// BranchReviewStore is where branch reviews are collected, beside the runs and
-// the reports rather than among them. It is one append-only log per product, for
-// the same reason the report log is: a branch review outlives every run whose
-// work it judged, and it is never revised once written.
+// BranchReviewStore is where branch reviews are collected: their own directory
+// beside the runs and the conversations rather than among them, for the same
+// reason each of those has one — a branch review outlives every run whose work
+// it judged, and belongs to no one of them. It holds one append-only log of
+// verdicts, never revised once written, and one event log per review beside it.
 type BranchReviewStore struct {
 	root      string
 	productID domain.ProductID
@@ -154,7 +175,7 @@ func NewBranchReviewStore(root string, productID domain.ProductID) (*BranchRevie
 		return nil, err
 	}
 	return &BranchReviewStore{
-		root:      filepath.Join(filepath.Clean(root), "products", string(productID)),
+		root:      filepath.Join(filepath.Clean(root), "products", string(productID), "branch-reviews"),
 		productID: productID,
 	}, nil
 }
@@ -163,7 +184,7 @@ func (s *BranchReviewStore) Root() string { return s.root }
 
 // Path names the log itself, so a failure can say where the recorded reviews
 // actually are.
-func (s *BranchReviewStore) Path() string { return filepath.Join(s.root, "branch-reviews.jsonl") }
+func (s *BranchReviewStore) Path() string { return filepath.Join(s.root, "reviews.jsonl") }
 
 // Append records one branch review durably.
 func (s *BranchReviewStore) Append(reviewed BranchReview) error {
@@ -246,6 +267,106 @@ func (s *BranchReviewStore) List() ([]BranchReview, error) {
 		return nil, fmt.Errorf("read branch review log: %w", err)
 	}
 	return reviews, nil
+}
+
+// AppendEvent persists one normalized event from a branch review. A branch
+// review is a provider invocation the harness makes, so it records the same
+// event stream every other one does: without it the review could not be
+// followed while it ran, and what the provider reported it cost would be
+// unrecoverable afterwards, because the event log is the only place that figure
+// is ever written down.
+//
+// The log is named for the review rather than for a run, and it lives in this
+// store's own directory, so nothing here can write into a run's event stream.
+func (s *BranchReviewStore) AppendEvent(event execution.Event) error {
+	if err := event.Validate(); err != nil {
+		return err
+	}
+	path, err := s.eventPath(event.RunID)
+	if err != nil {
+		return err
+	}
+	encoded, err := encodeEvent(event)
+	if err != nil {
+		return err
+	}
+	if len(encoded) > maxEncodedEventBytes {
+		return fmt.Errorf("encoded event is %d bytes, limit is %d", len(encoded), maxEncodedEventBytes)
+	}
+	if err := os.MkdirAll(s.root, 0o700); err != nil {
+		return fmt.Errorf("create branch review directory: %w", err)
+	}
+	_, statErr := os.Stat(path)
+	created := errors.Is(statErr, os.ErrNotExist)
+	if statErr != nil && !created {
+		return fmt.Errorf("inspect branch review event log: %w", statErr)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		return fmt.Errorf("open branch review event log: %w", err)
+	}
+	written, err := file.Write(encoded)
+	if err != nil {
+		file.Close()
+		return fmt.Errorf("append branch review event: %w", err)
+	}
+	if written != len(encoded) {
+		file.Close()
+		return fmt.Errorf("append branch review event: %w", io.ErrShortWrite)
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		return fmt.Errorf("sync branch review event log: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close branch review event log: %w", err)
+	}
+	if created {
+		return syncDirectory(s.root)
+	}
+	return nil
+}
+
+// LoadEvents reads one branch review's recorded event stream. A review that
+// never wrote one has no events rather than an unreadable log.
+func (s *BranchReviewStore) LoadEvents(reviewID string) ([]execution.Event, error) {
+	path, err := s.eventPath(reviewID)
+	if err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open branch review event log: %w", err)
+	}
+	defer file.Close()
+
+	var events []execution.Event
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
+	for scanner.Scan() {
+		event, err := execution.DecodeEvent(scanner.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("decode branch review event log for %s: %w", reviewID, err)
+		}
+		if event.RunID != reviewID {
+			return nil, fmt.Errorf("decode branch review event log for %s: event belongs to %s", reviewID, event.RunID)
+		}
+		events = append(events, event)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read branch review event log: %w", err)
+	}
+	return events, nil
+}
+
+func (s *BranchReviewStore) eventPath(reviewID string) (string, error) {
+	if !branchReviewIDPattern.MatchString(reviewID) {
+		return "", errors.New("branch review id is invalid")
+	}
+	return filepath.Join(s.root, reviewID+".events.jsonl"), nil
 }
 
 func decodeBranchReview(data []byte) (BranchReview, error) {

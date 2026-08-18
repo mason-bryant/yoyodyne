@@ -578,9 +578,9 @@ item* is runs: the conversations that steer them cost money too and are recorded
 just as durably, but attributing a conversation that discussed five items to any
 one of them is a judgement rather than a join, so it is left out here and said
 to be left out. It is not left out of what the harness has spent altogether —
-[`yoyo-status -c`](#following-a-run-or-a-conversation) prices conversations beside
-runs, because a total that skipped them would be wrong rather than merely
-unattributed.
+[`yoyo-status -c`](#following-a-run-a-conversation-or-a-branch-review) prices
+conversations and branch reviews beside runs, because a total that skipped
+either would be wrong rather than merely unattributed.
 
 `/show` breaks one item's price down by attempt, which is what a single total
 invites:
@@ -909,8 +909,14 @@ rather than an accumulated change, and the command says so instead of quietly
 reviewing a range you did not name.
 
 The verdict is recorded with the same session and model evidence a per-item
-review leaves behind, in `branch-reviews.jsonl` beside the run state, and what
-the reviewer noticed beside its verdict is collected with every other report.
+review leaves behind, in the `branch-reviews` directory beside the runs and the
+conversations, and what the reviewer noticed beside its verdict is collected
+with every other report. It is a provider invocation like any other the harness
+makes, so it records the event stream every other one records: it can be
+followed while it runs with
+[`yoyo-status`](#following-a-run-a-conversation-or-a-branch-review), and what
+the provider reported it cost is priced beside runs and conversations rather
+than quietly missing from the harness's total.
 
 What a `repair` verdict here does is deliberate and narrow: **nothing to the work
 already integrated.** Every commit under review was checked, reviewed, and
@@ -1186,43 +1192,49 @@ inside its repair loop, one paused for a provider usage limit, or one whose
 provider the harness stopped on time — is left exactly as it is for that command
 to pick up.
 
-### Following a run or a conversation
+### Following a run, a conversation, or a branch review
 
-`bin/yoyo-status` follows the normalized event stream a run or a conversation
-records, which is the closest thing there is to watching an agent work:
+`bin/yoyo-status` follows the normalized event stream a run, a conversation, or
+a [branch review](#reviewing-what-a-branch-adds-up-to) records, which is the
+closest thing there is to watching an agent work:
 
 ```sh
-./bin/yoyo-status          # follow the newest run or conversation
-./bin/yoyo-status -l       # list recent runs and conversations and exit
+./bin/yoyo-status          # follow the newest of any kind
+./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
 ./bin/yoyo-status -c       # report token spend and cost for each, and in total
 ```
 
-A conversation records the same kind of event stream a run does, and "is this
-alive" is the same question asked of either, so every mode covers both and the
-default never asks which kind you meant. Selecting one by id or by a unique id
-prefix works the same for both. `--runs` and `--chats` narrow it to one kind
-when that is what you want.
+A conversation and a branch review each record the same kind of event stream a
+run does, and "is this alive" is the same question asked of all three, so every
+mode covers all of them and the default never asks which kind you meant.
+Selecting one by id or by a unique id prefix works the same for each. `--runs`,
+`--chats`, and `--reviews` narrow it to one kind when that is what you want.
 
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
 actually asking: `answering` while an agent is working on a turn, `waiting`
-between turns, and `ended` once the role has moved on to a later conversation.
+between turns, and `ended` once the role has moved on to a later conversation. A
+branch review has no state file either — its verdicts share one log rather than
+having a record each — so its status comes from its own events: `reviewing`
+while the verdict is being made, and `reviewed` once it has been.
 
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run and per conversation,
-and a mixed total says how much of it was each — a conversation turn is a
-provider invocation like any other, and leaving them out understated every total
-they belonged in. [`yoyo cost`](#what-the-work-cost) is the same run spending
-grouped by the work item the runs were for, which is what answers "what did that
-piece of work cost"; it leaves conversations out, deliberately and for a
-different reason — a conversation that discussed five items cannot be attributed
-to one of them.
+reporting requires it. What it prices is one row per run, per conversation, and
+per branch review, and a mixed total says how much of it was each — a
+conversation turn and a branch review are each a provider invocation like any
+other, and leaving either out understated every total it belonged in.
+[`yoyo cost`](#what-the-work-cost) is the same run spending grouped by the work
+item the runs were for, which is what answers "what did that piece of work
+cost"; it leaves conversations and branch reviews out, deliberately and for the
+same reason — a conversation that discussed five items, and a review of a branch
+that carried a dozen, cannot be attributed to any one of them.
 
 [`scripts/yoyo-status-test.sh`](scripts/yoyo-status-test.sh) checks these claims
-against a fabricated state directory holding runs and conversations, without a
-provider or a repository and without reading your real state.
+against a fabricated state directory holding runs, conversations, and branch
+reviews, without a provider or a repository and without reading your real
+state.
 
 ## Further reading
 

@@ -1,13 +1,16 @@
 package runstate
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"yoyodyne/internal/execution"
 )
 
-const branchReviewID = "run-0123456789abcdef0123456789abcdef"
+const branchReviewID = "review-0123456789abcdef0123456789abcdef"
 
 func newBranchReview() BranchReview {
 	return BranchReview{
@@ -75,8 +78,62 @@ func TestBranchReviewStoreKeepsEveryVerdictItWasGiven(t *testing.T) {
 	if len(reviews[1].Findings) != 1 || reviews[1].Findings[0].File != "reader.go" || reviews[1].CommitsOmitted != 4 {
 		t.Errorf("recorded repair = %#v", reviews[1])
 	}
-	if !strings.HasSuffix(store.Path(), filepath.Join("products", "yoyodyne", "branch-reviews.jsonl")) {
+	if !strings.HasSuffix(store.Path(), filepath.Join("products", "yoyodyne", "branch-reviews", "reviews.jsonl")) {
 		t.Errorf("Path() = %q", store.Path())
+	}
+}
+
+// A branch review is a provider invocation, so it records the event stream every
+// other one records: it can be followed while it runs, and what it cost can be
+// read back afterwards. The log is its own, named for the review rather than for
+// a run, which is what keeps a verdict on settled work out of a run's evidence.
+func TestBranchReviewStoreKeepsTheEventStreamOfItsInvocation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewBranchReviewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewBranchReviewStore() error = %v", err)
+	}
+	if events, err := store.LoadEvents(branchReviewID); err != nil || events != nil {
+		t.Fatalf("LoadEvents() of an unreviewed branch = %#v, %v", events, err)
+	}
+	for sequence := uint64(1); sequence <= 3; sequence++ {
+		event, err := execution.NewEvent(branchReviewID, sequence, time.Now(), execution.EventReviewStarted, "harness.review", map[string]any{"scope": "branch"})
+		if err != nil {
+			t.Fatalf("NewEvent() error = %v", err)
+		}
+		if err := store.AppendEvent(event); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+	events, err := store.LoadEvents(branchReviewID)
+	if err != nil || len(events) != 3 {
+		t.Fatalf("LoadEvents() = %#v, %v", events, err)
+	}
+	for index, event := range events {
+		if event.Sequence != uint64(index+1) || event.RunID != branchReviewID {
+			t.Errorf("events[%d] = %#v", index, event)
+		}
+	}
+	// The stream is where `yoyo-status` looks for it: this store's own directory,
+	// named for the review, beside the runs rather than among them.
+	expected := filepath.Join(root, "products", "yoyodyne", "branch-reviews", branchReviewID+".events.jsonl")
+	if _, err := os.Stat(expected); err != nil {
+		t.Errorf("event log is not at %q: %v", expected, err)
+	}
+	// An identifier that is not a branch review's cannot name a log here, so
+	// nothing can aim this store at a run's event stream.
+	if err := store.AppendEvent(execution.Event{
+		SchemaVersion: execution.EventSchemaVersion,
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		Sequence:      1,
+		Timestamp:     time.Now().UTC(),
+		Type:          execution.EventReviewStarted,
+		Source:        "harness.review",
+		Payload:       []byte(`{}`),
+	}); err == nil || !strings.Contains(err.Error(), "branch review id is invalid") {
+		t.Errorf("AppendEvent() for a run id error = %v", err)
 	}
 }
 

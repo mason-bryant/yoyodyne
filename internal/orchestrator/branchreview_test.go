@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,7 +20,7 @@ import (
 	"yoyodyne/internal/runstate"
 )
 
-const branchReviewID = "run-abcdef0123456789abcdef0123456789"
+const branchReviewID = "review-abcdef0123456789abcdef0123456789"
 
 // accumulatedRepository builds the shape a branch review exists for: several
 // commits, each of which is a complete and consistent change on its own, whose
@@ -220,6 +221,73 @@ func TestBranchRepairVerdictIsRecordedAndChangesNothingAlreadyIntegrated(t *test
 	if recorded[0].Decision != runstate.ReviewRepair || len(recorded[0].Findings) != 1 ||
 		recorded[0].Findings[0].File != "reader.go" || recorded[0].Findings[0].Severity != runstate.SeverityMajor {
 		t.Errorf("recorded repair = %#v", recorded[0])
+	}
+}
+
+// A branch review is a paid provider invocation, so it leaves the event stream
+// every other one leaves: it can be followed while it runs, and the cost the
+// provider reported survives in the only place that figure is ever written down.
+func TestBranchReviewRecordsTheEventStreamOfItsInvocation(t *testing.T) {
+	t.Parallel()
+
+	repository := accumulatedRepository(t)
+	// The provider emits its own result event through the sink it was handed,
+	// exactly as the real backend does, because that event is what carries cost.
+	provider := &fakeBackend{run: func(request backend.RunRequest) (backend.RunResult, error) {
+		event, err := execution.NewEvent(request.RunID, request.LastSequence+1, time.Now(), execution.EventRunCompleted, "claude-code", map[string]any{
+			"total_cost_usd": 1.25,
+		})
+		if err != nil {
+			return backend.RunResult{}, err
+		}
+		if err := request.EventSink(event); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{
+			Backend:       domain.BackendClaudeCode,
+			SessionID:     "branch-review-session",
+			ResolvedModel: "claude-opus-5",
+			FinalText:     `{"decision":"approve","summary":"the commits agree"}`,
+			Process:       execution.ProcessResult{Status: execution.ProcessSucceeded},
+		}, nil
+	}}
+	reviewer, reviews, _ := newBranchReviewer(t, repository, provider)
+
+	outcome, err := reviewer.Review(context.Background(), BranchReviewRequest{Branch: "milestone", BaseRef: "main"})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if !outcome.Approved() {
+		t.Fatalf("Review() = %#v", outcome)
+	}
+	events, err := reviews.LoadEvents(branchReviewID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v", err)
+	}
+	var kinds []string
+	var priced bool
+	for _, event := range events {
+		kinds = append(kinds, string(event.Type))
+		if strings.Contains(string(event.Payload), `"total_cost_usd":1.25`) {
+			priced = true
+		}
+	}
+	// The review brackets itself the way a run's does, so following one shows the
+	// same shape, and the provider's own report sits between the two.
+	for _, want := range []execution.EventType{execution.EventReviewStarted, execution.EventReviewCompleted} {
+		if !slices.Contains(kinds, string(want)) {
+			t.Errorf("the recorded stream %v is missing %s", kinds, want)
+		}
+	}
+	if !priced {
+		t.Errorf("what the invocation cost did not survive into the stream: %v", kinds)
+	}
+	// Sequence numbers are strictly increasing, which is what lets a follower
+	// replay the stream in the order it happened.
+	for index := 1; index < len(events); index++ {
+		if events[index].Sequence <= events[index-1].Sequence {
+			t.Fatalf("events %d and %d are out of order: %#v", index-1, index, events)
+		}
 	}
 }
 
