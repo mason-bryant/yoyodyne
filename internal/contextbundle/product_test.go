@@ -324,6 +324,51 @@ func TestAssembleProductSaysWhenIntentIsNotRecorded(t *testing.T) {
 	}
 }
 
+// Goals stated inside the brief are goals. The structure contract already asks
+// every specification to state them under a `Goals` heading, so a project that
+// wrote them there has written them, and asking for goals that are on disk would
+// be a question with its answer already in the context.
+func TestAssembleProductCountsGoalsStatedInsideTheBrief(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", "# Product brief\n\n"+strings.Repeat("What this is and who it is for. ", 10)+"\n\n## Goals\n\n"+strings.Repeat("- An outcome the product reaches. ", 10)+"\n")
+
+	stated, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(stated.Text, "- Goals: the `Goals` section of docs/product/brief.md, about ") {
+		t.Fatalf("goals stated inside the brief are not counted:\n%s", stated.Text)
+	}
+
+	// A goals document is where goals live once there is one, and the brief's own
+	// section is not named beside it: that would report one intent twice.
+	writeProductFile(t, root, "docs/product/goals/v1-goals.md", "# V1 goals\n\n"+strings.Repeat("The outcomes the first version reaches. ", 10)+"\n\n## Goals\n\n- An outcome.\n")
+	both, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(both.Text, "- Goals: docs/product/goals/v1-goals.md, about ") {
+		t.Fatalf("the goals document is not what the goals are read from:\n%s", both.Text)
+	}
+	if strings.Contains(both.Text, "the `Goals` section of") {
+		t.Fatalf("the brief's own section is named beside a goals document:\n%s", both.Text)
+	}
+
+	// A heading with nothing under it states no goals, which is the case the
+	// structure contract reports as an empty goals section.
+	empty := t.TempDir()
+	writeProductFile(t, empty, "docs/product/brief.md", "# Product brief\n\nWhat this is and who it is for.\n\n## Goals\n\n## Something else\n\nProse.\n")
+	heading, err := AssembleProduct(ProductRequest{RepositoryRoot: empty, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(heading.Text, "- Goals: none recorded.") {
+		t.Fatalf("an empty goals heading is counted as goals:\n%s", heading.Text)
+	}
+}
+
 // A document that exists and says almost nothing is reported as what it is,
 // with the count beside it: whether a short document is enough is a judgment,
 // and one made from a verdict alone is not one.
@@ -342,23 +387,64 @@ func TestAssembleProductSaysWhenIntentIsAPlaceholder(t *testing.T) {
 	}
 }
 
-// The recorded-intent section is reserved its allowance before any
-// specification is read, so it has to fit inside one however many documents the
-// repository files under those two kinds and however long their paths are. A
-// section that outgrew the reserve would push the context past the budget it was
-// assembled to.
+// The recorded-intent section is charged to the context as a fixed allowance
+// before any specification is read, not as what it goes on to render, so what it
+// renders has to fit inside that allowance however the repository files its
+// intent. A section that outgrew the reserve would push the assembled context
+// past the byte budget it was assembled to, with nothing to catch it.
+//
+// This renders the section at its largest, and every part of "largest" is what
+// the bounds actually permit rather than a number chosen to pass: each entry is
+// a placeholder, which is the longest form an entry takes, and states its goals
+// inside the brief, which is the longest way one is named; every path is longer
+// than the fold allows; and the tail counts documents that were not named.
 func TestRecordedIntentFitsWhatIsReservedForIt(t *testing.T) {
 	t.Parallel()
 
-	document := intentDocument{path: strings.Repeat("nested/", 40) + "brief.md", words: 999999}
-	worst := recordedIntent{
-		brief: []intentDocument{document, document, document, document},
-		goals: []intentDocument{document, document, document, document},
+	// The allowance is sized against the fold, so what the fold actually returns
+	// is pinned here rather than assumed.
+	longPath := strings.Repeat("nested/", 40) + "v1-goals.md"
+	folded := singleLine(longPath, maxIntentPathBytes)
+	if len(folded) > maxIntentPathBytes+len("...") {
+		t.Fatalf("singleLine folds %d bytes to %d, want at most %d", len(longPath), len(folded), maxIntentPathBytes+len("..."))
 	}
+
+	// Below stubProseWords, so every entry carries the placeholder clause, and at
+	// the widest count that stays below it.
+	widest := intentDocument{path: longPath, words: stubProseWords - 1, inline: true}
+	// More documents than are named, so the tail that says how many were left out
+	// is rendered at more digits than a repository could reach: every included
+	// specification costs the context far more than one byte, so the default
+	// budget cannot hold this many of them.
+	total := maxRecordedIntentDocuments + defaultMaxProductBytes
+	worst := recordedIntent{brief: make([]intentDocument, total), goals: make([]intentDocument, total)}
+	for index := range maxRecordedIntentDocuments {
+		worst.brief[index] = widest
+		worst.goals[index] = widest
+	}
+
 	// The configured directory is added to the allowance rather than counted
 	// against it, so it is left out of what is measured here.
-	if rendered := len(renderRecordedIntent("", worst)); rendered > maxRecordedIntentBytes {
-		t.Fatalf("recorded intent renders %d bytes, allowance is %d", rendered, maxRecordedIntentBytes)
+	rendered := len(renderRecordedIntent("", worst))
+	if rendered+recordedIntentHeadroom > maxRecordedIntentBytes {
+		t.Fatalf("recorded intent renders %d bytes with %d bytes of headroom required, allowance is %d",
+			rendered, recordedIntentHeadroom, maxRecordedIntentBytes)
+	}
+}
+
+// What a placeholder entry costs is the largest an entry gets, which is what the
+// worst case above is built from. A word count large enough to need more digits
+// than a placeholder's does not overtake it, because the clause a placeholder
+// adds is worth far more than those digits.
+func TestPlaceholderEntriesAreTheLongestOnesRendered(t *testing.T) {
+	t.Parallel()
+
+	path := "docs/product/goals/v1-goals.md"
+	placeholder := renderIntentDocuments([]intentDocument{{path: path, words: stubProseWords - 1, inline: true}})
+	counted := renderIntentDocuments([]intentDocument{{path: path, words: defaultMaxProductBytes, inline: true}})
+	if len(placeholder) <= len(counted) {
+		t.Fatalf("a placeholder entry renders %d bytes and a counted one %d; the worst case is built from the wrong one",
+			len(placeholder), len(counted))
 	}
 }
 
@@ -430,7 +516,10 @@ func TestAssembleProductNamesWhatItCouldNotInclude(t *testing.T) {
 	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
 	writeProductFile(t, root, "docs/product/huge.md", strings.Repeat("x", 4096))
 
-	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", MaxBytes: 3072})
+	// The budget has to clear what is reserved before any specification is read —
+	// the header, the tracker state, and the recorded-intent allowance — and leave
+	// room for one specification but not the other.
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product", MaxBytes: 5120})
 	if err != nil {
 		t.Fatalf("AssembleProduct() error = %v", err)
 	}

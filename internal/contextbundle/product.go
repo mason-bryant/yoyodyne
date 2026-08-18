@@ -33,11 +33,22 @@ const maxWorkItemTitleBytes = 160
 // reserved before any specification is read, so a directory of specifications
 // can never push out the answer to whether the product has a brief at all. The
 // section is bounded by construction to fit inside it: at most
-// maxRecordedIntentDocuments paths per kind, each one folded to
-// maxIntentPathBytes. The configured directory is named in the section too and
-// is added to the allowance rather than bounded, because how long a project
-// makes that path is not this package's to cut.
-const maxRecordedIntentBytes = 1 << 10
+// maxRecordedIntentDocuments documents per kind, each named by a path folded to
+// maxIntentPathBytes. It is charged as this allowance rather than as what the
+// section actually renders, so what it renders has to fit — the allowance is
+// roughly twice the longest section the bounds above can produce, and
+// TestRecordedIntentFitsWhatIsReservedForIt renders that section and requires
+// the headroom to still be there. The configured directory is named in the
+// section too and is added to the allowance rather than bounded, because how
+// long a project makes that path is not this package's to cut.
+const maxRecordedIntentBytes = 2 << 10
+
+// recordedIntentHeadroom is how much of the allowance must be left unspent by
+// the longest section the bounds can produce. The counts inside it grow with
+// the repository — how many documents were not named, how many words one holds
+// — and a section sized to fit exactly today would be one digit away from
+// overrunning its reserve.
+const recordedIntentHeadroom = 256
 
 // maxRecordedIntentDocuments bounds how many documents of one kind are named.
 // This section answers whether the brief and the goals exist, not which files
@@ -372,12 +383,22 @@ func goalsSectionHasContent(lines []string, goalsLine, goalsLevel int) bool {
 type recordedIntent struct {
 	brief []intentDocument
 	goals []intentDocument
+	// briefGoals are the goals a brief states under its own `Goals` heading,
+	// which is the shape the structure contract asks every specification for. A
+	// project that wrote its goals there has written them, and reporting none
+	// would ask the operator for something already on disk. They are kept apart
+	// from the goals documents and used only when there are none, because naming
+	// a brief's section beside a goals document would report one intent twice.
+	briefGoals []intentDocument
 }
 
 // intentDocument is one such document and how much prose it carries.
 type intentDocument struct {
 	path  string
 	words int
+	// inline says the words are the document's `Goals` section rather than the
+	// whole of it, so what is named is the section and not the file.
+	inline bool
 }
 
 // add files one specification under the kind it says it is, if it is either.
@@ -386,9 +407,21 @@ func (i *recordedIntent) add(reference Reference) {
 	switch intentKind(reference.Path, reference.Content) {
 	case kindBrief:
 		i.brief = append(i.brief, document)
+		if words := goalsSectionWords(reference.Content); words > 0 {
+			i.briefGoals = append(i.briefGoals, intentDocument{path: reference.Path, words: words, inline: true})
+		}
 	case kindGoals:
 		i.goals = append(i.goals, document)
 	}
+}
+
+// goalsDocuments is what the repository records as its goals: the documents
+// that are goals, or failing those the goals a brief states inside itself.
+func (i recordedIntent) goalsDocuments() []intentDocument {
+	if len(i.goals) > 0 {
+		return i.goals
+	}
+	return i.briefGoals
 }
 
 // intentKind reports whether a specification is the brief or the goals, and ""
@@ -482,6 +515,57 @@ func proseWords(content string) int {
 	return words
 }
 
+// goalsSectionWords counts the prose a document states under its own `Goals`
+// heading, and returns zero when it states none there. It is the same section
+// the structure contract is checked over, counted rather than merely found:
+// a brief with a `Goals` heading and nothing under it has stated no goals.
+func goalsSectionWords(content string) int {
+	lines := strings.Split(withoutFrontmatter(content), "\n")
+	goalsLine, goalsLevel := -1, 0
+	inFence := false
+	for index, raw := range lines {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || line == "" {
+			continue
+		}
+		heading := headingPattern.FindStringSubmatch(line)
+		if heading != nil && goalsHeadingPattern.MatchString(strings.TrimSpace(heading[2])) {
+			goalsLine, goalsLevel = index, len(heading[1])
+			break
+		}
+	}
+	if goalsLine < 0 {
+		return 0
+	}
+
+	words := 0
+	inFence = false
+	for _, raw := range lines[goalsLine+1:] {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
+			inFence = !inFence
+			continue
+		}
+		if inFence || line == "" {
+			continue
+		}
+		if heading := headingPattern.FindStringSubmatch(line); heading != nil {
+			// The section ends at the next heading at its own level or above; a
+			// heading below it divides the goals rather than ending them.
+			if len(heading[1]) <= goalsLevel {
+				break
+			}
+			continue
+		}
+		words += len(strings.Fields(line))
+	}
+	return words
+}
+
 func renderRecordedIntent(directory string, intent recordedIntent) string {
 	return fmt.Sprintf(`
 ## Recorded product intent
@@ -496,7 +580,7 @@ what %s records of them, counted over the specifications in this context.
 Nothing else in this repository holds what a missing or placeholder document
 would say. What the product is for is the operator's to state, and asking is the
 only way to get it.
-`, directory, renderIntentDocuments(intent.brief), renderIntentDocuments(intent.goals))
+`, directory, renderIntentDocuments(intent.brief), renderIntentDocuments(intent.goalsDocuments()))
 }
 
 // renderIntentDocuments names the documents of one kind and how much each of
@@ -513,7 +597,11 @@ func renderIntentDocuments(documents []intentDocument) string {
 	}
 	named := make([]string, 0, len(listed))
 	for _, document := range listed {
-		entry := fmt.Sprintf("%s, about %d words", singleLine(document.path, maxIntentPathBytes), document.words)
+		where := singleLine(document.path, maxIntentPathBytes)
+		if document.inline {
+			where = "the `Goals` section of " + where
+		}
+		entry := fmt.Sprintf("%s, about %d words", where, document.words)
 		if document.words < stubProseWords {
 			entry += " and little more than a placeholder"
 		}
