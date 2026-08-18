@@ -12,8 +12,8 @@ revisions:
 
 # Product brief
 
-Yoyodyne turns product intent into shipped software. Someone with a repository
-and an idea says what they want, in conversation. Yoyodyne carries that intent
+Yoyo — the yoyodyne project — turns product intent into shipped software. Someone with a repository
+and an idea says what they want, in conversation. Yoyo carries that intent
 through goals, design, decomposition, implementation, independent review, and
 integration, and gives back merged code. Intent in, software out.
 
@@ -22,7 +22,7 @@ part. Writing code was rarely the bottleneck; deciding what should be built,
 keeping the reason for it traceable to the change that resulted, and making sure
 somebody other than the author looked before it landed — that is the work an
 agent handed a prompt does not do, and the work a person still ends up doing by
-hand around it. Yoyodyne is that surrounding structure, built so the loop can run
+hand around it. Yoyo is that surrounding structure, built so the loop can run
 without a person driving each turn of it.
 
 The nearest picture is a dark factory: a production line that runs unattended.
@@ -35,7 +35,7 @@ Autonomy here is the absence of routine per-change gates, not the absence of a
 human, and a system that never needed to ask its owner anything would be a
 system that had stopped taking direction.
 
-Yoyodyne is for anyone with a repository and an idea: someone building a weekend
+Yoyo is for anyone with a repository and an idea: someone building a weekend
 project, someone shipping professionally, and teams. It is not a tool for the
 people who wrote it. It is finished when someone who has never seen its internals
 can point it at their own repository, in their own language, and get software
@@ -47,7 +47,7 @@ with real authority between them, not one agent playing every part. A person's
 routine surface is intent, goals, and escalations. Everything between those and
 merged code belongs to the harness.
 
-What Yoyodyne's first version deliberately does not do is bounded separately in
+What Yoyo's first version deliberately does not do is bounded separately in
 [the v1 non-goals](goals/v1-non-goals.md); those are decisions about where v1
 stops, not limits on what the product is for.
 
@@ -69,7 +69,7 @@ stops, not limits on what the product is for.
   without being individually approved is visible while it runs and after it
   lands, and what it costs is reported rather than discovered.
 - **It works on other people's projects.** Any language, any build system, any
-  test framework — Yoyodyne runs what a project declares rather than
+  test framework — Yoyo runs what a project declares rather than
   understanding its toolchain, and general adoption is the aim rather than
   self-hosting.
 - **Safety invariants hold whatever the configuration says.** Roles, policies,
