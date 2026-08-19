@@ -234,10 +234,21 @@ triage:
 # "human" deliberately: they are what you state, and everything else traces back
 # to them. "yoyo artifact approve <id>" records your approval in the document's
 # frontmatter, against the revision it was given for, so a document amended
-# afterwards reads as approved-and-amended-since rather than as approved. It
-# gates nothing -- an unapproved document still loads and still governs what is
-# downstream of it. Designs are "automatic" because a design serving an approved
+# afterwards reads as approved-and-amended-since rather than as approved. An
+# unapproved document still loads and still governs what is downstream of it;
+# what your approval of the goals decides is what reaches the work queue, under
+# work_items below. Designs are "automatic" because a design serving an approved
 # goal is the architect's judgement about how.
+#
+# work_items is the one approval that gates rather than records, and it is where
+# you say how much of this you want to watch. "automatic" means you approve goals
+# rather than every work item: work that traces to a goal you approved is
+# admitted to the queue without asking you, and you are told afterwards what went
+# in. Work that traces to no goal, work that would cut against one, and a change
+# to the goals themselves still stop and ask. "human" puts every item to you
+# before it is admitted. Either way nothing is admitted without asking until you
+# have actually approved a goal, so a new project asks about everything until
+# your first "yoyo artifact approve".
 #
 # Integration and publishing are opted in to separately. Automatic integration is
 # refused unless it is actually gated by the checks below and a reviewer agent,
@@ -247,6 +258,7 @@ approvals:
   brief: %s
   goals: %s
   designs: %s
+  work_items: %s
   integration: %s
   publishing: %s
 `,
@@ -270,6 +282,7 @@ approvals:
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,
+		effective.Approvals.WorkItems,
 		effective.Approvals.Integration,
 		effective.Approvals.Publishing,
 	)

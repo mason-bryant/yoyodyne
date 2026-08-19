@@ -338,7 +338,7 @@ func TestConverseSurvivesAConcernItCannotRead(t *testing.T) {
 func TestContractStatesTheConcernProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
 	for _, required := range []string{
 		concernFence,
 		"Raise at most " + strconv.Itoa(MaxConcernsPerTurn) + " concerns",

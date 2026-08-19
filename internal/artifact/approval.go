@@ -28,6 +28,14 @@ package artifact
 // when — because a record that silently deactivated a document the moment its
 // owner corrected a sentence would be a gate nobody asked this to add.
 //
+// What reads this record has since made one thing turn on it. Work is admitted
+// to the queue without the operator being asked where it traces to a goal an
+// approved goals document states, so an unapproved or amended-since goals
+// document is one nothing is admitted under — the operator is asked per item
+// instead. That gate lives where admission happens rather than here, and this
+// package still refuses nothing: what it does is answer, honestly, the question
+// that gate asks.
+//
 // Who approves is not a role. Every artifact is drafted by the role that owns
 // it, so an approval a role could record would be that role approving its own
 // document; approval of what the product is for is the operator's, and it is

@@ -793,3 +793,88 @@ func TestRemoteMustBeAPlainRemoteName(t *testing.T) {
 		}
 	}
 }
+
+// The default for a new project is stated where a new project can read it: the
+// bundle says work_items, `yoyo init` writes it out, and a project that took the
+// bundle gets the gate at its goals rather than at every item. That is a
+// decision this repository made deliberately, so it is checked rather than left
+// to be noticed when the behavior changes under somebody.
+func TestANewProjectAdmitsWorkTracingToAnApprovedGoalByDefault(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Approvals.WorkItems != domain.ApprovalAutomatic {
+		t.Fatalf("inherited work_items = %q, want %q", inherited.Config.Approvals.WorkItems, domain.ApprovalAutomatic)
+	}
+	if origin := inherited.Origins["approvals.work_items"]; origin != BuiltinV1 {
+		t.Errorf("work_items origin = %q, want the bundle that states it", origin)
+	}
+	// And it can be turned back on, which is the whole point of it being a
+	// policy: the trust that suits an established product does not suit its
+	// first week.
+	perItem := loadProject(t, minimalProjectConfig+"approvals:\n  work_items: human\n", nil)
+	if perItem.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("work_items = %q, want the project override", perItem.Config.Approvals.WorkItems)
+	}
+	// A sparse override must not lose the approvals it does not name.
+	if perItem.Config.Approvals.Goals != domain.ApprovalHuman || perItem.Config.Approvals.Integration != domain.ApprovalHuman {
+		t.Fatalf("approvals = %#v, want the inherited values kept", perItem.Config.Approvals)
+	}
+}
+
+// A configuration written before work items became a policy still loads and
+// still means what it meant: the operator is asked about every item.
+func TestConfigurationWithoutWorkItemsKeepsThePerItemGate(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := DecodeResolved(strings.NewReader(`version: 1
+product:
+  id: example
+  repository: .
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
+`))
+	if err != nil {
+		t.Fatalf("DecodeResolved() error = %v", err)
+	}
+	if resolved.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("work_items = %q, want %q", resolved.Config.Approvals.WorkItems, domain.ApprovalHuman)
+	}
+	if origin := resolved.Origins["approvals.work_items"]; origin != OriginDefault {
+		t.Errorf("work_items origin = %q, want %q", origin, OriginDefault)
+	}
+}
+
+// Admitting work without asking rests on the operator's approval of the goal it
+// serves, so a project that records no goal approvals has nothing for it to rest
+// on. The setting would read as autonomy and mean nothing, which is refused here
+// rather than discovered as a queue that never fills.
+func TestAutomaticWorkItemsRequiresTheOperatorToBeApprovingGoals(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	writeProject(t, project, minimalProjectConfig+"approvals:\n  goals: automatic\n  work_items: automatic\n", nil)
+	_, err := LoadResolved(filepath.Join(project, DirectoryName, FileName))
+	if err == nil || !strings.Contains(err.Error(), "automatic work_items requires approvals.goals") {
+		t.Fatalf("LoadResolved() error = %v, want one refusing autonomy that rests on nothing", err)
+	}
+	// Per-item approval is unaffected: a project that approves no goals and asks
+	// about every item is coherent, if conservative.
+	perItem := loadProject(t, minimalProjectConfig+"approvals:\n  goals: automatic\n  work_items: human\n", nil)
+	if perItem.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("work_items = %q", perItem.Config.Approvals.WorkItems)
+	}
+}

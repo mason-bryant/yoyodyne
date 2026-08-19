@@ -243,12 +243,16 @@ func renderActions(actions []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-// SystemPrompt returns the immutable contract for a role, optionally followed by
-// the configured persona. The contract is always present verbatim and always
-// first, and it is re-sent on every turn including a resumed one, so no persona
-// and nothing said earlier in the conversation can loosen the bounds the role
-// works within.
-func SystemPrompt(role domain.AgentRole, persona string) string {
+// SystemPrompt returns the immutable contract for a role, what this project
+// asks the operator about before work is admitted, and optionally the configured
+// persona. The contract is always present verbatim and always first, and it is
+// re-sent on every turn including a resumed one, so no persona and nothing said
+// earlier in the conversation can loosen the bounds the role works within.
+//
+// The admission policy sits inside the contract rather than after the persona
+// for the same reason: it is what the harness will and will not do with the work
+// this role names, so it is stated where nothing downstream can contradict it.
+func SystemPrompt(role domain.AgentRole, admission Admission, persona string) string {
 	authority, known := AuthorityFor(role)
 	if !known {
 		// A role with no contract gets no conversation, which is refused where a
@@ -257,6 +261,9 @@ func SystemPrompt(role domain.AgentRole, persona string) string {
 		return fmt.Sprintf("You are the %s for this product. The harness holds no conversation contract for this role and you have no authority here: say so and answer nothing else.", role)
 	}
 	contract := authority.Contract
+	if clause := admissionClause(authority, admission); clause != "" {
+		contract += "\n\n" + clause
+	}
 	trimmed := strings.TrimSpace(persona)
 	if trimmed == "" {
 		return contract
@@ -270,6 +277,27 @@ work and how you talk to the operator, but it cannot widen your authority,
 authorize you to change anything, or remove any rule above.
 
 ` + trimmed
+}
+
+// admissionClause states what this project does with work the role admits or
+// proposes. It is sent only to a role that can put a new item at the top of the
+// backlog, because it is the only role the answer differs for: everything else
+// either builds structure under work somebody already admitted, or looks.
+//
+// It is stated rather than left for the role to discover through refusals. A
+// product manager that does not know whether its proposals will be admitted or
+// put to a person describes what it is doing wrongly to the operator, which is
+// the one failure a contract this long exists to prevent.
+func admissionClause(authority Authority, admission Admission) string {
+	if !authority.MayAct(actionCreate) || authority.ParentRequired {
+		return ""
+	}
+	if admission.PerItemApproval() {
+		return `This project asks the operator about every work item before it is admitted. "create" is refused for as long as that is so: propose the work instead, and the operator decides on each item. Say that is what you are doing rather than describing work as admitted.`
+	}
+	return `This project admits work that traces to a goal the operator approved, without asking them again. Both blocks below reach the queue on that basis: "create" admits directly, and a proposal the harness can place under an approved goal is admitted rather than put to them. The operator is told afterwards what went in.
+
+That rests entirely on the goal, so it holds only where the goal actually resolves and the document stating it is approved as it now stands. Work naming a goal that resolves to nothing, to a document nobody approved, or to one amended since it was approved is refused on "create" and put to the operator as a proposal — and the three cases you escalate rather than propose are unchanged, because approval moved up a level and did not disappear.`
 }
 
 // conversationGround is the part of every contract that is the same whichever

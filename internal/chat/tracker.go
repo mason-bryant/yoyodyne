@@ -573,6 +573,16 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 			singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason)
 		return
 	}
+	// An action that would put new work in the backlog is held to the same gate a
+	// proposal is. Admission is the one operation here that spends the operator's
+	// trust rather than tidying what they already agreed to, and a gate the
+	// proposal path held while this one did not would be no gate at all: the
+	// product manager reaches both, and work would simply arrive through whichever
+	// asked less.
+	if refusal := s.admissionRefusal(outcome.Action); refusal != "" {
+		outcome.Failure = refusal
+		return
+	}
 	if outcome.Action.readsTargetFirst() {
 		s.readActionTarget(ctx, outcome)
 		if refusal := refuseWhenClosed(outcome.Action.Action, strings.TrimSpace(outcome.Action.ID), outcome.TargetStatus); refusal != "" {
@@ -583,6 +593,36 @@ func (s *Session) applyTrackerAction(ctx context.Context, outcome *TrackerOutcom
 	s.carryOutTrackerAction(ctx, outcome)
 	outcome.noteAttribution(attribution)
 	outcome.noteTarget()
+}
+
+// admissionRefusal says why work an action would admit to the backlog does not
+// reach it, and is empty for every action that admits nothing. Decomposition is
+// deliberately not admission: a role that may only create underneath a parent is
+// breaking down work somebody already admitted, and holding it to the admission
+// gate would gate the wrong act.
+//
+// A project that asks about every work item refuses an admission outright rather
+// than turning it into something to approve. What the operator reads about a
+// tracker action is what already happened, and an action that instead waited on
+// them would be a proposal wearing an action's clothes — so the refusal names
+// the block that does put work to them.
+func (s *Session) admissionRefusal(action TrackerAction) string {
+	if action.Action != actionCreate || s.authority().ParentRequired {
+		return ""
+	}
+	if s.options.Admission.PerItemApproval() {
+		return perItemApprovalReason + ", so admitting work directly is refused; propose it instead and the operator decides"
+	}
+	// The goal is judged from the action itself rather than taken from the
+	// caller, so a creation that somehow carried none is refused by a gate that
+	// had something to judge rather than waved through by one that had nothing.
+	attribution := s.options.Goals.Attribute(action.Goal)
+	gap := attribution.ApprovalGap()
+	if gap == "" {
+		return ""
+	}
+	return fmt.Sprintf("it names the goal %q, and %s; work is admitted without asking only where it serves a goal the operator approved, so raise it as a concern or propose it and let them decide",
+		singleLine(attribution.Named, maxTrackerFailureBytes), gap)
 }
 
 // attributionFor judges the goal an action names against the goals the

@@ -69,6 +69,23 @@ execution:
 # serving an approved goal is the architect's judgement about how, and approving
 # each one is the per-change gate that autonomy is the absence of.
 #
+# work_items is "automatic" deliberately, and it is the one approval that gates
+# rather than records. It says the operator approves goals rather than every
+# work item: work that traces to a goal they approved is admitted to the queue
+# without a further prompt, and they are told afterwards what went in. Work that
+# traces to no goal, work that would cut against one, and a change to the goals
+# themselves still stop and ask, because those are exactly what the product
+# manager escalates rather than proposes. Set it to "human" to have every item
+# put to you before it is admitted, which is what a project wants while it is
+# still deciding how far to trust the arrangement.
+#
+# Nothing is admitted without asking until goals are actually approved, so a new
+# project asks about everything until its first "yoyo artifact approve" -- the
+# trust ramp is in the mechanism rather than in this default. That is also why
+# automatic here requires goals to be "human": admitting work rests on the goal
+# it serves having been approved, and a project approving no goals has nothing
+# for it to rest on.
+#
 # Integration is conservative: a project opts in to automatic integration, which
 # the harness then refuses unless deterministic checks and a reviewer agent
 # exist. Publishing is opted in to separately and for the same reason: pushing a
@@ -78,6 +95,7 @@ approvals:
   brief: human
   goals: human
   designs: automatic
+  work_items: automatic
   integration: human
   publishing: human
 

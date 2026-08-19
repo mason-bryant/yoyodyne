@@ -19,6 +19,12 @@
 // is guessed at: an attribution no document states is unresolved rather than
 // approximately right.
 //
+// A goal therefore carries the operator's approval of the document stating it,
+// because that is now what the gate rests on: work is admitted to the queue
+// without a person on the strength of serving an approved goal, so resolving an
+// attribution and knowing whether anybody agreed to what it resolved to are the
+// same question asked once. ApprovalGap is where that question is answered.
+//
 // # What is done about each state, and why
 //
 // An attribution is checked where it is made, which is where work is admitted.
@@ -113,7 +119,22 @@ type Goal struct {
 	// intends. A goal in a superseded or retired document is still recorded, so
 	// an attribution to one can be told from an attribution to nothing at all.
 	InForce bool `json:"in_force"`
+	// Approval is what the operator's approval of the document stating this goal
+	// amounts to as that document now stands. It is carried because approval
+	// moved up to the goals: work is admitted without asking on the strength of
+	// the goal it serves having been approved, so which goals those are has to be
+	// something a caller can read rather than assume. A goal is never dropped for
+	// being unapproved — an unapproved goals document still states the goals it
+	// states, and what changes is only whether work under it reaches the queue
+	// without a person.
+	Approval artifact.ApprovalState `json:"approval"`
 }
+
+// Approved reports the operator having approved the document stating this goal,
+// as that document now stands. A document approved and amended since is
+// deliberately not approved here: the approval still stands for what it was
+// given for, and the goal as it now reads is not what was seen.
+func (g Goal) Approved() bool { return g.Approval == artifact.ApprovalApproved }
 
 // BriefGoal is one goal the product brief states. It is what a goal's trailer
 // resolves to, and it is named the same way a goal is: by its own words, because
@@ -283,6 +304,33 @@ func (a Attribution) Resolved() bool {
 	return a.State == StateAttributed
 }
 
+// ApprovalGap says why this attribution does not trace to a goal the operator
+// approved, and is empty exactly when it does. It is what decides whether work
+// reaches the queue without a person, so it is deliberately stricter than
+// Resolved: approval moved up from each work item to the goals, and work
+// admitted on the strength of a goal nobody approved would be work admitted on
+// the strength of nothing.
+//
+// The three ways it can be missing are said differently because they are three
+// different things to do: settle what the work is for, approve the goals, or
+// approve them again for what has changed since.
+func (a Attribution) ApprovalGap() string {
+	if !a.Resolved() {
+		// An unresolved, unattributed, or uncheckable attribution has already
+		// said what is wrong with it, in the words the rest of the harness
+		// reports it in.
+		return a.Reason
+	}
+	switch a.Goal.Approval {
+	case artifact.ApprovalApproved:
+		return ""
+	case artifact.ApprovalAmended:
+		return fmt.Sprintf("%s states it and has been amended since the operator approved it, so the goal as it now reads is not one they have agreed to", a.Goal.ArtifactID)
+	default:
+		return fmt.Sprintf("%s states it and records no approval, so nothing says the operator agreed to it", a.Goal.ArtifactID)
+	}
+}
+
 // Note is the line a work item records its goal on. Everything that writes an
 // attribution goes through here, so what is written is always what is read
 // back.
@@ -387,6 +435,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 				ArtifactID: recorded.ID,
 				Path:       recorded.Path,
 				InForce:    recorded.InForce(),
+				Approval:   recorded.ApprovalState(),
 			})
 		}
 	}

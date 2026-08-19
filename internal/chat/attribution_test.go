@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -311,17 +312,21 @@ func TestAttributingWorkToAGoalTheGoalsDoNotStateIsRefused(t *testing.T) {
 	}
 }
 
-func TestAdmittingWorkWithNoRecordedGoalsSaysNothingCheckedIt(t *testing.T) {
+func TestAdmittingWorkWithNoRecordedGoalsIsRefusedRatherThanUnchecked(t *testing.T) {
 	t.Parallel()
 
-	// A project that has not written its goals down yet still admits work: the
-	// alternative is a harness that refuses to plan the work of writing them.
-	// What it does not do is let the attribution read as though it was checked.
+	// A project that has not written its goals down yet has approved no goal, so
+	// there is nothing for an admission without asking to rest on. This is the
+	// gate at the goals doing its one job: work whose attribution nobody could
+	// check is not work anybody agreed to, and admitting it anyway would move the
+	// gate up and remove it in the same change. The work is not lost -- it is
+	// proposed, and the operator decides -- which is what makes refusing here
+	// cost nothing.
 	tracker := &fakeTracker{}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Admitting it.",
 			`{"action":"create","title":"Write the goals","description":"There are none yet.","goal":"Have goals to work from.","reason":"nothing traces anywhere"}`)},
-		{SessionID: "session-1", FinalText: "Admitted."},
+		{SessionID: "session-1", FinalText: "Refused, then."},
 	}})
 	options.Tracker = tracker
 
@@ -329,11 +334,22 @@ func TestAdmittingWorkWithNoRecordedGoalsSaysNothingCheckedIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v", reply.Actions)
 	}
-	if !strings.Contains(reply.Actions[0].Summary, "nothing checked the goal it names") {
-		t.Fatalf("summary = %q", reply.Actions[0].Summary)
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v", tracker.created)
+	}
+	// The refusal says what was missing and what to do instead, because the
+	// product manager has somewhere else to put this work.
+	for _, required := range []string{
+		"there is nothing to check it against",
+		"a goal the operator approved",
+		"propose it",
+	} {
+		if !strings.Contains(reply.Actions[0].Failure, required) {
+			t.Fatalf("failure = %q, want it to state %q", reply.Actions[0].Failure, required)
+		}
 	}
 }
 
@@ -483,6 +499,10 @@ func TestApprovingAProposalWhoseGoalHasSinceGoneRefusesRatherThanCreating(t *tes
 	}})
 	options.Tracker = tracker
 	options.Goals = recordedGoals(recordedGoal)
+	// Per-item approval, so there is a proposal for the operator to approve at
+	// all: this is about the re-check that approval makes, not about what a
+	// project that admits work itself would have done with it.
+	options.Admission = Admission{WorkItems: domain.ApprovalHuman}
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "what next")
@@ -511,6 +531,9 @@ func recordedGoals(statements ...string) goal.Set {
 			ArtifactID: "v1-goals",
 			Path:       "docs/product/goals/v1-goals.md",
 			InForce:    true,
+			// Approved as the document now stands, which is what lets work naming
+			// one of these reach the queue without the operator being asked again.
+			Approval: artifact.ApprovalApproved,
 		})
 	}
 	return set
