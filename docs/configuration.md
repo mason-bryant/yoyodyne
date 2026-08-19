@@ -132,7 +132,11 @@ naming one of them reaches that one. What a role may do in that conversation is
 **not** configurable and is not what the persona says: the harness holds one contract and one authority table per role,
 sends the contract ahead of the persona on every turn, and refuses anything
 outside the table. A persona specializes how a role works; it cannot widen what
-the role is allowed to do. The README's
+the role is allowed to do. The set of role names is fixed for the same reason —
+every posture the harness derives, a reviewer's absent tools included, is derived
+from the name — so `role` must be one of `product-manager`, `architect`,
+`development-manager`, `developer`, or `reviewer`, and anything else is
+[refused when the configuration loads](#what-fails-closed). The README's
 [Talking to the other agents](../README.md#talking-to-the-other-agents) states
 the table itself.
 
@@ -1395,6 +1399,9 @@ These are all errors, reported before any work is claimed:
   decide which documents the harness treats as canonical artifacts;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
+- a `role` that is not one of the harness's five, which is how a typo in an
+  agents block is caught: the message names what was written and lists what could
+  have been meant. Adding a role is a change to the harness, not to this file;
 - a role and backend combination the backend does not support, such as an
   architect on the Codex backend;
 - any effective configuration that fails validation, even when every individual
