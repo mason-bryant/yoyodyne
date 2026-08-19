@@ -1142,6 +1142,72 @@ A budget of `0` is refused rather than read as "unbounded": nothing else bounds 
 check, so one that never returns would hold a worktree, a claim, and a run open
 indefinitely.
 
+## Scheduling ready work
+
+`yoyo run <id>` is you naming an item. `yoyo work` is the harness choosing:
+
+```yaml
+execution:
+  max_concurrent_developers: 1   # the default
+```
+
+It reads the admitted work in the order you set — highest priority first — takes
+the items the tracker itself reports as ready to pull, and starts as many of them
+at once as this leaves free. Each run gets a worktree and a branch of its own,
+and the command returns once every run it started has ended. `--limit <n>` stops
+it after that many runs; without one it drains what is ready.
+
+Nothing about running several at once relaxes anything. Capacity is enforced at
+the reservation rather than by the scheduler, so two schedulers, or a scheduler
+and a `yoyo run` beside it, share one limit rather than getting one each — a run
+that loses the race for the last slot is reported as declined, not as a failure.
+Integration stays serial: at most one promotion into a given target branch
+happens at a time, and a change whose target moved while it was being reviewed is
+replayed onto where the target went and promoted by fast-forward, or blocked if
+it will not replay. Nothing is ever forced.
+
+Four things keep an item out of a pass, and each is named in the output rather
+than silently skipped: the tracker not reporting it as ready, an unresolved
+directive pausing it, a run for it already being in flight anywhere, and there
+being no free slot. A fifth thing deliberately does *not*: an item whose goal was
+amended after it was admitted is pulled exactly as it would have been, and what
+changed goes into the run's recorded reason instead. See
+[what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
+why staleness reports rather than decides.
+
+`max_concurrent_developers` cannot exceed the number of developer `instances` you
+configured, and the default of `1` is deliberate: raising it is a decision about
+your machine, and [how long a check may take](#how-long-a-check-may-take) is the
+setting that has to move with it.
+
+### When a configuration change takes effect
+
+**At the next selection.** `yoyo work` re-reads the configuration before every
+pull, not once when it starts, so a capacity you raise or a priority you reorder
+while it is running is picked up the next time it chooses something. That is the
+same answer every other command gives — each one loads the configuration fresh —
+and it is what makes reordering the backlog steer the work rather than steering
+the work after a restart.
+
+A run already in flight keeps the configuration its own pull read. Its capacity,
+its check budget, and its repair budget were fixed when it was reserved, and
+changing them under a running developer would mean a run judged by rules it was
+never started under.
+
+### Why each run says why it was there
+
+Every run `yoyo work` starts records, in durable state, why that item was chosen:
+where it sat in the order, how much of the queue was pullable, how much of the
+machine was free, and anything upstream of it that had changed since it was
+admitted. `yoyo status` and a conversation's survey both read it back.
+
+This is not bookkeeping. Work the harness chose and cannot account for looks
+exactly like work happening behind your back, and holding intake — which stops
+`yoyo work` choosing anything more while what is running finishes — is worth
+having only if the thing that chooses actually consults it. Both halves are
+enforced rather than conventional: an item you name yourself is exempt from the
+hold, because naming it is you deciding it is the exception.
+
 ## Publishing through pull requests
 
 By default Yoyodyne is entirely local: it creates a branch and a worktree, runs

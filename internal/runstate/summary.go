@@ -65,6 +65,12 @@ type RunSummary struct {
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
+	// Selection is why the harness was running this item: who chose it and on
+	// what grounds. It matters most for the runs nobody typed an identifier for,
+	// which is why its absence is worth reporting rather than omitting — a run
+	// nothing accounts for is indistinguishable from work happening behind the
+	// operator's back, and a missing line reads as neither.
+	Selection *Selection `json:"selection,omitempty"`
 	// CostUSD is what the provider reported for every invocation in this run's
 	// log, and UnknownCost says why there is no figure rather than reporting one
 	// of zero: a run whose evidence is gone did not cost nothing.
@@ -176,6 +182,10 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.PathRefusal != nil {
 		refused := *state.PathRefusal
 		summary.RefusedPaths = &refused
+	}
+	if state.Selection != nil {
+		selection := *state.Selection
+		summary.Selection = &selection
 	}
 	price := s.priceRun(state)
 	summary.CostUSD = price.CostUSD
