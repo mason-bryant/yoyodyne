@@ -1,10 +1,12 @@
 # Team mode scope
 
 Drafted by the product manager; approved by the operator in conversation on
-2026-08-19. This document is deliberately plain prose for now: no governed
-kind exists yet for a scoping document, and inventing one belongs to the
-artifact-contract specification the architect owns (yoyodyne-ifd.87's
-delivery), not to this file.
+2026-08-19. This document is deliberately plain prose for now, and it lives outside
+the artifact homes because the contract there is strict: every document inside
+one carries identity frontmatter, and no governed kind exists yet for a
+scoping document. Inventing one belongs to the artifact-contract specification
+the architect owns (yoyodyne-ifd.87's delivery); when it exists, this document
+moves into `docs/product` under it.
 
 This bounds the team-mode epic: what Yoyodyne promises a team, who counts as an
 operator when several humans hold intent, and what is supported before the
