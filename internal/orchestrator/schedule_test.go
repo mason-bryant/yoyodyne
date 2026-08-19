@@ -115,6 +115,84 @@ func TestSchedulerRunsSeveralEligibleItemsAtOnceInWorktreesOfTheirOwn(t *testing
 	}
 }
 
+// The other half of the criterion, and the case concurrency is what makes
+// reachable at all: two runs started from the same base, both approved, both
+// changing the same line. One of them promotes; the other finds its target moved,
+// cannot replay onto it, and is blocked with everything preserved. Nothing is
+// forced, and the target branch carries exactly the winner's change.
+//
+// Which of the two wins is decided by the promotion lease and is deliberately
+// not asserted: what matters is that exactly one did and the loser was stopped
+// rather than resolved.
+func TestSchedulerBlocksTheLoserOfAConflictRatherThanForcingIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newRealScheduleHarness(t, 2, "yoyodyne-alpha", "yoyodyne-beta")
+	// Both developers are inside before either returns, so both runs were created
+	// from the same base commit: that is what makes the second promotion a
+	// contended one rather than a fast-forward onto work it already had.
+	harness.developersMeet(2)
+	harness.develop = func(workItemID, worktree string) error {
+		return os.WriteFile(filepath.Join(worktree, "shared.txt"), []byte(workItemID+" wrote this\n"), 0o600)
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if harness.rendezvousFailure != nil {
+		t.Fatalf("the developers never overlapped, so nothing contended: %v", harness.rendezvousFailure)
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %d run(s), want both items pulled: %s", len(schedule.Started), schedule.Render())
+	}
+
+	var promoted, blocked *Started
+	for index := range schedule.Started {
+		started := &schedule.Started[index]
+		switch {
+		case started.Outcome.Integration != nil:
+			promoted = started
+		case started.Outcome.Blocked:
+			blocked = started
+		}
+	}
+	if promoted == nil || blocked == nil {
+		t.Fatalf("outcomes = %s, want exactly one promotion and one blocked run", schedule.Render())
+	}
+	if blocked.Failure == "" {
+		t.Fatalf("%s was blocked without a reason recorded", blocked.WorkItemID)
+	}
+
+	// The target branch carries the winner's change and nothing of the loser's:
+	// a promotion that had been forced through would show the other content, and
+	// one that had been resolved would show both.
+	content, err := os.ReadFile(filepath.Join(harness.repository, "shared.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(content) != promoted.WorkItemID+" wrote this\n" {
+		t.Fatalf("shared.txt = %q, want exactly what %s promoted", content, promoted.WorkItemID)
+	}
+
+	// The blocked run keeps everything it had, which is what makes the conflict
+	// somebody's to decide rather than something the harness threw away.
+	if blocked.Outcome.WorktreePath == "" || blocked.Outcome.WorktreeRemoved {
+		t.Fatalf("blocked run = %#v, want its worktree preserved for whoever picks the conflict up", blocked.Outcome)
+	}
+	if blocked.Outcome.Branch == "" || blocked.Outcome.BranchRemoved {
+		t.Fatalf("blocked run = %#v, want its branch preserved", blocked.Outcome)
+	}
+	// And the blocker reached the tracker, which is where the decision is owed.
+	item, err := harness.Show(context.Background(), blocked.WorkItemID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if item.Status != "blocked" {
+		t.Fatalf("%s status = %q, want the conflict recorded on the work item", item.ID, item.Status)
+	}
+}
+
 // A capacity of one -- the default -- serializes the work: three items still all
 // run, and never two at a time.
 func TestSchedulerHonorsACapacityOfOne(t *testing.T) {
@@ -189,6 +267,15 @@ func TestSchedulerStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	}
 	if !strings.Contains(schedule.Render(), "the decomposition is heading somewhere odd") {
 		t.Fatalf("rendered = %q, want the operator's own reason for the hold", schedule.Render())
+	}
+	// A held pass never reads the queue, so it says nothing about it rather than
+	// reporting the zeroes it did not read. "0 admitted items" over a backlog
+	// nobody looked at would be worse than saying nothing.
+	if schedule.BacklogRead {
+		t.Fatalf("schedule = %#v, want no claim about a backlog a held pass never read", schedule)
+	}
+	if strings.Contains(schedule.Render(), "backlog at the last pull") {
+		t.Fatalf("rendered = %q, want no backlog counts from a pass that stopped before reading it", schedule.Render())
 	}
 }
 
@@ -276,6 +363,24 @@ func TestSchedulerLeavesWorkTheTrackerDoesNotReportAsReady(t *testing.T) {
 	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ready.ID {
 		t.Fatalf("started = %#v, want only the item the tracker reports as pullable", schedule.Started)
 	}
+	// The unready item is accounted for by the counts rather than by a line of its
+	// own. Both halves matter: naming every unready item would print a line per
+	// backlog entry on every pass, and reporting nothing at all would leave a
+	// backlog full of unpullable work indistinguishable from an empty one.
+	if len(schedule.Deferred) != 0 {
+		t.Fatalf("deferred = %#v, want an unready item left to the counts", schedule.Deferred)
+	}
+	// The counts are the last pull's, which is deliberately the reading an
+	// operator wants from a finished pass: the ready item ran and left the queue,
+	// so what is left is the one item nothing can pull -- which is the answer to
+	// "why did it stop with work still admitted?".
+	if schedule.Admitted != 1 || schedule.Pullable != 0 {
+		t.Fatalf("admitted = %d, pullable = %d, want the item nothing can pull still counted",
+			schedule.Admitted, schedule.Pullable)
+	}
+	if !strings.Contains(schedule.Render(), "1 admitted item(s), 0 of them ready to pull") {
+		t.Fatalf("rendered = %q, want the backlog counted in what an operator reads", schedule.Render())
+	}
 }
 
 // An item another process already has in flight is not started a second time.
@@ -297,6 +402,15 @@ func TestSchedulerLeavesWorkAlreadyInFlightAlone(t *testing.T) {
 	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-two" {
 		t.Fatalf("started = %#v, want the item nobody else is running", schedule.Started)
 	}
+	// A run in flight is not a deferral: the item was chosen already, by whoever
+	// is running it, and `yoyo status` is where that run is read. What this pass
+	// owes is the slot arithmetic that explains its own choices.
+	if len(schedule.Deferred) != 0 {
+		t.Fatalf("deferred = %#v, want a run in flight left to the slot counts", schedule.Deferred)
+	}
+	if schedule.Occupied < 1 {
+		t.Fatalf("occupied = %d, want the run another process holds counted against capacity", schedule.Occupied)
+	}
 }
 
 // Every developer slot held by somebody else leaves the scheduler nothing to
@@ -314,7 +428,9 @@ func TestSchedulerStopsWhenEveryDeveloperSlotIsHeldElsewhere(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
 	}
-	if len(schedule.Started) != 0 || schedule.Stopped != ScheduleCapacityFull {
+	// The stop reason is the whole account here: no item is named, because what
+	// kept this one out was the machine being full rather than anything about it.
+	if len(schedule.Started) != 0 || len(schedule.Deferred) != 0 || schedule.Stopped != ScheduleCapacityFull {
 		t.Fatalf("schedule = %#v, want the full capacity reported rather than an empty queue", schedule)
 	}
 }
@@ -524,6 +640,14 @@ func TestSchedulerReportsAnEmptyQueue(t *testing.T) {
 	}
 	if !strings.Contains(schedule.Render(), ScheduleDrained) {
 		t.Fatalf("rendered = %q, want it to say why nothing was started", schedule.Render())
+	}
+	// An empty backlog that was actually read is a different fact from one that
+	// was not, and the emptiness is only reported because this pass looked.
+	if !schedule.BacklogRead || schedule.Admitted != 0 {
+		t.Fatalf("schedule = %#v, want an emptiness this pass actually read", schedule)
+	}
+	if !strings.Contains(schedule.Render(), "0 admitted item(s), 0 of them ready to pull") {
+		t.Fatalf("rendered = %q, want the empty backlog counted", schedule.Render())
 	}
 }
 
@@ -798,6 +922,17 @@ func (h *scheduleHarness) close(workItemID string) {
 	}
 }
 
+// retire drops an item's readiness and leaves its status alone. The real harness
+// uses it rather than close because there the pipeline is what sets the status —
+// closed when the work landed, blocked when a conflict stopped it — and a
+// fixture that overwrote it would have the test asserting its own bookkeeping
+// instead of what the run actually recorded.
+func (h *scheduleHarness) retire(workItemID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.ready, workItemID)
+}
+
 func (h *scheduleHarness) pullOrder() []string {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -826,6 +961,10 @@ type realScheduleHarness struct {
 	directives   *runstate.DirectiveStore
 	holds        *runstate.OperatorHoldStore
 	intake       *runstate.IntakeHoldStore
+	// develop is what each run's developer writes into its worktree. The default
+	// gives every item a file of its own, which is the ordinary case; a test
+	// about what happens when two changes collide points them at one path.
+	develop func(workItemID, worktree string) error
 }
 
 func newRealScheduleHarness(t *testing.T, capacity int, ids ...string) *realScheduleHarness {
@@ -845,6 +984,9 @@ func newRealScheduleHarness(t *testing.T, capacity int, ids ...string) *realSche
 		intake:          newIntakeHoldStore(t),
 	}
 	harness.capacity = capacity
+	harness.develop = func(workItemID, worktree string) error {
+		return os.WriteFile(filepath.Join(worktree, workItemID+".txt"), []byte("implemented\n"), 0o600)
+	}
 	return harness
 }
 
@@ -868,7 +1010,7 @@ func (h *realScheduleHarness) start(ctx context.Context, workItemID string, sele
 
 	provider := roleBackend(func(request backend.RunRequest) error {
 		h.rendezvous()
-		return os.WriteFile(filepath.Join(request.WorkingDirectory, workItemID+".txt"), []byte("implemented\n"), 0o600)
+		return h.develop(workItemID, request.WorkingDirectory)
 	}, approveVerdict)
 	pipeline := newSharedPipeline(h.t, h.repository, h.worktreeRoot, h.store, h, provider, []string{"exit 0"})
 	pipeline.Config.Execution.MaxConcurrentDevelopers = h.scheduleHarness.capacity
@@ -891,7 +1033,7 @@ func (h *realScheduleHarness) start(ctx context.Context, workItemID string, sele
 	pipeline.Selection = selection
 
 	outcome, err := pipeline.Run(ctx, workItemID)
-	h.close(workItemID)
+	h.retire(workItemID)
 	return outcome, err
 }
 

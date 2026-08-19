@@ -192,9 +192,16 @@ type Started struct {
 	Failure  string `json:"failure,omitempty"`
 }
 
-// Deferred is one ready item this pass did not choose, and why. It is reported
-// rather than left out because an item missing from a schedule reads exactly
-// like an item that was never in the queue.
+// Deferred is one pullable item this pass declined to start, and why.
+//
+// Exactly one thing lands here: an unresolved directive. It is named against the
+// item because it needs a person, and because nothing else in the harness would
+// say that this particular item was passed over for it. The other reasons an
+// item is not started — the tracker not calling it ready, a run for it already
+// being in flight, no free developer slot — are facts about the pass rather than
+// about any one item, and the counts on the schedule report them at that grain.
+// A line per unready item would be a line per backlog entry on every pass, which
+// is how a listing stops being read at all.
 type Deferred struct {
 	WorkItemID string `json:"work_item_id"`
 	Reason     string `json:"reason"`
@@ -210,6 +217,24 @@ type Schedule struct {
 	// and how many developer slots were already taken when it read it.
 	Capacity int `json:"capacity"`
 	Occupied int `json:"occupied"`
+	// Admitted and Pullable are the size of the backlog and how much of it the
+	// tracker called ready, as of the last pull that got far enough to read the
+	// queue — a pull that found every slot taken stops before that, and leaves
+	// these where the pull before it put them.
+	//
+	// They are the pass-level answer to why an item was not started, and they are
+	// counts rather than a list on purpose: "nothing more is ready to pull" is a
+	// different fact when the backlog is empty and when forty admitted items are
+	// all waiting on something, and naming those forty every pass would bury the
+	// deferrals that actually need reading.
+	Admitted int `json:"admitted"`
+	Pullable int `json:"pullable"`
+	// BacklogRead reports that some pull got as far as reading the queue. Without
+	// it, counts of zero would be indistinguishable from a pass that stopped
+	// before it ever looked — a held intake, or a machine already full — and
+	// "0 admitted items" over a backlog nobody read is the confident emptiness
+	// every report in this harness is written to avoid.
+	BacklogRead bool `json:"backlog_read"`
 	// Stopped says why the scheduler stopped pulling, in the words of one of the
 	// Schedule* reasons above.
 	Stopped string `json:"stopped"`
@@ -334,6 +359,9 @@ pulling:
 			schedule.Stopped = ScheduleUnreadable
 			break
 		}
+		schedule.Admitted = len(queue.Entries)
+		schedule.Pullable = queue.Ready()
+		schedule.BacklogRead = true
 		stale, stalenessProblem := pull.stale(ctx)
 		if stalenessProblem != "" {
 			schedule.StalenessProblem = stalenessProblem
@@ -538,6 +566,15 @@ func (s Schedule) Render() string {
 	} else {
 		fmt.Fprintf(&rendered, "%d run(s) started, %d of %d developer slot(s) taken at the last pull\n",
 			len(s.Started), s.Occupied, s.Capacity)
+	}
+	// What the queue looked like is the pass-level answer to why an item was not
+	// started, so it is said whichever way the pass went — and said as counts,
+	// because the alternative is a line for every admitted item on every pass. A
+	// pass that never got as far as the queue says nothing here rather than
+	// printing zeroes it did not read.
+	if s.BacklogRead {
+		fmt.Fprintf(&rendered, "backlog at the last pull: %d admitted item(s), %d of them ready to pull\n",
+			s.Admitted, s.Pullable)
 	}
 	for _, started := range s.Started {
 		fmt.Fprintf(&rendered, "%s: %s\n", started.WorkItemID, started.state())

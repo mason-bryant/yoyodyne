@@ -1504,11 +1504,23 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Four things keep an item out of a pass, each named in the output rather than
-silently skipped — the tracker not reporting it as ready, an unresolved directive
-pausing it, a run for it already being in flight anywhere, and no free slot. A
-fifth deliberately does not: an item whose goal was amended after it was admitted
-is pulled exactly as it would have been, because
+Four things keep an item out of a pass, and the pass accounts for them at two
+different grains. An **unresolved directive** is named against the item it paused,
+with the directive's own words, because it needs a person and nothing else would
+report that this item was passed over for it. The other three — the tracker not
+reporting an item as ready, a run for it already being in flight anywhere, and no
+free slot — are facts about the pass rather than about any one item, so that is
+how they are reported: the stop reason says which of them ended the choosing, and
+a pass that got as far as reading the queue prints how many items were admitted,
+how many the tracker called ready to pull, and how many slots were taken. Counts
+rather than a list, deliberately — a line per unready item would be a line per
+backlog entry on every pass, which is how a listing stops being read. A pass that
+stopped before reading the queue at all, because you were holding intake or the
+machine was already full, says nothing about the backlog rather than reporting
+zeroes it never looked up.
+
+A fifth thing deliberately keeps nothing out: an item whose goal was amended after
+it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.
 

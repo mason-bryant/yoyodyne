@@ -1166,12 +1166,23 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Four things keep an item out of a pass, and each is named in the output rather
-than silently skipped: the tracker not reporting it as ready, an unresolved
-directive pausing it, a run for it already being in flight anywhere, and there
-being no free slot. A fifth thing deliberately does *not*: an item whose goal was
-amended after it was admitted is pulled exactly as it would have been, and what
-changed goes into the run's recorded reason instead. See
+Four things keep an item out of a pass, reported at two different grains. An
+unresolved directive is named against the item it paused, with the directive's
+own words: it needs a person, and nothing else would report that this item was
+passed over for it. The tracker not reporting an item as ready, a run for it
+already being in flight anywhere, and there being no free slot are facts about
+the pass rather than about any one item, so the pass reports them as such — the
+stop reason names which of them ended the choosing, and a pass that got as far as
+reading the queue prints how many items were admitted, how many the tracker
+called ready to pull, and how many slots were taken. Those are counts rather than
+a list on purpose: naming every unready item would print a line per backlog entry
+on every pass and bury the deferrals worth reading. A pass that stopped before
+reading the queue at all — held intake, or every slot already taken — says
+nothing about the backlog rather than reporting zeroes it never looked up.
+
+A fifth thing deliberately keeps nothing out: an item whose goal was amended
+after it was admitted is pulled exactly as it would have been, and what changed
+goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
 why staleness reports rather than decides.
 
