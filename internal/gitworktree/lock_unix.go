@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-// lockCreationFile takes an exclusive lock, waiting until it gets one or until
+// lockRegistryFile takes an exclusive lock, waiting until it gets one or until
 // the context bounds the wait. The lock belongs to the open file description
-// rather than to the process, so two creations in one process queue behind one
-// another exactly as two processes do.
-func lockCreationFile(ctx context.Context, file *os.File) error {
+// rather than to the process, so two registry writes in one process queue behind
+// one another exactly as two processes do.
+func lockRegistryFile(ctx context.Context, file *os.File) error {
 	for {
 		err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {

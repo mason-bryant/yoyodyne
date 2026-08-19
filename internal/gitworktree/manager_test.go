@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -319,6 +320,150 @@ func (w *creationWitness) observed() (adds, overlaps int) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.adds, w.overlaps
+}
+
+// Git prunes worktree registrations during automatic maintenance, and it judges
+// one stale by whether its gitdir file is there — which is precisely what an add
+// still filling its entry in has not written yet. A prune reaching that window
+// deletes the registration out from under the add, and the run is lost. The
+// registry lease cannot queue a prune Git starts for itself, so no command the
+// harness runs is allowed to start one; that is a property of every command
+// rather than of the few that write, because maintenance is triggered by
+// ordinary writing commands and prunes the whole repository when it runs.
+func TestManagerGitCommandsNeverStartAutomaticMaintenance(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &recordingProcessRunner{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	// The whole lifecycle is driven, because the assertion is about every command
+	// the harness issues and the writing ones are what start maintenance.
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-maintenance",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	if _, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+		Worktree:     worktree,
+		TargetBranch: worktree.TargetBranch,
+		SourceCommit: integration.SourceCommit,
+	}); err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+
+	if len(runner.commands) == 0 {
+		t.Fatal("no Git commands were recorded")
+	}
+	for _, command := range runner.commands {
+		// The settings have to lead: Git reads -c only before the subcommand, so
+		// one that arrived after it would be an argument to the subcommand and
+		// disable nothing.
+		if len(command) < len(maintenanceOptions) || !reflect.DeepEqual(command[:len(maintenanceOptions)], maintenanceOptions) {
+			t.Fatalf("git %v does not disable automatic maintenance first", command)
+		}
+	}
+}
+
+// A removal writes the same bookkeeping an add does, and Git guards neither, so
+// a creation that reached a half-deleted entry would exit rather than create
+// anything. Removal therefore queues on the registry lease. The lease is held
+// here from outside the removal, so what this observes is the removal waiting
+// for it rather than two commands that happened not to overlap.
+func TestManagerRemovalQueuesOnTheWorktreeRegistryLease(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &removalWitness{delegate: execution.OSProcessRunner{}, removing: make(chan struct{}, 1)}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-removal-queue",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+
+	lease, err := manager.leaseRegistry(context.Background())
+	if err != nil {
+		t.Fatalf("leaseRegistry() error = %v", err)
+	}
+	cleaned := make(chan error, 1)
+	go func() {
+		_, err := manager.CleanupIntegrated(context.Background(), CleanupRequest{
+			Worktree:     worktree,
+			TargetBranch: worktree.TargetBranch,
+			SourceCommit: integration.SourceCommit,
+		})
+		cleaned <- err
+	}()
+
+	// Nothing here waits for the removal to be attempted, because the assertion
+	// is that it is not. A machine slow enough to make this window uninformative
+	// still cannot fail it wrongly: only a removal that actually ran does that.
+	select {
+	case <-runner.removing:
+		t.Fatal("the worktree was unregistered while the registry lease was held elsewhere")
+	case err := <-cleaned:
+		t.Fatalf("CleanupIntegrated() finished without waiting for the lease: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if err := lease.release(); err != nil {
+		t.Fatalf("release() error = %v", err)
+	}
+	if err := <-cleaned; err != nil {
+		t.Fatalf("CleanupIntegrated() error = %v", err)
+	}
+	if registrations := gitOutput(t, repository, "worktree", "list", "--porcelain"); strings.Contains(registrations, worktree.Path) {
+		t.Fatalf("worktree registration survived cleanup: %q", registrations)
+	}
+}
+
+// removalWitness announces the moment the harness unregisters a worktree, which
+// is the one step of a cleanup the registry lease has to hold back.
+type removalWitness struct {
+	delegate execution.ProcessRunner
+	removing chan struct{}
+}
+
+func (w *removalWitness) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if containsArguments(command.Args, "worktree", "remove") {
+		select {
+		case w.removing <- struct{}{}:
+		default:
+		}
+	}
+	return w.delegate.Run(ctx, command, observer)
 }
 
 func TestManagerAllowsOnlyConfiguredPrimaryControlPlaneChanges(t *testing.T) {

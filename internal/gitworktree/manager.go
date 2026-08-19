@@ -25,6 +25,29 @@ const (
 	pushTimeout = 5 * time.Minute
 )
 
+// maintenanceOptions stop a Git command from handing this repository to Git's
+// automatic maintenance, and every command the harness runs carries them.
+//
+// Maintenance prunes worktree registrations, and it judges one stale by whether
+// its gitdir file is there — which is exactly what a `git worktree add` has not
+// written yet while it is still filling the entry in. A prune reaching that
+// window deletes the registration out from under the add, which fails with
+// "could not open '.git/worktrees/<id>/gitdir' for writing", and the run is lost
+// to nothing but timing. The registry lease queues the harness's own writes to
+// that bookkeeping; it cannot queue a prune Git starts for itself after an
+// ordinary write command, so the harness never asks for one. Both settings are
+// needed because either one alone still leaves a path to the same prune:
+// maintenance.auto governs whether the detached run starts at all, and gc.auto
+// governs the task inside it that does the pruning.
+//
+// They are passed per command rather than written into the repository's config,
+// because the repository belongs to whoever is developing in it and its
+// maintenance is theirs to configure. That leaves a prune the harness did not
+// start — a person's `git gc`, or another tool's write command in the same
+// repository — able to hit the same window, which is a thing to know about a
+// repository under a harness rather than something this can fence.
+var maintenanceOptions = []string{"-c", "maintenance.auto=false", "-c", "gc.auto=0"}
+
 type Manager struct {
 	runner                execution.ProcessRunner
 	gitBinary             string
@@ -374,7 +397,7 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	// worktree bookkeeping. Creation queues from here so a run is never lost to
 	// another one's half-written registration; the lease is held through the
 	// verification below, which reads that same bookkeeping.
-	lease, err := m.leaseCreation(ctx)
+	lease, err := m.leaseRegistry(ctx)
 	if err != nil {
 		return Worktree{}, err
 	}
@@ -1422,6 +1445,20 @@ func (m *Manager) removeIntegratedWorktree(ctx context.Context, worktree Worktre
 			return Cleanup{}, errors.New("refusing to remove a dirty worktree")
 		}
 	}
+	// A removal unregisters an entry in the same unguarded pieces an add writes
+	// one, so it queues on the same lease: a creation that reached a half-deleted
+	// entry would exit rather than create anything, which is the run this lease
+	// exists to stop losing. It is held through the verification below, which
+	// reads the bookkeeping the removal just wrote.
+	lease, err := m.leaseRegistry(ctx)
+	if err != nil {
+		return Cleanup{}, err
+	}
+	// Releasing is this process letting the next write in, and the operating
+	// system does it anyway when the process exits. A close that failed therefore
+	// says nothing about the worktree below, which either exists or does not.
+	defer func() { _ = lease.release() }()
+
 	removed, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "remove", path)
 	if err != nil {
 		return Cleanup{}, err
@@ -1653,7 +1690,7 @@ func (m *Manager) remoteTimeout() time.Duration {
 func (m *Manager) runBounded(ctx context.Context, environment []string, timeout time.Duration, args ...string) (execution.ProcessResult, error) {
 	result, err := m.runner.Run(ctx, execution.Command{
 		Name:    m.gitBinary,
-		Args:    args,
+		Args:    append(append([]string(nil), maintenanceOptions...), args...),
 		Env:     environment,
 		Timeout: timeout,
 	}, nil)
