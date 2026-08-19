@@ -1,0 +1,277 @@
+package artifact
+
+// The operator's approval of a document, recorded against the revision it was
+// given for.
+//
+// An approval given in conversation is a fact about a person that nothing on
+// disk holds. Everything downstream of the goals then has to treat an approved
+// goal and a draft one as the same document, because they are the same document:
+// the only difference between them lived in a chat log nobody reads
+// programmatically. Recording it is what makes the difference readable, and
+// recording it against a revision is what keeps it honest — an approval that
+// named only the artifact would still read as current after the document was
+// rewritten underneath it, which is the failure this exists to prevent.
+//
+// So an approval names the revision it was given for, the revision log is
+// append-only, and an index into it always means the same change. An artifact
+// amended after its approval is therefore distinguishable from one still
+// approved, by arithmetic rather than by judgement: the approved revision is no
+// longer the last one.
+//
+// # What this deliberately does not do
+//
+// Nothing here moves a gate. An unapproved artifact still loads, still governs
+// what is downstream of it, and stops nothing; an amendment after approval does
+// not retire the document, change its status, or refuse anything. Approval and
+// lifecycle status are kept apart on purpose — the status says what the document
+// is to the product, and the approval says what the operator agreed to and
+// when — because a record that silently deactivated a document the moment its
+// owner corrected a sentence would be a gate nobody asked this to add.
+//
+// Who approves is not a role. Every artifact is drafted by the role that owns
+// it, so an approval a role could record would be that role approving its own
+// document; approval of what the product is for is the operator's, and it is
+// recorded as theirs. That is also why recording one does not go through
+// Authorize, which is the boundary between roles: the operator is not one of
+// them, and holding the operator to a role's ownership would be the wrong
+// boundary in the wrong direction.
+//
+// What requires approval at all is the project's decision rather than this
+// package's. Policy carries the `approvals` configuration into the terms this
+// package thinks in, so what needs approving is what the configuration says
+// needs approving.
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+)
+
+// Approver is who gave an approval. It is a closed set of one because the
+// approval that matters here is a person's: a harness able to record itself as
+// the approver would be approving the intent it was given, which is the one
+// signature this record exists to carry.
+type Approver string
+
+// ApproverOperator is the person the harness works for.
+const ApproverOperator Approver = "operator"
+
+func (a Approver) Valid() bool { return a == ApproverOperator }
+
+// Approval is one recorded approval: which revision of the document was
+// approved, who approved it, when, and how the approval was given.
+type Approval struct {
+	// Revision is the index into the artifact's revision log that was approved.
+	// It is an index rather than a copy of the revision because the log is
+	// append-only: an index names one change for good, and a copy could disagree
+	// with the entry it claims to be.
+	Revision int      `yaml:"revision" json:"revision"`
+	By       Approver `yaml:"by" json:"by"`
+	// At is when the approval was recorded. That is usually when it was given and
+	// is not always — an approval given in conversation is recorded afterwards —
+	// so this is the time the harness can honestly attest to, and when it was
+	// actually given belongs in the reason, where a person says it.
+	At time.Time `yaml:"at" json:"at"`
+	// Reason is how the approval was given and what it covered — the conversation
+	// it was given in, the amendment it was given for. It is required, for the
+	// same reason a revision's is and a stronger one: this record speaks for a
+	// person, and an approval nobody can trace back to how they gave it is a claim
+	// the harness made on their behalf.
+	Reason string `yaml:"reason" json:"reason"`
+}
+
+// Validate reports every contract violation in the approval at once. Whether
+// the revision it names exists is checked by the artifact, which is the only
+// thing that holds the log the index points into.
+func (a Approval) Validate() error {
+	var problems []error
+	if a.Revision < 0 {
+		problems = append(problems, fmt.Errorf("revision %d is not an index into a revision log", a.Revision))
+	}
+	if !a.By.Valid() {
+		problems = append(problems, fmt.Errorf("by %q must be %q; approval of what the product is for is the operator's", a.By, ApproverOperator))
+	}
+	if a.At.IsZero() {
+		problems = append(problems, errors.New("at is required"))
+	}
+	switch reason := strings.TrimSpace(a.Reason); {
+	case reason == "":
+		problems = append(problems, errors.New("reason is required, saying how the approval was given"))
+	case len(reason) > MaxReasonBytes:
+		problems = append(problems, fmt.Errorf("reason is %d bytes, limit is %d", len(reason), MaxReasonBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// ApprovalState is what a document's approval amounts to as it now stands. The
+// three are separated because they are three different things to do: get the
+// operator's approval, get it again for what changed, or nothing.
+type ApprovalState string
+
+const (
+	// ApprovalUnapproved records no approval at all.
+	ApprovalUnapproved ApprovalState = "unapproved"
+	// ApprovalApproved is approved as it stands: the last revision recorded is the
+	// one the operator approved.
+	ApprovalApproved ApprovalState = "approved"
+	// ApprovalAmended was approved and has been amended since. The approval still
+	// stands for what it was given for, and the document as it now reads is not
+	// what was approved.
+	ApprovalAmended ApprovalState = "amended"
+)
+
+// LatestApproval returns the most recent approval recorded against an artifact,
+// and whether it has one. Approvals are recorded in the order they were given
+// and each names a later revision than the one before it, so the last entry is
+// the current one.
+func (a Artifact) LatestApproval() (Approval, bool) {
+	if len(a.Approvals) == 0 {
+		return Approval{}, false
+	}
+	return a.Approvals[len(a.Approvals)-1], true
+}
+
+// ApprovalState reports whether the document as it now stands is what the
+// operator approved.
+func (a Artifact) ApprovalState() ApprovalState {
+	latest, approved := a.LatestApproval()
+	switch {
+	case !approved:
+		return ApprovalUnapproved
+	case latest.Revision >= len(a.Revisions)-1:
+		return ApprovalApproved
+	default:
+		return ApprovalAmended
+	}
+}
+
+// RevisionsSinceApproval counts the revisions recorded after the approved one,
+// which is how much of the document has moved since the operator saw it. It is
+// zero for an artifact that is approved as it stands and for one that was never
+// approved, because in neither case is there an approval something has drifted
+// from.
+func (a Artifact) RevisionsSinceApproval() int {
+	if a.ApprovalState() != ApprovalAmended {
+		return 0
+	}
+	latest, _ := a.LatestApproval()
+	return len(a.Revisions) - 1 - latest.Revision
+}
+
+// approvalProblems reports what makes a recorded approval unusable: one that
+// names a revision the artifact does not have, and one recorded out of order.
+// Both are refusals rather than reports, unlike a revision recorded under the
+// wrong role: an approval that points nowhere says nothing about the document
+// at all, and reading it as an approval would be worse than reading it as
+// missing.
+func (a Artifact) approvalProblems() []error {
+	var problems []error
+	previous := -1
+	for index, approval := range a.Approvals {
+		if err := approval.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("approvals[%d]: %w", index, err))
+		}
+		switch {
+		case approval.Revision < 0:
+			// Already reported above, and nothing further can be said about an index
+			// that is not one.
+		case approval.Revision >= len(a.Revisions):
+			problems = append(problems, fmt.Errorf("approvals[%d] approves revision %d, and this artifact records %d",
+				index, approval.Revision, len(a.Revisions)))
+		case approval.Revision <= previous:
+			problems = append(problems, fmt.Errorf("approvals[%d] approves revision %d, which is not later than the revision approved before it; one revision is approved once, and approvals are recorded in the order they were given",
+				index, approval.Revision))
+		}
+		if approval.Revision > previous {
+			previous = approval.Revision
+		}
+	}
+	return problems
+}
+
+// Policy is what a project requires the operator's approval of: its `approvals`
+// configuration, in the terms this package thinks in. It is passed in rather
+// than read here because what requires approval is the project's decision and
+// this package's job is only to say what is recorded — which is also why an
+// artifact can be approved whether or not anything required it, and why nothing
+// here refuses an artifact for being unapproved.
+type Policy struct {
+	Brief   domain.ApprovalMode
+	Goals   domain.ApprovalMode
+	Designs domain.ApprovalMode
+}
+
+// Setting returns the configured approval that governs a kind, named as it is
+// written in the configuration, and whether one governs it at all.
+func (p Policy) Setting(kind Kind) (name string, mode domain.ApprovalMode, governed bool) {
+	switch kind {
+	case KindBrief:
+		return "approvals.brief", p.Brief, true
+	case KindGoals, KindNonGoals:
+		// One setting governs both. The configuration states one, and what a
+		// project means by approving its goals is the pair: the non-goals are where
+		// the goals stop, and a bound on intent that nobody approved is as much an
+		// unapproved statement of intent as a goal is.
+		return "approvals.goals", p.Goals, true
+	case KindDesign, KindSpecification:
+		return "approvals.designs", p.Designs, true
+	default:
+		// A decision record is the architect's account of how something was
+		// decided rather than a statement of what the product should do, and no
+		// approval setting names one. That is stated here rather than left to fall
+		// out of a missing case: nothing requires approving it, deliberately.
+		return "", "", false
+	}
+}
+
+// Requires reports that the operator's approval of a kind is what this project
+// asked for.
+func (p Policy) Requires(kind Kind) bool {
+	_, mode, governed := p.Setting(kind)
+	return governed && mode == domain.ApprovalHuman
+}
+
+// Approve records the operator's approval of an artifact as it currently
+// stands, against the last revision its log carries.
+//
+// It deliberately does not go through Authorize. That boundary is between the
+// roles the harness runs, and the operator is not one of them: an approval an
+// owning role could record would be that role approving its own document. What
+// this writes is only the approval — the document's prose, its title, what it
+// supports, and its status are untouched, so an approval can never become a way
+// to edit a document by another name.
+func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
+	existing, path, body, err := s.loadOne(id)
+	if err != nil {
+		return Artifact{}, err
+	}
+	if ended, hasEnding := existing.Ended(); hasEnding {
+		return Artifact{}, fmt.Errorf("artifact %q was %s on %s and is not approved afterwards: %s",
+			id, ended.Action, ended.At.Format(time.RFC3339), ended.Reason)
+	}
+	if strings.TrimSpace(reason) == "" {
+		return Artifact{}, fmt.Errorf("approving artifact %q needs a reason saying how the approval was given; this record speaks for a person, and one that cannot be traced back to them is a claim made on their behalf", id)
+	}
+	revision := len(existing.Revisions) - 1
+	if latest, approved := existing.LatestApproval(); approved && latest.Revision >= revision {
+		return Artifact{}, fmt.Errorf("artifact %q is already approved as it stands, at revision %d on %s: %s",
+			id, latest.Revision, latest.At.Format(time.RFC3339), latest.Reason)
+	}
+	approved := existing
+	approved.Approvals = append(append([]Approval(nil), existing.Approvals...), Approval{
+		Revision: revision,
+		By:       ApproverOperator,
+		At:       now.UTC(),
+		Reason:   strings.TrimSpace(reason),
+	})
+	if err := approved.Validate(); err != nil {
+		return Artifact{}, err
+	}
+	if err := s.write(path, approved, body); err != nil {
+		return Artifact{}, err
+	}
+	return approved, nil
+}

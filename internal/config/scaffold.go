@@ -206,10 +206,19 @@ execution:
   # max_concurrent_developers or the checks are left to serialize themselves.
   check_timeout: %s
 
-# Conservative by default: integration and publishing are opted in to
-# separately. Automatic integration is refused unless it is actually gated by
-# the checks below and a reviewer agent, and publishing is what pushes a branch
-# and opens a pull request where other people can see it.
+# What you approve, and what runs without asking. The brief and the goals are
+# "human" deliberately: they are what you state, and everything else traces back
+# to them. "yoyo artifact approve <id>" records your approval in the document's
+# frontmatter, against the revision it was given for, so a document amended
+# afterwards reads as approved-and-amended-since rather than as approved. It
+# gates nothing -- an unapproved document still loads and still governs what is
+# downstream of it. Designs are "automatic" because a design serving an approved
+# goal is the architect's judgement about how.
+#
+# Integration and publishing are opted in to separately. Automatic integration is
+# refused unless it is actually gated by the checks below and a reviewer agent,
+# and publishing is what pushes a branch and opens a pull request where other
+# people can see it.
 approvals:
   brief: %s
   goals: %s

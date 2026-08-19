@@ -197,6 +197,23 @@ const (
 )
 
 type Approvals struct {
+	// Brief, Goals, and Designs decide which canonical documents the operator's
+	// approval is asked for. `human` means the operator approves the document and
+	// the approval is recorded against it, in its frontmatter and against the
+	// revision it was given for, so an approved document and a draft one are
+	// distinguishable and a document amended after approval is distinguishable
+	// from both. Neither setting gates anything: an unapproved document still
+	// loads and still governs what is downstream of it, and what is reported is
+	// what is recorded. Goals governs the non-goals with the goals, because a
+	// bound on intent nobody approved is as much unapproved intent as a goal is.
+	//
+	// The shipped bundle says `human` for the brief and the goals deliberately
+	// rather than by inheritance: they are what the operator states and the whole
+	// of what the design asks a person to approve routinely, and everything
+	// downstream traces to them. Designs are `automatic` for the same reason read
+	// the other way — a design that serves an approved goal is the architect's
+	// judgement about how, and asking a person to approve each one is the
+	// per-change gate autonomy is the absence of.
 	Brief       domain.ApprovalMode `yaml:"brief" json:"brief"`
 	Goals       domain.ApprovalMode `yaml:"goals" json:"goals"`
 	Designs     domain.ApprovalMode `yaml:"designs" json:"designs"`

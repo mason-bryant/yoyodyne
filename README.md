@@ -1442,6 +1442,28 @@ files claiming one id refuse both, each naming the other.
 ./bin/yoyo artifact show v1-goals
 ```
 
+Your approval of one of these documents lives in the same frontmatter, and it is
+recorded against the revision it was given for:
+
+```sh
+./bin/yoyo artifact approve v1-goals --reason "approved in conversation on 2026-08-17"
+```
+
+That is what makes an approved goal and a draft one different things to
+everything downstream, instead of two identical documents whose difference lived
+in a chat log. Because the approval names a revision and the revision log is
+append-only, a document amended after you approved it reads as
+approved-and-amended-since rather than as approved — the approval still stands
+for what you gave it for, and the document as it now reads is not that. What is
+asked of you is your configuration's to say: `approvals.brief` and
+`approvals.goals` are `human`, `approvals.designs` is `automatic`, and a decision
+record is an account of how something was decided rather than a statement of
+intent, so nothing asks you to approve one. None of it is a gate: an unapproved
+document still loads and still governs what is downstream of it, and approving
+writes nothing but the approval — the document itself stays the owning role's to
+change. The [configuration guide](docs/configuration.md#approving-a-document) has
+the schema and what is refused.
+
 A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given
 identity to yet says so. Nothing else changes for it: a specification with no

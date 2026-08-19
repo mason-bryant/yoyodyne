@@ -8,6 +8,11 @@ revisions:
       by: product-manager
       at: 2026-08-17T00:00:00Z
       reason: identity added with the artifact metadata schema; the prose is unchanged
+approvals:
+    - revision: 0
+      by: operator
+      at: 2026-08-19T00:43:34.14703Z
+      reason: Approved by the operator in conversation on 2026-08-17, before anything could record it; written down here by yoyodyne-ifd.1.8, which exists for that gap. The prose approved is what this revision carries.
 ---
 
 # Product brief

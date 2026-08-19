@@ -18,6 +18,11 @@ revisions:
       by: product-manager
       at: 2026-08-18T00:00:00Z
       reason: added the adoption goal, drafted by the product manager and approved by the operator with one amendment - the readme alone, not the documentation, is what a newcomer needs; the intro now dates each new goal honestly
+approvals:
+    - revision: 2
+      by: operator
+      at: 2026-08-19T00:43:34.381311Z
+      reason: 'Approved by the operator in conversation: the v1 goals on 2026-08-17, and the legibility and adoption goals added on 2026-08-18, each approved as the revisions above record. Written down here by yoyodyne-ifd.1.8.'
 ---
 
 # V1 goals

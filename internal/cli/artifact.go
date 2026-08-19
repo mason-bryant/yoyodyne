@@ -19,6 +19,14 @@ package cli
 // calls them yet, which is why the reporting above is the whole of what is live:
 // exposing them needs an answer to how a document's prose reaches a command,
 // which is not how anybody writes prose today.
+//
+// `approve` is here for the opposite reason, and is the one thing these commands
+// write. An approval is the operator's, the operator is who runs a command, and
+// what it records is a fact about them rather than prose about the product — so
+// unlike an amendment it needs no answer to how a document gets written, and
+// unlike a role's mutation it is nobody else's to make. It moves no gate:
+// nothing refuses an unapproved document, and amending an approved one changes
+// what is reported about it rather than what is allowed.
 
 import (
 	"flag"
@@ -32,10 +40,32 @@ import (
 )
 
 type artifactOutput struct {
-	Artifacts         []artifact.Artifact         `json:"artifacts,omitempty"`
+	Artifacts []artifact.Artifact `json:"artifacts,omitempty"`
+	// Approvals pairs each listed artifact with what is recorded about its
+	// approval and what the configuration asks for, keyed by artifact id. The
+	// state is reported rather than left to be derived, because "approved" and
+	// "approved at a revision that has been amended since" is exactly the
+	// distinction a reader needs and exactly the one that is easy to get wrong.
+	Approvals         map[string]artifactApproval `json:"approvals,omitempty"`
 	Problems          []artifact.Problem          `json:"problems,omitempty"`
 	ReferenceProblems []artifact.ReferenceProblem `json:"reference_problems,omitempty"`
 	Error             string                      `json:"error,omitempty"`
+}
+
+// artifactApproval is what a machine-readable listing says about one document's
+// approval.
+type artifactApproval struct {
+	State artifact.ApprovalState `json:"state"`
+	// Required is whether this project asked for the operator's approval of this
+	// kind of document, and Setting names the configuration that decided.
+	Required bool   `json:"required"`
+	Setting  string `json:"setting,omitempty"`
+	Mode     string `json:"mode,omitempty"`
+	// Approval is the most recent one recorded, absent when there is none.
+	Approval *artifact.Approval `json:"approval,omitempty"`
+	// RevisionsSinceApproval is how far the document has moved since, and is zero
+	// unless the state is amended.
+	RevisionsSinceApproval int `json:"revisions_since_approval,omitempty"`
 }
 
 func runArtifact(args []string, stdout, stderr io.Writer) int {
@@ -48,6 +78,8 @@ func runArtifact(args []string, stdout, stderr io.Writer) int {
 		return listArtifacts(args[1:], stdout, stderr)
 	case "show":
 		return showArtifact(args[1:], stdout, stderr)
+	case "approve":
+		return approveArtifact(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown artifact command %q\n\n", args[0])
 		printArtifactUsage(stderr)
@@ -61,7 +93,7 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 	if code, ok := flags.parse(args, 0); !ok {
 		return code
 	}
-	store, code := flags.store(stderr)
+	store, policy, code := flags.store(stderr)
 	if code != 0 {
 		return code
 	}
@@ -78,7 +110,12 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 		listed = set.OfKind(selected)
 	}
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, artifactOutput{Artifacts: listed, Problems: set.Problems, ReferenceProblems: set.ReferenceProblems})
+		return writeJSON(stdout, stderr, artifactOutput{
+			Artifacts:         listed,
+			Approvals:         artifactApprovals(listed, policy),
+			Problems:          set.Problems,
+			ReferenceProblems: set.ReferenceProblems,
+		})
 	}
 	if len(listed) == 0 {
 		fmt.Fprintf(stdout, "no artifacts are recorded in %s\n", strings.Join(set.Homes, ", "))
@@ -87,6 +124,7 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "%s [%s, %s] %s\n", recorded.ID, recorded.Kind, recorded.Status, recorded.Title)
 		fmt.Fprintf(stdout, "  file: %s\n", recorded.Path)
 		fmt.Fprintf(stdout, "  supports: %s\n", artifactSupports(recorded))
+		fmt.Fprintf(stdout, "  approval: %s\n", renderArtifactApproval(recorded, policy))
 	}
 	// A document in an artifact home that carries no usable identity is not an
 	// artifact anything can refer to, so it is named here rather than left to be
@@ -109,7 +147,7 @@ func showArtifact(args []string, stdout, stderr io.Writer) int {
 	if code, ok := flags.parse(args, 1); !ok {
 		return code
 	}
-	store, code := flags.store(stderr)
+	store, policy, code := flags.store(stderr)
 	if code != 0 {
 		return code
 	}
@@ -117,27 +155,74 @@ func showArtifact(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportArtifactError(stdout, stderr, *flags.jsonOutput, err)
 	}
-	found, ok := set.Find(flags.set.Arg(0))
+	found, ok := set.Find(flags.id())
 	if !ok {
 		return reportArtifactError(stdout, stderr, *flags.jsonOutput,
-			fmt.Errorf("no artifact %q is recorded in %s", flags.set.Arg(0), strings.Join(set.Homes, ", ")))
+			fmt.Errorf("no artifact %q is recorded in %s", flags.id(), strings.Join(set.Homes, ", ")))
 	}
 	problems := set.ReferenceProblemsFor(found.ID)
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, artifactOutput{Artifacts: []artifact.Artifact{found}, ReferenceProblems: problems})
+		return writeJSON(stdout, stderr, artifactOutput{
+			Artifacts:         []artifact.Artifact{found},
+			Approvals:         artifactApprovals([]artifact.Artifact{found}, policy),
+			ReferenceProblems: problems,
+		})
 	}
 	fmt.Fprintf(stdout, "%s [%s, %s] %s\n", found.ID, found.Kind, found.Status, found.Title)
 	fmt.Fprintf(stdout, "file: %s\n", found.Path)
-	fmt.Fprintf(stdout, "supports: %s\n\n", artifactSupports(found))
-	for _, revision := range found.Revisions {
+	fmt.Fprintf(stdout, "supports: %s\n", artifactSupports(found))
+	fmt.Fprintf(stdout, "approval: %s\n\n", renderArtifactApproval(found, policy))
+	for index, revision := range found.Revisions {
 		fmt.Fprintf(stdout, "%s %s by the %s: %s\n",
 			revision.At.UTC().Format(time.RFC3339), revision.Action, revision.By, revision.Reason)
+		// Each approval is printed under the revision it was given for, because
+		// which version of the document the operator saw is the whole of what
+		// distinguishes an approval that still stands from one that has been
+		// amended out from under.
+		for _, approval := range found.Approvals {
+			if approval.Revision == index {
+				fmt.Fprintf(stdout, "  approved by the %s %s: %s\n",
+					approval.By, approval.At.UTC().Format(time.RFC3339), approval.Reason)
+			}
+		}
 	}
 	// What this one document's place in the chain is wrong about, so somebody
 	// asking after a single artifact is told without reading the whole listing.
 	for _, problem := range problems {
 		fmt.Fprintf(stderr, "%s: %s\n", problem.Kind, problem.Reason)
 	}
+	return 0
+}
+
+// approveArtifact records that the operator approved a document as it now
+// stands. The revision it applies to is never asked for: it is the last one the
+// document records, so an approval cannot be recorded against a version of the
+// document nobody was looking at.
+func approveArtifact(args []string, stdout, stderr io.Writer) int {
+	flags := newArtifactFlags("artifact approve", stderr)
+	reason := flags.set.String("reason", "", "how this approval was given and what it covered; required")
+	if code, ok := flags.parse(args, 1); !ok {
+		return code
+	}
+	store, policy, code := flags.store(stderr)
+	if code != 0 {
+		return code
+	}
+	approved, err := store.Approve(flags.id(), *reason, time.Now())
+	if err != nil {
+		return reportArtifactError(stdout, stderr, *flags.jsonOutput, err)
+	}
+	listed := []artifact.Artifact{approved}
+	if *flags.jsonOutput {
+		return writeJSON(stdout, stderr, artifactOutput{Artifacts: listed, Approvals: artifactApprovals(listed, policy)})
+	}
+	fmt.Fprintf(stdout, "%s [%s, %s] %s\n", approved.ID, approved.Kind, approved.Status, approved.Title)
+	fmt.Fprintf(stdout, "file: %s\n", approved.Path)
+	fmt.Fprintf(stdout, "approval: %s\n", renderArtifactApproval(approved, policy))
+	// Said every time, because the one way this could quietly become something
+	// else is somebody reading an approval as a change to the document or as a
+	// gate that has now opened. It is neither.
+	fmt.Fprintln(stdout, "recorded in the document's frontmatter; nothing the document says changed, and no gate moved")
 	return 0
 }
 
@@ -148,6 +233,9 @@ type artifactFlags struct {
 	name       string
 	configPath *string
 	jsonOutput *bool
+	// args are the positional arguments, collected by parse rather than read off
+	// the flag set, because the flags may come after them.
+	args []string
 }
 
 func newArtifactFlags(name string, stderr io.Writer) *artifactFlags {
@@ -161,11 +249,25 @@ func newArtifactFlags(name string, stderr io.Writer) *artifactFlags {
 	}
 }
 
+// parse reads the flags and the positional arguments, in whatever order they
+// were typed. Go's flag package stops at the first word that is not a flag, so
+// `artifact approve brief --reason ...` would otherwise arrive as three
+// positional arguments and be refused for naming three artifacts — and an id
+// before the flags that describe what is being done to it is how anybody types
+// it.
 func (f *artifactFlags) parse(args []string, positional int) (int, bool) {
-	if err := f.set.Parse(args); err != nil {
-		return 2, false
+	remaining := args
+	for {
+		if err := f.set.Parse(remaining); err != nil {
+			return 2, false
+		}
+		if f.set.NArg() == 0 {
+			break
+		}
+		f.args = append(f.args, f.set.Arg(0))
+		remaining = f.set.Args()[1:]
 	}
-	if f.set.NArg() != positional {
+	if len(f.args) != positional {
 		if positional == 0 {
 			fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)
 		} else {
@@ -177,21 +279,38 @@ func (f *artifactFlags) parse(args []string, positional int) (int, bool) {
 	return 0, true
 }
 
+// id is the artifact a command was given, for the commands that take one.
+func (f *artifactFlags) id() string {
+	if len(f.args) == 0 {
+		return ""
+	}
+	return f.args[0]
+}
+
 // store resolves the artifact homes the same way every other command resolves
 // the repository: relative to the project rather than to the .yoyodyne
 // directory the configuration happens to live in.
-func (f *artifactFlags) store(stderr io.Writer) (artifact.Store, int) {
+func (f *artifactFlags) store(stderr io.Writer) (artifact.Store, artifact.Policy, int) {
 	resolved, err := loadConfiguration(*f.configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return artifact.Store{}, 1
+		return artifact.Store{}, artifact.Policy{}, 1
 	}
 	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), resolved.Config.Product.Repository)
 	if err != nil {
 		fmt.Fprintf(stderr, "resolve product repository: %v\n", err)
-		return artifact.Store{}, 1
+		return artifact.Store{}, artifact.Policy{}, 1
 	}
-	return artifactStore(repository, resolved.Config.Product), 0
+	return artifactStore(repository, resolved.Config.Product), artifactPolicy(resolved.Config.Approvals), 0
+}
+
+// artifactPolicy is the approvals configuration in the terms the artifact
+// package thinks in. What requires the operator's approval is decided by the
+// project's configuration rather than by the kind of document: a project that
+// says its designs need approving gets that, and one that says its goals do not
+// is told so rather than nagged.
+func artifactPolicy(approvals config.Approvals) artifact.Policy {
+	return artifact.Policy{Brief: approvals.Brief, Goals: approvals.Goals, Designs: approvals.Designs}
 }
 
 // artifactStore is how the configured directories become a store, in one place
@@ -224,8 +343,64 @@ func artifactSupports(recorded artifact.Artifact) string {
 	return strings.Join(recorded.Supports, ", ")
 }
 
+// renderArtifactApproval says what is recorded about one document's approval,
+// and what this project asked for. A document nobody approved is reported
+// differently depending on whether anything wanted it approved: an unapproved
+// brief is something for the operator to do, and an unapproved design in a
+// project whose designs are automatic is nothing at all.
+func renderArtifactApproval(recorded artifact.Artifact, policy artifact.Policy) string {
+	setting, mode, governed := policy.Setting(recorded.Kind)
+	latest, approved := recorded.LatestApproval()
+	if approved {
+		given := fmt.Sprintf("given by the %s %s, for revision %d",
+			latest.By, latest.At.UTC().Format(time.RFC3339), latest.Revision)
+		if recorded.ApprovalState() == artifact.ApprovalApproved {
+			return "approved as it stands, " + given
+		}
+		return fmt.Sprintf("approved and amended since — %s, and %s recorded after it, so the document as it now reads is not what was approved",
+			given, laterRevisions(recorded.RevisionsSinceApproval()))
+	}
+	switch {
+	case policy.Requires(recorded.Kind):
+		return fmt.Sprintf("none recorded, and %s is %s, so this document is yours to approve", setting, mode)
+	case governed:
+		return fmt.Sprintf("none recorded; %s is %s, so none is asked for", setting, mode)
+	default:
+		return fmt.Sprintf("none recorded; no approval setting governs a %s artifact", recorded.Kind)
+	}
+}
+
+func laterRevisions(count int) string {
+	if count == 1 {
+		return "one revision was"
+	}
+	return fmt.Sprintf("%d revisions were", count)
+}
+
+// artifactApprovals is the same reading as renderArtifactApproval, for a
+// machine: the state, what the configuration asked for, and the approval itself.
+func artifactApprovals(artifacts []artifact.Artifact, policy artifact.Policy) map[string]artifactApproval {
+	approvals := make(map[string]artifactApproval, len(artifacts))
+	for _, recorded := range artifacts {
+		setting, mode, governed := policy.Setting(recorded.Kind)
+		reported := artifactApproval{
+			State:                  recorded.ApprovalState(),
+			Required:               policy.Requires(recorded.Kind),
+			RevisionsSinceApproval: recorded.RevisionsSinceApproval(),
+		}
+		if governed {
+			reported.Setting, reported.Mode = setting, string(mode)
+		}
+		if latest, approved := recorded.LatestApproval(); approved {
+			reported.Approval = &latest
+		}
+		approvals[recorded.ID] = reported
+	}
+	return approvals
+}
+
 func printArtifactUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo artifact <list|show> [options]
+	fmt.Fprintln(writer, `Usage: yoyo artifact <list|show|approve> [options]
 
 The canonical documents upstream of a work item -- the product brief, the goals,
 the designs and specifications, and the decision records -- each carry a stable
@@ -246,13 +421,29 @@ decision records, so a revision log recording a change by any other role is name
 on stderr as an unauthorized revision. The document still loads: the log is
 append-only, and losing it would leave a document nobody could correct.
 
+Your approval of one of these documents is recorded in the same frontmatter,
+against the revision it was given for, so a document amended after you approved
+it reads as approved-and-amended-since rather than as approved. What needs your
+approval is your configuration's to say: approvals.brief and approvals.goals
+default to human, approvals.designs to automatic, and a decision record is the
+architect's account of a decision rather than a statement of intent, so nothing
+asks you to approve one.
+
+Recording an approval moves no gate. An unapproved document still loads, still
+governs what is downstream of it, and stops nothing; approving writes nothing but
+the approval, and the document itself stays the owning role's to change.
+
   list [--kind <kind>]   list the recorded artifacts, and name what is not one
   show <id>              print one artifact and its recorded revisions
+  approve <id>           record your approval of a document as it now stands
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)
   --json                emit machine-readable JSON
 
 list options:
-  --kind <kind>         brief, goals, non-goals, design, specification, or decision`)
+  --kind <kind>         brief, goals, non-goals, design, specification, or decision
+
+approve options:
+  --reason <text>       how the approval was given and what it covered; required`)
 }
