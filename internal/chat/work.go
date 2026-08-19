@@ -63,7 +63,15 @@ type Work interface {
 	// developer, checks, review, and integration under the project's configured
 	// policy. It returns what the run reported even when it failed, because a
 	// failed run's branch, worktree, and findings are what the operator acts on.
-	Run(ctx context.Context, workItemID string) (RunReport, error)
+	// The selection travels with it and is recorded on the run, so what shows up
+	// in a survey afterwards says why it was started rather than only that it was.
+	Run(ctx context.Context, workItemID string, selection Selection) (RunReport, error)
+	// RequestStop asks one run to stop, whichever process is working on it. It is
+	// a request rather than an act for the reason the whole design turns on: the
+	// process holding a run is the only thing entitled to end it, so this records
+	// the operator's decision where that process reads it and returns. What became
+	// of the run is then read like anything else, through Progress.
+	RequestStop(ctx context.Context, request StopRequest) error
 	// Progress reports where the harness's most recent run of one work item has
 	// got to, read from the durable run record. It is how a conversation learns
 	// that a run it started has crossed a phase without knowing anything about
@@ -159,6 +167,32 @@ type RunPrice struct {
 	Unknown string `json:"unknown,omitempty"`
 }
 
+// The two things that choose work, as a conversation names them. They are the
+// same words the durable record uses, kept here so a conversation does not have
+// to reach into how a run is stored to say who picked something.
+const (
+	OperatorSelected           = "operator"
+	DevelopmentManagerSelected = "development manager"
+)
+
+// Selection is why the harness is running a work item: who chose it and on what
+// grounds. It travels with the request to run and is recorded on the run, so a
+// survey afterwards can answer the question that has no answer at all once
+// something other than the operator does the choosing.
+type Selection struct {
+	By     string `json:"by"`
+	Reason string `json:"reason"`
+}
+
+// StopRequest is the operator asking one run to stop. It names the run rather
+// than only the item because that is what a stop is about: an item can have had
+// several runs, and the one being stopped is the one in flight now.
+type StopRequest struct {
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Reason     string `json:"reason,omitempty"`
+}
+
 // RunSnapshot is one run the harness has recorded and not finished. It is read
 // from durable run state rather than from this process, so a run another
 // process is working on is just as visible as one started here.
@@ -169,6 +203,16 @@ type RunSnapshot struct {
 	Phase      string    `json:"phase,omitempty"`
 	Branch     string    `json:"branch,omitempty"`
 	StartedAt  time.Time `json:"started_at"`
+	// SelectedBy and SelectedBecause are who chose this work and why, as the run
+	// recorded it when it started. Both empty is a run nothing accounted for, and
+	// a survey says exactly that rather than leaving the line out: work proceeding
+	// for no visible reason is the thing an operator most needs to see.
+	SelectedBy      string `json:"selected_by,omitempty"`
+	SelectedBecause string `json:"selected_because,omitempty"`
+	// StopRequested reports that the operator has asked this run to stop and it
+	// has not stopped yet, which is a fact about the run rather than about the
+	// request: a run stays in flight until it reaches a boundary and ends itself.
+	StopRequested bool `json:"stop_requested,omitempty"`
 	// Detail names anything about the run that its status does not say, such as
 	// the usage limit it is waiting out.
 	Detail string `json:"detail,omitempty"`
@@ -231,6 +275,13 @@ type RunReport struct {
 	// is a matter of waiting. It is the one pause that can appear without a run
 	// behind it, on work a directive stopped before it was ever claimed.
 	DirectivePause string `json:"directive_pause,omitempty"`
+	// IntakeHeldSince and IntakeHoldReason are set instead of any of the others
+	// when the work was never started because the operator is holding what the
+	// harness chooses for itself. It never appears on a run: nothing was claimed
+	// and nothing developed, so there is no worktree, no branch, and nothing to
+	// continue — only an item that was not picked up and says why.
+	IntakeHeldSince  *time.Time `json:"intake_held_since,omitempty"`
+	IntakeHoldReason string     `json:"intake_hold_reason,omitempty"`
 	// OperatorHeldSince is set instead of any of the others when what stopped the
 	// work was the operator pausing all harness activity. Like a directive pause
 	// it is lifted by a decision rather than by a clock, and it can appear with no
@@ -320,9 +371,17 @@ type Stopped struct {
 	// the cancellation reached it, whether or not that conclusion integrated
 	// anything. Nothing was stopped, and nothing pretends it was.
 	AlreadyFinished bool
-	Report          RunReport
-	RunErr          error
-	Settlements     []Settlement
+	// RunID names the run the stop was aimed at, and Requested reports a stop
+	// this conversation asked another process to carry out rather than performing
+	// itself. The two go together: a run this conversation started is cancelled
+	// here and there is nothing to identify, while a run somewhere else is asked,
+	// and what became of it is read from its record afterwards. Requested is what
+	// keeps the report honest about which of those happened.
+	RunID       string
+	Requested   bool
+	Report      RunReport
+	RunErr      error
+	Settlements []Settlement
 }
 
 // Render describes the survey for an operator. Every group is named even when
@@ -427,11 +486,38 @@ func renderRunSnapshots(theme console.Theme, runs []RunSnapshot) string {
 		} else {
 			fmt.Fprintf(&rendered, "    started %s\n", run.StartedAt.UTC().Format(time.RFC3339))
 		}
+		// Why the item was chosen is said for every run, including the ones nothing
+		// accounted for. It is the line that makes the difference between watching
+		// the harness work and watching it do something unexplained, so it is never
+		// the line that is quietly left out.
+		fmt.Fprintf(&rendered, "    %s\n", run.chosen())
+		if run.StopRequested {
+			fmt.Fprint(&rendered, theme.State(console.StateFailed,
+				"    you have asked this run to stop; it ends itself at its next provider call, and nothing has been thrown away yet\n"))
+		}
 		if run.Detail != "" {
 			fmt.Fprintf(&rendered, "    %s\n", singleLine(run.Detail, maxSurveyTitleBytes*2))
 		}
 	}
 	return rendered.String()
+}
+
+// chosen says why the harness is running this item. A run that recorded nothing
+// says so plainly rather than showing a blank: "nobody recorded why" is an
+// answer an operator can act on, and an omitted line is not.
+func (r RunSnapshot) chosen() string {
+	by := strings.TrimSpace(r.SelectedBy)
+	because := strings.TrimSpace(r.SelectedBecause)
+	switch {
+	case by == "" && because == "":
+		return "chosen by: nothing recorded why this run was started"
+	case because == "":
+		return "chosen by " + by + ", with no reason recorded"
+	case by == "":
+		return "chosen, by nobody recorded: " + singleLine(because, maxSurveyTitleBytes*2)
+	default:
+		return "chosen by the " + by + ": " + singleLine(because, maxSurveyTitleBytes*2)
+	}
 }
 
 // state names where a run is: its status, and the phase it reached when the
@@ -699,6 +785,17 @@ func (r RunReport) Headline() string {
 		item = "the work item"
 	}
 	switch {
+	case r.Paused && r.IntakeHeldSince != nil:
+		// Intake is held, so the harness declined to choose this item. It is the
+		// one pause an operator can walk straight past: nothing is running, nothing
+		// is claimed, and naming the item themselves runs it anyway — which is the
+		// distinction between holding what the harness picks and pausing everything.
+		held := fmt.Sprintf("%s was not started because you are holding intake, since %s",
+			item, r.IntakeHeldSince.UTC().Format(time.RFC3339))
+		if reason := strings.TrimSpace(r.IntakeHoldReason); reason != "" {
+			held += " (" + singleLine(reason, maxSurveyTitleBytes*2) + ")"
+		}
+		return held + fmt.Sprintf("; nothing is running it and nothing was claimed, /release lets the harness choose work again, and /work %s runs it now regardless", item)
 	case r.Paused && r.OperatorHeldSince != nil:
 		// The operator paused everything rather than this, so this says what they
 		// did and what undoes it. It never claims a run is in flight: a paused
@@ -827,6 +924,14 @@ func (s Stopped) Render() string {
 		return ""
 	}
 	if !s.Finished {
+		if s.Requested {
+			// The request is durable and the run is somewhere else, so this is not a
+			// failure and there is nothing to type again: the run stops at its next
+			// provider call, and what it kept until then it still has.
+			fmt.Fprintf(&rendered, "asked %s to stop; it had not given up by the time this stopped waiting, so it is still in flight and stops at its next provider call.\n", s.WorkItemID)
+			rendered.WriteString(indent("/status says whether it has, and what it left behind is settled the next time anything settles."))
+			return rendered.String()
+		}
 		fmt.Fprintf(&rendered, "%s was asked to stop but has not given up yet; it is left in flight and can be settled once it does.\n", s.WorkItemID)
 		return rendered.String()
 	}

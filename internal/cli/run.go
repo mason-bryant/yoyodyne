@@ -49,6 +49,12 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	if err != nil {
 		return reportRunResult(stdout, stderr, *jsonOutput, orchestrator.Outcome{}, err)
 	}
+	// The operator typed the identifier, so the run records that as why it exists.
+	// It is worth recording even though it is obvious to whoever typed it: what an
+	// operator reads later is a list of runs, and one that says nothing about why
+	// it was chosen is indistinguishable from one the harness chose unaccountably.
+	pipeline.Selection = runstate.OperatorSelection(
+		"the operator ran this item by name from the command line", time.Now())
 	outcome, err := pipeline.Run(ctx, flags.Arg(0))
 	return reportRunResult(stdout, stderr, *jsonOutput, outcome, err)
 }
@@ -88,7 +94,12 @@ type components struct {
 	// provider. It is built on the state root itself rather than under the
 	// product, because one switch pauses the machine: what makes an operator pause
 	// is an account or an afternoon, neither of which belongs to a product.
-	holds        *runstate.OperatorHoldStore
+	holds *runstate.OperatorHoldStore
+	// intake is the operator's switch over the work the harness chooses for
+	// itself. It is built under the product rather than on the state root,
+	// because unlike the hold above it is about one backlog: holding what a
+	// development manager may pull from this product must leave another alone.
+	intake       *runstate.IntakeHoldStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -147,6 +158,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	intake, err := runstate.NewIntakeHoldStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -168,6 +183,7 @@ func buildComponents(configPath string) (components, error) {
 		branchReviews: branchReviews,
 		directives:    directives,
 		holds:         holds,
+		intake:        intake,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
@@ -247,6 +263,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// prompt for the same reason a directive is: a paused harness is not
 		// something an agent weighs.
 		Holds: parts.holds,
+		// The operator's hold on the work the harness chooses for itself, read
+		// where a run would be started for a reason other than the operator naming
+		// the item. It stops nothing already under way, which is the whole reason
+		// it is a second switch rather than part of the first.
+		Intake: parts.intake,
 		// A change an agent proposes to a document it may not edit is recorded
 		// here, for the same reason and in the same way: the run that argued the
 		// design was wrong is over long before anybody decides what to do about it,
@@ -372,7 +393,12 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// The operator's hold is the other pause that can have no run behind it,
 		// and it is reported on its own terms for the same reason: what lifts it is
 		// one command, and nothing about this work item has anything to do with it.
-		if outcome.PausedByOperator != nil {
+		// A held intake is the third pause with no run behind it, and the one that
+		// never applies to work an operator named: it is reported on its own terms
+		// so nothing describes it as a run waiting on a provider.
+		if outcome.PausedByIntake != nil {
+			reportIntakeHold(stdout, outcome)
+		} else if outcome.PausedByOperator != nil {
 			reportOperatorHold(stdout, stderr, outcome, err)
 		} else if outcome.PausedByDirective != nil {
 			reportDirectivePause(stdout, outcome)
@@ -584,6 +610,24 @@ func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, 
 		// so what failed is named beside it rather than in place of it.
 		fmt.Fprintf(stderr, "the pause is in force; this could not be fully reported: %v\n", err)
 	}
+}
+
+// reportIntakeHold names work the harness declined to choose because the
+// operator is holding intake. Nothing was claimed and nothing developed, so it
+// names no run, no branch, and no worktree: sending an operator to look for
+// artifacts nothing made is the failure every pause report here avoids.
+//
+// It always says the two ways out, because they are genuinely different
+// decisions: lift the hold and let the harness choose again, or leave it in force
+// and name this item yourself, which the hold was never over.
+func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
+	fmt.Fprintf(stdout, "INTAKE HELD: the harness starts nothing on its own, since %s\n",
+		outcome.PausedByIntake.HeldAt.Format(time.RFC3339))
+	if reason := strings.TrimSpace(outcome.PausedByIntake.Reason); reason != "" {
+		fmt.Fprintln(stdout, reason)
+	}
+	fmt.Fprintf(stdout, "nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
 }
 
 // reportCollectedReports names what this run's agents reported without it

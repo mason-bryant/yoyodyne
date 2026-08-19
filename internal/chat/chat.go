@@ -126,6 +126,11 @@ type Options struct {
 	// before the switch existed, rather than one that quietly ignores a pause it
 	// could have read.
 	Holds OperatorHolds
+	// Intake is the operator's switch over the work the harness chooses for
+	// itself: what a development manager may pull, as opposed to what the operator
+	// names. It is optional like the rest, and a conversation without one says it
+	// cannot hold intake rather than appearing to have held it.
+	Intake IntakeHolds
 	// Amendments is the durable log of changes other roles have proposed to
 	// documents they do not own. It is read here so the ones this role owns reach
 	// it: an owner that never hears the argument cannot answer it. It is optional

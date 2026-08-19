@@ -334,6 +334,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// invocation, so `yoyo pause` covers this conversation exactly as it covers
 		// the work steered from it.
 		Holds: parts.holds,
+		// The operator's switch over the work the harness chooses for itself, so
+		// holding intake is something they can do from the conversation they are
+		// already in rather than from a second tool.
+		Intake: parts.intake,
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.

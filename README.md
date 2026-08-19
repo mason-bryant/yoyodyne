@@ -676,7 +676,11 @@ everything else is said to the product manager:
 /refresh                 re-read the repository and tracker into this conversation
 /work <beads-id>         run one work item now, while you keep talking
 /wait                    wait for the run this conversation started and report it
-/stop [reason]           stop that run and settle what it left behind
+/stop [beads-id] [reason]  stop one item's run wherever it is running, and settle what it left
+/hold [reason]           stop the harness starting anything more on its own; running work carries on
+/release                 let the harness start work on its own again
+/intake                  whether the harness may start work on its own, and why not
+/stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
 /directives              what you have directed, and what is still unresolved
 /directive <what you have decided>
@@ -690,10 +694,12 @@ everything else is said to the product manager:
 A slash means the same thing in `yoyo chat --message`: the harness carries the
 command out and the product manager is never asked, because she cannot carry out
 a command and a turn spent trying is a turn you paid for. The four that only
-mean something inside a conversation — `/work`, `/wait`, `/stop`, and `/exit` with its alias `/quit`,
+mean something inside a conversation — `/work`, `/wait`, a bare `/stop`, and `/exit` with its alias `/quit`,
 each of which starts or acts on a run the conversation's own process owns — are
 refused there and say what to reach for instead, rather than being half carried
-out by a process that is about to exit. With `--json` what the command printed
+out by a process that is about to exit. `/stop <beads-id>` is not one of them: it
+reads durable state and asks whichever process holds the run, so it means exactly
+the same thing in a single message. With `--json` what the command printed
 is a field of its own, so nothing reads as something the product manager said.
 
 `/backlog` shows the ordering the product manager set, which is the one thing a
@@ -727,7 +733,12 @@ incompletely.
 checks, reviewer, and integration policy — in the background, so the
 conversation stays a conversation. One run at a time. `/status` reads durable
 run state and the tracker, so a run another process is executing is as visible
-as one started here, and a run that is owed a continuation rather than working —
+as one started here. Every run it lists says why that item was chosen, in the
+words whoever chose it recorded when the run started, and a run that recorded
+nothing is named as one nothing accounts for rather than shown with the line
+missing — an item running for no visible reason is the thing you most need to
+see, and it is indistinguishable from work happening behind your back. A run that
+is owed a continuation rather than working —
 one waiting out a provider usage limit, one whose provider was stopped on time,
 or one [paused for an unresolved directive](#directives-and-the-work-they-pause)
 — is named as such rather than reported as progress. On a terminal a
@@ -774,6 +785,41 @@ Either way the conversation's own log says what happened rather than only what
 was asked for: the stop is recorded as a request when you make it, and the run's
 outcome — what it left behind, or the integration that beat the cancellation —
 is recorded once it is known.
+
+`/stop <beads-id>` stops that item's run wherever it is running, including in a
+process this conversation has nothing to do with, which is what stopping has to
+mean once work starts without you asking for it item by item. The difference is
+only in who does the cancelling. A run this process owns is cancelled here. A run
+somewhere else is *asked*: the request is written beside the run, the process
+working on it reads that at its next provider call and ends the run there, and
+this waits for the run's own record to say so before reporting anything. So the
+report is about the run rather than about the request. A run that gives up is
+reported as stopped and what it left is settled exactly as above. A run that
+reached its own conclusion first is reported as having finished before the stop
+arrived, with nothing recorded on the item and nothing settled. And a run that
+has not given up by the time the grace runs out is reported as still in flight,
+stopping at its next provider call, with nothing it had thrown away — because a
+provider invocation already streaming is never interrupted. That generation is
+already paid for, and killing it would leave the run needing the same work again,
+which is the cost that makes killing processes the wrong verb in the first place.
+
+`/hold` is the narrower verb and the one with no equivalent before now: it stops
+the harness *choosing* new work, and lets everything already running finish. It
+is what you reach for when the queue looks wrong but nothing is on fire. It holds
+nothing you name yourself — `/work <beads-id>` still runs an item under it, since
+you placed the hold and naming something is you deciding it is the exception —
+and `/release` lets the harness choose again. A held intake leads `/status` with
+its own banner saying when it was placed and why, beneath the PAUSED banner if
+both are in force. It is recorded per product, unlike
+[`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
+manager may pull is a fact about one backlog.
+
+`/stop-everything` is the third and bluntest: it holds intake so nothing more
+starts, and then stops every run in flight, settling what each leaves. The order
+matters — holding first is what stops it becoming a race against the next item
+being started while the last one is being stopped. It reports what became of each
+run rather than what was asked of it, and one run that could not be stopped never
+hides the others.
 
 `/show` prints one work item in full — its status, priority, parent,
 dependencies, description, design, acceptance criteria, and notes — through the
@@ -1801,6 +1847,13 @@ provider's refusals are allowed to spend: a hold never eats a run's
 thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
 `/status` lead with a PAUSED banner naming when the pause was placed, because a
 system somebody paused and forgot looks exactly like a system that died.
+
+This is the broad switch, and there is a narrow one beside it. `yoyo pause` stops
+everything including the runs already under way, which park keeping everything
+they have; the conversation's [`/hold`](#steering-the-work-from-the-conversation)
+stops only the harness choosing new work and lets what is running finish. Reach
+for the first when the reason is your account or your afternoon, and the second
+when the reason is the queue.
 
 ### Waiting out a provider usage limit
 
