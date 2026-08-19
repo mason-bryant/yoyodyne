@@ -1,0 +1,185 @@
+package slack
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// The two tokens authenticate different things, and swapping them is the
+// failure that looks like a workspace problem: posting with the app token is
+// refused, and opening a connection with the bot token is refused, and neither
+// says which token was wrong.
+func TestEachCallCarriesTheTokenThatAuthenticatesIt(t *testing.T) {
+	t.Parallel()
+
+	var seen []string
+	api := newTestAPI(t, func(writer http.ResponseWriter, request *http.Request) {
+		seen = append(seen, request.URL.Path+" "+request.Header.Get("Authorization"))
+		switch {
+		case strings.HasSuffix(request.URL.Path, "chat.postMessage"):
+			writeJSON(writer, map[string]any{"ok": true, "ts": "1755.0001"})
+		case strings.HasSuffix(request.URL.Path, "apps.connections.open"):
+			writeJSON(writer, map[string]any{"ok": true, "url": "wss://slack.test/link"})
+		default:
+			writeJSON(writer, map[string]any{"ok": true})
+		}
+	})
+
+	if _, err := api.Post(context.Background(), Message{Channel: "C1", Text: "said"}); err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	if _, err := api.OpenConnection(context.Background()); err != nil {
+		t.Fatalf("OpenConnection() error = %v", err)
+	}
+	want := []string{"/api/chat.postMessage Bearer xoxb-test", "/api/apps.connections.open Bearer xapp-test"}
+	if len(seen) != len(want) || seen[0] != want[0] || seen[1] != want[1] {
+		t.Fatalf("calls = %q, want %q", seen, want)
+	}
+}
+
+// A post carries the thread it belongs in and the identity it speaks under.
+// Losing the thread timestamp is what turns one thread per topic into a channel
+// of loose messages.
+func TestAPostCarriesItsThreadAndItsSpeaker(t *testing.T) {
+	t.Parallel()
+
+	var request postRequest
+	api := newTestAPI(t, func(writer http.ResponseWriter, incoming *http.Request) {
+		body, _ := io.ReadAll(incoming.Body)
+		if err := json.Unmarshal(body, &request); err != nil {
+			t.Errorf("Unmarshal() error = %v", err)
+		}
+		if contentType := incoming.Header.Get("Content-Type"); !strings.HasPrefix(contentType, "application/json") {
+			t.Errorf("Content-Type = %q, want JSON", contentType)
+		}
+		writeJSON(writer, map[string]any{"ok": true, "ts": "1755.0002"})
+	})
+
+	ts, err := api.Post(context.Background(), Message{
+		Channel: "C1", Text: "the checks passed", ThreadTS: "1755.0001",
+		Username: "developer", IconEmoji: ":hammer_and_wrench:",
+	})
+	if err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	if ts != "1755.0002" {
+		t.Fatalf("Post() = %q, want the timestamp Slack gave the message", ts)
+	}
+	if request.ThreadTS != "1755.0001" || request.Username != "developer" || request.IconEmoji != ":hammer_and_wrench:" {
+		t.Fatalf("request = %#v, want the thread and the speaker carried", request)
+	}
+}
+
+// Slack refuses with HTTP 200 and `ok: false`. A client that read the status
+// code alone would record every refusal as a message that was posted.
+func TestARefusalIsNotASuccessfulPost(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+		writeJSON(writer, map[string]any{"ok": false, "error": "not_in_channel"})
+	})
+	_, err := api.Post(context.Background(), Message{Channel: "C1", Text: "said"})
+	if err == nil {
+		t.Fatal("Post() = nil, want the refusal reported")
+	}
+	// A channel the app was never invited to is not fixed by trying again, and
+	// a sink that retried it would say the same thing every few seconds forever.
+	if !PermanentError(err) {
+		t.Fatalf("PermanentError(%v) = false, want a refusal an operator has to fix", err)
+	}
+}
+
+// A rate limit is Slack asking for a pause rather than refusing the work, so it
+// is waited out inside the call rather than turned into a failed pass.
+func TestARateLimitIsWaitedOutRatherThanFailed(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			writer.Header().Set("Retry-After", "2")
+			writer.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		writeJSON(writer, map[string]any{"ok": true, "ts": "1755.0003"})
+	})
+	var waited time.Duration
+	api.sleep = func(_ context.Context, d time.Duration) error {
+		waited += d
+		return nil
+	}
+
+	if _, err := api.Post(context.Background(), Message{Channel: "C1", Text: "said"}); err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want the call repeated once the wait was over", attempts)
+	}
+	if waited != 2*time.Second {
+		t.Fatalf("waited = %s, want the wait Slack asked for", waited)
+	}
+	// A header asking for an hour must park the call rather than the process.
+	if bounded := retryAfter("100000"); bounded != maxRetryAfter {
+		t.Fatalf("retryAfter() = %s, want it bounded at %s", bounded, maxRetryAfter)
+	}
+}
+
+// An empty message says nothing, and a message with nowhere to go cannot be
+// posted. Both are refused before a request is made rather than by Slack.
+func TestNothingIsPostedWithoutAChannelAndSomethingToSay(t *testing.T) {
+	t.Parallel()
+
+	api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+		t.Error("no request should have been made")
+		writeJSON(writer, map[string]any{"ok": true, "ts": "1"})
+	})
+	if _, err := api.Post(context.Background(), Message{Text: "said"}); err == nil {
+		t.Fatal("Post() without a channel = nil, want a refusal")
+	}
+	if _, err := api.Post(context.Background(), Message{Channel: "C1", Text: "  "}); err == nil {
+		t.Fatal("Post() with an empty body = nil, want a refusal")
+	}
+	if _, err := NewAPI("", "xapp-test"); err == nil {
+		t.Fatal("NewAPI() without a bot token = nil, want a refusal")
+	}
+	if _, err := NewAPI("xoxb-test", ""); err == nil {
+		t.Fatal("NewAPI() without an app token = nil, want a refusal")
+	}
+}
+
+// newTestAPI builds a client whose requests are served by a handler in this
+// process. The sandbox this suite runs in has no network at all, so the
+// transport is replaced rather than the server bound to a port: the request
+// shapes, the headers, and the decoding are all the real ones.
+func newTestAPI(t *testing.T, handler http.HandlerFunc) *API {
+	t.Helper()
+	api, err := NewAPI("xoxb-test", "xapp-test")
+	if err != nil {
+		t.Fatalf("NewAPI() error = %v", err)
+	}
+	api.client = &http.Client{Transport: handlerTransport{handler: handler}}
+	api.sleep = func(context.Context, time.Duration) error { return nil }
+	return api
+}
+
+type handlerTransport struct {
+	handler http.Handler
+}
+
+func (t handlerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	recorder := httptest.NewRecorder()
+	t.handler.ServeHTTP(recorder, request)
+	return recorder.Result(), nil
+}
+
+func writeJSON(writer http.ResponseWriter, value any) {
+	writer.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(writer).Encode(value)
+}

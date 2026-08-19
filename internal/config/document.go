@@ -23,6 +23,7 @@ type configDocument struct {
 	Approvals *approvalsDocument       `yaml:"approvals"`
 	Checks    *[]string                `yaml:"checks"`
 	Agents    map[string]agentDocument `yaml:"agents"`
+	Slack     *slackDocument           `yaml:"slack"`
 }
 
 type productDocument struct {
@@ -55,6 +56,16 @@ type approvalsDocument struct {
 	Designs     *domain.ApprovalMode `yaml:"designs"`
 	Integration *domain.ApprovalMode `yaml:"integration"`
 	Publishing  *domain.ApprovalMode `yaml:"publishing"`
+}
+
+type slackDocument struct {
+	Enabled *bool   `yaml:"enabled"`
+	Channel *string `yaml:"channel"`
+	// Operators replaces an inherited allow-list entirely rather than adding to
+	// it, for the reason the check list does: an allow-list is a decision about
+	// who may steer the harness, and one silently concatenated from two layers
+	// is not the list either layer wrote.
+	Operators *[]string `yaml:"operators"`
 }
 
 type agentDocument struct {

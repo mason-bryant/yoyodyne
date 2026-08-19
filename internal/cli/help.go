@@ -34,6 +34,7 @@ func commandHelp() string {
 		printReviewUsage,
 		printCostUsage,
 		printReconcileUsage,
+		printSlackUsage,
 	}
 	var rendered strings.Builder
 	for index, print := range printers {

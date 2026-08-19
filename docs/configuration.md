@@ -1456,7 +1456,52 @@ These are all errors, reported before any work is claimed:
   architect on the Codex backend;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
-  configured developer instances, or automatic integration with no checks.
+  configured developer instances, or automatic integration with no checks;
+- `slack.enabled` with no `slack.channel`, a channel that is not a channel id or
+  name, or an operator that is not a Slack user id — checked whether or not
+  reporting is switched on, so a typo is found now rather than on the day
+  somebody turns it on.
+
+## Reporting to Slack
+
+`yoyo slack` reports what the harness is doing into a Slack channel: one thread
+per work item, one message per milestone, and every report an agent filed at the
+severity it was filed under. The project says where to report and who may
+eventually steer it; nothing else about reporting is configurable here.
+
+```yaml
+slack:
+  enabled: true
+  channel: C0123456789   # a channel id, or a #name
+  operators:             # optional, and inert today
+    - U01234567
+```
+
+The whole block is optional, and a project that omits it reports nothing — which
+is every project until it opts in. `channel` takes a channel id or a name;
+an id is worth preferring because renaming the channel does not break it.
+
+`operators` is the allow-list of Slack user ids whose thread replies the harness
+will act on once the inbound half is built. **Nothing reads a reply today.** It
+is here rather than in the environment because a user id is identity rather than
+a secret, it defaults to empty so enabling reporting never enables anybody to
+steer the harness by accident, and an override replaces an inherited list
+outright rather than merging into it — a list concatenated from two layers is
+not the list either layer wrote.
+
+**The credentials are not here and must never be.** The sink reads
+`SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from its own process environment and
+from nowhere else: never from this file, never from a work item, never from a
+prompt. That is what keeps the boundary structural rather than behavioral — one
+separate process posts, so no run process, and therefore no agent's subprocess
+tree, has a Slack token in its environment at all. Exporting them in a shell
+profile every process inherits would undo exactly that, so export them in the
+shell you start `yoyo slack` from.
+
+Reporting is an observation and never a gate: a workspace that is down, slow, or
+misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup.md)
+takes a workspace from nothing to live reporting, and the app manifest it asks
+for is checked in beside it.
 
 ## Personas
 

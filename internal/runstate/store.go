@@ -424,6 +424,14 @@ func (s *Store) Outstanding() ([]State, error) {
 	return s.scan("outstanding", func(state State) bool { return state.Outstanding() })
 }
 
+// Recorded lists every run the harness holds for this product, whatever became
+// of them. It is for a reader that has to notice change rather than act on it —
+// the reporting sink is the first — and it decides nothing about what it reads:
+// a run a live process owns is listed exactly as a finished one is.
+func (s *Store) Recorded() ([]State, error) {
+	return s.scan("recorded", func(State) bool { return true })
+}
+
 // Latest reports the most recently started run recorded for one work item,
 // whatever became of it. It is how somebody asks what the harness last did to a
 // piece of work without holding, adopting, or otherwise deciding anything about

@@ -258,6 +258,14 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "approvals.integration", approvals.Integration, &r.config.Approvals.Integration, applied.origin)
 		setValue(r.origins, "approvals.publishing", approvals.Publishing, &r.config.Approvals.Publishing, applied.origin)
 	}
+	if slack := document.Slack; slack != nil {
+		setValue(r.origins, "slack.enabled", slack.Enabled, &r.config.Slack.Enabled, applied.origin)
+		setValue(r.origins, "slack.channel", slack.Channel, &r.config.Slack.Channel, applied.origin)
+		if slack.Operators != nil {
+			r.config.Slack.Operators = append([]string(nil), (*slack.Operators)...)
+			r.origins["slack.operators"] = applied.origin
+		}
+	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate
 	// either layer described.

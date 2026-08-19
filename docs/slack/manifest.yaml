@@ -1,0 +1,72 @@
+# The Slack app Yoyodyne reports through.
+#
+# This is a Slack app manifest: paste it into
+# https://api.slack.com/apps → "Create New App" → "From an app manifest", and
+# Slack creates the app with exactly the scopes, settings, and event
+# subscriptions below. It is checked in so the app an operator installs is
+# reviewed with the code rather than assembled by hand from a list of checkboxes
+# — two workspaces set up a month apart get the same app.
+#
+# Setting it up from nothing is docs/slack/setup.md, beside this file.
+#
+# The scopes are the least the design needs, and each is here for one reason:
+#
+#   chat:write             post messages. Without it the sink reports nothing.
+#   chat:write.customize   post under a per-message name and icon, so one
+#                          channel can carry more than one speaker rather than
+#                          everything arriving from one bot. Each role speaks
+#                          under its own name and face, and what no persona did
+#                          arrives from the harness itself; without this scope
+#                          the voice would be the only thing telling them apart.
+#   channels:history       read replies in the thread the sink opened, in public
+#                          channels. Nothing acts on a reply today: the sink
+#                          acknowledges what arrives so Slack stops redelivering
+#                          it and does no more. The scope is declared now so the
+#                          inbound half is a feature flag rather than a
+#                          reinstall, and an operator who does not want it yet
+#                          can remove it and the two message events below.
+#   groups:history         the same, for a private channel.
+#
+# Socket Mode is on and there is no request URL, which is the point: the harness
+# runs on operators' machines behind NAT, and the Events API would demand a
+# public HTTPS endpoint per operator.
+display_information:
+  name: Yoyodyne
+  description: Reports what the Yoyodyne harness is doing, one thread per work item.
+  long_description: |
+    Yoyodyne runs development work on your own machine: it claims a work item,
+    develops it, runs the checks, has it reviewed, and promotes it. This app is
+    how that work is visible while it happens. One thread per work item, one
+    message per milestone, and every report an agent files at the severity it
+    was filed under. Each role speaks under its own name, in its own voice, and
+    what no persona did arrives from the harness itself.
+
+    It reports and does not act. Messages are read from the harness's own
+    durable records by a process you start yourself, so nothing here can change
+    what the harness does, and a workspace that is down delays messages rather
+    than losing them.
+  background_color: "#1f2933"
+features:
+  bot_user:
+    display_name: yoyodyne
+    # The harness is not a person waiting to be messaged: it posts when
+    # something happens and is otherwise quiet.
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write
+      - chat:write.customize
+      - channels:history
+      - groups:history
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.channels
+      - message.groups
+  interactivity:
+    # Buttons and menus are a control surface, and this app is a reporting one.
+    is_enabled: false
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
