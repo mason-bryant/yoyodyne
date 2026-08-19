@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -77,6 +78,62 @@ func TestAdmittedWorkRecordsTheGoalItResolvedTo(t *testing.T) {
 	// resolves to the goal it was admitted under.
 	if !options.Goals.AttributionOf(tracker.created[0].Notes).Resolved() {
 		t.Fatalf("the admitted item does not resolve to a goal: %q", tracker.created[0].Notes)
+	}
+}
+
+func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
+	t.Parallel()
+
+	// A decomposition is the development manager's only creation, and the goal it
+	// names has to survive exactly as an admission's does. The audit reads an
+	// item's goal off the notes the tracker holds, so a creation that validated
+	// the goal and then wrote it nowhere would orphan every child of every
+	// decomposition — silently, because the action itself reported success, and at
+	// scale, because decomposition is where most items now come from.
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.102": {ID: "yoyodyne-ifd.102", Title: "Blocked-run triage", Status: "open"},
+	}}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("One child, under the admitted item.",
+			`{"action":"create","title":"Triage docket","description":"Stopped work reaches the development manager.","goal":"`+recordedGoal+`","parent":"yoyodyne-ifd.102","priority":1,"reason":"nothing routes stopped work today"}`)},
+		{SessionID: "session-1", FinalText: "Filed."},
+	}})
+	options.Role = domain.RoleDevelopmentManager
+	options.Agent = string(domain.RoleDevelopmentManager)
+	options.Tracker = tracker
+	options.Goals = recordedGoals(recordedGoal)
+
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	reply, err := session.Send(context.Background(), "decompose ifd.102")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if len(tracker.created) != 1 || tracker.created[0].Parent != "yoyodyne-ifd.102" {
+		t.Fatalf("created = %#v", tracker.created)
+	}
+
+	// The assertion is made against what the tracker hands back rather than
+	// against what it was handed, because that is the direction the audit reads
+	// in: an attribution that only exists in the request is one nobody can find.
+	child, err := tracker.Show(context.Background(), reply.Actions[0].WorkItemID)
+	if err != nil {
+		t.Fatalf("Show(%q) error = %v", reply.Actions[0].WorkItemID, err)
+	}
+	attribution := options.Goals.AttributionOf(child.Notes)
+	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
+		t.Fatalf("the decomposition child does not resolve to a goal: %#v\nnotes:\n%s", attribution, child.Notes)
+	}
+	// The provenance and the goal are one note, and the goal is the part that has
+	// been lost before: an item recording only who created it says nothing about
+	// what the work is for.
+	if !strings.Contains(child.Notes, "Created under yoyodyne-ifd.102, decomposing it") {
+		t.Fatalf("the child lost its provenance:\n%s", child.Notes)
 	}
 }
 

@@ -1239,11 +1239,22 @@ func (f *fakeTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.W
 		return beads.WorkItem{}, f.err
 	}
 	f.created = append(f.created, item)
-	return beads.WorkItem{
+	// The item is kept, notes and all, so a test can read back what a creation
+	// actually left on it rather than only what it asked for. What a creation
+	// writes is where an item's goal lives, and every later read of it — the
+	// attribution audit first — finds it there or finds nothing.
+	created := beads.WorkItem{
 		ID:     fmt.Sprintf("yoyodyne-%d", len(f.created)),
 		Title:  item.Title,
 		Parent: item.Parent,
-	}, nil
+		Status: "open",
+		Notes:  item.Notes,
+	}
+	if f.items == nil {
+		f.items = map[string]beads.WorkItem{}
+	}
+	f.items[created.ID] = created
+	return created, nil
 }
 
 func (f *fakeTracker) Update(_ context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error) {
