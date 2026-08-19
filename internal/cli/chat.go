@@ -99,6 +99,13 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 // which role they address and in nothing else, so they share this rather than
 // growing two conversations that drift apart.
 type conversationRequest struct {
+	// agentName is the configured agent the operator named, and is empty when
+	// they named none. It is carried rather than resolved back from the role
+	// because a role two agents fill has no single answer: an operator who named
+	// one of them must reach that one, with its persona and its model, and a
+	// command that resolved the role again would silently reach whichever sorted
+	// first.
+	agentName  string
 	configPath string
 	message    string
 	fresh      bool
@@ -108,7 +115,7 @@ type conversationRequest struct {
 // converse holds one conversation with one role: a single message and its reply,
 // or the interactive conversation the operator stays inside.
 func converse(ctx context.Context, role domain.AgentRole, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
-	session, lease, err := openChat(ctx, role, request.configPath, request.fresh, stderr)
+	session, lease, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, stderr)
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
@@ -239,7 +246,7 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // mean the same thing in every conversation. What differs between roles is what
 // the role itself may ask for, and that is the contract and the authority table
 // in the chat package rather than anything decided here.
-func openChat(ctx context.Context, role domain.AgentRole, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
+func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
@@ -250,15 +257,15 @@ func openChat(ctx context.Context, role domain.AgentRole, configPath string, fre
 	cfg := parts.config
 	repository := parts.repository
 
-	agent := agentForRole(cfg, role)
-	if agent.Role != role {
-		return nil, nil, fmt.Errorf("no %s agent is configured; there is nobody to talk to", role)
+	name, agent, err := conversationAgent(cfg, role, agentName)
+	if err != nil {
+		return nil, nil, err
 	}
 	if agent.Backend != domain.BackendClaudeCode {
-		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the configured %s backend is %q", role, agent.Backend)
+		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
-		return nil, nil, fmt.Errorf("%s agent %s", role, err)
+		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)
 	}
 
 	processRunner := parts.runner
@@ -334,7 +341,7 @@ func openChat(ctx context.Context, role domain.AgentRole, configPath string, fre
 		Goals:        goals,
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
-		Agent:        agentNameForRole(cfg, role),
+		Agent:        name,
 		Provider:     domain.BackendClaudeCode,
 		Repository:   repository,
 		ProductID:    cfg.Product.ID,
@@ -352,6 +359,32 @@ func openChat(ctx context.Context, role domain.AgentRole, configPath string, fre
 		return nil, nil, errors.Join(err, lease.Release())
 	}
 	return session, lease, nil
+}
+
+// conversationAgent picks the agent a conversation is actually held with, and
+// is the one place that decision is made. A named agent is used as named, so an
+// operator who picked one of two architects gets that one's persona and model
+// rather than whichever the role happens to resolve to; a conversation that
+// names none takes the agent filling the role, which is what `yoyo chat` has
+// always done. An agent named for one role and configured for another is
+// refused rather than quietly answered by the wrong contract, because the role
+// decides the authority and the name decides the persona and they must agree.
+func conversationAgent(cfg config.Config, role domain.AgentRole, name string) (string, config.AgentConfig, error) {
+	if strings.TrimSpace(name) == "" {
+		resolved := agentNameForRole(cfg, role)
+		if resolved == "" {
+			return "", config.AgentConfig{}, fmt.Errorf("no %s agent is configured; there is nobody to talk to", role)
+		}
+		return resolved, cfg.Agents[resolved], nil
+	}
+	agent, configured := cfg.Agents[name]
+	if !configured {
+		return "", config.AgentConfig{}, fmt.Errorf("no agent named %q is configured; `yoyo agent list` names them", name)
+	}
+	if agent.Role != role {
+		return "", config.AgentConfig{}, fmt.Errorf("agent %s fills the %s role, not %s", name, agent.Role, role)
+	}
+	return name, agent, nil
 }
 
 // chatTracker is the work-item client a conversation acts through: it reads the

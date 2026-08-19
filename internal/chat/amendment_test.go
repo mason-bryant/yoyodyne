@@ -322,3 +322,45 @@ func (f *fakeAmendmentLog) List() ([]amendment.Record, error) {
 	}
 	return f.records, nil
 }
+
+// The other half of the same routing: a change proposed against a design is the
+// architect's to answer, and it reaches the architect's conversation rather than
+// stopping at the operator. Both halves are asserted because ownership routing
+// that only ever withholds is indistinguishable from delivering nothing at all.
+func TestProposalsAgainstTheDesignsReachTheArchitect(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{FinalText: "the design is right as written", SessionID: "session-1"},
+	}}
+	options := testOptions(t, provider)
+	options.Role = domain.RoleArchitect
+	options.Amendments = &fakeAmendmentLog{records: []amendment.Record{
+		{Proposal: ptr(testDesignProposal("amendment-fedcba9876543210fedcba9876543210"))},
+		// The product manager's to answer, so the architect is never handed it.
+		{Proposal: ptr(testGoalsProposal("amendment-0123456789abcdef0123456789abcdef"))},
+	}}
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := session.Send(context.Background(), "what do you make of it?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	prompt := provider.requests[0].Prompt
+	if !strings.Contains(prompt, "Changes proposed to documents you own") {
+		t.Fatalf("the architect was never told what was proposed against its designs:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "v1-design") {
+		t.Fatalf("the design proposal did not reach the architect:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "v1-goals") {
+		t.Fatalf("a proposal addressed to the product manager reached the architect:\n%s", prompt)
+	}
+	// The architect can no more decide one than the product manager can: the
+	// owner argues, and the operator records the decision.
+	if !strings.Contains(prompt, "You cannot decide one from here") {
+		t.Fatalf("the architect was not told it cannot decide the proposal:\n%s", prompt)
+	}
+}

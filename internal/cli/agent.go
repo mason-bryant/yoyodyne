@@ -209,6 +209,23 @@ func showAgent(args []string, stdout, stderr io.Writer) int {
 }
 
 func chatWithAgent(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	role, request, code := agentConversationRequest(args, stderr)
+	if code != 0 {
+		return code
+	}
+	return converse(ctx, role, request, stdin, stdout, stderr)
+}
+
+// agentConversationRequest turns the command line into the conversation it asks
+// for: which role answers, and which configured agent fills it. Both travel on,
+// because the role decides the contract and the agent decides the persona and
+// the model — resolving the name here and looking the role up again later would
+// address whichever agent sorted first in a project that configured two.
+//
+// It is separate from holding the conversation so that what the operator named
+// is checked before a lease is taken or a provider is started, and so that what
+// it resolved can be tested without either.
+func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole, conversationRequest, int) {
 	flags := flag.NewFlagSet("agent chat", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
@@ -216,41 +233,38 @@ func chatWithAgent(ctx context.Context, args []string, stdin io.Reader, stdout, 
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
 	if err := flags.Parse(args); err != nil {
-		return 2
+		return "", conversationRequest{}, 2
 	}
 	if flags.NArg() != 1 {
 		fmt.Fprintln(stderr, "name the agent to talk to, as `yoyo agent chat <name>`; `yoyo agent list` names them")
-		return 2
+		return "", conversationRequest{}, 2
 	}
 	if *jsonOutput && *message == "" {
 		fmt.Fprintln(stderr, "agent chat --json requires --message: an interactive conversation has no single result to encode")
-		return 2
+		return "", conversationRequest{}, 2
 	}
 
-	// The configuration is resolved twice — once to turn the name into a role,
-	// and once inside the conversation itself — because naming an agent that
-	// does not exist should say so before a provider is started or a lease is
-	// taken.
 	resolved, err := loadConfiguration(*configPath)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return "", conversationRequest{}, 1
 	}
-	_, role, err := resolveAgent(resolved.Config, flags.Arg(0))
+	name, role, err := resolveAgent(resolved.Config, flags.Arg(0))
 	if err != nil {
 		fmt.Fprintln(stderr, err)
-		return 1
+		return "", conversationRequest{}, 1
 	}
 	if _, known := chat.AuthorityFor(role); !known {
 		fmt.Fprintf(stderr, "the harness holds no conversation contract for role %q, so there is nothing to say to it\n", role)
-		return 1
+		return "", conversationRequest{}, 1
 	}
-	return converse(ctx, role, conversationRequest{
+	return role, conversationRequest{
+		agentName:  name,
 		configPath: *configPath,
 		message:    *message,
 		fresh:      *fresh,
 		jsonOutput: *jsonOutput,
-	}, stdin, stdout, stderr)
+	}, 0
 }
 
 // readAgents reports every configured agent with whatever durable state it has.
@@ -304,26 +318,39 @@ func readAgents(parts components) ([]agentReport, error) {
 		default:
 			report.Problem = err.Error()
 		}
-		report.InUse = conversationInUse(store, agent.Role)
+		inUse, problem := conversationInUse(store, agent.Role)
+		report.InUse = inUse
+		if problem != "" {
+			report.Problem = appendProblem(report.Problem, problem)
+		}
 		reports = append(reports, report)
 	}
 	return reports, nil
 }
 
 // conversationInUse reports whether another process is holding this role's
-// conversation. It answers by taking the same lease a conversation would and
-// letting it go again immediately: an advisory lock is the only thing that
-// actually decides this, so asking it is the only answer that is not a guess.
-func conversationInUse(store *runstate.ConversationStore, role domain.AgentRole) bool {
+// conversation, and why the question could not be answered when it could not.
+// It answers by taking the same lease a conversation would and letting it go
+// again immediately: an advisory lock is the only thing that actually decides
+// this, so asking it is the only answer that is not a guess.
+//
+// A failure to ask is not an answer. Reporting one as "in use" would tell the
+// operator that every agent at once was mid-conversation whenever the state
+// directory could not be opened, which is both wrong and the opposite of what
+// they would do about it.
+func conversationInUse(store *runstate.ConversationStore, role domain.AgentRole) (bool, string) {
 	lease, err := store.Hold(role)
-	if err != nil {
-		return true
+	switch {
+	case errors.Is(err, runstate.ErrConversationHeld):
+		return true, ""
+	case err != nil:
+		return false, err.Error()
 	}
 	// A lease that cannot be released leaves this process holding it until it
 	// exits, which is the safe direction: a one-shot command exits immediately
 	// and the operating system drops the lock with it.
 	_ = lease.Release()
-	return false
+	return false, ""
 }
 
 // readRunsInFlight reports the runs that have not finished, which is what the

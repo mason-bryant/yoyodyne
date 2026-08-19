@@ -972,7 +972,10 @@ comes from. Every other configured agent is reachable the same way:
 ```
 
 The name is either the agent's configured name or the role it fills, and a role
-two agents fill is a question rather than a request: name the one you mean.
+two agents fill is a question rather than a request: name the one you mean. The
+name you give is the agent that answers — its persona and its model, not its
+sibling's — and the role it fills is what decides its authority. `yoyo chat`
+names none, so it takes the agent filling the product-manager role.
 
 **Each agent is a durable logical identity, not a process.** The provider that
 answers a turn is started for that turn and gone afterwards; what survives it is
@@ -997,7 +1000,10 @@ design becomes tracked work. It decomposes: every item it creates hangs under an
 item the product manager already admitted, and the harness refuses a creation
 that names no parent. It cannot admit work, cannot reorder the backlog, and has
 no close or retire — so a decomposition can never quietly become new scope, and
-the backlog's order stays the product manager's. Work it discovers that belongs
+the backlog's order stays the product manager's. What it created is recorded as
+what it was: the item's own notes say it was created under its parent,
+decomposing it, rather than admitted to the backlog, so the two acts stay
+distinguishable long after the conversation that made one of them is gone. Work it discovers that belongs
 elsewhere it says to you, for the product manager to admit.
 
 The architect owns the designs, the decision records, and the invariants, and it

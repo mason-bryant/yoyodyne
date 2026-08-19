@@ -277,3 +277,134 @@ func TestEachRoleIsGivenTheDocumentsItAnswersFor(t *testing.T) {
 		}
 	}
 }
+
+// twoArchitectsConfig is the case the whole name-versus-role distinction exists
+// for: one role, two agents, different personas and different models. Addressing
+// one of them by name has to reach that one.
+const twoArchitectsConfig = `version: 1
+product:
+  id: yoyodyne
+  repository: .
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+checks:
+  - go test ./...
+agents:
+  house-architect:
+    role: architect
+    backend: claude-code
+    model: fable
+  visiting-architect:
+    role: architect
+    backend: claude-code
+    model: claude-opus-5-20260514
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+`
+
+// The agent an operator named is the agent that answers. The role decides the
+// contract and the authority; the name decides the persona and the model, and a
+// command that resolved the name to a role and then looked the role up again
+// would reach whichever sibling sorted first with no sign that it had.
+func TestNamingAnAgentAddressesThatAgentRatherThanItsRole(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, twoArchitectsConfig)
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		t.Fatalf("loadConfiguration() error = %v", err)
+	}
+	cfg := resolved.Config
+
+	// The sibling that is not named is the one the role alone resolves to, so a
+	// conversation that reached it would be indistinguishable from one that
+	// ignored the name. That is what makes the assertions below discriminating.
+	if agentNameForRole(cfg, domain.RoleArchitect) != "house-architect" {
+		t.Fatalf("the role resolves to %q, so this test proves nothing", agentNameForRole(cfg, domain.RoleArchitect))
+	}
+
+	// What the command line resolved travels on to the conversation: the name as
+	// well as the role, because the role alone cannot say which of the two.
+	var stderr strings.Builder
+	role, request, code := agentConversationRequest(
+		[]string{"--config", configPath, "--message", "which one are you?", "visiting-architect"}, &stderr)
+	if code != 0 {
+		t.Fatalf("agentConversationRequest() code = %d, stderr = %q", code, stderr.String())
+	}
+	if role != domain.RoleArchitect || request.agentName != "visiting-architect" {
+		t.Fatalf("resolved role %q and agent %q", role, request.agentName)
+	}
+	if request.message != "which one are you?" || request.configPath != configPath {
+		t.Fatalf("request = %#v", request)
+	}
+
+	// And the conversation is built from that agent: its model, and its persona.
+	name, agent, err := conversationAgent(cfg, role, request.agentName)
+	if err != nil {
+		t.Fatalf("conversationAgent() error = %v", err)
+	}
+	if name != "visiting-architect" || agent.Model != "claude-opus-5-20260514" {
+		t.Fatalf("conversationAgent() = %q, model %q", name, agent.Model)
+	}
+
+	// A conversation that names no agent — `yoyo chat`, and every role with one
+	// agent — still takes the one filling the role.
+	name, agent, err = conversationAgent(cfg, domain.RoleArchitect, "")
+	if err != nil || name != "house-architect" || agent.Model != "fable" {
+		t.Fatalf("conversationAgent(unnamed) = %q, model %q, err = %v", name, agent.Model, err)
+	}
+
+	// A name and a role that disagree are refused rather than resolved to one of
+	// them: the role decides the contract, the name decides the persona, and a
+	// conversation whose two halves came from different agents is not one
+	// anybody asked for.
+	if _, _, err := conversationAgent(cfg, domain.RoleDeveloper, "house-architect"); err == nil {
+		t.Fatal("conversationAgent() accepted an agent that fills another role")
+	}
+	if _, _, err := conversationAgent(cfg, domain.RoleArchitect, "nobody"); err == nil {
+		t.Fatal("conversationAgent() accepted an agent nobody configured")
+	}
+	if _, _, err := conversationAgent(cfg, domain.RoleReviewer, ""); err == nil {
+		t.Fatal("conversationAgent() invented an agent for an unfilled role")
+	}
+}
+
+// Failing to ask whether a conversation is held is not the same as being told
+// that it is. An unreadable state directory reported as "in use" would tell the
+// operator every agent was mid-conversation at once, which is both wrong and the
+// opposite of what they would act on.
+func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewConversationStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	inUse, problem := conversationInUse(store, domain.RoleArchitect)
+	if inUse || problem != "" {
+		t.Fatalf("a free conversation reported in use = %v, problem = %q", inUse, problem)
+	}
+
+	// Held by this process, which is what another process holding it looks like
+	// from outside.
+	lease, err := store.Hold(domain.RoleArchitect)
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	defer lease.Release()
+	if inUse, problem = conversationInUse(store, domain.RoleArchitect); !inUse || problem != "" {
+		t.Fatalf("a held conversation reported in use = %v, problem = %q", inUse, problem)
+	}
+
+	// A role whose name could never be a path is the failure to ask: it is
+	// refused before any lock is taken, so it is a problem to report rather than
+	// a conversation to claim.
+	if inUse, problem = conversationInUse(store, "Not A Role"); inUse || problem == "" {
+		t.Fatalf("an unaskable lease reported in use = %v, problem = %q", inUse, problem)
+	}
+}

@@ -283,4 +283,67 @@ func TestTheDevelopmentManagerDecomposesAdmittedWork(t *testing.T) {
 	if len(tracker.links) != 1 || tracker.links[0] != [2]string{"yoyodyne-ifd.4.7", "yoyodyne-ifd.4.6"} {
 		t.Fatalf("links = %#v", tracker.links)
 	}
+
+	// What the item records, and what the operator is told, both say what the
+	// act actually was. The development manager cannot admit work, so a
+	// creation described as an admission would attribute to it the one thing the
+	// harness refuses to let it do — and the item would carry that claim durably,
+	// long after this conversation is gone.
+	notes := tracker.created[0].Notes
+	for _, want := range []string{
+		"Created under yoyodyne-ifd.4, decomposing it",
+		"by the development manager in conversation",
+	} {
+		if !strings.Contains(notes, want) {
+			t.Fatalf("the item's provenance is missing %q:\n%s", want, notes)
+		}
+	}
+	if strings.Contains(notes, "Admitted to the backlog") {
+		t.Fatalf("a decomposition was recorded as an admission:\n%s", notes)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleDevelopmentManager, reply.Actions)
+	if !strings.Contains(rendered, "decomposed yoyodyne-ifd.4 into yoyodyne-1") {
+		t.Fatalf("the operator was not told this was a decomposition:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "admitted") {
+		t.Fatalf("the operator was told a decomposition was an admission:\n%s", rendered)
+	}
+}
+
+// The product manager's creation is the act the development manager's is not,
+// and it keeps saying so: this is what the role-dependent verb is measured
+// against, so a change that made every creation read the same way fails here
+// rather than passing quietly.
+func TestTheProductManagerAdmitsWorkToTheBacklog(t *testing.T) {
+	t.Parallel()
+
+	answer := "Filing it.\n\n" +
+		"```yoyodyne-tracker\n" +
+		`{"actions":[{"action":"create","title":"Add the role authority table","description":"What each role may ask for, in Go.","goal":"` + recordedGoal + `","priority":1,"reason":"the operator asked for it"}]}` +
+		"\n```"
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{}}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: answer},
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Filed."},
+	}})
+	options.Tracker = tracker
+	options.Goals = recordedGoals(recordedGoal)
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	reply, err := session.Send(context.Background(), "Add an item for the authority table.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("created %d item(s), want 1", len(tracker.created))
+	}
+	if !strings.Contains(tracker.created[0].Notes, "Admitted to the backlog by the product manager") {
+		t.Fatalf("the admission was not recorded as one:\n%s", tracker.created[0].Notes)
+	}
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
+	if !strings.Contains(rendered, "admitted yoyodyne-1 to the backlog at priority 1") {
+		t.Fatalf("the admission was not reported as one:\n%s", rendered)
+	}
 }

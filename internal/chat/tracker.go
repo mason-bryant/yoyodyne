@@ -678,6 +678,14 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// later action is an item that sits at whatever the tracker defaults to
 		// until somebody remembers it. A creation that says nothing about priority
 		// is still a creation, and the tracker's default then places it.
+		//
+		// What the creation is called depends on who made it, because two
+		// different acts reach this one call. The product manager admitting work
+		// puts something in the backlog that was not there; a role that may only
+		// create underneath an admitted parent is decomposing what is already
+		// there. Recording both as an admission would say the development manager
+		// did the one thing the harness refuses to let it do.
+		creation := s.creationVerb(action.parent())
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
@@ -685,7 +693,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// The goal is written onto the item rather than only checked as it goes
 			// past, because an item in the queue that does not say what it is for is
 			// exactly the work nobody can later decide to stop doing.
-			Notes:    s.trackerProvenance("Admitted to the backlog", action.Reason) + "\n\n" + goal.Note(action.Goal),
+			Notes:    s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal),
 			Parent:   action.parent(),
 			Priority: action.Priority,
 		})
@@ -695,11 +703,11 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		}
 		outcome.WorkItemID = created.ID
 		if action.Priority != nil {
-			outcome.applied("admitted %s to the backlog at priority %d: %s",
-				created.ID, *action.Priority, singleLine(created.Title, maxSurveyTitleBytes))
+			outcome.applied("%s at priority %d: %s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes))
 			return
 		}
-		outcome.applied("admitted %s to the backlog: %s", created.ID, singleLine(created.Title, maxSurveyTitleBytes))
+		outcome.applied("%s: %s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes))
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -834,6 +842,46 @@ func (o *TrackerOutcome) fail(err error) {
 // in the same closed state, and an item that does not say which it was is one
 // nobody can tell apart from work that landed.
 const retiredWithoutBeingDone = "Retired from the backlog without being done"
+
+// creation names what a creation actually was: the note written onto the item
+// and the line the operator reads. The two are kept together so an item's
+// durable record and the account the operator was given can never describe the
+// same act differently.
+type creation struct {
+	note string
+	// applied renders the line the operator reads, given the identifier the
+	// tracker assigned. It is a function rather than a format string because
+	// what it interpolates includes a parent identifier, and text that came from
+	// somewhere else is never a format.
+	applied func(id string) string
+}
+
+// creationVerb decides which of the two acts this creation is. A role that may
+// only create underneath an admitted parent cannot admit work — the authority
+// table refuses a parentless creation before this is reached — so what it did is
+// decomposition, and it is recorded as decomposition. A parent is named where
+// there is one, because "created under what" is the whole of what makes a
+// decomposition auditable.
+func (s *Session) creationVerb(parent string) creation {
+	if !s.authority().ParentRequired {
+		return creation{
+			note:    "Admitted to the backlog",
+			applied: func(id string) string { return "admitted " + id + " to the backlog" },
+		}
+	}
+	if parent == "" {
+		// Unreachable while the authority table refuses it, and stated rather than
+		// assumed: a decomposition that lost its parent is still not an admission.
+		return creation{
+			note:    "Created as decomposition",
+			applied: func(id string) string { return "created " + id },
+		}
+	}
+	return creation{
+		note:    "Created under " + parent + ", decomposing it",
+		applied: func(id string) string { return "decomposed " + parent + " into " + id },
+	}
+}
 
 // trackerProvenance is what an item records about a change an agent made to it.
 // The role is named as well as the conversation and the turn, for the same

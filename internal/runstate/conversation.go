@@ -32,6 +32,13 @@ const ConversationSchemaVersion = 1
 // caller starts one instead of resuming.
 var ErrNoConversation = errors.New("role has no recorded conversation")
 
+// ErrConversationHeld reports that another process holds the conversation. It
+// is a sentinel because "somebody else is talking to this agent" and "the state
+// directory could not be read" lead to opposite conclusions, and a caller that
+// cannot tell them apart reports a broken state root as a conversation in
+// progress.
+var ErrConversationHeld = errors.New("already held by another process")
+
 // Conversation is the durable record of one operator conversation with an
 // agent. It exists so a conversation survives the process that held it: the
 // provider session identifier is what a later process resumes from, and the
@@ -217,7 +224,7 @@ func (s *ConversationStore) Hold(role domain.AgentRole) (*Lease, error) {
 	}
 	if !held {
 		file.Close()
-		return nil, fmt.Errorf("the %s conversation is already held by another process", role)
+		return nil, fmt.Errorf("the %s conversation is %w", role, ErrConversationHeld)
 	}
 	return &Lease{file: file}, nil
 }
