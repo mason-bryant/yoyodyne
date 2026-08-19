@@ -133,7 +133,25 @@ type ProductRequest struct {
 	// that could run a command to find out would be reading the implementation
 	// rather than a description of it.
 	CommandHelp string
-	MaxBytes    int
+	// RoleDocuments are the directories of documents this role reads beyond the
+	// specifications: the architect's designs and decision records, and whatever
+	// else a role needs to answer for what it owns. The product manager supplies
+	// none, and that is the point — its evidence is product intent and a
+	// description of what ships, and the design document is deliberately not
+	// among it. Every directory is confined to the repository exactly as the
+	// specifications are, and one that does not exist simply contributes
+	// nothing.
+	RoleDocuments []DocumentSet
+	MaxBytes      int
+}
+
+// DocumentSet is one directory of a role's own documents, with what to call
+// each one in the context. The label is what the reader sees on the section —
+// "Design", "Decision record" — so a document arrives as the kind of thing it
+// is rather than as an anonymous file.
+type DocumentSet struct {
+	Label     string
+	Directory string
 }
 
 // SpecificationProblem names one specification that does not follow the
@@ -162,9 +180,21 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, fmt.Errorf("resolve repository root symlinks: %w", err)
 	}
-	directory, err := validateSpecificationsDirectory(request.SpecificationsDirectory)
+	directory, err := validateSpecificationsDirectory("specifications", request.SpecificationsDirectory)
 	if err != nil {
 		return Bundle{}, err
+	}
+	roleDocuments := make([]DocumentSet, 0, len(request.RoleDocuments))
+	for _, set := range request.RoleDocuments {
+		label := strings.TrimSpace(set.Label)
+		if label == "" {
+			return Bundle{}, errors.New("every role document set must say what to call its documents")
+		}
+		clean, err := validateSpecificationsDirectory(strings.ToLower(label), set.Directory)
+		if err != nil {
+			return Bundle{}, err
+		}
+		roleDocuments = append(roleDocuments, DocumentSet{Label: label, Directory: clean})
 	}
 	maxBytes := request.MaxBytes
 	if maxBytes == 0 {
@@ -174,12 +204,12 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		return Bundle{}, errors.New("max context bytes must be greater than zero")
 	}
 
-	specificationPaths, err := discoverSpecifications(root, directory)
+	specificationPaths, err := discoverSpecifications("specifications", root, directory)
 	if err != nil {
 		return Bundle{}, err
 	}
 
-	header := productHeader(directory)
+	header := productHeader(directory, roleDocuments)
 	trackerState := renderWorkItems(request.WorkItems, request.WorkItemsUnavailable)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
@@ -227,11 +257,24 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		}
 	}
 
-	if len(bundle.References) == 0 {
+	// Counted before a role's own documents are read, because from here on the
+	// references are no longer only specifications and the question this answers
+	// — does this repository record any product intent at all — is still about
+	// the specifications alone.
+	bundle.SpecificationsIncluded = len(bundle.References)
+	if bundle.SpecificationsIncluded == 0 {
 		// Saying that intent is not written down is part of the context whether or
 		// not there was room for anything else, so it is charged before the
 		// documentation is given what is left rather than added on top of it.
 		bundle.Bytes += len(renderNoSpecifications(directory))
+	}
+	// A role's own documents are read after the specifications and before the
+	// documentation of what ships, so intent still wins the budget over
+	// everything and description still loses to both. What did not fit is named
+	// beside the specifications that did not fit, for the same reason.
+	roleSections, err := readRoleDocuments(root, roleDocuments, &bundle, maxBytes, &omitted)
+	if err != nil {
+		return Bundle{}, err
 	}
 	// The shipped surface is read after the specifications have taken what they
 	// need, so intent wins the budget over description by construction rather
@@ -245,10 +288,11 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	var output strings.Builder
 	output.WriteString(header)
 	output.WriteString(renderRecordedIntent(directory, intent))
-	if len(bundle.References) == 0 {
+	if bundle.SpecificationsIncluded == 0 {
 		output.WriteString(renderNoSpecifications(directory))
 	}
 	output.WriteString(specifications.String())
+	output.WriteString(roleSections)
 	output.WriteString(shippedSurface)
 	output.WriteString(documentation)
 	output.WriteString(renderShippedDocumentationNote(documentation, documentationOmitted))
@@ -264,18 +308,20 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	return bundle, nil
 }
 
-// validateSpecificationsDirectory keeps the configured directory inside the
+// validateSpecificationsDirectory keeps a configured directory inside the
 // repository. The same rule guards the configuration itself; it is repeated
 // here because this package is what actually reads the filesystem, and a
-// confinement that only holds when a caller remembered to check is not one.
-func validateSpecificationsDirectory(directory string) (string, error) {
+// confinement that only holds when a caller remembered to check is not one. The
+// kind names what is being confined, so a role's own documents are refused in
+// the same words and for the same reason the specifications are.
+func validateSpecificationsDirectory(kind, directory string) (string, error) {
 	trimmed := strings.TrimSpace(directory)
 	if trimmed == "" {
-		return "", errors.New("specifications directory is required")
+		return "", fmt.Errorf("%s directory is required", kind)
 	}
 	clean := filepath.Clean(trimmed)
 	if filepath.IsAbs(trimmed) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("specifications directory %q resolves outside the repository", directory)
+		return "", fmt.Errorf("%s directory %q resolves outside the repository", kind, directory)
 	}
 	return clean, nil
 }
@@ -284,21 +330,21 @@ func validateSpecificationsDirectory(directory string) (string, error) {
 // directory is walked to any depth without following symlinks, and every path
 // is still validated when it is read. A directory that does not exist is not an
 // error: a project with no specifications yet gets a conversation that says so.
-func discoverSpecifications(root, directory string) ([]string, error) {
+func discoverSpecifications(kind, root, directory string) ([]string, error) {
 	path := filepath.Join(root, directory)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("inspect specifications directory %q: %w", directory, err)
+		return nil, fmt.Errorf("inspect %s directory %q: %w", kind, directory, err)
 	}
 	if !info.IsDir() {
-		return nil, fmt.Errorf("specifications path %q is not a directory", directory)
+		return nil, fmt.Errorf("%s path %q is not a directory", kind, directory)
 	}
 
 	var found []string
-	err = filepath.WalkDir(path, func(candidate string, dirEntry fs.DirEntry, walkErr error) error {
+	walk := func(candidate string, dirEntry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -314,9 +360,9 @@ func discoverSpecifications(root, directory string) ([]string, error) {
 		}
 		found = append(found, filepath.ToSlash(relative))
 		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("discover specifications under %q: %w", directory, err)
+	}
+	if err := filepath.WalkDir(path, walk); err != nil {
+		return nil, fmt.Errorf("discover %s under %q: %w", kind, directory, err)
 	}
 	sort.Strings(found)
 	return found, nil
@@ -668,7 +714,7 @@ func renderIntentDocuments(documents []intentDocument) string {
 	return rendered + "."
 }
 
-func productHeader(directory string) string {
+func productHeader(directory string, roleDocuments []DocumentSet) string {
 	return fmt.Sprintf(`# Product context
 
 The sections below are the product as this repository records it today: what the
@@ -690,12 +736,95 @@ description — the implementation as built, as the people using it are told abo
 it — and it settles nothing about intent. Where the two disagree, report the
 conflict rather than resolving it silently.
 
-What is still not here is the source, the design document, and any way to run a
+`+renderRoleDocumentNote(roleDocuments)+`
+`, directory)
+}
+
+// renderRoleDocumentNote closes the header by saying what is not here. Which
+// documents those are depends on the role: the product manager is not given the
+// designs, and an architect that is would be told it had not read the one thing
+// it owns. Either way the instruction is the same — say you have not read
+// something rather than reasoning from what you would expect it to say.
+func renderRoleDocumentNote(sets []DocumentSet) string {
+	if len(sets) == 0 {
+		return `What is still not here is the source, the design document, and any way to run a
 command. Those say how the product is built rather than what it is for or what
 it ships. So when something outside these sections matters, say that you have
 not read it rather than reasoning from what you would expect it to say.
 
-`, directory)
+`
+	}
+	directories := make([]string, 0, len(sets))
+	for _, set := range sets {
+		directories = append(directories, set.Directory)
+	}
+	return fmt.Sprintf(`Your own documents are here too, from %s. They are how this product is built
+rather than what it is for: they serve the intent above and never revise it, and
+where one of them contradicts a specification the contradiction is worth
+reporting rather than resolving quietly.
+
+What is still not here is the source and any way to run a command. So when
+something outside these sections matters, say that you have not read it rather
+than reasoning from what you would expect it to say.
+
+`, strings.Join(directories, ", "))
+}
+
+// holds reports whether a document is already in the bundle, so a directory
+// nested inside another one is not carried twice.
+func (b Bundle) holds(path string) bool {
+	for _, reference := range b.References {
+		if reference.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// readRoleDocuments renders the documents a role reads beyond the
+// specifications. Each set is walked in a stable order and charged against the
+// same budget the specifications were, so a large designs directory takes what
+// is left rather than displacing product intent, and what did not fit is named
+// as omitted rather than silently missing. A set whose directory does not exist
+// contributes nothing: a repository that has recorded no designs yet is a fact
+// about the repository, not a failure to assemble a context.
+func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes int, omitted *[]string) (string, error) {
+	var rendered strings.Builder
+	for _, set := range sets {
+		paths, err := discoverSpecifications(strings.ToLower(set.Label), root, set.Directory)
+		if err != nil {
+			return "", err
+		}
+		for _, documentPath := range paths {
+			// A document reachable from two sets — decision records with the
+			// invariants nested underneath them — is carried once rather than
+			// twice, and stays under the label it was first read as.
+			if bundle.holds(documentPath) {
+				continue
+			}
+			reference, err := readReference(root, documentPath, maxBytes-bundle.Bytes)
+			if err != nil {
+				var tooLarge tooLargeError
+				if errors.As(err, &tooLarge) {
+					*omitted = append(*omitted, documentPath)
+					continue
+				}
+				return "", err
+			}
+			section := fmt.Sprintf("\n## %s: %s\n\n%s", set.Label, reference.Path, reference.Content)
+			if !strings.HasSuffix(section, "\n") {
+				section += "\n"
+			}
+			if bundle.Bytes+len(section) > maxBytes {
+				*omitted = append(*omitted, documentPath)
+				continue
+			}
+			rendered.WriteString(section)
+			bundle.Bytes += len(section)
+			bundle.References = append(bundle.References, reference)
+		}
+	}
+	return rendered.String(), nil
 }
 
 // readShippedDocumentation reads the operator-facing documentation into one

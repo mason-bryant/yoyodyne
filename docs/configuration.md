@@ -124,6 +124,16 @@ a persona file that is in the repository beside the configuration. Change one by
 editing it. Remove one by deleting its block. Nothing has to be expressed as a
 deviation from something invisible.
 
+`yoyo agent list` reports them as they actually stand, with the durable
+conversation each one has, and `yoyo agent chat <name>` addresses one. What a
+role may do in that conversation is **not** configurable and is not what the
+persona says: the harness holds one contract and one authority table per role,
+sends the contract ahead of the persona on every turn, and refuses anything
+outside the table. A persona specializes how a role works; it cannot widen what
+the role is allowed to do. The README's
+[Talking to the other agents](../README.md#talking-to-the-other-agents) states
+the table itself.
+
 ## Discovery
 
 Yoyodyne looks for a configuration in this order:
@@ -494,8 +504,8 @@ It holds in two places, and only one of them is live today.
 the kind, on creating, amending, superseding, and retiring one, and records the
 role that did in the revision log. That path exists and is enforced, but no
 command reaches it yet — there is no `yoyo artifact create`, and the roles that
-would use it do not run — so today it constrains nothing that is actually
-happening. It is the boundary a role meets when it arrives, rather than a persona
+own documents reach no tools from a conversation — so today it constrains nothing
+that is actually happening. It is the boundary a role meets when it arrives, rather than a persona
 asking it to behave.
 
 **Reading.** A document whose revision log records a change by a role that does
@@ -567,20 +577,22 @@ yoyo amendment decline <id> --reason ...  # turn it down, keeping why
 **Every decision is yours, whoever owns the document.** An owning role that runs
 is shown what has been proposed against its documents and argues for or against
 it — proposals against the brief and the goals are carried into the product
-manager's conversation, which is told in so many words that it cannot decide one
-and cannot edit anything. The architect does not execute at all yet. So no agent
-records a decision, `yoyo amendment` is the only thing that does, and the record
-says you exercised the owner's authority rather than that the owner answered —
-the same override path `yoyo invariant` documents. A decline keeps the reason it
-was turned down with, because a proposal refused silently is one the same
-argument arrives to make again.
+manager's conversation, and proposals against the designs, the specifications,
+and the decision records are carried into the architect's, each told in so many
+words that it cannot decide one and cannot edit anything. Both owners can now be
+asked directly: `yoyo agent chat architect` is where the argument about a design
+happens. But no agent records a decision, `yoyo amendment` is the only thing that
+does, and the record says you exercised the owner's authority rather than that
+the owner answered — the same override path `yoyo invariant` documents. A decline
+keeps the reason it was turned down with, because a proposal refused silently is
+one the same argument arrives to make again.
 
 An owning role recording its own decision is vocabulary the record already has
 and nothing produces: what would make it real is a decision the harness carries
 out for a role from its own reply, the way it carries out the product manager's
 tracker actions. Until something does that, read "under the architect's
-authority" on a decision as your judgement standing in for a role that has not
-run, not as the architect having answered.
+authority" on a decision as your judgement standing in for the role, taken after
+hearing it rather than instead of hearing it.
 
 The reviewer is deliberately not given this block. What it finds wrong with a
 change is a finding, which decides whether the change is repaired; a reviewer

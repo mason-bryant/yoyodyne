@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -213,7 +214,7 @@ func TestSplitReplySeparatesActingFromProposing(t *testing.T) {
 		proposalFence + "\n{\"items\":[{\"title\":\"Rewrite the CLI\",\"description\":\"Port everything.\",\"rationale\":\"You raised it.\",\"goal\":\"Support development in any language.\"}]}\n```\n\n" +
 		concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"A plugin marketplace\",\"detail\":\"No goal covers third-party extensions.\",\"question\":\"Which goal should it serve?\"}]}\n```\n"
 
-	parsed, err := splitReply(answer)
+	parsed, err := splitReply(domain.RoleProductManager, answer)
 	if err != nil {
 		t.Fatalf("splitReply() error = %v", err)
 	}
@@ -231,7 +232,7 @@ func TestSplitReplySeparatesActingFromProposing(t *testing.T) {
 	// A block the harness cannot read leaves the answer whole and reports a typed
 	// failure, so the caller can say what was lost and nothing is run from it.
 	broken := "Closing it.\n\n" + trackerFence + "\n{\"actions\":[{\"action\":\"close\"}]}\n```\n"
-	parsed, err = splitReply(broken)
+	parsed, err = splitReply(domain.RoleProductManager, broken)
 	var unreadable *TrackerError
 	if !errors.As(err, &unreadable) {
 		t.Fatalf("splitReply() error = %v, want a TrackerError", err)
@@ -339,7 +340,7 @@ func TestRetiringWorkIsRecordedAsWithdrawnRatherThanFinished(t *testing.T) {
 
 	// The operator reads what the retirement actually was. Scope that was
 	// dropped never appears as scope that was delivered.
-	rendered := renderTrackerOutcomes(reply.Actions)
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
 	if !strings.Contains(rendered, "retired yoyodyne-ifd.23 from the backlog without it being done") {
 		t.Fatalf("rendered outcomes = %q", rendered)
 	}
@@ -388,7 +389,7 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	if !strings.Contains(tracker.created[0].Notes, "Goal served: Run development nearly autonomously.") {
 		t.Fatalf("created work item notes = %q", tracker.created[0].Notes)
 	}
-	rendered := renderTrackerOutcomes(reply.Actions)
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
 	if !strings.Contains(rendered, "admitted yoyodyne-1 to the backlog at priority 0") {
 		t.Fatalf("rendered outcomes = %q", rendered)
 	}
@@ -546,7 +547,7 @@ func TestAnActionOnAClosedItemSaysSoRatherThanApplyingSilently(t *testing.T) {
 	if !strings.Contains(reply.Text, "Both are closed") {
 		t.Fatalf("reply text = %q", reply.Text)
 	}
-	rendered := renderTrackerOutcomes(reply.Actions)
+	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
 	if !strings.Contains(rendered, "failed, and changed nothing: yoyodyne-ifd.23 is closed") {
 		t.Fatalf("rendered outcomes = %q", rendered)
 	}
@@ -636,7 +637,7 @@ func TestWhatIsRefusedOnClosedWorkIsWhatWouldMeanNothing(t *testing.T) {
 func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	t.Parallel()
 
-	contract := SystemPrompt("")
+	contract := SystemPrompt(domain.RoleProductManager, "")
 	// An action the harness runs but never states is one the product manager will
 	// not use, and an action stated but not implemented is one it will ask for and
 	// be refused. Both are ways for the contract and the harness to disagree.

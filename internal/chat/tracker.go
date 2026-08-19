@@ -20,6 +20,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
@@ -215,11 +216,15 @@ type trackerDocument struct {
 // part the operator has to be told, because the product manager will otherwise
 // describe work it believes it did.
 type TrackerError struct {
-	Err error
+	// Role is who asked, so a failure in one conversation is not reported as
+	// another role's. It is empty only where nothing named a role, which reads
+	// as the unattributed "agent" rather than as the product manager.
+	Role domain.AgentRole
+	Err  error
 }
 
 func (e *TrackerError) Error() string {
-	return "the product manager asked for tracker actions the harness cannot read: " + e.Err.Error()
+	return "the " + RoleTitle(e.Role) + " asked for tracker actions the harness cannot read: " + e.Err.Error()
 }
 
 func (e *TrackerError) Unwrap() error { return e.Err }
@@ -830,29 +835,30 @@ func (o *TrackerOutcome) fail(err error) {
 // nobody can tell apart from work that landed.
 const retiredWithoutBeingDone = "Retired from the backlog without being done"
 
-// trackerProvenance is what an item records about a change the product manager
-// made to it. The conversation and the turn are named for the same reason an
-// approved proposal names them: the item has to trace back to the intent that
-// changed it, and to the fact that the product manager rather than the operator
-// decided it.
+// trackerProvenance is what an item records about a change an agent made to it.
+// The role is named as well as the conversation and the turn, for the same
+// reason an approved proposal names them: the item has to trace back to the
+// intent that changed it, and to which role rather than the operator decided
+// it. A decomposition the development manager made and an admission the product
+// manager made are not the same act, and an item that recorded them the same way
+// would be unauditable.
 func (s *Session) trackerProvenance(what, reason string) string {
-	note := fmt.Sprintf("%s by the product manager in conversation %s, after turn %d.", what, s.state.ConversationID, s.state.Turns)
+	note := fmt.Sprintf("%s by the %s in conversation %s, after turn %d.", what, RoleTitle(s.state.Role), s.state.ConversationID, s.state.Turns)
 	if trimmed := strings.TrimSpace(reason); trimmed != "" {
 		note += "\n\nReason: " + trimmed
 	}
 	return note
 }
 
-// renderTrackerOutcomes describes to the operator what the product manager did.
-// Everything here happened without their approval, which is exactly why every
-// action is listed rather than summarized, and why a failed one is named as
-// failed.
-func renderTrackerOutcomes(outcomes []TrackerOutcome) string {
+// renderTrackerOutcomes describes to the operator what an agent did. Everything
+// here happened without their approval, which is exactly why every action is
+// listed rather than summarized, and why a failed one is named as failed.
+func renderTrackerOutcomes(role domain.AgentRole, outcomes []TrackerOutcome) string {
 	if len(outcomes) == 0 {
 		return ""
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "The product manager acted on the tracker (%d action(s)):\n", len(outcomes))
+	fmt.Fprintf(&rendered, "The %s acted on the tracker (%d action(s)):\n", RoleTitle(role), len(outcomes))
 	for _, outcome := range outcomes {
 		rendered.WriteString(outcome.Render())
 	}

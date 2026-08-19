@@ -82,9 +82,11 @@ rather than after:
   `/work <id>` when you want the next thing run. The product manager owns the
   backlog and its order; the development manager that would take from the top of
   it without being told is not built yet, and neither is a scheduler.
-- **The product manager is the only agent you talk to.** The architect role is
-  reachable from the command line for invariants and does not execute as an
-  agent yet.
+- **The product manager is the agent you drive the work from**, and it is no
+  longer the only one you can talk to: `yoyo agent chat <name>` addresses any
+  configured agent, each with its own durable conversation and its own authority.
+  What none of them do yet is act without you — nothing pulls from the backlog or
+  decomposes a design on its own.
 - **Claude Code is the backend that runs.** `codex` exists as a name in the
   configuration vocabulary; the adapter behind it is designed and not built, and
   a run refuses a developer configured for anything but `claude-code`.
@@ -957,6 +959,66 @@ repository and tracker was gathered and against what commit, and the normalized
 event stream is stored beside it — including what the operator asked the harness
 to do, which is recorded in the conversation's own log beside the runs' logs.
 
+### Talking to the other agents
+
+`yoyo chat` is the product manager, because product intent is where the work
+comes from. Every other configured agent is reachable the same way:
+
+```text
+./bin/yoyo agent list                      # who is configured, and what each is doing
+./bin/yoyo agent show architect            # one agent in full
+./bin/yoyo agent chat architect            # talk to it
+./bin/yoyo agent chat development-manager --message "Decompose ifd.4." --json
+```
+
+The name is either the agent's configured name or the role it fills, and a role
+two agents fill is a question rather than a request: name the one you mean.
+
+**Each agent is a durable logical identity, not a process.** The provider that
+answers a turn is started for that turn and gone afterwards; what survives it is
+one conversation record per role, with its own provider session, its own turn
+count, and its own picture of the repository. Talking to the architect never
+resumes what the product manager was told, and `yoyo agent list` reads all of it
+without starting a provider — including whether another process is holding a
+conversation right now, which is why a second one would be refused.
+
+**What each role may do is fixed in the harness rather than in its persona.** A
+project rewrites any persona it likes and the boundaries do not move:
+
+| Role | Reads the tracker | Writes to the tracker | Its own documents |
+| --- | --- | --- | --- |
+| product manager | yes | admits, orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| architect | yes | nothing | designs, decisions, invariants: decides, and you record |
+| development manager | yes | creates and links **only underneath admitted work** | none |
+| developer, reviewer | yes | nothing | none |
+
+The development manager is the one worth reading twice, because it is where a
+design becomes tracked work. It decomposes: every item it creates hangs under an
+item the product manager already admitted, and the harness refuses a creation
+that names no parent. It cannot admit work, cannot reorder the backlog, and has
+no close or retire — so a decomposition can never quietly become new scope, and
+the backlog's order stays the product manager's. Work it discovers that belongs
+elsewhere it says to you, for the product manager to admit.
+
+The architect owns the designs, the decision records, and the invariants, and it
+cannot edit any of them from a conversation, because no conversation has tools.
+Decide the change with it and then record it yourself — `yoyo invariant` for an
+invariant, a revision to the document for the rest. Changes other roles proposed
+against its documents are carried into its conversation for it to argue, the
+same way the product manager hears proposals against the brief and the goals.
+
+Each role is also given the documents it answers for. The architect gets the
+designs, the invariants, and the decision records alongside the specifications;
+the development manager, developer, and reviewer get the designs and the
+invariants; the product manager gets none of them, which is the same decision
+read the other way — intent is what it reasons from, and the implementation must
+not be able to argue about what the product is for.
+
+Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
+`/reports`, `/refresh` — means the same thing in every conversation, because
+those are your authority carried out by the harness rather than anything the
+agent did.
+
 ### What the conversation looks like on a terminal
 
 On a terminal, the line you are composing has a region of its own at the bottom
@@ -1159,11 +1221,11 @@ attempt raises one proposal rather than one per attempt.
 
 The owner hears it where it works, and you are the one who decides. Proposals
 against the brief and the goals are carried into the product manager's
-conversation, which argues for or against them and cannot decide or edit
-anything; the architect agent does not execute at all yet. So every decision is
-recorded by you through `yoyo amendment` — the same override path
-`yoyo invariant` takes — and the record says you exercised the owner's authority
-rather than that the owner answered.
+conversation and proposals against the designs, the specifications, and the
+decision records into the architect's, and each argues for or against them and
+can decide or edit nothing. So every decision is recorded by you through
+`yoyo amendment` — the same override path `yoyo invariant` takes — and the record
+says you exercised the owner's authority rather than that the owner answered.
 
 ### How fresh the conversation's picture is, and how to refresh it
 
@@ -1654,8 +1716,10 @@ invariant the harness could not read is named as a gap rather than dropped
 silently, and what was delivered is recorded on the work item so an operator can
 see afterwards which constraints applied.
 
-The architect agent does not execute yet, so the lifecycle is reachable from the
-command line, acting with the architect's authority and recording that it did:
+The architect can be asked what an invariant should say — `yoyo agent chat
+architect` — and it cannot write one, because no conversation has tools. So the
+lifecycle is reachable from the command line, acting with the architect's
+authority and recording that it did:
 
 ```sh
 ./bin/yoyo invariant list

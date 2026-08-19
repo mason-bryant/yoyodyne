@@ -34,7 +34,7 @@ func TestASlashMessageIsCarriedOutByTheHarnessRatherThanSaidToTheProductManager(
 	session := newTestChatSession(t, provider, collectedTestReport(t))
 
 	var stdout, stderr bytes.Buffer
-	if code := runChatMessage(context.Background(), session, "/reports", false, &stdout, &stderr); code != 0 {
+	if code := runChatMessage(context.Background(), session, domain.RoleProductManager, "/reports", false, &stdout, &stderr); code != 0 {
 		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
 	}
 	if !strings.Contains(stdout.String(), "bd lint could not run") {
@@ -55,7 +55,7 @@ func TestASlashMessageIsReportedAsHarnessOutputRatherThanAsAReply(t *testing.T) 
 	session := newTestChatSession(t, provider, collectedTestReport(t))
 
 	var stdout, stderr bytes.Buffer
-	if code := runChatMessage(context.Background(), session, "/reports", true, &stdout, &stderr); code != 0 {
+	if code := runChatMessage(context.Background(), session, domain.RoleProductManager, "/reports", true, &stdout, &stderr); code != 0 {
 		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
 	}
 	var decoded chatOutput
@@ -86,7 +86,7 @@ func TestAConversationOnlyCommandIsRefusedInASingleMessage(t *testing.T) {
 	session := newTestChatSession(t, provider)
 
 	var stdout, stderr bytes.Buffer
-	code := runChatMessage(context.Background(), session, "/work yoyodyne-ifd.70", false, &stdout, &stderr)
+	code := runChatMessage(context.Background(), session, domain.RoleProductManager, "/work yoyodyne-ifd.70", false, &stdout, &stderr)
 	if code != 1 {
 		t.Fatalf("runChatMessage() code = %d, want 1; stderr = %q", code, stderr.String())
 	}
@@ -113,7 +113,7 @@ func TestAMessageThatIsNotACommandIsStillSaidToTheProductManager(t *testing.T) {
 	session := newTestChatSession(t, provider)
 
 	var stdout, stderr bytes.Buffer
-	if code := runChatMessage(context.Background(), session, "what is in the backlog?", false, &stdout, &stderr); code != 0 {
+	if code := runChatMessage(context.Background(), session, domain.RoleProductManager, "what is in the backlog?", false, &stdout, &stderr); code != 0 {
 		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
 	}
 	if provider.turns != 1 {
@@ -183,6 +183,7 @@ func newTestChatSession(t *testing.T, provider chat.Backend, reports ...report.R
 		}
 	}
 	session, err := chat.Open(chat.Options{
+		Role:         domain.RoleProductManager,
 		Backend:      provider,
 		Store:        store,
 		Reports:      collected,

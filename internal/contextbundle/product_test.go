@@ -753,3 +753,87 @@ func writeProductFile(t *testing.T, root, relative, content string) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 }
+
+// A role that owns documents is given them. The product manager is not, and
+// that is the same decision read the other way: an architect that cannot see
+// the design it owns answers from memory, and a product manager that can see it
+// has the implementation arguing about what the product is for.
+func TestAssembleProductGivesARoleItsOwnDocuments(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	writeProductFile(t, root, "docs/designs/v1-harness-design.md", "# Design\n\nArchitecture, not intent.\n")
+	writeProductFile(t, root, "docs/decisions/beads.md", "# Beads is the durable workflow store\n\nWhat was decided and why.\n")
+	writeProductFile(t, root, "docs/decisions/invariants/one-promotion.md", "# One promotion per target branch\n\nThe constraint itself.\n")
+
+	architect, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments: []DocumentSet{
+			{Label: "Design", Directory: "docs/designs"},
+			{Label: "Architectural invariant", Directory: "docs/decisions/invariants"},
+			{Label: "Decision record", Directory: "docs/decisions"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"## Specification: docs/product/runs.md",
+		"## Design: docs/designs/v1-harness-design.md",
+		"Architecture, not intent.",
+		"## Architectural invariant: docs/decisions/invariants/one-promotion.md",
+		"## Decision record: docs/decisions/beads.md",
+		"Your own documents are here too, from docs/designs, docs/decisions/invariants, docs/decisions.",
+	} {
+		if !strings.Contains(architect.Text, required) {
+			t.Fatalf("the architect's context is missing %q:\n%s", required, architect.Text)
+		}
+	}
+	// A document reachable from two of the sets is carried once, under the label
+	// it was first read as: the invariants sit inside the decision records.
+	if count := strings.Count(architect.Text, "docs/decisions/invariants/one-promotion.md"); count != 1 {
+		t.Fatalf("the nested invariant appears %d times:\n%s", count, architect.Text)
+	}
+	// Intent is still counted as intent, whatever else the references now hold.
+	if architect.SpecificationsIncluded != 1 || len(architect.References) != 4 {
+		t.Fatalf("specifications = %d, references = %d", architect.SpecificationsIncluded, len(architect.References))
+	}
+	// The header no longer claims the design was withheld, because it was not.
+	if strings.Contains(architect.Text, "the design document, and any way to run a") {
+		t.Fatalf("the architect is told it has not read the design it was given:\n%s", architect.Text)
+	}
+
+	// The product manager asks for none of them and is given none of them.
+	productManager, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, excluded := range []string{"Architecture, not intent.", "The constraint itself.", "What was decided and why."} {
+		if strings.Contains(productManager.Text, excluded) {
+			t.Fatalf("the product manager was given %q:\n%s", excluded, productManager.Text)
+		}
+	}
+
+	// A role's documents are confined to the repository exactly as the
+	// specifications are, and a set that says nothing about what it holds is
+	// refused rather than rendered as an anonymous pile.
+	if _, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments:           []DocumentSet{{Label: "Design", Directory: "../elsewhere"}},
+	}); err == nil {
+		t.Fatal("AssembleProduct() read a directory outside the repository")
+	}
+	if _, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments:           []DocumentSet{{Directory: "docs/designs"}},
+	}); err == nil {
+		t.Fatal("AssembleProduct() accepted an unlabelled document set")
+	}
+}

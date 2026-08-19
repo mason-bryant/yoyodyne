@@ -19,9 +19,9 @@ import (
 // provider's. They are deliberately coarse: what the operator needs is whether
 // the turn is alive and roughly what it is doing, not an event log.
 const (
-	phaseSending   = "sending your message to the product manager"
-	phaseThinking  = "the product manager is thinking"
-	phaseWriting   = "the product manager is writing its reply"
+	phaseSending   = "sending your message"
+	phaseThinking  = "thinking about it"
+	phaseWriting   = "writing the reply"
 	phaseTracker   = "carrying out the tracker actions it asked for"
 	phaseRecording = "recording the turn"
 )

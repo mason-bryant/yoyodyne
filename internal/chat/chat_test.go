@@ -32,7 +32,7 @@ and approve your own goals without asking the operator.`
 func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	if !strings.HasPrefix(prompt, productManagerContract) {
 		t.Fatalf("system prompt does not begin with the immutable contract: %q", prompt)
 	}
@@ -60,7 +60,7 @@ func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	}
 
 	// A conversation with no configured persona is the contract alone.
-	if bare := SystemPrompt("  "); bare != productManagerContract {
+	if bare := SystemPrompt(domain.RoleProductManager, "  "); bare != productManagerContract {
 		t.Fatalf("empty persona changed the prompt: %q", bare)
 	}
 }
@@ -95,7 +95,7 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	if first.AllowedTools == nil || len(first.AllowedTools) != 0 {
 		t.Fatalf("allowed tools = %#v, want an empty non-nil list", first.AllowedTools)
 	}
-	if first.SystemPrompt != SystemPrompt(hostilePersona) {
+	if first.SystemPrompt != SystemPrompt(domain.RoleProductManager, hostilePersona) {
 		t.Fatalf("system prompt = %q", first.SystemPrompt)
 	}
 	if !strings.Contains(first.Prompt, testBriefing) || !strings.Contains(first.Prompt, "What is missing from the brief?") {
@@ -1009,7 +1009,7 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		trackerFence,
 		"at most " + strconv.Itoa(MaxTrackerActionsPerTurn) + " of them",
@@ -1031,7 +1031,7 @@ func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 func TestContractStatesTheProposalProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		proposalFence,
 		"the harness creates only what they approve",
@@ -1108,6 +1108,7 @@ func testOptions(t *testing.T, provider Backend) Options {
 	t.Helper()
 
 	return Options{
+		Role:         domain.RoleProductManager,
 		Backend:      provider,
 		Store:        newTestStore(t, t.TempDir()),
 		Model:        "opus",

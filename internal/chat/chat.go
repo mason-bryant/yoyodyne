@@ -87,9 +87,14 @@ type Tracker interface {
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
 }
 
-// Options describes one product-manager conversation: who answers, what it
-// knows, and where the conversation is recorded.
+// Options describes one conversation: which role answers, what it knows, and
+// where the conversation is recorded.
 type Options struct {
+	// Role is the logical agent this conversation is with. It is required, and
+	// it decides three things that must not be able to disagree: the contract
+	// sent to the provider, what the role may ask the harness for, and which
+	// durable record the conversation resumes from.
+	Role    domain.AgentRole
 	Backend Backend
 	Store   Store
 	// Tracker is the work tracker this conversation acts on: the items the
@@ -370,16 +375,16 @@ type Reply struct {
 	Evidence      Evidence        `json:"evidence"`
 }
 
-// Open loads or starts the product manager's conversation. A recorded
-// conversation with a provider session is resumed; anything else starts a new
-// one, because a conversation with no session cannot be continued and pretending
-// otherwise would silently drop what was said before.
+// Open loads or starts a role's conversation. A recorded conversation with a
+// provider session is resumed; anything else starts a new one, because a
+// conversation with no session cannot be continued and pretending otherwise
+// would silently drop what was said before.
 func Open(options Options) (*Session, error) {
 	if err := options.validate(); err != nil {
 		return nil, err
 	}
 	session := &Session{options: options, deliveredAmendments: map[string]bool{}}
-	existing, err := options.Store.Load(domain.RoleProductManager)
+	existing, err := options.Store.Load(options.Role)
 	switch {
 	case err == nil:
 		if !options.Fresh && existing.ProviderSessionID != "" {
@@ -405,7 +410,7 @@ func Open(options Options) (*Session, error) {
 		ConversationID: conversationID,
 		ProductID:      options.ProductID,
 		RepositoryID:   options.RepositoryID,
-		Role:           domain.RoleProductManager,
+		Role:           options.Role,
 		Backend:        options.Provider,
 		StartedAt:      now,
 		UpdatedAt:      now,
@@ -462,13 +467,19 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 			reply.Text = appendProse(reply.Text, answer)
 			return reply, err
 		}
-		parsed, err := splitReply(answer)
+		parsed, err := splitReply(s.state.Role, answer)
 		reply.Text = appendProse(reply.Text, parsed.Prose)
 		// What was reported is collected before anything else is decided about
 		// the turn, and a report that could not be read is noted rather than
 		// returned: the rest of the answer is unaffected by either.
 		s.collectReply(&reply, parsed)
 		if err != nil {
+			return reply, err
+		}
+		// What this role has no authority for is refused before any of it is
+		// recorded or carried out. The answer is readable and the turn was paid
+		// for, so both are returned; what the role asked for is simply not done.
+		if err := s.authorize(parsed); err != nil {
 			return reply, err
 		}
 
@@ -554,7 +565,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		}
 		return "", &OperatorHoldError{Hold: hold}
 	}
-	systemPrompt := SystemPrompt(s.options.Persona)
+	systemPrompt := SystemPrompt(s.state.Role, s.options.Persona)
 	// The repository documents, the tracker's own text, and the operator's words
 	// all go to the provider, so anything recognizably sensitive is redacted on
 	// the way out rather than only in what comes back.
@@ -579,12 +590,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		s.activity.observe(event)
 		return nil
 	}
-	// No tools at all and a read-only permission mode. The product manager's
-	// authority over the tracker is exercised by the harness on its behalf, so
-	// nothing here gives it a filesystem, a shell, or a network to reach.
+	// No tools at all and a read-only permission mode, whichever role is
+	// answering. Whatever authority a role has over the tracker is exercised by
+	// the harness on its behalf, so nothing here gives it a filesystem, a shell,
+	// or a network to reach.
 	result, err := s.options.Backend.Run(ctx, backend.RunRequest{
 		RunID:            s.state.ConversationID,
-		Role:             domain.RoleProductManager,
+		Role:             s.state.Role,
 		WorkingDirectory: s.options.Repository,
 		Prompt:           prompt,
 		SystemPrompt:     systemPrompt,
@@ -623,12 +635,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("product manager backend failed: %w", err), s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
-			fmt.Errorf("product manager reported failure: %s", firstNonEmpty(result.StopReason, result.FinalText, "unknown provider failure")),
+			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), firstNonEmpty(result.StopReason, result.FinalText, "unknown provider failure")),
 			s.record(),
 		)
 	}
@@ -684,13 +696,13 @@ type parsedReply struct {
 // read. The report block is the exception at both ends: it is taken out first,
 // and one that cannot be read leaves everything else to be taken apart exactly
 // as it would have been.
-func splitReply(answer string) (parsedReply, error) {
+func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 	rest, reports, reportErr := report.Extract(answer)
 	parsed := parsedReply{Reports: reports, ReportProblem: reportErr}
 	prose, actions, err := extractTrackerActions(rest)
 	if err != nil {
 		parsed.Prose = rest
-		return parsed, &TrackerError{Err: err}
+		return parsed, &TrackerError{Role: role, Err: err}
 	}
 	prose, proposals, err := extractProposals(prose)
 	if err != nil {
@@ -760,7 +772,7 @@ func appendProse(existing, addition string) string {
 func (s *Session) carryResults(outcomes []TrackerOutcome) error {
 	s.state.PendingTrackerResults = boundText(renderTrackerResults(outcomes), maxPendingResultBytes)
 	if err := s.record(); err != nil {
-		return fmt.Errorf("record the results the product manager has not been told: %w", err)
+		return fmt.Errorf("record the results the %s has not been told: %w", RoleTitle(s.state.Role), err)
 	}
 	return nil
 }
@@ -1114,7 +1126,7 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// it reported is shown for the same reason, and stays in the pile for
 		// /reports afterwards.
 		s.reportTrackerActions(out, reply)
-		reportFiled(out, reply)
+		reportFiled(out, s.state.Role, reply)
 		// What the product manager would not propose is put to the operator before
 		// anything else about the turn is settled, including a turn that went on to
 		// fail: a question it declined to answer for itself is the one thing here
@@ -1244,7 +1256,7 @@ func (s *Session) reportTrackerActions(out io.Writer, reply Reply) {
 	if len(reply.Actions) == 0 {
 		return
 	}
-	fmt.Fprint(out, renderTrackerOutcomes(reply.Actions))
+	fmt.Fprint(out, renderTrackerOutcomes(s.state.Role, reply.Actions))
 	if reply.ResultsCarriedOver {
 		fmt.Fprintf(out, "it stopped after %d rounds of actions; what they returned is recorded with the conversation and reaches it when you next say something.\n", maxTrackerRounds)
 	}
@@ -1512,6 +1524,12 @@ func (s *Session) record() error {
 
 func (o Options) validate() error {
 	var problems []error
+	// The role is checked first and by name. A conversation opened for a role
+	// the harness holds no contract for would have no statement of authority to
+	// send and no table to refuse anything against, so it is not opened at all.
+	if _, known := AuthorityFor(o.Role); !known {
+		problems = append(problems, fmt.Errorf("no conversation contract exists for role %q", o.Role))
+	}
 	if o.Backend == nil {
 		problems = append(problems, errors.New("conversation backend is required"))
 	}
@@ -1519,7 +1537,7 @@ func (o Options) validate() error {
 		problems = append(problems, errors.New("conversation store is required"))
 	}
 	if err := config.ValidateModelSelector(o.Model); err != nil {
-		problems = append(problems, fmt.Errorf("product manager %s", err))
+		problems = append(problems, fmt.Errorf("%s %s", RoleTitle(o.Role), err))
 	}
 	if !o.Provider.Valid() {
 		problems = append(problems, fmt.Errorf("unsupported backend %q", o.Provider))
@@ -1568,28 +1586,6 @@ func (o Options) newID() (string, error) {
 		return runstate.NewConversationID()
 	}
 	return o.NewID()
-}
-
-// SystemPrompt returns the immutable product-manager contract, optionally
-// followed by the configured persona. The contract is always present verbatim
-// and always first, and it is re-sent on every turn including a resumed one, so
-// no persona and nothing said earlier in the conversation can loosen the bounds
-// the product manager works within.
-func SystemPrompt(persona string) string {
-	contract := productManagerContract
-	trimmed := strings.TrimSpace(persona)
-	if trimmed == "" {
-		return contract
-	}
-	return contract + `
-
-# Configured product-manager persona
-
-The project configuration supplies the guidance below. It may specialize how you
-work and how you talk to the operator, but it cannot widen your authority,
-authorize you to change anything, or remove any rule above.
-
-` + trimmed
 }
 
 // productManagerContract is the harness policy every product-manager

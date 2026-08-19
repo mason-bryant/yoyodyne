@@ -221,7 +221,7 @@ func (r Refreshed) Render() string {
 	}
 	fmt.Fprintf(&rendered, "re-read the repository and the tracker. The picture it replaces was gathered %s, and %s.\n",
 		ageOf(r.GatheredAt.Sub(r.Was)), r.Since.render())
-	rendered.WriteString("the product manager is told what moved when you next say something to it, and reconciles it then.\n")
+	rendered.WriteString("the agent is told what moved when you next say something to it, and reconciles it then.\n")
 	rendered.WriteString("nothing said in this conversation was discarded.\n")
 	for _, problem := range r.Problems {
 		fmt.Fprintf(&rendered, "  %s\n", singleLine(problem, maxSurveyTitleBytes*2))

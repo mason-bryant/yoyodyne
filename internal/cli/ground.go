@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -44,19 +46,50 @@ type conversationGround struct {
 	runner         execution.ProcessRunner
 	repository     string
 	specifications string
-	gitBinary      string
-	clock          execution.Clock
-	timeout        time.Duration
+	// roleDocuments are the directories this role reads beyond the
+	// specifications. The product manager has none by design, and every other
+	// role is answering for documents it would otherwise have to be told the
+	// contents of by the operator.
+	roleDocuments []contextbundle.DocumentSet
+	gitBinary     string
+	clock         execution.Clock
+	timeout       time.Duration
 }
 
-func newConversationGround(parts components) conversationGround {
+func newConversationGround(parts components, role domain.AgentRole) conversationGround {
 	return conversationGround{
 		runner:         parts.runner,
 		repository:     parts.repository,
 		specifications: parts.config.Product.Specifications,
+		roleDocuments:  roleDocumentSets(role, parts.config.Product),
 		gitBinary:      "git",
 		clock:          execution.RealClock{},
 		timeout:        chatTrackerTimeout,
+	}
+}
+
+// roleDocumentSets names the documents a role reads beyond the specifications.
+//
+// The product manager reads none of them, and that is a decision rather than an
+// omission: its evidence is product intent and a description of what ships, and
+// giving it the designs would let how the product is built argue about what it
+// is for. Every other role is the opposite case — an architect that cannot see
+// the designs it owns is answering from memory.
+//
+// The invariants are listed before the decision records they are extracted from
+// so they arrive labelled as the constraints they are; a directory nested inside
+// another is carried once, under the label it was first read as.
+func roleDocumentSets(role domain.AgentRole, product config.Product) []contextbundle.DocumentSet {
+	designs := contextbundle.DocumentSet{Label: "Design", Directory: product.Designs}
+	invariants := contextbundle.DocumentSet{Label: "Architectural invariant", Directory: product.Invariants}
+	decisions := contextbundle.DocumentSet{Label: "Decision record", Directory: product.Decisions}
+	switch role {
+	case domain.RoleProductManager:
+		return nil
+	case domain.RoleArchitect:
+		return []contextbundle.DocumentSet{designs, invariants, decisions}
+	default:
+		return []contextbundle.DocumentSet{designs, invariants}
 	}
 }
 
@@ -79,6 +112,7 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
 		RepositoryRoot:          g.repository,
 		SpecificationsDirectory: g.specifications,
+		RoleDocuments:           g.roleDocuments,
 		WorkItems:               items,
 		WorkItemsUnavailable:    unavailable,
 		CommandHelp:             commandHelp(),
@@ -89,9 +123,9 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 	for _, problem := range bundle.SpecificationProblems {
 		briefing.Problems = append(briefing.Problems, "specification "+problem.String())
 	}
-	if len(bundle.References) == 0 {
+	if bundle.SpecificationsIncluded == 0 {
 		briefing.Problems = append(briefing.Problems,
-			fmt.Sprintf("no specification was found under %s; the product manager has no recorded product intent to reason over", g.specifications))
+			fmt.Sprintf("no specification was found under %s; this conversation has no recorded product intent to reason over", g.specifications))
 	}
 	briefing.Text = bundle.Text
 	// The commit is evidence rather than a requirement: a repository that will

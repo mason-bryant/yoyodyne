@@ -401,7 +401,7 @@ func TestTheTranscriptSaysARefreshHappened(t *testing.T) {
 	transcript := out.String()
 	for _, required := range []string{
 		"re-read the repository and the tracker",
-		"the product manager is told what moved when you next say something to it",
+		"the agent is told what moved when you next say something to it",
 	} {
 		if !strings.Contains(transcript, required) {
 			t.Fatalf("transcript = %q, want it to say %q", transcript, required)
