@@ -2,13 +2,36 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
+
+// listingRunner answers each bd listing with the slice it asked for, so a test
+// can exercise a read path that consults more than one of them.
+type listingRunner struct {
+	items map[string][]map[string]any
+}
+
+func (r *listingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	listed := []map[string]any{}
+	for _, argument := range command.Args {
+		if status, asked := strings.CutPrefix(argument, "--status="); asked {
+			listed = r.items[status]
+		}
+	}
+	encoded, err := json.Marshal(listed)
+	if err != nil {
+		return execution.ProcessResult{}, err
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: string(encoded)}, nil
+}
 
 func TestTheGoalsWorkCanBeAttributedToAreListedWithWhereTheyAreStated(t *testing.T) {
 	t.Parallel()
@@ -80,6 +103,79 @@ func TestAGoalsDocumentStatingNoGoalsIsNamedRatherThanReadAsFewerGoals(t *testin
 	}
 	if !strings.Contains(stdout, "no goal is in force") {
 		t.Fatalf("list stdout = %q", stdout)
+	}
+}
+
+// The audit's own read path, end to end from the bd command line: a
+// decomposition child carrying the note a creation wrote is found by the
+// lookup the command actually performs and reported as serving its goal.
+//
+// It exists because the reported symptom was phrased in this command's words —
+// six children of yoyodyne-ifd.102 reading "it records no goal" — and a test
+// that resolved the goal by calling the parse directly would leave open whether
+// the loss was in how the audit locates an item and pulls its notes. So this
+// runs admittedWorkItems, which is the whole of that lookup, against a bd that
+// answers with the item's notes, and then asks the same question reportAttribution
+// asks of every item it lists.
+func TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	// The note a decomposition writes, in the shape internal/chat builds it:
+	// provenance, the reason, and the goal on its own line at the end.
+	child := "Created under yoyodyne-ifd.102, decomposing it by the development manager " +
+		"in conversation chat-419cedb4, after turn 3.\n\nReason: nothing routes stopped work today.\n\n" +
+		goal.Note(autonomy)
+	bd := &listingRunner{items: map[string][]map[string]any{
+		"open": {{
+			"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
+			"priority": 1, "issue_type": "task", "notes": child,
+		}},
+		"blocked": {{
+			// A blocked sibling too: the audit reads two slices of the tracker, and
+			// an item found in only one of them would be reported on by only one.
+			"id": "yoyodyne-ifd.102.7", "title": "Re-arm a dropped queued merge", "status": "blocked",
+			"priority": 3, "issue_type": "task", "notes": child,
+		}},
+	}}
+
+	admitted, err := admittedWorkItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
+	if err != nil {
+		t.Fatalf("admittedWorkItems() error = %v", err)
+	}
+	if len(admitted) != 2 {
+		t.Fatalf("the audit's lookup found %d item(s): %#v", len(admitted), admitted)
+	}
+
+	// From here on this is reportAttribution's own body: the goals it read, and
+	// AttributionOf against each item's notes.
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}},
+	}
+	attributions := make([]itemAttribution, 0, len(admitted))
+	for _, item := range admitted {
+		attributions = append(attributions, itemAttribution{
+			WorkItemID:  item.ID,
+			Title:       item.Title,
+			Status:      item.Status,
+			Attribution: goals.AttributionOf(item.Notes),
+		})
+	}
+	if code := attributionExitCode(attributions); code != 0 {
+		t.Fatalf("the audit failed a decomposition child: %#v", attributions)
+	}
+
+	var rendered bytes.Buffer
+	printAttributions(&rendered, attributions, goals)
+	report := rendered.String()
+	// The words the symptom was reported in. If a decomposition child ever reads
+	// as naming no goal again, it fails here in the same language the operator saw.
+	if strings.Contains(report, "it records no goal") {
+		t.Fatalf("a decomposition child reads as naming no goal:\n%s", report)
+	}
+	if !strings.Contains(report, "2 admitted item(s): 2 serve a recorded goal, 0 name none") {
+		t.Fatalf("report = %q", report)
 	}
 }
 

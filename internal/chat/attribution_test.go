@@ -119,8 +119,11 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
-	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
-		t.Fatalf("actions = %#v: %s", reply.Actions, reply.Actions[0].Failure)
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if !reply.Actions[0].Applied {
+		t.Fatalf("the creation was not applied: %s", reply.Actions[0].Failure)
 	}
 
 	// The creation reached bd as a decomposition under the admitted parent, and it
@@ -138,6 +141,12 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	// through the same client — and asked the same question yoyo goals
 	// attribution asks. Nothing between here and there is stubbed: the notes in
 	// bd's listing are the ones bd was told to store.
+	//
+	// The question is the same code and not merely the same shape: reportAttribution
+	// gets its items from Client.List and then calls goals.AttributionOf(item.Notes)
+	// on each, which is the pair of calls below. The command's own lookup — both
+	// tracker slices, ordered — is covered where it lives, by
+	// TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup in internal/cli.
 	listed, err := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}.List(context.Background(), "open")
 	if err != nil {
 		t.Fatalf("List() error = %v", err)
