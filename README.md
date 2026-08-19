@@ -1323,7 +1323,7 @@ a credential, a tool, or a request for either, and the reviewer — the role who
 verdict authorizes the merge — runs with no tools at all, so it cannot perform
 one. A developer does have a shell in its worktree and runs under your account,
 so "no agent pushes" describes what the harness does rather than a boundary it
-enforces; the [design document](docs/v1-harness-design.md#what-is-enforced-and-what-is-not)
+enforces; the [design document](docs/designs/v1-harness-design.md#what-is-enforced-and-what-is-not)
 says which half is which. The local target branch stays authoritative: the
 harness fast-forwards it as it always has, and the forge merges the pull request
 carrying exactly that commit under a merge commit — the one method that puts the
@@ -1592,7 +1592,7 @@ not. Recording, amending, and retiring one goes through a single code path that
 refuses every role but the architect, so `yoyo invariant` and any future
 architect agent are bound by it and no other role has an authorized way to write
 one. A developer, though, has a shell in its worktree, exactly as it does for
-the [pushes and merges the harness never routes through an agent](docs/v1-harness-design.md#what-is-enforced-and-what-is-not):
+the [pushes and merges the harness never routes through an agent](docs/designs/v1-harness-design.md#what-is-enforced-and-what-is-not):
 what stands in the way of it editing an invariant is its contract, which forbids
 it and tells it to propose the amendment instead, and the reviewer, which is
 told that a change creating, amending, retiring, or editing one is a finding.
@@ -1886,7 +1886,7 @@ state.
 
 ## Further reading
 
-- [The v1 harness design](docs/v1-harness-design.md) — the architecture, the
+- [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.
 - [The configuration guide](docs/configuration.md) — the full configuration

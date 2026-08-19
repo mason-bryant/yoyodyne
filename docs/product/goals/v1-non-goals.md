@@ -17,9 +17,9 @@ revisions:
 These are the things Yoyodyne's first version deliberately does not do. They
 bound [the v1 goals](v1-goals.md): a non-goal is a decision about where v1 stops
 rather than a gap waiting to be closed, and
-[what is deferred beyond v1](../../v1-harness-design.md#deferred-beyond-v1) says
+[what is deferred beyond v1](../../designs/v1-harness-design.md#deferred-beyond-v1) says
 which of them are expected to arrive later. They were agreed as part of the v1
-design and stated in [the v1 harness design](../../v1-harness-design.md) until
+design and stated in [the v1 harness design](../../designs/v1-harness-design.md) until
 they were moved here alongside the goals they bound; the wording below is
 unchanged from that document.
 

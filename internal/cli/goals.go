@@ -28,8 +28,12 @@ import (
 const goalsTrackerTimeout = 30 * time.Second
 
 type goalsOutput struct {
-	Goals    []goal.Goal    `json:"goals,omitempty"`
-	Problems []goal.Problem `json:"problems,omitempty"`
+	Goals []goal.Goal `json:"goals,omitempty"`
+	// BriefGoals are what the goals above link upward to, listed so a reader
+	// resolving a link by hand has both ends of it.
+	BriefGoals   []goal.BriefGoal   `json:"brief_goals,omitempty"`
+	Problems     []goal.Problem     `json:"problems,omitempty"`
+	LinkProblems []goal.LinkProblem `json:"link_problems,omitempty"`
 	// Attributions are the admitted work items and what each says it is for.
 	Attributions []itemAttribution `json:"attributions,omitempty"`
 	Error        string            `json:"error,omitempty"`
@@ -75,7 +79,12 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 	if *flags.jsonOutput {
-		return writeJSON(stdout, stderr, goalsOutput{Goals: goals.Goals, Problems: goals.Problems})
+		return writeJSON(stdout, stderr, goalsOutput{
+			Goals:        goals.Goals,
+			BriefGoals:   goals.BriefGoals,
+			Problems:     goals.Problems,
+			LinkProblems: goals.LinkProblems,
+		})
 	}
 	if reason, uncheckable := goals.Uncheckable(); uncheckable {
 		fmt.Fprintf(stdout, "no goal is in force: %s\n", reason)
@@ -90,6 +99,9 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 		}
 		fmt.Fprintf(stdout, "%s%s\n", recorded.Statement, state)
 		fmt.Fprintf(stdout, "  stated by: %s (%s)\n", recorded.ArtifactID, recorded.Path)
+		if recorded.Supports != "" {
+			fmt.Fprintf(stdout, "  supports: %s\n", recorded.Supports)
+		}
 	}
 	printGoalsProblems(stderr, goals)
 	return 0
@@ -227,6 +239,12 @@ func attributionDetail(attribution goal.Attribution) string {
 func printGoalsProblems(stderr io.Writer, goals goal.Set) {
 	for _, problem := range goals.Problems {
 		fmt.Fprintf(stderr, "goals not read: %s\n", problem)
+	}
+	// A broken link upstream is reported beside the goals rather than instead of
+	// them: the goal is still stated and work can still be attributed to it, and
+	// what is wrong is the chain above it.
+	for _, problem := range goals.LinkProblems {
+		fmt.Fprintf(stderr, "goal not linked to the brief: %s\n", problem)
 	}
 }
 

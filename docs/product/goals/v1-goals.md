@@ -31,7 +31,7 @@ These are the outcomes Yoyodyne's first version is built to reach: what has to
 become true for a harness to carry a product brief through goals, designs, work,
 reviewed changes, and an integrated codebase. Each one names the goal in
 [the product brief](../brief.md) that it supports, which is what
-[design invariant 1](../../v1-harness-design.md#design-invariants) requires. That
+[design invariant 1](../../designs/v1-harness-design.md#design-invariants) requires. That
 link is prose, and nothing in the harness checks it yet; artifact governance in
 milestone 2 is what will. Until then a reader has to check that it holds.
 
@@ -39,7 +39,7 @@ What v1 deliberately does not do is stated separately in
 [the v1 non-goals](v1-non-goals.md).
 
 Eight of these goals were agreed as part of the v1 design and stated in
-[the v1 harness design](../../v1-harness-design.md) until they were moved here;
+[the v1 harness design](../../designs/v1-harness-design.md) until they were moved here;
 their wording is unchanged from that document, and what has changed is that each
 now names its link upstream. Four are new. The goal on independent review was
 added when the brief was written and the backlog was checked against it, because

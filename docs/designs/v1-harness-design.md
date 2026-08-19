@@ -1,3 +1,17 @@
+---
+id: v1-harness-design
+kind: design
+title: Yoyodyne V1 Harness Design
+supports:
+    - v1-goals
+status: active
+revisions:
+    - action: created
+      by: architect
+      at: 2026-08-18T00:00:00Z
+      reason: identity added with the artifact metadata schema and the document moved into the configured designs home, where nothing could refer to it before; recorded under the architect's authority because a design is the architect's, pending ratification when the role runs. The design's own prose is unchanged.
+---
+
 # Yoyodyne V1 Harness Design
 
 ## Status
@@ -14,7 +28,7 @@ The implementation is deliberately sequenced around a narrow walking skeleton. O
 
 ## Goals and Non-goals
 
-The goals this design serves, and the non-goals that bound it, are product intent rather than design, so they live with the product manager's artifacts rather than here: [the v1 goals](product/goals/v1-goals.md) and [the v1 non-goals](product/goals/v1-non-goals.md). They were moved out of this document unchanged, because [artifact ownership](#artifact-ownership) assigns the goals to the product manager, and intent stated in an architect-owned document is intent the owning role does not hold.
+The goals this design serves, and the non-goals that bound it, are product intent rather than design, so they live with the product manager's artifacts rather than here: [the v1 goals](../product/goals/v1-goals.md) and [the v1 non-goals](../product/goals/v1-non-goals.md). They were moved out of this document unchanged, because [artifact ownership](#artifact-ownership) assigns the goals to the product manager, and intent stated in an architect-owned document is intent the owning role does not hold.
 
 Invariant 1 below is what binds this design back to them: every design and implementation item must trace to at least one active goal.
 
@@ -191,7 +205,7 @@ These files are reviewable with the code and are the source of truth for their c
 
 `decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them in `invariants/` beneath it, kept in their own directory because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work rather than Markdown.
 
-One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default, and it is the only part of this layout the harness reads today. [Configuration](configuration.md#product-specifications) is the reference for it.
+One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default, and it is the only part of this layout the harness reads today. [Configuration](../configuration.md#product-specifications) is the reference for it.
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
@@ -283,7 +297,7 @@ The `checks` above are this project's own, and they are the harness's only view 
 
 Personas specialize how an agent works and can never grant it authority: the immutable role contracts are enforced in Go and prefix the configured guidance in the prompt. A persona `path` is relative to the project `.yoyodyne` directory and must name a Markdown file inside it. Configuration loading rejects unknown keys, unknown bundles, unsafe or non-Markdown persona paths, unknown role capabilities, invalid ownership, unsupported provider combinations, and automatic integration without both checks and review. Validation runs against the effective configuration, so a combination no single layer expressed still fails before any work is claimed.
 
-[Configuration](configuration.md) is the operator-facing reference for the layout, precedence, merge semantics, and inspection commands.
+[Configuration](../configuration.md) is the operator-facing reference for the layout, precedence, merge semantics, and inspection commands.
 
 ## Work Execution and Integration
 

@@ -3,7 +3,7 @@
 This directory holds the goals derived from [the product brief](../brief.md).
 It currently holds [the v1 goals](v1-goals.md) and
 [the v1 non-goals](v1-non-goals.md) that bound them, moved here unchanged from
-[the v1 harness design](../../v1-harness-design.md) because goals are the
+[the v1 harness design](../../designs/v1-harness-design.md) because goals are the
 product manager's to own rather than the architect's.
 
 A goal document opens with an introduction saying what it covers and why, and
@@ -31,7 +31,7 @@ Each goal states one outcome the product is trying to reach, and should be:
 
 Goals are owned by the product manager and approved by the operator. Other roles
 ask questions and propose amendments; they do not revise a goal directly. See
-[artifact ownership](../../v1-harness-design.md#artifact-ownership).
+[artifact ownership](../../designs/v1-harness-design.md#artifact-ownership).
 
 Stable artifact IDs, lifecycle status, and the rest of the machine-readable
 metadata each goal will carry are not settled yet; they arrive with artifact

@@ -4,7 +4,7 @@ A managed project the harness is driven over in `language_agnostic_test.go`. It
 is deliberately not Go: no module, no `go.mod`, no Go source, and no check that
 runs a Go command.
 
-Invariant 11 of `docs/v1-harness-design.md` says the harness assumes no
+Invariant 11 of `docs/designs/v1-harness-design.md` says the harness assumes no
 language, build system, or test framework in the managed project — verification
 is the commands the project declares, run in the worktree, and the harness
 decides only whether they passed. Every other fixture in this repository is a

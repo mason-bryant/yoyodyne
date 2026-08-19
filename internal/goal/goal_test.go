@@ -547,6 +547,272 @@ func TestTheGoalsAreReadFromTheArtifactsAsTheStoreLoadsThem(t *testing.T) {
 	}
 }
 
+func TestAGoalNamesTheBriefGoalItSupportsRatherThanOnlySayingSoInProse(t *testing.T) {
+	t.Parallel()
+
+	// The link upstream is what the frontmatter cannot carry: `supports: brief`
+	// says the document serves the brief and says nothing about which of the
+	// brief's goals any one entry in it reaches.
+	set := setLinkedToBrief(t, `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the brief through to verification.
+  *Supports: every change traces to intent somebody approved.*
+- Review every change independently.
+  **Supports: nothing lands unreviewed by someone other than its author.**
+`)
+	if len(set.LinkProblems) != 0 {
+		t.Fatalf("link problems = %v", set.LinkProblems)
+	}
+	if len(set.BriefGoals) != 2 {
+		t.Fatalf("brief goals = %#v", set.BriefGoals)
+	}
+	// The brief's goal is named by the claim it opens with, not by the paragraph
+	// enlarging on it.
+	if set.BriefGoals[0].Name != "Every change traces to intent somebody approved." {
+		t.Fatalf("brief goal = %#v", set.BriefGoals[0])
+	}
+	// Either spelling of the emphasis means the same thing by it, and the
+	// trailing marker is markup rather than part of what is named.
+	if set.Goals[0].Supports != "every change traces to intent somebody approved." {
+		t.Fatalf("supports = %q", set.Goals[0].Supports)
+	}
+	if set.Goals[1].Supports != "nothing lands unreviewed by someone other than its author." {
+		t.Fatalf("supports = %q", set.Goals[1].Supports)
+	}
+}
+
+func TestATrailerWrappedAcrossLinesNamesTheWholeBriefGoal(t *testing.T) {
+	t.Parallel()
+
+	// A trailer long enough to wrap is as ordinary as a goal long enough to wrap.
+	// Reading only its first physical line would name a fragment, which resolves
+	// to nothing and reports the fragment rather than the truncation.
+	set := setLinkedToBrief(t, `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Publish that work as pull requests the harness opens.
+  *Supports: nothing lands unreviewed by someone other than
+  its author.*
+`)
+	if len(set.LinkProblems) != 0 {
+		t.Fatalf("link problems = %v", set.LinkProblems)
+	}
+	if set.Goals[0].Supports != "nothing lands unreviewed by someone other than its author." {
+		t.Fatalf("supports = %q", set.Goals[0].Supports)
+	}
+	// The trailer still has to stay out of the goal itself.
+	if strings.Contains(set.Goals[0].Statement, "Supports:") {
+		t.Fatalf("goal = %q", set.Goals[0].Statement)
+	}
+}
+
+func TestAGoalNamingABriefGoalTheBriefDoesNotStateIsReported(t *testing.T) {
+	t.Parallel()
+
+	set := setLinkedToBrief(t, `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the brief through to verification.
+  *Supports: every change is cheap to make.*
+`)
+	if len(set.LinkProblems) != 1 || set.LinkProblems[0].Kind != LinkDangling {
+		t.Fatalf("link problems = %#v", set.LinkProblems)
+	}
+	problem := set.LinkProblems[0]
+	if problem.ArtifactID != "v1-goals" || problem.Path != "docs/product/goals/v1-goals.md" {
+		t.Fatalf("link problem = %#v", problem)
+	}
+	// What is reported has to name the claim that does not resolve, because that
+	// is the string somebody has to correct.
+	if !strings.Contains(problem.Reason, "every change is cheap to make.") {
+		t.Fatalf("reason = %q", problem.Reason)
+	}
+	// Nothing is dropped over a broken link: the goal is still what the document
+	// states, and work naming it still resolves.
+	if !set.Attribute("Maintain a traceable chain from the brief through to verification.").Resolved() {
+		t.Fatalf("a goal with a broken link upstream stopped resolving")
+	}
+}
+
+func TestAGoalThatNamesNothingUpstreamIsReportedAsAnOrphan(t *testing.T) {
+	t.Parallel()
+
+	// A goal with no trailer at all, and one whose trailer annotates the goal
+	// rather than linking it, are the same thing: neither says what the goal is
+	// for.
+	set := setLinkedToBrief(t, `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the brief through to verification.
+- Review every change independently.
+  *Added when the backlog was checked against the brief.*
+`)
+	if len(set.LinkProblems) != 2 {
+		t.Fatalf("link problems = %#v", set.LinkProblems)
+	}
+	for _, problem := range set.LinkProblems {
+		if problem.Kind != LinkUnstated {
+			t.Fatalf("link problem = %#v", problem)
+		}
+	}
+	if set.Goals[1].Supports != "" {
+		t.Fatalf("a trailer that names no brief goal was read as naming one: %q", set.Goals[1].Supports)
+	}
+}
+
+func TestABriefStatingNoGoalsIsReportedOnceRatherThanAgainstEveryGoal(t *testing.T) {
+	t.Parallel()
+
+	// Naming the missing root beats reporting every goal as separately unlinked:
+	// what somebody has to fix is the brief, and it is one thing rather than one
+	// per goal below it.
+	root := newRepository(t)
+	write(t, root, "docs/product/brief.md", "# Product brief\n\nWhat this is for, with no goals stated under a heading.\n")
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the brief through to verification.
+  *Supports: every change traces to intent somebody approved.*
+- Review every change independently.
+  *Supports: nothing lands unreviewed by someone other than its author.*
+`)
+	set := Collect(root, setOf(
+		recorded("brief", artifact.KindBrief, artifact.StatusActive, "docs/product/brief.md"),
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+	))
+	if len(set.LinkProblems) != 1 || set.LinkProblems[0].Kind != LinkNoBriefGoals {
+		t.Fatalf("link problems = %#v", set.LinkProblems)
+	}
+	if !strings.Contains(set.LinkProblems[0].Reason, "brief") {
+		t.Fatalf("reason = %q", set.LinkProblems[0].Reason)
+	}
+	// A brief that states no goals is not a goals document that could not be
+	// read. It is the root either way.
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+}
+
+func TestAGoalNoLongerInForceIsNotHeldToItsLinkUpstream(t *testing.T) {
+	t.Parallel()
+
+	// A superseded document states intent that was replaced. Reporting its links
+	// would leave a permanent finding against a decision somebody already made.
+	root := newRepository(t)
+	write(t, root, "docs/product/brief.md", briefDocument())
+	write(t, root, "docs/product/goals/v0-goals.md", `# V0 goals
+
+An introduction.
+
+## Goals
+
+- Something the product no longer intends.
+  *Supports: a brief goal nobody ever wrote.*
+`)
+	set := Collect(root, setOf(
+		recorded("brief", artifact.KindBrief, artifact.StatusActive, "docs/product/brief.md"),
+		recorded("v0-goals", artifact.KindGoals, artifact.StatusSuperseded, "docs/product/goals/v0-goals.md"),
+	))
+	if len(set.LinkProblems) != 0 {
+		t.Fatalf("link problems = %#v", set.LinkProblems)
+	}
+}
+
+func TestEveryGoalYoyodyneRecordsNamesABriefGoalTheBriefStates(t *testing.T) {
+	t.Parallel()
+
+	// The seeded artifacts are the first product this governs, and the chain from
+	// their goals to the brief is exactly what identity was added for. Checking
+	// it here ties the two documents together rather than leaving the link to be
+	// believed.
+	root := repositoryRoot(t)
+	store := artifact.Store{
+		RepositoryRoot: root,
+		Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
+		Excluded:       []string{"docs/decisions/invariants"},
+	}
+	artifacts, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(artifacts.Problems) != 0 || len(artifacts.ReferenceProblems) != 0 {
+		t.Fatalf("problems = %v, reference problems = %v", artifacts.Problems, artifacts.ReferenceProblems)
+	}
+
+	set := Collect(root, artifacts)
+	if len(set.Problems) != 0 {
+		t.Fatalf("goals not read: %v", set.Problems)
+	}
+	if len(set.LinkProblems) != 0 {
+		t.Fatalf("goals not linked to the brief: %v", set.LinkProblems)
+	}
+	if len(set.BriefGoals) == 0 || len(set.Goals) == 0 {
+		t.Fatalf("brief goals = %d, goals = %d", len(set.BriefGoals), len(set.Goals))
+	}
+}
+
+// setLinkedToBrief is a repository whose brief states the goals a goals document
+// links up to, so a test about that link says only that.
+func setLinkedToBrief(t *testing.T, goals string) Set {
+	t.Helper()
+	root := newRepository(t)
+	write(t, root, "docs/product/brief.md", briefDocument())
+	write(t, root, "docs/product/goals/v1-goals.md", goals)
+	set := Collect(root, setOf(
+		recorded("brief", artifact.KindBrief, artifact.StatusActive, "docs/product/brief.md"),
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+	))
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+	return set
+}
+
+// briefDocument is a brief in the shape Yoyodyne's own is written in: each goal
+// a bolded claim followed by a paragraph enlarging on it.
+func briefDocument() string {
+	return `# Product brief
+
+What the product is for.
+
+## Goals
+
+- **Every change traces to intent somebody approved.** A reader can follow any
+  merged change back through the work, the design, and the goal to the brief.
+- **Nothing lands unreviewed by someone other than its author.**
+`
+}
+
+// repositoryRoot is the checkout these tests run in, so the seeded artifacts are
+// read where they actually live rather than from a copy.
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("Abs() error = %v", err)
+	}
+	if root, err = filepath.EvalSymlinks(root); err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	return root
+}
+
 // setWithGoals is a repository whose only goals document states what a test
 // names, so a test about attribution says only that.
 func setWithGoals(t *testing.T, statements ...string) Set {
