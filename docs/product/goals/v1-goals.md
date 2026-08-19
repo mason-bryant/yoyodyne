@@ -18,6 +18,10 @@ revisions:
       by: product-manager
       at: 2026-08-18T00:00:00Z
       reason: added the adoption goal, drafted by the product manager and approved by the operator with one amendment - the readme alone, not the documentation, is what a newcomer needs; the intro now dates each new goal honestly
+    - action: amended
+      by: product-manager
+      at: 2026-08-18T00:00:00Z
+      reason: the introduction claimed nothing checks the link to the brief; milestone 2 delivered that checking, and the introduction now says so
 approvals:
     - revision: 2
       by: operator
@@ -32,8 +36,10 @@ become true for a harness to carry a product brief through goals, designs, work,
 reviewed changes, and an integrated codebase. Each one names the goal in
 [the product brief](../brief.md) that it supports, which is what
 [design invariant 1](../../designs/v1-harness-design.md#design-invariants) requires. That
-link is prose, and nothing in the harness checks it yet; artifact governance in
-milestone 2 is what will. Until then a reader has to check that it holds.
+link is checked: artifact governance, delivered in milestone 2, resolves
+each goal's *Supports* trailer against the brief mechanically, and a test
+enforces it. A reader can still trace the link by hand; the harness no longer
+depends on them to.
 
 What v1 deliberately does not do is stated separately in
 [the v1 non-goals](v1-non-goals.md).

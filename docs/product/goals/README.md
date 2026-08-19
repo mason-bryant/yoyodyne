@@ -15,9 +15,9 @@ content under a `Non-goals` heading, so the harness reports it as stating none.
 It is still read exactly as written rather than dropped, because refusing it
 would lose intent somebody recorded. The contract having no shape for a
 non-goals document is a gap in the contract, not a reason to file non-goals
-under a `Goals` heading. [The brief](../brief.md) is reported the same way
-today, and this file is reported too, because its `Goals` title is taken for
-that heading with no introduction ahead of it.
+under a `Goals` heading. This file is reported too, because its `Goals` title is taken
+for that heading with no introduction ahead of it; [the brief](../brief.md) is
+not.
 
 Each goal states one outcome the product is trying to reach, and should be:
 
@@ -33,9 +33,11 @@ Goals are owned by the product manager and approved by the operator. Other roles
 ask questions and propose amendments; they do not revise a goal directly. See
 [artifact ownership](../../designs/v1-harness-design.md#artifact-ownership).
 
-Stable artifact IDs, lifecycle status, and the rest of the machine-readable
-metadata each goal will carry are not settled yet; they arrive with artifact
-governance in milestone 2, and reference validation and orphan reporting arrive
-with them. Until then a goal is ordinary prose in this directory and the link to
-the brief is prose too: a reader has to check that it holds, because nothing in
-the harness does.
+Artifact governance, delivered in milestone 2, made that machine-checkable:
+each goals document carries identity frontmatter, every goal's *Supports*
+trailer is resolved against the brief mechanically, reference validation and
+orphan reporting run over the loaded set, and a test enforces that every goal
+in force names a claim the brief states. A reader can still trace the links by
+hand; the harness no longer depends on them to. This index itself is ordinary
+prose — the store does not govern directory indexes — so the contract it
+teaches lives here informally and normatively in the governed documents.
