@@ -10,6 +10,14 @@ revisions:
       by: architect
       at: 2026-08-19T14:55:09Z
       reason: commissioned as yoyodyne-ifd.68.1, the design child of the Slack reporting epic; decided in conversation with the operator on 2026-08-19 and transcribed under the architect's role verbatim from conversation chat-11558d32
+    - action: amended
+      by: architect
+      at: 2026-08-19T19:08:06Z
+      reason: approved amendment-c255fbec from the developer on yoyodyne-ifd.68.2 - the design was explicit about topics and silent about speakers; the attribution rule is recorded ahead of the table so new event kinds are attributed by it, and run-started follows the recorded selector rather than being fixed to the development manager
+    - action: amended
+      by: architect
+      at: 2026-08-19T19:08:06Z
+      reason: approved amendment-7b47ac9b from the developer on yoyodyne-ifd.68.3's first run - the design specified catch-up from cursors and not the no-cursor case, and the two readings diverge sharply; the non-replaying reading is now the design's own, with the stream-beginning refinement so the cutoff is when reporting was enabled rather than when each message is posted
 ---
 
 # Slack reporting: events out, directives in, one thread per topic
@@ -29,6 +37,8 @@ Work the harness runs on its own is acceptable only while it is visible, and tod
 **2. The sink is one separate, long-running process.** A single operator-started process (verb to be settled at implementation; I propose `yoyo slack`) holds the Socket Mode connection, tails the durable streams from per-stream cursors, owns the thread map, and posts. Rejected: posting from each run process. Runs are ephemeral and concurrent; N processes posting means N racing writers to one thread map and a token in every run's environment. With one sink, the credential boundary is structural rather than behavioral: **no run process, and therefore no agent's subprocess tree, ever has a Slack token in its environment at all.** The harness posts; agents cannot, and not because they were asked nicely.
 
 **3. Reporting is observation, never a gate.** Slack being down, slow, or misconfigured changes nothing about any run: no wait, no failure, no park. The sink catches up from its cursors when it returns, so messages arrive late rather than never. At-least-once delivery is accepted: a crash between a post and its cursor advance may duplicate a message, and a rare duplicate is chosen over a lost one because the durable record, not Slack, is authoritative.
+
+A sink starting with no cursor for a stream initializes that cursor at now and reports forward: history is never replayed into Slack, because a product with hundreds of recorded runs would otherwise open hundreds of threads the moment reporting is switched on. The cutoff is when reporting was switched on, not when a message happens to be posted — a stream that begins after the sink is running is reported from its own beginning, so a run started under a live sink is reported whole even if the sink falls behind, and only the pre-Slack past stays where it already is, in the durable records `yoyo-status` reads.
 
 **4. Socket Mode, confirmed.** The harness runs on operators' machines behind NAT; the Events API would demand a public HTTPS endpoint per operator, which fails the near-one-click setup requirement outright. And Socket Mode is bidirectional on one connection, which is what makes 68.4 a feature flag rather than a transport redesign: the websocket that posts is the websocket replies arrive on. Rejected: incoming webhooks — outbound-only, so two-way would mean a second transport later, which is precisely the rework this design exists to prevent.
 
@@ -53,6 +63,28 @@ Every outbound message is one envelope:
 | `severity` | `critical`, `warning`, `note` — the reports vocabulary, and rendered so critical cannot be mistaken for a note; the words carry the meaning, decoration only adds to it. |
 | `body` | The rendered or verbatim text. |
 | `refs` | Correlation ids: run, conversation or exchange, work item, directive, pull request. |
+
+### Who speaks
+
+Who speaks is decided here rather than per implementation child, because one voice per speaker is the epic's legibility goal, and an attribution decided three times is three chances to voice one event differently.
+
+The rule comes first and the table applies it, so a new event kind is attributed by the rule rather than by extending the table from imagination: **a persona speaks for its own judgments and its own authored text; the harness speaks for what it performs.**
+
+| Event | Speaker |
+| --- | --- |
+| run claimed and started | the recorded selector: the development manager when it chose the item, the harness when the operator named it |
+| checks passed or failed | harness |
+| the reviewer's verdict | reviewer |
+| the developer's attempt summary | developer, verbatim |
+| promotion; publication; queued merge; merge | harness |
+| a run parking or continuing (usage limit, overload, operator pause, unresolved directive) | harness |
+| blocker recorded | harness |
+| report filed | the role that filed it, verbatim |
+| proposal raised | the role that raised it, verbatim |
+| ask-exchange turn | the role whose turn it is, verbatim |
+| an exchange closing, including unresolved at its round cap | harness |
+
+Run-started deserves its line of reasoning, because it is the one place the speaker varies. The event carries the recorded selection reason, so the speaker follows the recorded selector: the development manager when it chose, and the harness when the operator named the item — the operator is not a persona, and a persona must not narrate selections it never made.
 
 The initial reportable set is deliberately the milestones the conversation's activity line already reports, plus what has no terminal surface at night: run claimed and started — **carrying the recorded selection reason**, so the fact the `selected-work-passes-intake-and-records-why` invariant makes durable is also the fact an operator sees; checks passed or failed; the reviewer's verdict; promotion; publication, queued merge, and merge; a run parking (usage limit, overload, operator pause, unresolved directive) and continuing; a blocker recorded; a report filed, at its severity; a proposal raised; an ask-exchange turn, and an exchange closing — including closing unresolved at its round cap, which escalates to the operator and is exactly the kind of message this channel exists to carry. Each transition is said once; a thread is a narrative, not an event log scrolling sideways.
 
