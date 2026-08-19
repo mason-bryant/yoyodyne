@@ -2,7 +2,10 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +13,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -90,9 +94,13 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	// the goal and then wrote it nowhere would orphan every child of every
 	// decomposition — silently, because the action itself reported success, and at
 	// scale, because decomposition is where most items now come from.
-	tracker := &fakeTracker{items: map[string]beads.WorkItem{
-		"yoyodyne-ifd.102": {ID: "yoyodyne-ifd.102", Title: "Blocked-run triage", Status: "open"},
-	}}
+	// Nothing here is a test double standing in for the tracker. The session acts
+	// through the real beads client, so the note the chat layer writes has to
+	// survive being turned into a bd command line and read back out of bd's
+	// answer — which is the boundary an in-package fake cannot speak for, and the
+	// one the six orphaned children of yoyodyne-ifd.102 were suspected of dying
+	// at.
+	bd := &recordingBD{}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("One child, under the admitted item.",
 			`{"action":"create","title":"Triage docket","description":"Stopped work reaches the development manager.","goal":"`+recordedGoal+`","parent":"yoyodyne-ifd.102","priority":1,"reason":"nothing routes stopped work today"}`)},
@@ -100,7 +108,7 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	}})
 	options.Role = domain.RoleDevelopmentManager
 	options.Agent = string(domain.RoleDevelopmentManager)
-	options.Tracker = tracker
+	options.Tracker = beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
 	options.Goals = recordedGoals(recordedGoal)
 
 	session, err := Open(options)
@@ -112,29 +120,97 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 		t.Fatalf("Send() error = %v", err)
 	}
 	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
-		t.Fatalf("actions = %#v", reply.Actions)
-	}
-	if len(tracker.created) != 1 || tracker.created[0].Parent != "yoyodyne-ifd.102" {
-		t.Fatalf("created = %#v", tracker.created)
+		t.Fatalf("actions = %#v: %s", reply.Actions, reply.Actions[0].Failure)
 	}
 
-	// The assertion is made against what the tracker hands back rather than
-	// against what it was handed, because that is the direction the audit reads
-	// in: an attribution that only exists in the request is one nobody can find.
-	child, err := tracker.Show(context.Background(), reply.Actions[0].WorkItemID)
-	if err != nil {
-		t.Fatalf("Show(%q) error = %v", reply.Actions[0].WorkItemID, err)
+	// The creation reached bd as a decomposition under the admitted parent, and it
+	// carried the note. A --notes bd never receives is an attribution that exists
+	// only in the harness's own account of what it did.
+	create := bd.command("create")
+	if create == nil {
+		t.Fatalf("no bd create was run: %#v", bd.args)
 	}
-	attribution := options.Goals.AttributionOf(child.Notes)
+	if !slices.Contains(create, "--parent=yoyodyne-ifd.102") {
+		t.Fatalf("the child was not created under its parent: %#v", create)
+	}
+
+	// The item is then read back the way the audit reads it — off a bd listing,
+	// through the same client — and asked the same question yoyo goals
+	// attribution asks. Nothing between here and there is stubbed: the notes in
+	// bd's listing are the ones bd was told to store.
+	listed, err := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}.List(context.Background(), "open")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed = %#v", listed)
+	}
+	attribution := options.Goals.AttributionOf(listed[0].Notes)
 	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
-		t.Fatalf("the decomposition child does not resolve to a goal: %#v\nnotes:\n%s", attribution, child.Notes)
+		t.Fatalf("the decomposition child does not resolve to a goal: %#v\nnotes:\n%s", attribution, listed[0].Notes)
 	}
 	// The provenance and the goal are one note, and the goal is the part that has
 	// been lost before: an item recording only who created it says nothing about
 	// what the work is for.
-	if !strings.Contains(child.Notes, "Created under yoyodyne-ifd.102, decomposing it") {
-		t.Fatalf("the child lost its provenance:\n%s", child.Notes)
+	if !strings.Contains(listed[0].Notes, "Created under yoyodyne-ifd.102, decomposing it") {
+		t.Fatalf("the child lost its provenance:\n%s", listed[0].Notes)
 	}
+}
+
+// recordingBD stands in for the bd binary rather than for the tracker: it keeps
+// whatever a creation stored and gives it back on a listing, exactly as bd does
+// — verified against a real bd, which returns the notes a create was given both
+// in its own answer and in a later list --json. It invents nothing. An item
+// listed with no notes is an item created with none, which is what makes the
+// round trip through the command line worth asserting on.
+type recordingBD struct {
+	args  [][]string
+	items []map[string]any
+}
+
+func (r *recordingBD) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.args = append(r.args, append([]string(nil), command.Args...))
+	answer := "[]"
+	switch {
+	case len(command.Args) > 0 && command.Args[0] == "create":
+		item := map[string]any{
+			"id":         fmt.Sprintf("yoyodyne-ifd.102.%d", len(r.items)+2),
+			"status":     "open",
+			"priority":   1,
+			"issue_type": "task",
+		}
+		for _, argument := range command.Args {
+			for flag, field := range map[string]string{"--title=": "title", "--description=": "description", "--notes=": "notes"} {
+				if value, carried := strings.CutPrefix(argument, flag); carried {
+					item[field] = value
+				}
+			}
+		}
+		r.items = append(r.items, item)
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		answer = string(encoded)
+	case len(command.Args) > 0 && command.Args[0] == "list":
+		encoded, err := json.Marshal(r.items)
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		answer = string(encoded)
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: answer}, nil
+}
+
+// command returns the arguments of the one bd invocation with this verb, or nil
+// when there was none.
+func (r *recordingBD) command(verb string) []string {
+	for _, args := range r.args {
+		if len(args) > 0 && args[0] == verb {
+			return args
+		}
+	}
+	return nil
 }
 
 func TestWorkAdmittedBeforeGoalsWereCheckedCanAcquireOne(t *testing.T) {
