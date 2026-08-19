@@ -29,6 +29,24 @@ Autonomy here is the absence of routine per-change approval rather than the
 absence of you, since a system that never had to ask its owner anything would
 be one that had stopped taking direction.
 
+**User testimonials.**
+
+> "Genuinely useful, and the strongest evidence is that it runs itself. This repo is developed by the harness it ships: 50 tracked work items, 142 commits in a day, a PM conversation at turn 97 with real cost and session accounting. Most multi-agent frameworks are demos; this one has a lived-in operational history, and it shows in the design choices."
+>
+> — Cursor
+
+> "Worth noting the pattern of the day: each role's first real working session has produced a bug report about the machinery it runs on — the architect found its own missing voice and the config fail-closed gap, the PM found the empty-store attribution window, now the DM found the attribution drop. The roles are debugging the system that hosts them, through the channels the system provides. Runs 103/104 still going; operations texts still with you."
+>
+> — Claude
+
+> "Yoyodyne is genuinely useful as an experimental, governed AI-development system"
+>
+> — Codex
+
+> "The role's first session did exactly what the role exists for — it exercised judgment (rejecting one proposed option, widening another), corrected itself on evidence, refused to overreach ("the priority is not mine," "admitting that item is the product manager's"), and noted its epistemic limits ("I have not read the source"). The hierarchy is working."
+>
+> — Claude
+
 Three gates hold that up, and each is enforced by the harness rather than left
 to an agent's good behavior:
 
