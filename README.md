@@ -1,19 +1,33 @@
 # yoyo
 
-Writing code was never the hard part. Deciding what to build, keeping every
-change traceable to why, and making sure something other than the author
-reviewed it before it landed -- that is the work still done by hand around every
-coding agent. Yoyo is that structure, built to run without you driving each
-turn: goals in, merged software out, a conversation to steer it.
+Writing code was never the hard part.
 
-The nearest picture is a dark factory. The floor is dark: work is developed,
-checked, reviewed, and integrated without anybody watching each step. The office
-is not. You say what the line is for — you state intent, approve the brief and
-the goals it becomes, and answer what gets escalated to you — and everything
-between that and merged code belongs to the harness. Autonomy here is the
-absence of routine per-change approval rather than the absence of you, since a
-system that never had to ask its owner anything would be one that had stopped
-taking direction.
+The work is writing down the ideas, turning them into designs, breaking them
+up, assigning the work, the reviewing, the testing... the whole SDLC. For
+anything more complex than trivial software, that was always the majority of
+the effort.
+
+This is the work still done by hand around every coding agent. You prompt, you
+test, you get someone else to review and approve, you check it against the
+design documents.
+
+Putting that structure in place and maintaining the engineering discipline to
+keep it there is most of the overhead of building a dev organization.
+
+Yoyo is that structure, built to run without you driving each turn: goals in,
+merged software out, a conversation to steer it.
+
+The nearest picture is a
+[dark factory](<https://en.wikipedia.org/wiki/Lights_out_(manufacturing)>).
+The floor is dark: work is developed, checked, reviewed, and integrated without
+anybody watching each step. The office is not. You say what the line is for — a
+brief and goals you approve once, and amend when your intent changes. What
+reaches you after that is the exception, not the routine: a question only an
+owner can answer, a gate only you can open. Days of merged work pass between
+them. Everything else between intent and merged code belongs to the harness.
+Autonomy here is the absence of routine per-change approval rather than the
+absence of you, since a system that never had to ask its owner anything would
+be one that had stopped taking direction.
 
 Three gates hold that up, and each is enforced by the harness rather than left
 to an agent's good behavior:
