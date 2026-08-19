@@ -32,7 +32,7 @@ func TestAssembleProductReadsSpecificationsAndTrackerState(t *testing.T) {
 	// Only Markdown inside the configured directory is product evidence.
 	writeProductFile(t, root, "docs/product/diagram.png", "not markdown")
 	writeProductFile(t, root, "README.md", "# Yoyodyne\n\nWhat the product ships, described to whoever uses it.\n")
-	writeProductFile(t, root, "docs/v1-harness-design.md", "# Design\n\nArchitecture, not intent.\n")
+	writeProductFile(t, root, "docs/designs/v1-harness-design.md", "# Design\n\nArchitecture, not intent.\n")
 	writeProductFile(t, root, "internal/notes.md", "implementation notes")
 
 	bundle, err := AssembleProduct(ProductRequest{

@@ -150,3 +150,69 @@ func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 		t.Fatalf("report = %q", rendered.String())
 	}
 }
+
+func TestTheListPrintsTheBriefLinkAndReportsEachWayItBreaks(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil)+`
+# Product brief
+
+An introduction.
+
+## Goals
+
+- **Intent in, software out** — the harness carries approved intent to merged code.
+`)
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md", artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"})+`
+# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from intent to verification.
+  *Supports: intent in, software out.*
+- Isolate implementation tasks in harness-managed worktrees.
+- Publish work as pull requests the harness opens.
+  *Supports: a claim the brief does not state.*
+`)
+
+	stdout, stderr, code := runCLI(t, "goals", "list", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "supports: intent in, software out.") {
+		t.Fatalf("list stdout = %q, want the resolved link printed beside the goal", stdout)
+	}
+	for _, want := range []string{
+		"goal not linked to the brief:",
+		"it names no brief goal",
+		"a claim the brief does not state",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("list stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+
+	jsonStdout, jsonStderr, jsonCode := runCLI(t, "goals", "list", "--json", "--config", configPath)
+	if jsonCode != 0 {
+		t.Fatalf("json list code = %d, stderr = %q", jsonCode, jsonStderr)
+	}
+	// The field names are the operator-facing contract, so the test decodes
+	// them by name rather than through goalsOutput.
+	var decoded struct {
+		BriefGoals   []goal.BriefGoal   `json:"brief_goals"`
+		LinkProblems []goal.LinkProblem `json:"link_problems"`
+	}
+	if err := json.Unmarshal([]byte(jsonStdout), &decoded); err != nil {
+		t.Fatalf("decode json listing: %v", err)
+	}
+	if len(decoded.BriefGoals) != 1 || decoded.BriefGoals[0].Name != "Intent in, software out" {
+		t.Fatalf("brief_goals = %+v, want the one bolded brief claim by name", decoded.BriefGoals)
+	}
+	if len(decoded.LinkProblems) != 2 {
+		t.Fatalf("link_problems = %+v, want the unstated and dangling goals reported", decoded.LinkProblems)
+	}
+}

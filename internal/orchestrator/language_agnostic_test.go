@@ -1,6 +1,6 @@
 package orchestrator
 
-// Invariant 11 of docs/v1-harness-design.md: "The harness assumes no language,
+// Invariant 11 of docs/designs/v1-harness-design.md: "The harness assumes no language,
 // build system, or test framework in the managed project. Verification is the
 // commands the project declares, run in the worktree; the harness decides only
 // whether they passed."
@@ -39,7 +39,7 @@ const (
 	// nonGoFixture is the managed project these tests point the harness at.
 	nonGoFixture = "testdata/typescript-fixture"
 	// designDocument is where the invariant these tests verify is recorded.
-	designDocument = "../../docs/v1-harness-design.md"
+	designDocument = "../../docs/designs/v1-harness-design.md"
 	// languageInvariant is the sentence that states it. The fixture exists for
 	// this claim alone, so the two are tied together here rather than left to be
 	// rediscovered.

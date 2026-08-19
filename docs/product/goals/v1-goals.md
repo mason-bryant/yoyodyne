@@ -18,11 +18,19 @@ revisions:
       by: product-manager
       at: 2026-08-18T00:00:00Z
       reason: added the adoption goal, drafted by the product manager and approved by the operator with one amendment - the readme alone, not the documentation, is what a newcomer needs; the intro now dates each new goal honestly
+    - action: amended
+      by: product-manager
+      at: 2026-08-18T00:00:00Z
+      reason: the introduction claimed nothing checks the link to the brief; milestone 2 delivered that checking, and the introduction now says so
 approvals:
     - revision: 2
       by: operator
       at: 2026-08-19T00:43:34.381311Z
       reason: 'Approved by the operator in conversation: the v1 goals on 2026-08-17, and the legibility and adoption goals added on 2026-08-18, each approved as the revisions above record. Written down here by yoyodyne-ifd.1.8.'
+    - revision: 3
+      by: operator
+      at: 2026-08-19T03:28:43Z
+      reason: 'Approved by the operator in conversation on 2026-08-18: the introduction now states that milestone 2 delivered the goal-to-brief link checking, wording drafted by the product manager.'
 ---
 
 # V1 goals
@@ -31,15 +39,17 @@ These are the outcomes Yoyodyne's first version is built to reach: what has to
 become true for a harness to carry a product brief through goals, designs, work,
 reviewed changes, and an integrated codebase. Each one names the goal in
 [the product brief](../brief.md) that it supports, which is what
-[design invariant 1](../../v1-harness-design.md#design-invariants) requires. That
-link is prose, and nothing in the harness checks it yet; artifact governance in
-milestone 2 is what will. Until then a reader has to check that it holds.
+[design invariant 1](../../designs/v1-harness-design.md#design-invariants) requires. That
+link is checked: artifact governance, delivered in milestone 2, resolves
+each goal's *Supports* trailer against the brief mechanically, and a test
+enforces it. A reader can still trace the link by hand; the harness no longer
+depends on them to.
 
 What v1 deliberately does not do is stated separately in
 [the v1 non-goals](v1-non-goals.md).
 
 Eight of these goals were agreed as part of the v1 design and stated in
-[the v1 harness design](../../v1-harness-design.md) until they were moved here;
+[the v1 harness design](../../designs/v1-harness-design.md) until they were moved here;
 their wording is unchanged from that document, and what has changed is that each
 now names its link upstream. Four are new. The goal on independent review was
 added when the brief was written and the backlog was checked against it, because

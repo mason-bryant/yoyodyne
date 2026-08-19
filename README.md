@@ -1347,7 +1347,7 @@ a credential, a tool, or a request for either, and the reviewer — the role who
 verdict authorizes the merge — runs with no tools at all, so it cannot perform
 one. A developer does have a shell in its worktree and runs under your account,
 so "no agent pushes" describes what the harness does rather than a boundary it
-enforces; the [design document](docs/v1-harness-design.md#what-is-enforced-and-what-is-not)
+enforces; the [design document](docs/designs/v1-harness-design.md#what-is-enforced-and-what-is-not)
 says which half is which. The local target branch stays authoritative: the
 harness fast-forwards it as it always has, and the forge merges the pull request
 carrying exactly that commit under a merge commit — the one method that puts the
@@ -1564,6 +1564,20 @@ the set work may be attributed to, and a repository with no goals in force is
 told that nothing was checked rather than having its queue reported as
 unattributed.
 
+The link the other way is read too. A goals document's frontmatter says the
+document serves the brief; it says nothing about which of the brief's goals any
+one entry in it reaches, and that is the link a goal states in an emphasized
+`*Supports: ...*` line directly under it — indented with the entry and with no
+blank line between, or the trailer is not read as part of the goal. `yoyo
+goals list` resolves each one against the
+goals the brief itself states — named by the claim each opens with — and prints
+it beside the goal. A goal that names nothing upstream, and one naming a brief
+goal the brief does not state, are reported on stderr; a brief that states no
+goals at all is reported once, naming the brief, rather than against every goal
+below it. Nothing is refused over a broken link: the goal is still what the
+document states and work naming it still resolves, because what is wrong is the
+chain above it rather than the goal.
+
 ## What a change upstream leaves stale
 
 Amend a goal and the documents that serve it, and the work admitted under its
@@ -1616,7 +1630,7 @@ not. Recording, amending, and retiring one goes through a single code path that
 refuses every role but the architect, so `yoyo invariant` and any future
 architect agent are bound by it and no other role has an authorized way to write
 one. A developer, though, has a shell in its worktree, exactly as it does for
-the [pushes and merges the harness never routes through an agent](docs/v1-harness-design.md#what-is-enforced-and-what-is-not):
+the [pushes and merges the harness never routes through an agent](docs/designs/v1-harness-design.md#what-is-enforced-and-what-is-not):
 what stands in the way of it editing an invariant is its contract, which forbids
 it and tells it to propose the amendment instead, and the reviewer, which is
 told that a change creating, amending, retiring, or editing one is a finding.
@@ -1910,7 +1924,7 @@ state.
 
 ## Further reading
 
-- [The v1 harness design](docs/v1-harness-design.md) — the architecture, the
+- [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.
 - [The configuration guide](docs/configuration.md) — the full configuration

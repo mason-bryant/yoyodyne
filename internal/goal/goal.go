@@ -75,7 +75,15 @@ const maxGoalsPerDocument = 200
 // artifact is carried because that is what an attribution resolves to: knowing
 // the words matched is not knowing which document they were agreed in.
 type Goal struct {
-	Statement  string `json:"statement"`
+	Statement string `json:"statement"`
+	// Supports names the goal in the product brief that this goal serves, read
+	// from the emphasized trailer under it. It is what makes the second-to-last
+	// link of the chain checkable rather than prose a reader has to hold in their
+	// head: a goals document already carries `supports: brief` in its
+	// frontmatter, which says the document serves the brief and says nothing
+	// about which of the brief's goals any one entry in it reaches. Empty for a
+	// goal that names none.
+	Supports   string `json:"supports,omitempty"`
 	ArtifactID string `json:"artifact_id"`
 	// Path is the repository-relative file the statement was read from.
 	Path string `json:"path"`
@@ -85,10 +93,68 @@ type Goal struct {
 	InForce bool `json:"in_force"`
 }
 
+// BriefGoal is one goal the product brief states. It is what a goal's trailer
+// resolves to, and it is named the same way a goal is: by its own words, because
+// the brief carries no identity inside itself either. The name is the
+// emphasized phrase the brief's entry opens with rather than the whole entry —
+// the brief states each goal as a bolded claim followed by a paragraph
+// enlarging on it, and a goal downstream names the claim.
+type BriefGoal struct {
+	// Name is what a goal names to reach this one.
+	Name string `json:"name"`
+	// Statement is the brief's entry whole, so a reader is shown the goal rather
+	// than only the phrase that names it.
+	Statement  string `json:"statement"`
+	ArtifactID string `json:"artifact_id"`
+	Path       string `json:"path"`
+}
+
+// LinkProblemKind is what is wrong with a goal's link to the brief. The three
+// are told apart because they are fixed differently: a goal naming nothing has
+// yet to say what it is for, a goal naming something the brief does not state is
+// a name to correct, and a brief stating no goals is the root of the chain
+// missing rather than anything wrong with the goals below it.
+type LinkProblemKind string
+
+const (
+	// LinkUnstated is a goal that names nothing upstream.
+	LinkUnstated LinkProblemKind = "unsupported-goal"
+	// LinkDangling is a goal naming a brief goal the brief does not state.
+	LinkDangling LinkProblemKind = "dangling-support"
+	// LinkNoBriefGoals is the brief stating no goals for anything to name. It is
+	// reported once rather than against every goal, because the thing to fix is
+	// one document and not one per goal below it.
+	LinkNoBriefGoals LinkProblemKind = "no-brief-goals"
+)
+
+// LinkProblem is one goal whose link to the brief does not hold. Like a broken
+// artifact reference it is reported beside a set that still holds every goal it
+// read: a goal whose upstream link is wrong is still the goal the document
+// states, and dropping it would make work naming it unresolvable over a problem
+// with the brief.
+type LinkProblem struct {
+	Kind LinkProblemKind `json:"kind"`
+	// Statement, ArtifactID, and Path are the goal the problem is written down
+	// in. They are empty on LinkNoBriefGoals, which is about the brief.
+	Statement  string `json:"statement,omitempty"`
+	ArtifactID string `json:"artifact_id,omitempty"`
+	Path       string `json:"path,omitempty"`
+	Reason     string `json:"reason"`
+}
+
+func (p LinkProblem) String() string {
+	if p.Statement == "" {
+		return p.Reason
+	}
+	return fmt.Sprintf("%s (%s): %s", p.Statement, p.ArtifactID, p.Reason)
+}
+
 // Problem names one goals document whose goals could not be read, and says why.
 // It is reported beside the goals that did load: a document nobody can read is
 // a gap in what work can be attributed to, and a gap nobody is told about looks
-// exactly like a repository with fewer goals.
+// exactly like a repository with fewer goals. The brief shares this listing
+// when it cannot be read — its Reason names it as the brief, so the shared
+// `goals not read:` rendering still says which document failed and why.
 type Problem struct {
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
@@ -101,10 +167,18 @@ func (p Problem) String() string {
 // Set is every goal the repository records.
 type Set struct {
 	Goals []Goal `json:"goals,omitempty"`
+	// BriefGoals are the goals the product brief states, which is what the goals
+	// above link upward to.
+	BriefGoals []BriefGoal `json:"brief_goals,omitempty"`
 	// Sources are the goals artifacts read, in the order the artifact set holds
 	// them, so what is reported can say where it looked.
 	Sources  []string  `json:"sources,omitempty"`
 	Problems []Problem `json:"problems,omitempty"`
+	// LinkProblems are the goals whose link to the brief does not hold. They are
+	// kept apart from Problems because they mean something different: a Problem
+	// is a document whose goals are not in the set, and one of these is a goal
+	// that is. Nothing is dropped over one.
+	LinkProblems []LinkProblem `json:"link_problems,omitempty"`
 	// Unavailable is why the goals are not known at all, as opposed to known to
 	// be none. A caller that could not load the artifacts says so here: work
 	// admitted while the goals cannot be read is not work whose goal was
@@ -192,6 +266,46 @@ func NamedIn(notes string) (string, bool) {
 // malformed artifact is reported rather than refusing the whole set.
 func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 	var set Set
+	brief, briefInForce, briefUnreadable := "", false, false
+	for _, recorded := range artifacts.OfKind(artifact.KindBrief) {
+		// A brief in force is the one that names the root, so it wins the naming
+		// from one that is not; with no brief in force, the id of one that ended
+		// is still what a reader has to be sent to.
+		if brief == "" || recorded.InForce() {
+			brief = recorded.ID
+		}
+		// A superseded or retired brief states intent that was replaced, and its
+		// goals are not link targets. Both ends of the link are held to the same
+		// rule: linkProblems judges only goals in force, and a goal resolving
+		// against a brief goal the product no longer holds would be traceability
+		// that pointed at replaced intent.
+		if !recorded.InForce() {
+			continue
+		}
+		briefInForce = true
+		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
+		if err != nil {
+			// The brief is named as the brief: the problems listing is shared
+			// with the goals documents, and a read failure reported bare would
+			// describe the root of the chain as one of its leaves.
+			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: fmt.Sprintf("the product brief could not be read: %s", err.Error())})
+			briefUnreadable = true
+			continue
+		}
+		// A brief stating no goals is not reported here. It is the root of the
+		// chain whether or not it states any, and what it costs is that nothing
+		// below it can link upward — which is where it is reported, once, rather
+		// than as a defect in the brief.
+		stated, _ := statements(content)
+		for _, entry := range stated {
+			set.BriefGoals = append(set.BriefGoals, BriefGoal{
+				Name:       named(entry.statement),
+				Statement:  entry.statement,
+				ArtifactID: recorded.ID,
+				Path:       recorded.Path,
+			})
+		}
+	}
 	for _, recorded := range artifacts.OfKind(artifact.KindGoals) {
 		set.Sources = append(set.Sources, recorded.ID)
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
@@ -204,24 +318,94 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: problem})
 			continue
 		}
-		for _, statement := range stated {
-			if len(statement) > MaxStatementBytes {
+		for _, entry := range stated {
+			if len(entry.statement) > MaxStatementBytes {
 				set.Problems = append(set.Problems, Problem{
 					Path: recorded.Path,
 					Reason: fmt.Sprintf("a goal it states is %d bytes, limit is %d; work cannot name a goal that long, so it is not one work can be attributed to",
-						len(statement), MaxStatementBytes),
+						len(entry.statement), MaxStatementBytes),
 				})
 				continue
 			}
 			set.Goals = append(set.Goals, Goal{
-				Statement:  statement,
+				Statement:  entry.statement,
+				Supports:   supported(entry.trailer),
 				ArtifactID: recorded.ID,
 				Path:       recorded.Path,
 				InForce:    recorded.InForce(),
 			})
 		}
 	}
+	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce, briefUnreadable)
 	return set
+}
+
+// linkProblems reports every goal whose link to the brief does not hold. Only
+// goals in force are judged: one stated by a document that was superseded or
+// retired is no longer intent anybody has to trace, and reporting it would
+// leave a permanent finding against a decision somebody already made.
+func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInForce, briefUnreadable bool) []LinkProblem {
+	current := make([]Goal, 0, len(goals))
+	for _, candidate := range goals {
+		if candidate.InForce {
+			current = append(current, candidate)
+		}
+	}
+	if len(current) == 0 {
+		return nil
+	}
+	if len(briefGoals) == 0 {
+		// Naming the missing root beats reporting every goal as separately
+		// unlinked, which is the same choice the artifact references make: what
+		// somebody has to fix is one document, and it is not any of the goals.
+		// The three cases are separated because they are three different things to
+		// do: write the brief, put the brief that was written back in force, or
+		// state its goals under a `Goals` heading.
+		var reason string
+		switch {
+		case brief == "":
+			reason = `no artifact of kind "brief" is recorded, so there is no brief goal for a goal to name`
+		case !briefInForce:
+			reason = fmt.Sprintf("%s is no longer in force, so the goals it states are not intent a goal can name", brief)
+		// An unreadable brief is a fourth case, not the third: telling the
+		// operator to add a `Goals` heading to a document that could not be
+		// read would send them to fix the wrong thing. The read failure
+		// itself is already reported with the goals problems.
+		case briefUnreadable:
+			reason = fmt.Sprintf("%s could not be read — the failure is reported with the goals problems — so whether it states goals is unknown and no goal can resolve against it", brief)
+		default:
+			reason = fmt.Sprintf("%s states no goals under a `Goals` heading, so there is no brief goal for a goal to name", brief)
+		}
+		return []LinkProblem{{Kind: LinkNoBriefGoals, Reason: reason}}
+	}
+
+	stated := make(map[string]bool, len(briefGoals))
+	for _, upstream := range briefGoals {
+		stated[fold(upstream.Name)] = true
+	}
+	var problems []LinkProblem
+	for _, candidate := range current {
+		switch {
+		case candidate.Supports == "":
+			problems = append(problems, LinkProblem{
+				Kind:       LinkUnstated,
+				Statement:  candidate.Statement,
+				ArtifactID: candidate.ArtifactID,
+				Path:       candidate.Path,
+				Reason: fmt.Sprintf("it names no brief goal; a goal says what it supports in an emphasized `%s ...` line directly under it, and one that supports nothing in the brief is an orphan",
+					supportsPrefix),
+			})
+		case !stated[fold(candidate.Supports)]:
+			problems = append(problems, LinkProblem{
+				Kind:       LinkDangling,
+				Statement:  candidate.Statement,
+				ArtifactID: candidate.ArtifactID,
+				Path:       candidate.Path,
+				Reason:     fmt.Sprintf("it supports %q, and %s states no goal by that name", candidate.Supports, briefGoals[0].ArtifactID),
+			})
+		}
+	}
+	return problems
 }
 
 // Unreadable is the set a caller holds when the artifacts themselves could not
@@ -390,6 +574,70 @@ func trailer(line string) bool {
 	return closing < 0 || strings.TrimSpace(rest[closing+len(marker):]) == ""
 }
 
+// supportsPrefix opens what a trailer says. A trailer that says anything else is
+// an annotation of the goal rather than its link upstream, and is read as
+// naming nothing rather than as naming whatever it happened to contain.
+const supportsPrefix = "Supports:"
+
+// emphasisMarkers are the Markdown emphasis spellings a trailer may be written
+// in, longest first so `**bold**` is not read as an italic `*` around `*bold*`.
+var emphasisMarkers = []string{"**", "__", "*", "_"}
+
+// supported reads the brief goal a trailer names, and returns nothing for a
+// trailer that names none. The match on the prefix is case-folded because
+// `Supports:` and `supports:` are the same annotation typed differently, which
+// is the same tolerance a goal statement gets and for the same reason.
+func supported(trailer string) string {
+	unemphasized := strings.TrimSpace(withoutEmphasis(strings.TrimSpace(trailer)))
+	if len(unemphasized) < len(supportsPrefix) || !strings.EqualFold(unemphasized[:len(supportsPrefix)], supportsPrefix) {
+		return ""
+	}
+	return strings.TrimSpace(unemphasized[len(supportsPrefix):])
+}
+
+// withoutEmphasis strips the emphasis a trailer is wrapped in, so what it says
+// is read rather than how it was marked up. Only a marker the line opens with
+// is stripped, and only from both ends: emphasis inside the trailer belongs to
+// the words it names, which have to match the brief as the brief writes them.
+func withoutEmphasis(line string) string {
+	for _, marker := range emphasisMarkers {
+		if !strings.HasPrefix(line, marker) {
+			continue
+		}
+		return strings.TrimSuffix(strings.TrimSpace(line[len(marker):]), marker)
+	}
+	return line
+}
+
+// named is what a brief goal is called: the emphasized phrase its entry opens
+// with, which is the claim a goal downstream names, or the whole entry when it
+// opens with none. The brief states each goal as a bolded claim and then a
+// paragraph enlarging on it, so naming the whole entry would make every link
+// upstream a copy of a paragraph — and would break the moment the paragraph was
+// reworded, over a claim that had not changed.
+func named(statement string) string {
+	for _, marker := range []string{"**", "__"} {
+		if !strings.HasPrefix(statement, marker) {
+			continue
+		}
+		rest := statement[len(marker):]
+		if closing := strings.Index(rest, marker); closing > 0 {
+			return strings.TrimSpace(rest[:closing])
+		}
+	}
+	return statement
+}
+
+// entry is one goal as a document states it: the statement itself, and the
+// emphasized trailer under it naming what it supports upstream. The two are
+// read in one pass because they are one entry — the trailer is recognised
+// already, to keep it out of the statement, and dropping it there would leave
+// the link upstream readable only by a person.
+type entry struct {
+	statement string
+	trailer   string
+}
+
 // statements reads the goals one document states, or says why it states none.
 // A goal is one top-level entry under the `Goals` heading, and its statement is
 // that entry's opening paragraph rejoined onto one line. The rejoining is the
@@ -409,28 +657,30 @@ func trailer(line string) bool {
 // collecting the wrong prose is worse here than collecting none: what this
 // returns is what work may be attributed to, so a sentence read out of the
 // wrong section becomes a goal somebody can admit work under.
-func statements(content string) ([]string, string) {
+func statements(content string) ([]entry, string) {
 	lines := strings.Split(withoutFrontmatter(content), "\n")
 	level := 0
 	inGoals := false
 	inFence := false
 	// open says the statement collected last is still being read, so the line in
-	// hand may be the rest of it. Anything that is not more of that sentence
-	// closes it, which is why every branch below says so.
-	open := false
-	var stated []string
+	// hand may be the rest of it, and trailing says the same of its trailer.
+	// Anything that is not more of what is being read closes both, which is why
+	// every branch below says so. They are never both set: the trailer is what
+	// ends the statement.
+	open, trailing, adopted := false, false, false
+	var stated []entry
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			inFence, open = !inFence, false
+			inFence, open, trailing = !inFence, false, false
 			continue
 		}
 		if inFence || line == "" {
-			open = false
+			open, trailing = false, false
 			continue
 		}
 		if heading := headingPattern.FindStringSubmatch(line); heading != nil {
-			open = false
+			open, trailing = false, false
 			text := strings.TrimSpace(heading[2])
 			switch {
 			case negatedGoalsHeadingPattern.MatchString(text):
@@ -450,30 +700,57 @@ func statements(content string) ([]string, string) {
 			continue
 		}
 		if !inGoals {
-			open = false
+			open, trailing = false, false
 			continue
 		}
 		// The raw line rather than the trimmed one decides what is a goal: an
 		// indented entry describes the goal above it.
 		if item := listItemPattern.FindStringSubmatch(raw); item != nil {
-			open = false
+			open, trailing = false, false
 			if len(stated) >= maxGoalsPerDocument {
 				continue
 			}
 			if statement := strings.TrimSpace(item[1]); statement != "" {
-				stated = append(stated, statement)
+				stated = append(stated, entry{statement: statement})
 				open = true
 			}
 			continue
 		}
-		if !open {
+		if !open && !trailing {
 			continue
 		}
-		if !indented(raw) || nestedListItemPattern.MatchString(raw) || trailer(line) {
-			open = false
+		if !indented(raw) || nestedListItemPattern.MatchString(raw) {
+			open, trailing = false, false
 			continue
 		}
-		stated[len(stated)-1] += " " + line
+		// The trailer ends the statement and begins itself. It is collected
+		// rather than skipped because it is where the goal names what it supports
+		// in the brief, and it wraps exactly as a statement does.
+		if open && trailer(line) {
+			open, trailing, adopted = false, true, true
+			stated[len(stated)-1].trailer = line
+			continue
+		}
+		if trailing {
+			// A second emphasized run begins a new trailer rather than
+			// continuing the recorded one. The link reads the Supports
+			// trailer, so the first one matching that prefix wins and an
+			// annotation passes by unread — in either order.
+			if trailer(line) {
+				if supported(stated[len(stated)-1].trailer) == "" && supported(line) != "" {
+					stated[len(stated)-1].trailer = line
+					adopted = true
+				} else {
+					adopted = false
+				}
+				continue
+			}
+			if adopted {
+				stated[len(stated)-1].trailer += " " + line
+			}
+			continue
+		}
+		stated[len(stated)-1].statement += " " + line
 	}
 	switch {
 	case level == 0:

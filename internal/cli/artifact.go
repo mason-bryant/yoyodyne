@@ -318,11 +318,7 @@ func artifactPolicy(approvals config.Approvals) artifact.Policy {
 // directory excluded from them because its files carry the identity scheme this
 // one was modeled on rather than this one.
 func artifactStore(repositoryRoot string, product config.Product) artifact.Store {
-	return artifact.Store{
-		RepositoryRoot: repositoryRoot,
-		Homes:          []string{product.Specifications, product.Designs, product.Decisions},
-		Excluded:       []string{product.Invariants},
-	}
+	return artifact.StoreFor(repositoryRoot, product)
 }
 
 func reportArtifactError(stdout, stderr io.Writer, jsonOutput bool, err error) int {
