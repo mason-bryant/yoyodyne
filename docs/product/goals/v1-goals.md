@@ -27,6 +27,10 @@ approvals:
       by: operator
       at: 2026-08-19T00:43:34.381311Z
       reason: 'Approved by the operator in conversation: the v1 goals on 2026-08-17, and the legibility and adoption goals added on 2026-08-18, each approved as the revisions above record. Written down here by yoyodyne-ifd.1.8.'
+    - revision: 3
+      by: operator
+      at: 2026-08-19T03:28:43Z
+      reason: 'Approved by the operator in conversation on 2026-08-18: the introduction now states that milestone 2 delivered the goal-to-brief link checking, wording drafted by the product manager.'
 ---
 
 # V1 goals
