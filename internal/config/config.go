@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -368,12 +369,22 @@ func (c Config) Validate() error {
 		if err := domain.ValidateIdentifier("agent name", name); err != nil {
 			problems = append(problems, err.Error())
 		}
+		// The set of roles is fixed in the harness, so a name outside it is
+		// refused here rather than reaching the backend that assembles the
+		// invocation: everything downstream — the role's authority, its tool
+		// posture, whether it counts as a developer — is derived from the name,
+		// and a typo in an agents block would otherwise load and fail only once
+		// work had been claimed. The known roles are named because the whole
+		// point of the refusal is that the operator can see which one was meant.
+		roleKnown := agent.Role.Valid()
 		if strings.TrimSpace(string(agent.Role)) == "" {
 			problems = append(problems, fmt.Sprintf("agent %q role is required", name))
+		} else if !roleKnown {
+			problems = append(problems, fmt.Sprintf("agent %q has unknown role %q; roles are %s", name, agent.Role, describeRoles()))
 		}
 		if !agent.Backend.Valid() {
 			problems = append(problems, fmt.Sprintf("agent %q has unsupported backend %q", name, agent.Backend))
-		} else if !agent.Backend.SupportsRole(agent.Role) {
+		} else if roleKnown && !agent.Backend.SupportsRole(agent.Role) {
 			problems = append(problems, fmt.Sprintf("backend %q does not support role %q for agent %q", agent.Backend, agent.Role, name))
 		}
 		// Every executable agent declares its own selector; the harness never
@@ -441,6 +452,16 @@ func (p Persona) problems(agentName string) []string {
 		problems = append(problems, fmt.Sprintf("agent %q persona %q is %d bytes, limit is %d", agentName, p.Path, len(p.Text), MaxPersonaBytes))
 	}
 	return problems
+}
+
+// describeRoles lists the harness's roles the way an operator would read them
+// back into the file they mistyped.
+func describeRoles() string {
+	names := make([]string, 0, len(domain.Roles()))
+	for _, role := range domain.Roles() {
+		names = append(names, strconv.Quote(string(role)))
+	}
+	return strings.Join(names, ", ")
 }
 
 // validateSpecificationsDirectory keeps the product manager's inputs inside the

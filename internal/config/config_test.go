@@ -218,6 +218,81 @@ func TestValidateRequiresAModelSelectorForEveryAgent(t *testing.T) {
 	}
 }
 
+func TestValidateRefusesAnUnknownRole(t *testing.T) {
+	t.Parallel()
+
+	// The set of roles is fixed in the harness, so a name outside it is refused
+	// while the configuration is being loaded — before any work is claimed —
+	// rather than when the provider is finally invoked with it.
+	for _, test := range []struct {
+		name string
+		role string
+	}{
+		{name: "typo", role: "developor"},
+		{name: "wrong case", role: "Developer"},
+		{name: "role from somewhere else", role: "security-reviewer"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			input := strings.Replace(validBootstrapConfig, "role: developer", "role: "+test.role, 1)
+			_, err := Decode(strings.NewReader(input))
+			if err == nil {
+				t.Fatal("Decode() error = nil, want an unknown role failure")
+			}
+			var validationErr ValidationError
+			if !errors.As(err, &validationErr) {
+				t.Fatalf("Decode() error type = %T, want ValidationError", err)
+			}
+			// The refusal names the agent, what it said, and what it could have
+			// said: an operator who mistyped a role fixes it from the message.
+			for _, expected := range []string{`agent "developers" has unknown role`, test.role, `"developer"`, `"reviewer"`} {
+				if !strings.Contains(err.Error(), expected) {
+					t.Errorf("Decode() error %q does not contain %q", err, expected)
+				}
+			}
+			// An unknown role is not a backend that fails to serve it. Reporting
+			// both would send the operator to the backend line for a problem on
+			// the role line.
+			if strings.Contains(err.Error(), "does not support role") {
+				t.Errorf("Decode() error %q blames the backend for an unknown role", err)
+			}
+			// The role also stops counting toward the roles a run needs, so the
+			// configuration is short a developer rather than quietly having one.
+			if !strings.Contains(err.Error(), "at least one developer agent is required") {
+				t.Errorf("Decode() error %q counts an unknown role as a developer", err)
+			}
+		})
+	}
+}
+
+func TestValidateAcceptsEveryHarnessRole(t *testing.T) {
+	t.Parallel()
+
+	// The refusal is of names outside the set, not of names the bootstrap
+	// configuration happens not to use.
+	for _, role := range domain.Roles() {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+			input := strings.Replace(validBootstrapConfig, "role: developer", "role: "+string(role), 1)
+			_, err := Decode(strings.NewReader(input))
+			if role == domain.RoleDeveloper {
+				if err != nil {
+					t.Fatalf("Decode() error = %v", err)
+				}
+				return
+			}
+			// Every other role leaves the configuration with no developer, which
+			// is a different problem and the only one it should report.
+			if err == nil || !strings.Contains(err.Error(), "at least one developer agent is required") {
+				t.Fatalf("Decode() error = %v, want only the missing developer", err)
+			}
+			if strings.Contains(err.Error(), "unknown role") {
+				t.Fatalf("Decode() error %q refuses role %q", err, role)
+			}
+		})
+	}
+}
+
 func TestValidateAllowsCodexOnlyForThinRoles(t *testing.T) {
 	t.Parallel()
 

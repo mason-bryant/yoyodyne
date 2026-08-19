@@ -215,6 +215,20 @@ func TestInvalidInheritanceFailsClosed(t *testing.T) {
 			problem: `does not support role "architect"`,
 		},
 		{
+			// A typo in an agents block is the way an unknown role actually
+			// arrives, and the effective configuration is where it has to be
+			// caught: the overlay says only the role, and the backend and model
+			// it would run under come from the bundle underneath.
+			name:    "typoed role on an inherited agent",
+			config:  minimalProjectConfig + "agents:\n  developer:\n    role: developor\n",
+			problem: `agent "developer" has unknown role "developor"`,
+		},
+		{
+			name:    "unknown role on a new agent",
+			config:  minimalProjectConfig + "agents:\n  auditor:\n    role: security-reviewer\n    backend: claude-code\n    model: opus\n",
+			problem: `agent "auditor" has unknown role "security-reviewer"`,
+		},
+		{
 			name:    "invalid effective configuration",
 			config:  minimalProjectConfig + "execution:\n  max_concurrent_developers: 4\n",
 			problem: "max_concurrent_developers cannot exceed configured developer instances",
