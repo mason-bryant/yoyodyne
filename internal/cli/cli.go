@@ -281,7 +281,7 @@ Commands:
   config show       print the effective configuration and value origins
   artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
-  goals             read the recorded goals, and what admitted work serves
+  goals             read the recorded goals and what work serves, and witness it
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives

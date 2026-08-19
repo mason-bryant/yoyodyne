@@ -2,13 +2,18 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -75,9 +80,166 @@ func TestAdmittedWorkRecordsTheGoalItResolvedTo(t *testing.T) {
 	}
 	// What the harness writes is what it reads back: the item it just created
 	// resolves to the goal it was admitted under.
-	if !options.Goals.AttributionOf(tracker.created[0].Notes).Resolved() {
+	if !options.Goals.AttributionOf(tracker.created[0].Notes, goal.Witness{}).Resolved() {
 		t.Fatalf("the admitted item does not resolve to a goal: %q", tracker.created[0].Notes)
 	}
+}
+
+func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
+	t.Parallel()
+
+	// A decomposition is the development manager's only creation, and the goal it
+	// names has to survive exactly as an admission's does. The audit reads an
+	// item's goal off the notes the tracker holds, so a creation that validated
+	// the goal and then wrote it nowhere would orphan every child of every
+	// decomposition — silently, because the action itself reported success, and at
+	// scale, because decomposition is where most items now come from.
+	//
+	// Nothing here is a test double standing in for the tracker. The session acts
+	// through the real beads client, so the note the chat layer writes has to
+	// survive being turned into a bd command line and read back out of bd's
+	// answer — which is the boundary an in-package fake cannot speak for.
+	bd := &recordingBD{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("One child, under the admitted item.",
+			`{"action":"create","title":"Triage docket","description":"Stopped work reaches the development manager.","goal":"`+recordedGoal+`","parent":"yoyodyne-ifd.102","priority":1,"reason":"nothing routes stopped work today"}`)},
+		{SessionID: "session-1", FinalText: "Filed."},
+	}})
+	options.Role = domain.RoleDevelopmentManager
+	options.Agent = string(domain.RoleDevelopmentManager)
+	options.Tracker = beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
+	options.Goals = recordedGoals(recordedGoal)
+
+	session, err := Open(options)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	reply, err := session.Send(context.Background(), "decompose ifd.102")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if !reply.Actions[0].Applied {
+		t.Fatalf("the creation was not applied: %s", reply.Actions[0].Failure)
+	}
+
+	// The creation reached bd as a decomposition under the admitted parent, and it
+	// carried the note. A --notes bd never receives is an attribution that exists
+	// only in the harness's own account of what it did.
+	create := bd.command("create")
+	if create == nil {
+		t.Fatalf("no bd create was run: %#v", bd.args)
+	}
+	if !slices.Contains(create, "--parent=yoyodyne-ifd.102") {
+		t.Fatalf("the child was not created under its parent: %#v", create)
+	}
+
+	// The item is then read back the way the audit reads it — off a bd listing,
+	// through the same client — and asked the same question yoyo goals
+	// attribution asks. Nothing between here and there is stubbed: the notes in
+	// bd's listing are the ones bd was told to store.
+	listed, err := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}.List(context.Background(), "open")
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("listed = %#v", listed)
+	}
+	attribution := options.Goals.AttributionOf(listed[0].Notes, listed[0].GoalWitness)
+	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
+		t.Fatalf("the decomposition child does not resolve to a goal: %#v\nnotes:\n%s", attribution, listed[0].Notes)
+	}
+	// The provenance and the goal are one note, and the goal is the part that has
+	// been lost before: an item recording only who created it says nothing about
+	// what the work is for.
+	if !strings.Contains(listed[0].Notes, "Created under yoyodyne-ifd.102, decomposing it") {
+		t.Fatalf("the child lost its provenance:\n%s", listed[0].Notes)
+	}
+	// And the tracker was told, outside those notes, which goal was written here.
+	// That is what survives somebody replacing them, and it is why the loss would
+	// be reported next time rather than read as work nobody has attributed yet.
+	if listed[0].GoalWitness.Statement != recordedGoal {
+		t.Fatalf("the creation left no witness of the goal it recorded: %#v", listed[0].GoalWitness)
+	}
+	wiped := beads.WorkItem{Notes: "Constraints from the architect.", GoalWitness: listed[0].GoalWitness}
+	lost := options.Goals.AttributionOf(wiped.Notes, wiped.GoalWitness)
+	if lost.State != goal.StateLost {
+		t.Fatalf("replacing the child's notes reads as %q rather than a lost attribution", lost.State)
+	}
+	// And what it takes to put it back travels with the loss, so the child is
+	// recoverable from the tracker rather than from somebody's memory of the
+	// decomposition that made it.
+	if lost.Recorded != recordedGoal {
+		t.Fatalf("the loss does not say which goal to put back: %#v", lost)
+	}
+}
+
+// recordingBD stands in for the bd binary rather than for the tracker: it keeps
+// whatever a creation stored and gives it back on a listing, exactly as bd does
+// — verified against a real bd, which returns the notes and metadata a create
+// was given both in its own answer and in a later list --json. It invents
+// nothing. An item listed with no notes is an item created with none, which is
+// what makes the round trip through the command line worth asserting on.
+type recordingBD struct {
+	args  [][]string
+	items []map[string]any
+}
+
+func (r *recordingBD) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.args = append(r.args, append([]string(nil), command.Args...))
+	answer := "[]"
+	switch {
+	case len(command.Args) > 0 && command.Args[0] == "create":
+		item := map[string]any{
+			"id":         fmt.Sprintf("yoyodyne-ifd.102.%d", len(r.items)+2),
+			"status":     "open",
+			"priority":   1,
+			"issue_type": "task",
+		}
+		for _, argument := range command.Args {
+			for flag, field := range map[string]string{"--title=": "title", "--description=": "description", "--notes=": "notes"} {
+				if value, carried := strings.CutPrefix(argument, flag); carried {
+					item[field] = value
+				}
+			}
+			// bd takes an item's whole metadata as JSON at creation and stores what
+			// it is given, so it is decoded here rather than pattern-matched: what a
+			// listing carries afterwards is that object.
+			if value, carried := strings.CutPrefix(argument, "--metadata="); carried {
+				var metadata map[string]any
+				if err := json.Unmarshal([]byte(value), &metadata); err != nil {
+					return execution.ProcessResult{}, err
+				}
+				item["metadata"] = metadata
+			}
+		}
+		r.items = append(r.items, item)
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		answer = string(encoded)
+	case len(command.Args) > 0 && command.Args[0] == "list":
+		encoded, err := json.Marshal(r.items)
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		answer = string(encoded)
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: answer}, nil
+}
+
+// command returns the arguments of the one bd invocation with this verb, or nil
+// when there was none.
+func (r *recordingBD) command(verb string) []string {
+	for _, args := range r.args {
+		if len(args) > 0 && args[0] == verb {
+			return args
+		}
+	}
+	return nil
 }
 
 func TestWorkAdmittedBeforeGoalsWereCheckedCanAcquireOne(t *testing.T) {
@@ -115,7 +277,7 @@ func TestWorkAdmittedBeforeGoalsWereCheckedCanAcquireOne(t *testing.T) {
 		t.Fatalf("appended notes carry no provenance: %q", change.AppendNotes)
 	}
 	// The item, with what was appended, now resolves.
-	attribution := options.Goals.AttributionOf(legacy + "\n\n" + change.AppendNotes)
+	attribution := options.Goals.AttributionOf(legacy+"\n\n"+change.AppendNotes, goal.Witness{})
 	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
 		t.Fatalf("attribution = %#v", attribution)
 	}
@@ -183,15 +345,22 @@ func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 		{ID: "yoyodyne-ifd.1", Title: "Attributed work", Status: "open", Notes: goal.Note(recordedGoal)},
 		{ID: "yoyodyne-ifd.2", Title: "Legacy work", Status: "open", Notes: "Admitted long ago."},
 		{ID: "yoyodyne-ifd.3", Title: "Misattributed work", Status: "open", Notes: goal.Note("Grow the ecosystem.")},
+		// An item whose notes were replaced by something that did not carry its
+		// goal forward. It is not legacy work, and the survey must not offer it as
+		// something to attribute afresh: the goal it served is in the record of
+		// what was written on it.
+		{ID: "yoyodyne-ifd.4", Title: "Overwritten work", Status: "open", Notes: "Constraints from the architect.", GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal}},
 	}, goals)
 
 	// The survey is where the product manager would go to attribute the backlog,
-	// so it says which items are waiting for one and which carry a claim that is
-	// wrong, without turning the listing into a per-item report.
+	// so it says which items are waiting for one, which carry a claim that is
+	// wrong, and which lost what they recorded, without turning the listing into a
+	// per-item report.
 	for _, want := range []string{
-		"1 of 3 name a goal the goals state, 1 name none, and 1 name a goal the goals do not state",
+		"1 of 4 name a goal the goals state, 1 name none, 1 name a goal the goals do not state, and 1 recorded a goal and lost it",
 		"yoyodyne-ifd.2",
 		"yoyodyne-ifd.3",
+		"a record destroyed rather than work to attribute afresh: yoyodyne-ifd.4",
 		`"attribute" records a goal`,
 	} {
 		if !strings.Contains(rendered, want) {
@@ -224,6 +393,15 @@ func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 	if !strings.Contains(unchecked, "What the queue is for was not checked") {
 		t.Fatalf("survey = %q", unchecked)
 	}
+	// An item that lost its goal is said even then, because saying so rests on the
+	// tracker's own record of what was written rather than on any goals document.
+	lost := renderOpenQueueEvidence([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.1", Status: "open"},
+		{ID: "yoyodyne-ifd.4", Status: "open", Notes: "Constraints from the architect.", GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal}},
+	}, goal.Set{})
+	if !strings.Contains(lost, "recorded a goal and no longer carry it: yoyodyne-ifd.4") {
+		t.Fatalf("survey = %q", lost)
+	}
 }
 
 func TestReadingAnItemSaysWhatItIsFor(t *testing.T) {
@@ -243,6 +421,26 @@ func TestReadingAnItemSaysWhatItIsFor(t *testing.T) {
 	// work to attribute and the other is a claim to correct.
 	if !strings.Contains(wrong, "Grow the ecosystem.") || strings.Contains(wrong, "none recorded") {
 		t.Fatalf("rendered item = %q", wrong)
+	}
+	// An item whose notes lost their goal is read as having lost it, and the words
+	// the tracker kept are quoted: restoring an attribution is naming that goal
+	// again, and this is the line the product manager acts on. Reading the item is
+	// what the survey sends them to for exactly this.
+	destroyed := renderWorkItemEvidence(beads.WorkItem{
+		ID: "yoyodyne-ifd.4", Notes: "Constraints from the architect.",
+		GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal},
+	}, goals)
+	if !strings.Contains(destroyed, "attribution: recorded and lost") || !strings.Contains(destroyed, recordedGoal) {
+		t.Fatalf("rendered item = %q", destroyed)
+	}
+	// And where the tracker kept no words, it says so rather than implying a
+	// record somebody could go and read.
+	bare := renderWorkItemEvidence(beads.WorkItem{
+		ID: "yoyodyne-ifd.5", Notes: "Constraints from the architect.",
+		GoalWitness: goal.Witness{Recorded: true},
+	}, goals)
+	if !strings.Contains(bare, "recovered from outside the tracker") {
+		t.Fatalf("rendered item = %q", bare)
 	}
 }
 

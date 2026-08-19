@@ -134,7 +134,7 @@ func TestAnItemThatRecordsNoGoalIsUnattributedRatherThanWrong(t *testing.T) {
 	t.Parallel()
 
 	set := setWithGoals(t, "Maintain a traceable chain from the brief through to verification.")
-	attribution := set.AttributionOf("Admitted to the backlog by the product manager.\n\nReason: the operator asked for it.")
+	attribution := set.AttributionOf("Admitted to the backlog by the product manager.\n\nReason: the operator asked for it.", Witness{})
 	// Work admitted before attributions were checked says nothing, and nothing is
 	// not a false claim. Telling the two apart is what lets legacy work be
 	// grandfathered without also excusing an attribution that is wrong.
@@ -143,6 +143,59 @@ func TestAnItemThatRecordsNoGoalIsUnattributedRatherThanWrong(t *testing.T) {
 	}
 	if attribution.Named != "" {
 		t.Fatalf("attribution names something the item did not: %#v", attribution)
+	}
+}
+
+func TestAnItemWitnessedToHaveHadAGoalHasLostItRatherThanNeverHadOne(t *testing.T) {
+	t.Parallel()
+
+	statement := "Maintain a traceable chain from the brief through to verification."
+	set := setWithGoals(t, statement)
+	// The same notes an item has after something replaced them: the provenance
+	// and the goal that were written at creation are gone, and what is left says
+	// nothing about either. Read against the tracker's witness that a goal was
+	// written here, that is a record destroyed rather than a record never made —
+	// and it must not land in the one state that is deliberately not failed.
+	replaced := "Constraints from the architect, recorded 2026-08-19."
+	lost := set.AttributionOf(replaced, Witness{Recorded: true, Statement: statement})
+	if lost.State != StateLost {
+		t.Fatalf("attribution = %#v", lost)
+	}
+	if !strings.Contains(lost.Reason, "written over") {
+		t.Fatalf("the reason does not say what happened: %#v", lost)
+	}
+	// The words the tracker kept are what a restoration puts back, so they are
+	// carried rather than left for somebody to find: an item told only that it
+	// lost a goal is an item somebody has to go and re-derive one for.
+	if lost.Recorded != statement || !strings.Contains(lost.Reason, statement) {
+		t.Fatalf("the lost attribution does not say which goal to put back: %#v", lost)
+	}
+	// It is still not an answer. The state is decided from the notes, so an item
+	// whose notes lost their goal reads as lost however much the tracker
+	// remembers — a loss that resolved out of the metadata would report as intact
+	// while the item stayed empty.
+	if lost.Resolved() || lost.Goal.Statement != "" {
+		t.Fatalf("the witness answered for the item: %#v", lost)
+	}
+	// A witness from before the words were kept says what it knows and no more.
+	bare := set.AttributionOf(replaced, Witness{Recorded: true})
+	if bare.State != StateLost || bare.Recorded != "" {
+		t.Fatalf("attribution = %#v", bare)
+	}
+	if !strings.Contains(bare.Reason, "does not hold which goal") {
+		t.Fatalf("the reason claims a record the tracker does not have: %#v", bare)
+	}
+	// The same notes with no witness are the legacy item they look like, which is
+	// what keeps the check from failing a backlog nobody has attributed yet.
+	if unwitnessed := set.AttributionOf(replaced, Witness{}); unwitnessed.State != StateUnattributed {
+		t.Fatalf("attribution = %#v", unwitnessed)
+	}
+	// A witness on an item that still carries its goal changes nothing: the goal
+	// in the notes is the attribution, and the witness only ever says what was
+	// written.
+	kept := set.AttributionOf(replaced+"\n\n"+Note(statement), Witness{Recorded: true, Statement: statement})
+	if !kept.Resolved() {
+		t.Fatalf("attribution = %#v", kept)
 	}
 }
 
@@ -161,7 +214,7 @@ func TestTheNewestAttributionOnAnItemIsTheOneThatCounts(t *testing.T) {
 		"",
 		Note("Maintain a traceable chain from the brief through to verification."),
 	}, "\n")
-	attribution := set.AttributionOf(notes)
+	attribution := set.AttributionOf(notes, Witness{Recorded: true})
 	if !attribution.Resolved() {
 		t.Fatalf("attribution = %#v", attribution)
 	}

@@ -833,7 +833,8 @@ nested.
 | --- | --- | --- |
 | `attributed` | Names a goal an in-force goals artifact states. | The chain holds. |
 | `unresolved` | Names something no in-force goals artifact states. | A claim that is wrong. Admission is refused, and an item already carrying one is reported for correction. |
-| `unattributed` | Names no goal at all. | Work admitted before this check existed. Grandfathered: reported, never refused, and nothing stops it running. |
+| `unattributed` | Names no goal at all, and the tracker witnesses none was ever written. | Work admitted before this check existed. Grandfathered: reported, never refused, and nothing stops it running. |
+| `lost` | Names no goal, on an item the tracker witnesses one was written onto. | A record that was destroyed rather than never made. Reported and failed. Where the witness kept the words, they are quoted and putting them back is a restoration rather than a fresh judgement; where it kept only that a goal was written, the words have to be recovered from outside the tracker. |
 | `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. |
 
 Wording is compared with case, surrounding and repeated whitespace, and trailing
@@ -847,17 +848,47 @@ the item already records rather than replacing it. The newest such line is the
 item's current claim, so the goal an item was admitted under is never rewritten
 and the record of how it came to be attributed survives.
 
+Every write that puts a goal into an item's notes also records that goal in the
+tracker's own metadata for the item, under `yoyodyne_goal_recorded`. It exists
+because the notes are what gets destroyed: `yoyo` only ever appends to them, but
+anything else with the tracker's command line can replace them wholesale, and it
+has. Six items lost the goal they were created under that way and read
+afterwards exactly like work admitted before the check existed, which is the one
+state nothing fails on. The witness is outside the reach of the write that does
+the damage, so it survives to say both that an attribution was destroyed and
+which one.
+
+The notes stay the record. What an item serves is resolved from them and only
+from them, and the copy in the metadata is never read as an answer — an
+attribution the notes lost and the metadata answered for would report as intact
+while the item stayed empty, which is the same silence arrived at from the other
+side. The copy says what to put back, and putting it back is a `Goal served:`
+line written onto the item like any other. A goal longer than a goals document
+may state is witnessed without its words rather than stored cut in half.
+
+**The witness covers a goal only from the moment it is written.** An attribution
+made before this existed carries none, so replacing its notes reads as work
+nobody ever attributed and does not fail the audit. `yoyo goals witness` closes
+that gap over a backlog: it records, on every admitted item whose notes state a
+goal and which carries no witness, the goal those notes already state. It writes
+no attribution and decides nothing — the statement is the item's own, copied to
+where a careless writer cannot reach it — and it is worth running once after
+upgrading, and again after any bulk import of work attributed elsewhere.
+
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
 yoyo goals attribution   # what each admitted work item says it is for
+yoyo goals witness       # witness the goals already recorded on admitted work
 ```
 
-`attribution` exits non-zero for an item whose attribution is `unresolved` and
-zero for one with none. That asymmetry is the decision, not an oversight: an
-item admitted before goals were checked is somebody's to attribute, and a rule
-that failed every one of them would stop a backlog to close a gap that has cost
-nothing yet. Attributing one is a judgement about what the work is for, so it is
-the product manager's to make in conversation and there is no command here that
+`attribution` exits non-zero for an item whose attribution is `unresolved` or
+`lost`, and zero for one with none. That asymmetry is the decision, not an
+oversight: an item admitted before goals were checked is somebody's to attribute,
+and a rule that failed every one of them would stop a backlog to close a gap that
+has cost nothing yet. An item that lost the goal it recorded fails for the
+opposite reason — it passed the check, and what is wrong is that the record of it
+was written over. Attributing one is a judgement about what the work is for, so it
+is the product manager's to make in conversation and there is no command here that
 makes it.
 
 That leaves a pass still owed. When the check arrived, Yoyodyne's own backlog
