@@ -39,9 +39,14 @@ const GrantMarker = "protected-path grant:"
 // GrantInstruction is what a refused developer is told to do about it. It is a
 // constant here, beside the rule it explains, because a refusal that does not
 // say how an exception is made is a refusal an agent has to guess its way past.
+//
+// It says where a grant lives and not which role puts it there. Who writes an
+// item's text is a question about the fixed set of roles and their authority,
+// which is the architect's to settle and not something a refusal message should
+// decide by being worded one way rather than another.
 const GrantInstruction = "These paths are yours to change only when the work item says so. An item grants one by naming it after `" + GrantMarker +
 	"` on a line of its own, and that grant covers every attempt the item makes. Nothing you write grants a path: the item is written and reviewed before the run starts, which is what makes an exception somebody's decision rather than yours. " +
-	"If your work genuinely needs one of these paths, take it back out of your change, and use your summary and an amendment proposal to say which path you need and why — the grant is the product manager's to add to the item."
+	"If your work genuinely needs one of these paths, take it back out of your change, and use your summary and an amendment proposal to say which path you need and why. The grant goes into the work item, which is not yours to write."
 
 // Set is the paths one project protects, as repository-relative directory
 // prefixes in slash form.

@@ -776,13 +776,14 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 
 // resumedDeveloperPrompt rebuilds the prompt the interrupted attempt was given
 // from what survived on disk. Only one kind of repair input is ever recorded at
-// a time, and where more than one is somehow present the later gate wins,
-// because each gate is re-run after every attempt and a record from an earlier
-// one describes a change this run has already moved past. That orders them the
-// way a run meets them: the refused paths are decided in front of the checks,
-// and the checks in front of the review. A run that recorded none of the three
-// never had a failure returned to it — it paused before or during its first
-// attempt — so what it is owed is that attempt.
+// a time, and where more than one is somehow present the most recent trigger
+// wins. That is the earliest gate a run meets rather than the latest, because a
+// gate that refuses is a gate the ones behind it never ran: refused paths are
+// decided in front of the checks, so a check failure beside them was recorded
+// against a change this run has already moved past, and the same holds for
+// findings beside a failing check. A run that recorded none of the three never
+// had a failure returned to it — it paused before or during its first attempt —
+// so what it is owed is that attempt.
 func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
 	case state.PathRefusal != nil:

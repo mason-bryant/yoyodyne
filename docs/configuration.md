@@ -586,7 +586,10 @@ phrase an item could produce by accident.
 
 Nothing an agent writes grants a path. A developer that genuinely needs one says
 so in its summary and [proposes the change](#proposing-a-change-to-a-document-you-do-not-own);
-adding the grant to the item is the product manager's.
+the grant goes into the work item, which is not a developer's to write. Which
+role writes it there is a question about the fixed set of roles rather than about
+this gate, and is not answered here — **you** write it, as the operator, and so
+does any agent you have directed to maintain the item.
 
 ### Proposing a change to a document you do not own
 
