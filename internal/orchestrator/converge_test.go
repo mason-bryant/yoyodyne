@@ -87,7 +87,7 @@ func TestReconcileSettlesAQueuedMergeAndCatchesTheTargetUpItself(t *testing.T) {
 	}
 }
 
-// A merge the forge dropped is the one thing here that reaches a person. The
+// A merge the forge dropped is one of the two settle outcomes that reach a person. The
 // publication is outstanding, nothing about it is confirmed, and the local
 // branch must not be moved on it — deciding that is exactly what the harness is
 // not allowed to do here.

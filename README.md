@@ -2106,16 +2106,18 @@ target branch caught up onto the merge commit the forge made. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
 
-Two settle-path outcomes leave a publication outstanding for a person, and the
-line on the work item reads the same for both, so it is worth knowing which you
-are looking at. A merge the forge **dropped** is the first: something the base
-branch required went unmet, the harness does not merge past a requirement, and
-nothing about that publication is confirmed. A merge that **landed but could
-not be finished** is the second: the forge performed it, and the confirming
-steps after it — verifying what the remote carries, catching the target up —
-failed, so the record honestly says the publication is not settled even though
-the merge is real. In both, your local branch is deliberately left where it is
-rather than moved on a publication nothing verified. Other reports on this page
+Two settle-path outcomes leave a publication outstanding for a person, each
+with its own line on the work item. A merge the forge **dropped** is the
+first: something the base branch required went unmet, the harness does not
+merge past a requirement, and nothing about that publication is confirmed. A
+merge that **landed but could not be confirmed** is the second: the forge
+performed it, and the steps that confirm it — verifying the remote carries the
+promotion, recording the merge commit, retiring the consumed branch — failed,
+so the record honestly says the publication is not settled even though the
+merge is real. In both, your local branch is deliberately left where it is
+rather than moved on a publication nothing verified. A catch-up the settle
+could not make is neither of these: it is ordinary, the run settles, and the
+convergence sweep below finishes it on the next pass. Other reports on this page
 still reach you when the evidence demands it — a preserved blocker, a diverged
 remote, a catch-up that could not finish — but none of them asks reconcile to
 exercise judgement: it reports and leaves the decision where it belongs.
