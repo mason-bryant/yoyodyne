@@ -1079,8 +1079,11 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// separates what they said from the answer while the answer is still
 		// being worked on rather than arriving with it.
 		fmt.Fprint(out, s.theme.Rule())
-		if strings.HasPrefix(message, "/") {
-			exit, err := s.command(ctx, message, harness)
+		if IsCommand(message) {
+			// Dispatch the same line Session.Command would: IsCommand tolerates
+			// leading whitespace, so the dispatcher must see it trimmed or a
+			// padded command arrives with an empty name.
+			exit, err := s.command(ctx, strings.TrimSpace(message), harness)
 			// A command that failed is reported and the conversation carries
 			// on: an operator who mistyped an identifier or reached an
 			// unavailable tracker has not ended anything.

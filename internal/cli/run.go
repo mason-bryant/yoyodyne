@@ -587,12 +587,12 @@ func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, 
 }
 
 // reportCollectedReports names what this run's agents reported without it
-// stopping their work. The reports themselves are read from the conversation,
-// which is where the operator already is; what this owes them is to say there
-// is something new to read.
+// stopping their work. The reports themselves are read from the pile, either
+// from a command line or from the conversation the operator may already be in;
+// what this owes them is to say there is something new to read, and where.
 func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
 	if len(outcome.Reports) > 0 {
-		fmt.Fprintf(writer, "reported %d thing(s) without stopping the run; `yoyo chat` shows them with /reports\n", len(outcome.Reports))
+		fmt.Fprintf(writer, "reported %d thing(s) without stopping the run; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
 	}
 	if outcome.ReportProblem != "" {
 		fmt.Fprintln(writer, outcome.ReportProblem)

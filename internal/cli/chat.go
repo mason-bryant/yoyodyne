@@ -58,7 +58,12 @@ type chatOutput struct {
 	// happened, and a report nobody is shown is one nobody reads.
 	Reports       []report.Report `json:"reports,omitempty"`
 	ReportProblem string          `json:"report_problem,omitempty"`
-	Error         string          `json:"error,omitempty"`
+	// Harness is what an operator command printed when the message turned out to
+	// be one. It is a separate field from the reply because nothing said it: the
+	// harness answered, the product manager was never asked, and no turn was
+	// spent.
+	Harness string `json:"harness,omitempty"`
+	Error   string `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -88,37 +93,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	defer lease.Release()
 
 	if *message != "" {
-		// A one-shot message resumes the same recorded conversation an
-		// interactive one does, and carries the same risk of answering from a
-		// picture taken hours ago. It is said on stderr because stdout is the
-		// reply and, with --json, a document.
-		fmt.Fprintln(stderr, session.Freshness(ctx))
-		reply, err := session.Send(ctx, *message)
-		if err != nil {
-			// The answer travels with the failure. A turn that produced one is
-			// worth reading even when what it proposed could not be read.
-			return reportChatFailure(stdout, stderr, *jsonOutput, &reply, err)
-		}
-		if *jsonOutput {
-			evidence := reply.Evidence
-			return writeJSON(stdout, stderr, chatOutput{
-				Evidence:           &evidence,
-				Reply:              reply.Text,
-				Proposals:          reply.Proposals,
-				Concerns:           reply.Concerns,
-				Actions:            reply.Actions,
-				ResultsCarriedOver: reply.ResultsCarriedOver,
-				Reports:            reply.Reports,
-				ReportProblem:      reply.ReportProblem,
-			})
-		}
-		fmt.Fprintln(stdout, reply.Text)
-		printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
-		printChatReports(stdout, reply.Reports, reply.ReportProblem)
-		printChatConcerns(stdout, reply.Concerns)
-		printChatProposals(stdout, reply.Proposals)
-		printChatEvidence(stdout, reply.Evidence)
-		return 0
+		return runChatMessage(ctx, session, *message, *jsonOutput, stdout, stderr)
 	}
 
 	// The conversation is held over a console rather than the raw streams: on a
@@ -143,6 +118,89 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
 		fmt.Fprintf(stderr, "conversation ended: %v\n", converseErr)
+		return 1
+	}
+	return 0
+}
+
+// runChatMessage answers one thing the operator said from a command line. It is
+// either a command the harness carries out or a message the product manager
+// answers, and which of the two it is is the conversation's own rule rather than
+// a second one written here: a slash means the same thing in a single message as
+// it does at the prompt.
+func runChatMessage(ctx context.Context, session *chat.Session, message string, jsonOutput bool, stdout, stderr io.Writer) int {
+	// Without this the command would be said to the product manager, who has no
+	// way to carry one out and every reason to be confused by one — and the
+	// operator would pay for the turn.
+	if chat.IsCommand(message) {
+		return runChatCommand(ctx, session, message, jsonOutput, stdout, stderr)
+	}
+	// A one-shot message resumes the same recorded conversation an interactive
+	// one does, and carries the same risk of answering from a picture taken hours
+	// ago. It is said on stderr because stdout is the reply and, with --json, a
+	// document.
+	fmt.Fprintln(stderr, session.Freshness(ctx))
+	reply, err := session.Send(ctx, message)
+	if err != nil {
+		// The answer travels with the failure. A turn that produced one is worth
+		// reading even when what it proposed could not be read.
+		return reportChatFailure(stdout, stderr, jsonOutput, &reply, err)
+	}
+	if jsonOutput {
+		evidence := reply.Evidence
+		return writeJSON(stdout, stderr, chatOutput{
+			Evidence:           &evidence,
+			Reply:              reply.Text,
+			Proposals:          reply.Proposals,
+			Concerns:           reply.Concerns,
+			Actions:            reply.Actions,
+			ResultsCarriedOver: reply.ResultsCarriedOver,
+			Reports:            reply.Reports,
+			ReportProblem:      reply.ReportProblem,
+		})
+	}
+	fmt.Fprintln(stdout, reply.Text)
+	printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
+	printChatReports(stdout, reply.Reports, reply.ReportProblem)
+	printChatConcerns(stdout, reply.Concerns)
+	printChatProposals(stdout, reply.Proposals)
+	printChatEvidence(stdout, reply.Evidence)
+	return 0
+}
+
+// runChatCommand carries out an operator command that arrived as a single
+// message. The harness answers it rather than the product manager, so there is
+// no turn, no reply, and nothing spent — which is also why the conversation's
+// freshness is not printed here: how old its picture of the product is says
+// nothing about an answer it had no part in.
+func runChatCommand(ctx context.Context, session *chat.Session, line string, jsonOutput bool, stdout, stderr io.Writer) int {
+	var rendered strings.Builder
+	err := session.Command(ctx, line, &rendered)
+	return reportChatCommand(stdout, stderr, jsonOutput, session.Evidence(), rendered.String(), err)
+}
+
+// reportChatCommand shows what a command did. What it printed is written
+// whether or not it went on to fail, for the same reason a failed turn still
+// carries its reply: a command that recorded something and then could not
+// report it recorded it all the same. The failure itself is the command's,
+// which is what the exit code says.
+func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.Evidence, rendered string, err error) int {
+	if jsonOutput {
+		output := chatOutput{Evidence: &evidence, Harness: rendered}
+		if err != nil {
+			output.Error = err.Error()
+		}
+		if code := writeJSON(stdout, stderr, output); code != 0 {
+			return code
+		}
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	fmt.Fprint(stdout, rendered)
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
 	}
 	return 0
@@ -340,7 +398,8 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string)
 	fmt.Fprintln(writer, "it judges to be against the product's intent are not proposed at all: it stops")
 	fmt.Fprintln(writer, "and asks you instead.")
 	fmt.Fprintln(writer, "Any agent can report something without it stopping their work; /reports")
-	fmt.Fprintln(writer, "shows you what has been collected.")
+	fmt.Fprintln(writer, "shows you what has been collected, and `yoyo reports` shows the same pile")
+	fmt.Fprintln(writer, "without a conversation.")
 	fmt.Fprintln(writer, "Changes other roles have proposed to the brief and the goals are carried into")
 	fmt.Fprintln(writer, "this conversation for it to argue; you decide them with `yoyo amendment`.")
 	fmt.Fprintln(writer, "Its picture of the repository and the tracker is the one gathered above; /refresh")
@@ -480,7 +539,12 @@ Options:
   --new              start a new conversation instead of resuming the recorded one
   --json             emit machine-readable JSON (requires --message)
 
-An interactive conversation also carries out operator commands: /backlog,
-/status, /show, /diff, /refresh, /work, /wait, /stop, and /redirect. Ask it for
-/help once it is open.`)
+A conversation also carries out operator commands: /backlog, /status, /show,
+/diff, /reports, /refresh, /work, /wait, /stop, and /redirect. Ask it for /help
+once it is open.
+
+A --message that begins with a slash is carried out as one of those commands
+rather than said to the product manager. The commands that only mean something
+inside a conversation — /work, /wait, /stop, and /exit (alias /quit) — are refused there and
+say what to reach for instead.`)
 }

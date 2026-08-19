@@ -685,6 +685,15 @@ everything else is said to the product manager:
 /exit                    end the conversation, stopping anything it is running
 ```
 
+A slash means the same thing in `yoyo chat --message`: the harness carries the
+command out and the product manager is never asked, because she cannot carry out
+a command and a turn spent trying is a turn you paid for. The four that only
+mean something inside a conversation — `/work`, `/wait`, `/stop`, and `/exit` with its alias `/quit`,
+each of which starts or acts on a run the conversation's own process owns — are
+refused there and say what to reach for instead, rather than being half carried
+out by a process that is about to exit. With `--json` what the command printed
+is a field of its own, so nothing reads as something the product manager said.
+
 `/backlog` shows the ordering the product manager set, which is the one thing a
 development manager pulls from: the admitted work that is not finished, in
 priority order, each unready item saying what is holding it, and the item that
@@ -1059,6 +1068,21 @@ Every role can say such a thing without stopping: the developer, the
 reviewer, and the product manager each end what they say with one small block,
 and the harness collects it. `/reports` shows you the pile, newest last, with
 the twenty most recent listed and the rest counted.
+
+`yoyo reports` shows the same pile without opening a conversation, which is what
+a run finishing overnight needs: it says it reported something, and reading it
+must not cost an interactive conversation with a provider behind it. It prints
+the whole pile rather than the most recent twenty, because a command's output
+can be paged and piped where a listing beside a conversation cannot, and
+`--json` hands a script the collected records themselves. Like `/reports` it is
+read-only in the strongest sense the design allows: a report is written once and
+never revised, and nothing retires one, marks one read, or decides anything
+about the pile.
+
+```sh
+./bin/yoyo reports                 # the whole pile, oldest first
+./bin/yoyo reports --json          # the collected records, for triage or a script
+```
 
 A report is deliberately not a blocker, and nothing about it behaves like one.
 The run carries on exactly as it would have: an approving verdict that mentions
