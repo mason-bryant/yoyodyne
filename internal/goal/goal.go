@@ -283,7 +283,10 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		briefInForce = true
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
 		if err != nil {
-			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: err.Error()})
+			// The brief is named as the brief: the problems listing is shared
+			// with the goals documents, and a read failure reported bare would
+			// describe the root of the chain as one of its leaves.
+			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: fmt.Sprintf("the product brief could not be read: %s", err.Error())})
 			briefUnreadable = true
 			continue
 		}
@@ -306,7 +309,6 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
 		if err != nil {
 			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: err.Error()})
-			briefUnreadable = true
 			continue
 		}
 		stated, problem := statements(content)

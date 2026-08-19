@@ -909,20 +909,20 @@ func configuredStore(t *testing.T, root string) artifact.Store {
 		t.Fatalf("Load() error = %v", err)
 	}
 	product := loaded.Product
+	// The store is assembled through the same path the commands use, so a home
+	// added to the production assembly is covered here without this list being
+	// maintained by hand.
+	store := artifact.StoreFor(root, product)
 	// A home the configuration names and nobody created is the drift this is
 	// looking for, so it is a failure here rather than the empty set the store
 	// tolerates: the design document was governed by nothing for exactly as long
 	// as docs/designs did not exist.
-	for _, home := range []string{product.Specifications, product.Designs, product.Decisions} {
+	for _, home := range store.Homes {
 		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(home))); err != nil || !info.IsDir() {
 			t.Fatalf("configured artifact home %q is not a directory in this repository: %v", home, err)
 		}
 	}
-	return artifact.Store{
-		RepositoryRoot: root,
-		Homes:          []string{product.Specifications, product.Designs, product.Decisions},
-		Excluded:       []string{product.Invariants},
-	}
+	return store
 }
 
 // repositoryRoot is the checkout these tests run in, so the seeded artifacts are
@@ -1050,5 +1050,50 @@ An introduction.
 		if goal.Supports != want[i] {
 			t.Fatalf("goal %d supports = %q, want %q (annotation must not swallow or precede away the link)", i, goal.Supports, want[i])
 		}
+	}
+}
+
+func TestAnUnreadableGoalsDocumentDoesNotReportTheBriefAsUnreadable(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The brief reads fine and legitimately states no goals; a goals document
+	// beside it cannot be read at all. The link report must point at the brief's
+	// real condition, not at a read failure belonging to a different document.
+	write(t, root, "docs/product/brief.md", `---
+id: brief
+---
+
+# Product brief
+
+An introduction with no Goals heading.
+`)
+	write(t, root, "docs/product/goals/v1-goals.md", `---
+id: v1-goals
+---
+
+# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from intent to verification.
+`)
+
+	set := Collect(root, setOf(
+		recorded("brief", artifact.KindBrief, artifact.StatusActive, "docs/product/brief.md"),
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+		recorded("v2-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/missing.md"),
+	))
+	if len(set.Problems) != 1 || !strings.Contains(set.Problems[0].Path, "missing.md") {
+		t.Fatalf("problems = %v, want exactly the unreadable goals document", set.Problems)
+	}
+	if len(set.LinkProblems) != 1 {
+		t.Fatalf("link problems = %v, want the brief reported once", set.LinkProblems)
+	}
+	reason := set.LinkProblems[0].Reason
+	if strings.Contains(reason, "could not be read") || !strings.Contains(reason, "states no goals") {
+		t.Fatalf("link reason = %q: the brief states no goals and was read fine; a goals document failing to read must not be pinned on the brief", reason)
 	}
 }
