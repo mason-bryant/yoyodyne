@@ -61,6 +61,36 @@ type Config struct {
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
+	// Slack configures the reporting sink. It is absent from a project that does
+	// not report to a workspace, which is every project until one opts in.
+	Slack Slack `yaml:"slack,omitempty" json:"slack,omitempty"`
+}
+
+// Slack is what a project says about reporting into a chat workspace. What it
+// deliberately does not hold is a credential: the sink's two tokens live in the
+// sink process's environment and nowhere else, so nothing that is read into a
+// prompt, a context bundle, or a run's environment can carry one. What is here
+// is identity and addressing, which is configuration in the ordinary sense —
+// checked in, reviewed with the code, and readable by anybody who can read the
+// repository.
+type Slack struct {
+	// Enabled is the switch. A project that has not set it reports nothing, and
+	// the sink refuses to start rather than posting into a workspace nobody
+	// configured.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	// Channel is where the threads are opened, as a channel id (the stable
+	// thing, which a rename does not break) or a #name. A project that enables
+	// Slack without one is refused at load, before any work is claimed, because
+	// the alternative is a sink that starts, reads a stream, and then discovers
+	// it has nowhere to post.
+	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	// Operators is the allow-list of Slack user ids whose thread replies the
+	// harness will act on. It is inert until the inbound half exists: nothing
+	// today reads a reply at all. It lives here rather than in the environment
+	// because a user id is identity rather than a secret, and it defaults to
+	// empty so enabling reporting never enables anybody to steer the harness
+	// from a chat workspace by accident.
+	Operators []string `yaml:"operators,omitempty" json:"operators,omitempty"`
 }
 
 type Product struct {
@@ -100,8 +130,17 @@ type Execution struct {
 	// independent review, because the reviewed change is not the change that
 	// would now be promoted. Zero never retries, which is the behavior a run had
 	// before this bound existed: the first refusal ends it.
-	IntegrationRetriesBeforeReconciliation int    `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
-	WorktreeRoot                           string `yaml:"worktree_root" json:"worktree_root"`
+	IntegrationRetriesBeforeReconciliation int `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
+	// TransientRelaunchesBeforeBlocking bounds how many times a run reissues a
+	// provider invocation that died without judging the work — an API error the
+	// provider's own retries did not outlast, or a response cut off mid-flight.
+	// The relaunch continues the same worktree and the same session, so nothing
+	// the dead attempt built is redone. One budget covers the developer and the
+	// reviewer, because what it bounds is how much of the provider's weather one
+	// run absorbs. Zero never relaunches, which is the behavior a run had before
+	// this bound existed: the first transient death ends it.
+	TransientRelaunchesBeforeBlocking int    `yaml:"transient_relaunches_before_blocking" json:"transient_relaunches_before_blocking"`
+	WorktreeRoot                      string `yaml:"worktree_root" json:"worktree_root"`
 	// Remote names the Git remote publishing pushes to and opens pull requests
 	// against. It is only consulted when `approvals.publishing` is automatic, and
 	// a repository that has no remote by this name publishes nothing rather than
@@ -305,6 +344,11 @@ func (c Config) Validate() error {
 	if c.Execution.IntegrationRetriesBeforeReconciliation < 0 {
 		problems = append(problems, "integration_retries_before_reconciliation cannot be negative")
 	}
+	// And here, for the same reason: zero says fail on the first transient death,
+	// which is a choice, and a negative bound is not one.
+	if c.Execution.TransientRelaunchesBeforeBlocking < 0 {
+		problems = append(problems, "transient_relaunches_before_blocking cannot be negative")
+	}
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")
 	}
@@ -424,10 +468,58 @@ func (c Config) Validate() error {
 		}
 	}
 
+	problems = append(problems, c.Slack.problems()...)
+
 	if len(problems) > 0 {
 		return ValidationError{Problems: problems}
 	}
 	return nil
+}
+
+// slackChannelPattern keeps a configured channel a channel: an id, or a name
+// with or without its leading hash. Anything else names nothing the workspace
+// has, and is refused here rather than becoming a posting failure every few
+// seconds for as long as the sink runs.
+var slackChannelPattern = regexp.MustCompile(`^#?[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// slackUserPattern is the shape of a Slack user id. Names are deliberately not
+// accepted: a display name is not identity — two people can carry one, and one
+// person can change theirs — and an allow-list keyed on something that moves is
+// an allow-list that quietly stops matching the person it was written for.
+var slackUserPattern = regexp.MustCompile(`^[UW][A-Z0-9]{6,}$`)
+
+// MaxSlackChannelBytes bounds a configured channel so it stays a channel rather
+// than a request smuggled onto the Slack API.
+const MaxSlackChannelBytes = 80
+
+// problems reports what makes a Slack section unusable. Everything is checked
+// whether or not reporting is enabled, so a project that has configured the
+// section and not switched it on yet learns about a typo now rather than on the
+// day it turns reporting on.
+func (s Slack) problems() []string {
+	var problems []string
+	channel := strings.TrimSpace(s.Channel)
+	switch {
+	case channel == "":
+		if s.Enabled {
+			problems = append(problems, "slack.channel is required when slack is enabled")
+		}
+	case len(channel) > MaxSlackChannelBytes:
+		problems = append(problems, fmt.Sprintf("slack.channel is %d bytes, limit is %d", len(channel), MaxSlackChannelBytes))
+	case !slackChannelPattern.MatchString(channel):
+		problems = append(problems, fmt.Sprintf("slack.channel %q must be a channel id or name", s.Channel))
+	}
+	for index, operator := range s.Operators {
+		trimmed := strings.TrimSpace(operator)
+		if trimmed == "" {
+			problems = append(problems, fmt.Sprintf("slack.operators[%d] cannot be empty", index))
+			continue
+		}
+		if !slackUserPattern.MatchString(trimmed) {
+			problems = append(problems, fmt.Sprintf("slack.operators[%d] %q must be a Slack user id", index, operator))
+		}
+	}
+	return problems
 }
 
 // problems reports what makes a declared persona unusable. A persona that

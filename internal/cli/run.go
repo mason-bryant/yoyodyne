@@ -416,10 +416,16 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		if outcome.RepairAttempts > 0 {
 			fmt.Fprintf(stderr, "repair attempts: %d\n", outcome.RepairAttempts)
 		}
-		// A blocked item is not waiting on this process: the unresolved findings
-		// are recorded where the work is tracked and need a replan.
+		if outcome.TransientRelaunches > 0 {
+			fmt.Fprintf(stderr, "relaunches after a provider death: %d\n", outcome.TransientRelaunches)
+		}
+		// A blocked item is not waiting on this process: what stopped it is
+		// recorded where the work is tracked and needs a person. Several different
+		// things block a run — unresolved findings, a failing check, a target
+		// branch that kept moving, a provider that kept killing it — so this says
+		// where to look rather than naming one of them and being wrong.
 		if outcome.Blocked {
-			fmt.Fprintf(stderr, "blocker recorded on %s: the reviewer's findings are unresolved\n", outcome.WorkItemID)
+			fmt.Fprintf(stderr, "blocker recorded on %s; the failure above says what stopped it\n", outcome.WorkItemID)
 		}
 		// An artifact recorded as removed is never described as preserved.
 		if outcome.Branch != "" && !outcome.BranchRemoved {
@@ -444,6 +450,9 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		reportPullRequest(stdout, outcome)
 		if outcome.RepairAttempts > 0 {
 			fmt.Fprintf(stdout, "repair attempts: %d\n", outcome.RepairAttempts)
+		}
+		if outcome.TransientRelaunches > 0 {
+			fmt.Fprintf(stdout, "relaunches after a provider death: %d\n", outcome.TransientRelaunches)
 		}
 		if outcome.Integration == nil {
 			fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)

@@ -752,9 +752,18 @@ func renderReconcileBlockerNotes(state runstate.State, observation gitworktree.O
 	if state.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(state.RepairAttempts))
 	}
+	// The relaunch budget is durable for exactly this reader: a run interrupted
+	// after absorbing provider deaths has already spent part of it, and a note
+	// that omitted them would describe a run with more room than it has.
+	if state.TransientRelaunches > 0 {
+		lines = append(lines, "Relaunches after a provider death already spent: "+strconv.Itoa(state.TransientRelaunches))
+	}
 	lines = append(lines, renderObservedArtifacts(state, observation)...)
 	if state.CheckFailure != nil {
 		lines = append(lines, fmt.Sprintf("Last failing check: %s (exit %d)", state.CheckFailure.Command, state.CheckFailure.ExitCode))
+	}
+	if state.PathRefusal != nil {
+		lines = append(lines, "Refused protected paths: "+strings.Join(state.PathRefusal.Paths, ", "))
 	}
 	if state.ReviewSummary != "" {
 		lines = append(lines, "Last review summary: "+state.ReviewSummary)

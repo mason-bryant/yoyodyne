@@ -416,6 +416,11 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "repair_attempts cannot be negative",
 		},
 		{
+			name:    "negative transient relaunches",
+			mutate:  func(state *State) { state.TransientRelaunches = -1 },
+			problem: "transient_relaunches cannot be negative",
+		},
+		{
 			name:    "a failing check the developer cannot re-run",
 			mutate:  func(state *State) { state.CheckFailure = &CheckFailure{ExitCode: 3} },
 			problem: "check_failure: command is required",
@@ -434,6 +439,30 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 				state.Integration = &integration
 			},
 			problem: "integration requires no recorded failing check",
+		},
+		{
+			name:    "a refusal that names no path",
+			mutate:  func(state *State) { state.PathRefusal = &PathRefusal{Grants: []string{"docs/designs"}} },
+			problem: "path_refusal: at least one refused path is required",
+		},
+		{
+			name: "a refusal that carries more paths than the bound allows",
+			mutate: func(state *State) {
+				paths := make([]string, MaxRefusedPaths+1)
+				for index := range paths {
+					paths[index] = "docs/product/goal.md"
+				}
+				state.PathRefusal = &PathRefusal{Paths: paths}
+			},
+			problem: "path_refusal: 51 refused paths are recorded",
+		},
+		{
+			name: "integration alongside a path the gate still refuses",
+			mutate: func(state *State) {
+				state.PathRefusal = &PathRefusal{Paths: []string{"docs/product/brief.md"}}
+				state.Integration = &integration
+			},
+			problem: "integration requires no recorded protected-path refusal",
 		},
 		{
 			name:    "integration target that is not a local branch",
@@ -612,6 +641,9 @@ func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
 		{Severity: SeverityMinor, Message: "this name reads as a verb"},
 	}
 	state.RepairAttempts = 1
+	// The relaunch budget is durable so that a crash cannot refill it, which is
+	// worth nothing if the count does not survive the file it is written to.
+	state.TransientRelaunches = 2
 	state.TargetBranch = "main"
 	state.Integration = &Integration{
 		TargetBranch:         "main",
@@ -655,6 +687,44 @@ func TestStoreRoundTripsTheFailingCheckARepairAttemptWasHanded(t *testing.T) {
 		Command:  "go test ./...",
 		ExitCode: 1,
 		Output:   "--- FAIL: TestThing\n    thing_test.go:12: got 2, want 3\nFAIL",
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(state.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !reflect.DeepEqual(loaded, state) {
+		t.Fatalf("Load() = %#v, want %#v", loaded, state)
+	}
+}
+
+// TestStoreRoundTripsTheProtectedPathsARefusedAttemptWasHanded proves the same
+// for the gate in front of the checks. It matters more here than it does for a
+// check: a resumed run rebuilds the attempt from this rather than by re-reading
+// the worktree, and nothing reconstructs it for a reader afterwards, because the
+// worktree it describes is removed when the run is cleaned up.
+func TestStoreRoundTripsTheProtectedPathsARefusedAttemptWasHanded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusRunning)
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	state.WorktreePath = "/state/worktree"
+	state.Branch = "yoyodyne/task/01234567"
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Phase = PhaseDeveloping
+	state.ProviderSessionID = "developer-session"
+	state.RepairAttempts = 1
+	state.PathRefusal = &PathRefusal{
+		Paths:   []string{".yoyodyne/config.yaml", "docs/product/brief.md"},
+		Omitted: 2,
+		Grants:  []string{"docs/designs/v1-harness-design.md"},
 	}
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)

@@ -1360,6 +1360,18 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+Then the change is gated on what it touched. The project configuration and the
+artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
+`docs/designs/`, and `docs/decisions/` by default — are default-deny for a
+developer's diff, because a developer that edits one is redefining what its own
+work is measured against. A change that touches one without the work item
+granting it is refused before any check runs and before any reviewer is asked,
+and handed back to the same developer in the same repair loop a failing check
+uses. An item grants an exception in its own text, on a line beginning
+`Protected-path grant:`, so every exception is declared in reviewed item text
+rather than discovered in a diff. [Configuration](docs/configuration.md#protected-paths-in-a-developers-change)
+has the details.
+
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
@@ -1914,7 +1926,9 @@ Ordinary transient throttling still never reaches any of this: the provider CLI
 retries that on its own, and the harness does not duplicate the wait. What it
 does act on is the terminal result the CLI ends on once its own retries are
 spent — an `api_error` reporting HTTP 529 — because at that point the provider
-has stopped retrying and somebody has to.
+has stopped retrying and somebody has to. An overload is the only terminal
+`api_error` that becomes a wait;
+[the rest of them](#when-the-provider-dies-mid-run) become a relaunch.
 
 ### Releasing a wait early
 
@@ -1949,6 +1963,57 @@ worst a premature release costs is one refused request. It is refused when the
 named item has no run in flight, or has one that is not waiting on the provider
 at all, because a release recorded against a run that is not waiting would be
 acted on by whatever pause that run took next.
+
+### When the provider dies mid-run
+
+Not every way a provider ends an invocation is a refusal it names in advance.
+Sometimes it simply dies: the API answers with an error its own retry ladder did
+not outlast, or the connection carrying the response goes away before the reply
+is finished — `API Error: Connection closed mid-response`, which quotes no HTTP
+status because nothing answered. Nothing was judged and nothing is wrong with the
+change; the run just stops existing. That used to fail the run outright and leave
+a person to reconcile it, reopen the item, and launch it again — twice in the
+week before this was built.
+
+The run relaunches itself now. The dead invocation is reissued in the same
+worktree and the same developer session, up to
+`execution.transient_relaunches_before_blocking` times — two by default — and
+then the run carries on as if nothing had happened. Continuing the session is
+what makes this cheap rather than merely automatic: an attempt that died
+mid-response had already made part of the change, and the relaunch picks that up
+instead of asking a developer to derive it a second time. There is no wait
+attached, because there is no condition to wait out: a dropped connection is
+already gone, and the provider's own retries are spent before the harness sees
+the terminal.
+
+One budget covers both provider invocations a run makes. A review the provider
+killed is asked for again on the same count, without redeveloping the change,
+because what the budget bounds is how much of the provider's weather one run
+absorbs rather than how often either role is asked. Nothing is handed back to the
+developer either way, so a relaunch spends no repair attempt — the change is not
+what went wrong.
+
+Relaunches are counted in durable run state before each one begins, so a process
+that dies mid-relaunch resumes against the budget it had rather than a fresh one.
+A run that spends the budget stops and records a blocker on the work item naming
+the provider's own last message. That is the only case a person sees. Setting the
+bound to `0` restores the earlier behavior: the first provider death ends the run.
+
+What else that blocker says depends on what the run was carrying, because a
+provider dies during a repair attempt as readily as during the first one. A run
+nothing had judged yet says so plainly — no check failed, no reviewer asked for
+repair, nothing here says the change is wrong — which is what tells you to pick
+the work up rather than replan it. A run killed inside its repair loop names the
+repair attempts it had spent, the check that was failing, and the findings it was
+answering, and says the provider is what stopped it rather than that verdict:
+the evidence is unresolved rather than dismissed.
+
+A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
+4xx status — a malformed request, a key that is not permitted, a limit the
+provider is enforcing — would earn the identical answer on the next attempt, so
+it fails the run exactly as it always did. So does a 529, which is
+[a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
+any terminal the API did not report at all.
 
 ### When a provider stalls or runs out of budget
 
@@ -2113,6 +2178,44 @@ against a fabricated state directory holding runs, conversations, and branch
 reviews, without a provider or a repository and without reading your real
 state.
 
+### Reporting into Slack
+
+Everything above needs you at the terminal, which is the wrong requirement for
+work that runs while you are not. `yoyo slack` is the same account of the work in
+a Slack workspace: one thread per work item, one message per milestone, and every
+report an agent filed at the severity it was filed under. Each role speaks under
+its own name and in its own voice, and what no persona did — a promotion, a
+merge, your own holds — arrives from the harness itself. It is a process you
+start and leave running, and it needs your project to have opted in:
+
+```yaml
+# .yoyodyne/config.yaml
+slack:
+  enabled: true
+  channel: C0123456789
+```
+
+```sh
+export SLACK_BOT_TOKEN=xoxb-...   # this process's environment, and nowhere else
+export SLACK_APP_TOKEN=xapp-...
+./bin/yoyo slack                  # or --once to make a single pass and exit
+```
+
+[`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
+live reporting, and the app it asks you to create is the checked-in manifest
+beside it rather than a list of checkboxes to work through by hand.
+
+It is an observation and never a gate. Nothing waits on it: a workspace that is
+down delays messages rather than losing them, because the sink reads the same
+durable records the verbs above read and catches up from its own cursors when it
+returns. The moment its history starts from is written down the first time you
+ever run it and never taken again, so time the sink itself spent stopped is a gap
+it reads across rather than a gap in what it says. It is also the reason no run
+holds a Slack token — one separate process posts, so no agent's subprocess tree
+ever has a credential for your workspace in it. Replies are acknowledged and
+nothing acts on them yet; steering the harness from a thread is designed and not
+built.
+
 ## Further reading
 
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
@@ -2121,5 +2224,7 @@ state.
 - [The configuration guide](docs/configuration.md) — the full configuration
   reference: layout, discovery, precedence, checks, publishing, personas,
   inheritance, and inspection.
+- [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
+  reporting in threads, with the app manifest checked in beside it.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.

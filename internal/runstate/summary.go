@@ -53,9 +53,15 @@ type RunSummary struct {
 	// record was last written. It is what a repair attempt was handed, so on a
 	// failed run it is usually the thing behind the reason rather than a second
 	// reason.
-	FailingCheck   *CheckFailure `json:"failing_check,omitempty"`
-	PublishFailure string        `json:"publish_failure,omitempty"`
-	CleanupFailure string        `json:"cleanup_failure,omitempty"`
+	FailingCheck *CheckFailure `json:"failing_check,omitempty"`
+	// RefusedPaths is the protected-path refusal that was still standing when the
+	// record was last written. It sits beside the failing check because it is the
+	// same kind of fact — what a repair attempt was handed, and usually the thing
+	// behind the reason rather than a second reason — and because it is the one
+	// the reader cannot go and reproduce: the worktree it describes is gone.
+	RefusedPaths   *PathRefusal `json:"refused_paths,omitempty"`
+	PublishFailure string       `json:"publish_failure,omitempty"`
+	CleanupFailure string       `json:"cleanup_failure,omitempty"`
 	// CompletionRecordingFailure is on the summary for the reason it is on the
 	// state: the run record is the one durable home this failure class has.
 	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
@@ -166,6 +172,10 @@ func (s *Store) summarize(state State) RunSummary {
 	if state.CheckFailure != nil {
 		failing := *state.CheckFailure
 		summary.FailingCheck = &failing
+	}
+	if state.PathRefusal != nil {
+		refused := *state.PathRefusal
+		summary.RefusedPaths = &refused
 	}
 	price := s.priceRun(state)
 	summary.CostUSD = price.CostUSD

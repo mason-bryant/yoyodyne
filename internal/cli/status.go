@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -175,6 +176,17 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	}
 	if run.FailingCheck != nil {
 		fmt.Fprintf(writer, "  failing check: %s exited %d\n", singleLine(run.FailingCheck.Command), run.FailingCheck.ExitCode)
+		printed = true
+	}
+	// A refused path is said here rather than left to the run's JSON for the
+	// reason the failing check is: it is what stopped the run, and the worktree
+	// that would have shown it is removed when the run is cleaned up.
+	if run.RefusedPaths != nil {
+		refused := strings.Join(run.RefusedPaths.Paths, ", ")
+		if run.RefusedPaths.Omitted > 0 {
+			refused = fmt.Sprintf("%s, and %d more", refused, run.RefusedPaths.Omitted)
+		}
+		fmt.Fprintf(writer, "  refused paths: %s\n", singleLine(refused))
 		printed = true
 	}
 	return printed

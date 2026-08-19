@@ -69,6 +69,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return reportCosts(ctx, args[1:], stdout, stderr)
 	case "reconcile":
 		return reconcileRuns(ctx, args[1:], stdout, stderr)
+	case "slack":
+		return runSlack(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -289,6 +291,7 @@ Commands:
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
   reconcile         settle runs an interrupted process left behind
+  slack             report what the harness is doing into a Slack channel
   version           print version information
   help              show this help`)
 }

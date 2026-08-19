@@ -35,7 +35,10 @@ import (
 // is what every run written before the hold existed meant. Why a run was
 // selected is the newest of them and behaves identically: absent means nothing
 // accounted for the choice, which is what every run written before selections
-// were recorded meant.
+// were recorded meant. The protected paths a change was refused for is the
+// newest of them and behaves the same way: absent means no such refusal was
+// ever recorded against this run, which is what every run written before the
+// gate existed meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -139,6 +142,52 @@ func (c CheckFailure) Validate() error {
 	}
 	if len(c.Output) > MaxCheckOutputBytes {
 		problems = append(problems, fmt.Errorf("output is %d bytes, which exceeds the %d byte bound", len(c.Output), MaxCheckOutputBytes))
+	}
+	return errors.Join(problems...)
+}
+
+// MaxRefusedPaths bounds how many protected paths a refusal carries into
+// durable state and into the developer's next attempt. A change that rewrote a
+// whole artifact home must not be able to fill either with a listing, and the
+// count of what was dropped is kept beside what was kept, so a bounded refusal
+// never reads as the whole of what the gate caught.
+const MaxRefusedPaths = 50
+
+// PathRefusal is the protected-path gate's refusal a repair attempt was handed
+// back: the upstream paths the change touched that the work item never granted.
+// It is durable for the reason a failing check is, and for one more. An attempt
+// interrupted before it ran has to be reissued with exactly the input it was
+// given, and a run that spends its attempts has to name what it still refuses —
+// and unlike a check, nothing re-derives this for a reader afterwards, because
+// the worktree it describes is removed when the run is cleaned up.
+type PathRefusal struct {
+	// Paths are the refused paths, repository-relative, in the order they sort.
+	Paths []string `json:"paths"`
+	// Omitted is how many further refused paths the bound above dropped.
+	Omitted int `json:"omitted,omitempty"`
+	// Grants is what the work item did grant, recorded beside the refusal
+	// because the two are read together: a refusal that looks wrong is most often
+	// a grant that named the path differently, and a reader with only one half of
+	// that cannot see it.
+	Grants []string `json:"grants,omitempty"`
+}
+
+// Validate reports every contract violation in the recorded refusal at once.
+func (p PathRefusal) Validate() error {
+	var problems []error
+	if len(p.Paths) == 0 {
+		problems = append(problems, errors.New("at least one refused path is required"))
+	}
+	if len(p.Paths) > MaxRefusedPaths {
+		problems = append(problems, fmt.Errorf("%d refused paths are recorded, which exceeds the bound of %d", len(p.Paths), MaxRefusedPaths))
+	}
+	for index, refused := range p.Paths {
+		if strings.TrimSpace(refused) == "" {
+			problems = append(problems, fmt.Errorf("paths[%d] is empty", index))
+		}
+	}
+	if p.Omitted < 0 {
+		problems = append(problems, errors.New("omitted cannot be negative"))
 	}
 	return errors.Join(problems...)
 }
@@ -396,6 +445,12 @@ type State struct {
 	// describe a change the gate has already moved past, and passing checks
 	// clear the failure.
 	CheckFailure *CheckFailure `json:"check_failure,omitempty"`
+	// PathRefusal carries the protected paths the gate refused before any check
+	// ran. It is the third kind of repair input and behaves as the other two do:
+	// at most one of the three describes the current attempt, and because this
+	// gate is decided before the checks, recording a refusal clears both of the
+	// others rather than competing with them for the next attempt.
+	PathRefusal *PathRefusal `json:"path_refusal,omitempty"`
 	// RepairAttempts counts the repair attempts already handed back to the
 	// developer, whichever kind of failure triggered them: one budget covers
 	// both, so it bounds the developer invocations a run can make rather than
@@ -412,6 +467,19 @@ type State struct {
 	// thing: how long a run keeps chasing a moving target, rather than how many
 	// times a developer is asked to fix its own change.
 	IntegrationRetries int `json:"integration_retries,omitempty"`
+	// TransientRelaunches counts the provider invocations this run has reissued
+	// after one died without judging the work — an API error the provider's own
+	// retries did not outlast, or a response cut off mid-flight. One budget covers
+	// the developer and the reviewer both, because what it bounds is how many
+	// times a run absorbs the provider dying under it rather than how often either
+	// role is asked; separate budgets would let a run alternating between them
+	// absorb twice what an operator configured. It is bounded apart from the
+	// repair budget for the reason that budget is bounded apart from the
+	// integration one: nothing here is a fault in the change, so spending a repair
+	// attempt on it would charge the developer for the provider's weather. It is
+	// recorded before each relaunch begins, so a process that dies mid-relaunch
+	// resumes against the budget it had rather than buying a fresh one.
+	TransientRelaunches int `json:"transient_relaunches,omitempty"`
 	// UsageLimitResetsAt is the deadline a run paused for an exhausted provider
 	// usage limit is waiting on. It is written before the wait begins, so a
 	// process that dies during the wait does not lose the deadline and a restart
@@ -628,6 +696,11 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("check_failure: %w", err))
 		}
 	}
+	if s.PathRefusal != nil {
+		if err := s.PathRefusal.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("path_refusal: %w", err))
+		}
+	}
 	if s.Changes != nil {
 		if err := s.Changes.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("changes: %w", err))
@@ -638,6 +711,9 @@ func (s State) Validate() error {
 	}
 	if s.IntegrationRetries < 0 {
 		problems = append(problems, errors.New("integration_retries cannot be negative"))
+	}
+	if s.TransientRelaunches < 0 {
+		problems = append(problems, errors.New("transient_relaunches cannot be negative"))
 	}
 	if s.UsageLimitPausedSeconds < 0 {
 		problems = append(problems, errors.New("usage_limit_paused_seconds cannot be negative"))
@@ -711,6 +787,12 @@ func (s State) Validate() error {
 		// never actually cleared.
 		if s.CheckFailure != nil {
 			problems = append(problems, errors.New("integration requires no recorded failing check"))
+		}
+		// And the same for the gate in front of them: a promotion recorded
+		// alongside a refused protected path describes a change that reached
+		// integration carrying an edit to the intent it was written against.
+		if s.PathRefusal != nil {
+			problems = append(problems, errors.New("integration requires no recorded protected-path refusal"))
 		}
 		// The target is fixed before the work starts, so an integration into a
 		// different branch describes a promotion this run was never set up to

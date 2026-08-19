@@ -74,6 +74,9 @@ agents:
 	if cfg.Execution.RepairAttemptsBeforeReplan != 2 {
 		t.Fatalf("RepairAttemptsBeforeReplan = %d, want 2", cfg.Execution.RepairAttemptsBeforeReplan)
 	}
+	if cfg.Execution.TransientRelaunchesBeforeBlocking != 2 {
+		t.Fatalf("TransientRelaunchesBeforeBlocking = %d, want 2", cfg.Execution.TransientRelaunchesBeforeBlocking)
+	}
 	if cfg.Execution.WorktreeRoot != "auto" {
 		t.Fatalf("WorktreeRoot = %q, want auto", cfg.Execution.WorktreeRoot)
 	}

@@ -254,6 +254,11 @@ type RunReport struct {
 	Commit         string `json:"commit,omitempty"`
 	WorkItemClosed bool   `json:"work_item_closed,omitempty"`
 	RepairAttempts int    `json:"repair_attempts,omitempty"`
+	// TransientRelaunches counts the provider invocations the run reissued after
+	// one died without judging the work. It is reported beside the repair
+	// attempts and means something different: the provider's weather rather than
+	// anything the change had to be corrected for.
+	TransientRelaunches int `json:"transient_relaunches,omitempty"`
 	// Blocked reports that the run recorded a durable blocker on its item, and
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed.
@@ -763,6 +768,9 @@ func (r RunReport) Render() string {
 	}
 	if r.RepairAttempts > 0 {
 		fmt.Fprintf(&rendered, "  repair attempts: %d\n", r.RepairAttempts)
+	}
+	if r.TransientRelaunches > 0 {
+		fmt.Fprintf(&rendered, "  relaunches after a provider death: %d\n", r.TransientRelaunches)
 	}
 	if r.Reported > 0 {
 		fmt.Fprintf(&rendered, "  reported %d thing(s) without stopping; /reports shows them\n", r.Reported)

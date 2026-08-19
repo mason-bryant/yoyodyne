@@ -1014,6 +1014,110 @@ func TestRunTreatsAnUnrecognizedTerminalErrorAsAFailure(t *testing.T) {
 	}
 }
 
+// connectionClosedMessage is what the provider CLI wrote, byte for byte, on the
+// run that died developing yoyodyne-ifd.68.2 on 2026-08-19 — the second time that
+// week a person reconciled, reopened, and relaunched a run by hand, and the
+// latest of the two. It quotes no HTTP status because nothing answered: the
+// transport went away mid-reply.
+const connectionClosedMessage = "API Error: Connection closed mid-response. The response above may be incomplete."
+
+// A provider that dies without judging the work is a relaunch rather than the
+// end of a run, and the shapes it dies in are what the harness has to recognize.
+func TestRunReportsATransientProviderDeath(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+		detail string
+	}{
+		{
+			name:   "a connection that dropped mid-response",
+			stream: terminalErrorStream("api_error", connectionClosedMessage),
+			detail: "api_error: " + connectionClosedMessage,
+		},
+		{
+			// Every record of this shape in the local run history reads exactly like
+			// this: the category and nothing else. That it says so little is not a
+			// reason to read it as a judgement of the work.
+			name:   "the bare category the older records carry",
+			stream: terminalErrorStream("api_error", ""),
+			detail: "api_error",
+		},
+		{
+			name:   "a server-side status that named no wait",
+			stream: terminalErrorStream("api_error", "API Error: 500 Internal Server Error"),
+			detail: "api_error: API Error: 500 Internal Server Error",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, testCase.stream)
+			if result.TransientFailure == nil {
+				t.Fatalf("Run() reported no transient failure: %#v", result)
+			}
+			// The provider's own account travels with the death, because the
+			// category alone leaves whoever reads the blocker afterwards with no
+			// idea which of these happened.
+			if result.TransientFailure.Detail != testCase.detail {
+				t.Fatalf("transient failure detail = %q, want %q", result.TransientFailure.Detail, testCase.detail)
+			}
+			// None of these is a refusal, and describing one as either would send
+			// the run into a wait for a condition nobody named.
+			if result.ServerOverload != nil || result.UsageLimit != nil {
+				t.Fatalf("a transient death became a refusal: overload=%#v limit=%#v", result.ServerOverload, result.UsageLimit)
+			}
+		})
+	}
+}
+
+// An overload is the transient death the harness already has a wait for. Two
+// answers to the same terminal would leave which one a run took depending on the
+// order the caller happened to read them.
+func TestRunReportsAnOverloadOnlyAsAnOverload(t *testing.T) {
+	t.Parallel()
+
+	result, _ := runUsageLimitStream(t, terminalErrorStream("api_error", overloadedMessage))
+	if result.ServerOverload == nil {
+		t.Fatalf("Run() reported no server overload: %#v", result)
+	}
+	if result.TransientFailure != nil {
+		t.Fatalf("an overload was also reported as a transient death: %#v", result.TransientFailure)
+	}
+}
+
+// A refusal that stands is not weather. Relaunching would put the identical
+// request in front of the provider and earn the identical answer, so these fail
+// the run exactly as they always have.
+func TestRunDoesNotRelaunchOnARefusalThatStands(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name   string
+		stream string
+	}{
+		{name: "a request the provider could not read", stream: terminalErrorStream("api_error", "API Error: 400 Bad Request. Your request could not be read.")},
+		{name: "a key that is not permitted", stream: terminalErrorStream("api_error", "API Error: 403 Forbidden")},
+		{name: "a limit the provider is enforcing", stream: terminalErrorStream("api_error", "API Error: 429 Too Many Requests")},
+		// The terminal reason is the claim. An agent that ended some other way is
+		// reporting on its own work, however much its message looks like an API's.
+		{name: "an ending that was not the API's", stream: terminalErrorStream("error_during_execution", connectionClosedMessage)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, testCase.stream)
+			if result.TransientFailure != nil {
+				t.Fatalf("a refusal that stands became a relaunch: %#v", result.TransientFailure)
+			}
+			if !result.IsError {
+				t.Fatalf("Run() lost the reported failure: %#v", result)
+			}
+		})
+	}
+}
+
 // The CLI retries an overload ten times on its own before it gives up. Those
 // retries are its business and stay its business: only the terminal result it
 // ends on asks the harness for anything.

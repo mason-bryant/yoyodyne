@@ -89,6 +89,7 @@ execution:
   max_concurrent_developers: 1
   repair_attempts_before_replan: 2
   integration_retries_before_reconciliation: 2
+  transient_relaunches_before_blocking: 2
   worktree_root: auto
   remote: origin
   usage_limit_max_pause: 6h
@@ -183,6 +184,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `product.decisions` (`docs/decisions`), `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2),
    `execution.integration_retries_before_reconciliation` (2),
+   `execution.transient_relaunches_before_blocking` (2),
    `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -236,7 +238,8 @@ review is not a change anybody can trust.
 
 ## Goals
 
-- A run integrates only behind deterministic checks and an independent review.
+- A run integrates only behind [protected paths](#protected-paths-in-a-developers-change),
+  deterministic checks, and an independent review.
 - A run that cannot finish leaves its work recoverable rather than lost.
 ```
 
@@ -528,10 +531,78 @@ a file that could neither load nor be corrected. So the document keeps loading,
 keeps governing, and stays amendable by its owner, and the entry stays reported
 until somebody decides what to do about it.
 
-What is still not enforced anywhere is an agent with an editor in its worktree
-changing a document without recording that it did — the same gap the design
-records for pushing and merging, where the contract in the prompt and the
-reviewer are what stand in the way.
+**A third place, and the one that catches an editor.** Both halves above are
+about the document — who wrote it, and what its log says. Neither notices a
+developer that simply opens the file. That is what the protected-path gate below
+is for, and it is why an agent with an editor in its worktree is no longer the
+open case it was: the edit is refused before anybody reviews it, whatever the
+revision log does or does not say about it.
+
+### Protected paths in a developer's change
+
+The documents above are upstream of every change a developer makes. A developer
+that edits one is redefining what its own work is measured against, and reading
+the diff does not tell that from a legitimate edit — both are a file that
+changed. So these paths are **default-deny for a developer's diff**:
+
+| Protected | Setting it follows |
+| --- | --- |
+| `.yoyodyne/` | fixed; the configuration directory |
+| `docs/product/` | `product.specifications` |
+| `docs/designs/` | `product.designs` |
+| `docs/decisions/` | `product.decisions` |
+| `docs/decisions/invariants/` | `product.invariants` |
+
+The set follows your configuration rather than the default layout: a project
+that keeps its designs elsewhere has not thereby made them a developer's to
+rewrite.
+
+**How it behaves.** The gate runs in front of the deterministic checks, on every
+attempt, over every path the change touches — tracked, untracked, and both sides
+of a move. A change that touches one of these paths without a grant is refused
+and handed back to the same developer inside the same repair loop a failing check
+uses, spending from the same budget, and the refusal names how a grant is made.
+No reviewer is asked about it: the class of finding this replaces used to cost an
+Opus review cycle to reach, and it costs a string comparison here. A run whose
+repair budget is spent still refusing is blocked on the work item, with the
+refused paths and the item's grants both named, because which of the two is wrong
+is a person's decision.
+
+**Granting a path.** An exception is declared in the work item's text, on a line
+beginning with the marker:
+
+```text
+Protected-path grant: docs/designs/v1-harness-design.md
+```
+
+Several paths on one line are separated by commas or spaces, and several such
+lines are read together. A grant naming a file admits that file alone; a grant
+naming a directory admits what is inside it. A grant of the repository root is
+not a grant, and prose that merely discusses these paths grants nothing — the
+marker has to begin the line, which is why it is an unlovely token rather than a
+phrase an item could produce by accident.
+
+**Which fields count, and why it is not "whoever wrote it".** A grant is read
+from the item's **title, description, design guidance, and acceptance criteria**,
+and **not from its notes**. The gate does not ask who typed a grant — it cannot,
+because the tracker records no authorship the harness could check. What it relies
+on instead is *when*: those four fields exist before the run starts and no part of
+the harness writes to them, so a grant in one of them predates the change it
+admits. The notes are the opposite — the harness appends each run's own record
+there, including the reviewer's summary and findings — so a grant read from the
+notes could be an agent's own prose, admitted to the next run of the same item.
+That is the case this gate exists to stop, so the notes do not count.
+
+The practical consequence: **a grant written into the notes silently does not
+count.** A run refused despite an item that plainly names the path is usually
+this. Both the refusal and the blocker name the fields a grant is read from.
+
+Nothing any agent produces during a run grants a path. A developer that
+genuinely needs one says so in its summary and
+[proposes the change](#proposing-a-change-to-a-document-you-do-not-own); the
+grant goes into the item, which is not a developer's to write. Which role
+maintains an item's text is a question about the fixed set of roles rather than
+about this gate, and this document does not answer it.
 
 ### Proposing a change to a document you do not own
 
@@ -1286,7 +1357,9 @@ Ordinary transient throttling still never reaches any of this: the provider CLI
 retries that itself, and the harness does not duplicate the wait. What the
 harness acts on is the terminal result that CLI ends on once its own retries are
 spent — an `api_error` reporting HTTP 529 — because the provider has stopped
-retrying by then and something has to.
+retrying by then and something has to. An overload is the only terminal
+`api_error` that becomes a wait; the rest are covered by
+[the relaunch budget](#relaunching-a-run-the-provider-killed) below.
 
 `yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
 and it overrides nothing else. It moves the next probe to now, for when the
@@ -1297,6 +1370,52 @@ acts on the release within seconds, and the run keeps its claim, its branch, its
 worktree, and its developer session. If the provider still refuses, the run
 records the new report and waits again, so a premature release costs one refused
 request. See the README for the whole of that behavior.
+
+## Relaunching a run the provider killed
+
+Not every way a provider ends an invocation is a refusal it names in advance.
+Sometimes it dies: the API answers with an error its own retry ladder did not
+outlast, or the connection carrying the response goes away before the reply is
+finished — `API Error: Connection closed mid-response`, which quotes no HTTP
+status because nothing answered. The work was never judged and nothing is wrong
+with the change. Rather than failing, the run relaunches itself:
+
+```yaml
+execution:
+  transient_relaunches_before_blocking: 2
+```
+
+The dead invocation is reissued in the same worktree and the same developer
+session, so an attempt that died mid-response continues the change it had already
+started rather than deriving it again. No wait is attached, because there is no
+condition to wait out: a dropped connection is already gone, and the provider's
+own retries are spent before the harness sees the terminal.
+
+One budget covers both provider invocations a run makes. A review the provider
+killed is asked for again on the same count, without redeveloping the change,
+because what the budget bounds is how much of the provider's weather a single run
+absorbs rather than how often either role is asked. Nothing is handed back to the
+developer, so a relaunch spends no repair attempt.
+
+Relaunches are counted in durable run state before each one begins, so a process
+that dies mid-relaunch resumes against the budget it had rather than a fresh one.
+A run that spends the budget stops and records a blocker on the work item naming
+the provider's own last message. Setting the bound to `0` restores the earlier
+behavior: the first provider death ends the run.
+
+What else that blocker says depends on what the run was carrying, because a
+provider dies during a repair attempt as readily as during the first one. A run
+nothing had judged yet says plainly that no check failed and no reviewer asked
+for repair. A run killed inside its repair loop names the repair attempts it had
+spent, the failing check, and the findings it was answering, and says the
+provider stopped it rather than that verdict — the evidence is unresolved rather
+than dismissed.
+
+A refusal that would stand is never relaunched. A terminal `api_error` quoting a
+4xx status — a malformed request, a key that is not permitted, a limit the
+provider is enforcing — earns the identical answer on the next attempt, so it
+fails the run as it always did; so does a 529, which is a wait rather than a
+relaunch, and so does any terminal the API did not report at all.
 
 ## Losing a race for the target branch
 
@@ -1396,7 +1515,8 @@ These are all errors, reported before any work is claimed:
 - a `product.specifications` that is empty, absolute, or climbs out of the
   repository, since it decides what the product manager reads; and the same of
   `product.invariants`, `product.designs`, and `product.decisions`, since they
-  decide which documents the harness treats as canonical artifacts;
+  decide which documents the harness treats as canonical artifacts and which
+  paths a developer's change may not touch;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's five, which is how a typo in an
@@ -1406,15 +1526,60 @@ These are all errors, reported before any work is claimed:
   architect on the Codex backend;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
-  configured developer instances, or automatic integration with no checks.
+  configured developer instances, or automatic integration with no checks;
+- `slack.enabled` with no `slack.channel`, a channel that is not a channel id or
+  name, or an operator that is not a Slack user id — checked whether or not
+  reporting is switched on, so a typo is found now rather than on the day
+  somebody turns it on.
+
+## Reporting to Slack
+
+`yoyo slack` reports what the harness is doing into a Slack channel: one thread
+per work item, one message per milestone, and every report an agent filed at the
+severity it was filed under. The project says where to report and who may
+eventually steer it; nothing else about reporting is configurable here.
+
+```yaml
+slack:
+  enabled: true
+  channel: C0123456789   # a channel id, or a #name
+  operators:             # optional, and inert today
+    - U01234567
+```
+
+The whole block is optional, and a project that omits it reports nothing — which
+is every project until it opts in. `channel` takes a channel id or a name;
+an id is worth preferring because renaming the channel does not break it.
+
+`operators` is the allow-list of Slack user ids whose thread replies the harness
+will act on once the inbound half is built. **Nothing reads a reply today.** It
+is here rather than in the environment because a user id is identity rather than
+a secret, it defaults to empty so enabling reporting never enables anybody to
+steer the harness by accident, and an override replaces an inherited list
+outright rather than merging into it — a list concatenated from two layers is
+not the list either layer wrote.
+
+**The credentials are not here and must never be.** The sink reads
+`SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from its own process environment and
+from nowhere else: never from this file, never from a work item, never from a
+prompt. That is what keeps the boundary structural rather than behavioral — one
+separate process posts, so no run process, and therefore no agent's subprocess
+tree, has a Slack token in its environment at all. Exporting them in a shell
+profile every process inherits would undo exactly that, so export them in the
+shell you start `yoyo slack` from.
+
+Reporting is an observation and never a gate: a workspace that is down, slow, or
+misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup.md)
+takes a workspace from nothing to live reporting, and the app manifest it asks
+for is checked in beside it.
 
 ## Personas
 
 A persona is a Markdown file describing how an agent works. Personas specialize
 behavior; they never grant it. The harness invariants — agent authority,
-worktree sandboxing, the review verdict contract, integration preconditions, and
-cleanup — are enforced in Go and are not configurable, so a persona cannot
-weaken them:
+worktree sandboxing, the protected paths a developer's change may not touch, the
+review verdict contract, integration preconditions, and cleanup — are enforced in
+Go and are not configurable, so a persona cannot weaken them:
 
 - the developer prompt starts with the harness contract verbatim, and the
   persona follows it as subordinate guidance;
