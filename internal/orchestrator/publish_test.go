@@ -74,8 +74,7 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 	}
 	// The relationship the merge actually produces: the remote target is the
 	// forge's own merge commit, it contains the promoted commit unrewritten, and
-	// it carries exactly that commit's content. The local branch stays where the
-	// promotion put it and never takes on the forge's commit.
+	// it carries exactly that commit's content.
 	remoteTarget := publishedCommit(t, remote, "main")
 	if remoteTarget == outcome.Integration.TargetCommit {
 		t.Errorf("remote main = %q, want the forge's merge commit above the promoted commit", remoteTarget)
@@ -84,8 +83,17 @@ func TestPipelinePublishesInTheDeveloperPhaseAndMergesOnApproval(t *testing.T) {
 		t.Errorf("recorded merge commit = %q, want the remote target %q", outcome.PullRequest.MergeCommit, remoteTarget)
 	}
 	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
-	if local := publishedCommit(t, repository, "main"); local != outcome.Integration.TargetCommit {
-		t.Errorf("local main = %q, want the integrated commit %q", local, outcome.Integration.TargetCommit)
+	// The last step of the promotion is local: the merge left the remote a
+	// commit ahead, so the run catches the local branch up onto it rather than
+	// leaving a checkout somebody has to pull by hand.
+	if local := publishedCommit(t, repository, "main"); local != remoteTarget {
+		t.Errorf("local main = %q, want the forge's merge commit %q", local, remoteTarget)
+	}
+	if outcome.Catchup == nil || !outcome.Catchup.Advanced || outcome.Catchup.RemoteCommit != remoteTarget {
+		t.Errorf("catch-up = %#v, want main advanced onto %q", outcome.Catchup, remoteTarget)
+	}
+	if outcome.Catchup.Held != "" {
+		t.Errorf("catch-up was held: %s", outcome.Catchup.Held)
 	}
 	if published := publishedCommit(t, remote, outcome.Branch); published != "" {
 		t.Errorf("merged remote branch survived at %q", published)
@@ -1234,16 +1242,32 @@ func (f queuedFixture) run(t *testing.T) Outcome {
 // merge and settles the run on the answer.
 func (f queuedFixture) reconcile(t *testing.T) []Reconciliation {
 	t.Helper()
-	results, err := Reconciler{
-		Tracker:   f.tracker,
-		Worktrees: newObserver(t, f.repository, f.worktreeRoot),
-		Store:     f.store,
-		Publisher: f.forge,
-	}.Reconcile(context.Background())
+	results, err := f.reconciler(t).Reconcile(context.Background())
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)
 	}
 	return results
+}
+
+// converge is the other half of that sweep: the local state brought onto what
+// the forge has, once the runs themselves are settled.
+func (f queuedFixture) converge(t *testing.T) Convergence {
+	t.Helper()
+	convergence, err := f.reconciler(t).Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge() error = %v", err)
+	}
+	return convergence
+}
+
+func (f queuedFixture) reconciler(t *testing.T) Reconciler {
+	t.Helper()
+	return Reconciler{
+		Tracker:   f.tracker,
+		Worktrees: newObserver(t, f.repository, f.worktreeRoot),
+		Store:     f.store,
+		Publisher: f.forge,
+	}
 }
 
 // A repository with no remote reports the same thing on every pass. A resumed

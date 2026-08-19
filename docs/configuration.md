@@ -28,6 +28,7 @@ half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bund
 yoyo init                              # configure the current directory
 yoyo init --directory path/to/project  # configure another one
 yoyo init --product example            # name the product explicitly
+yoyo init --tracker-remote <url>       # sync the tracker somewhere else
 yoyo init --force                      # overwrite what is already there
 ```
 
@@ -50,6 +51,37 @@ whatever `init` found; read what it proposed before running work.
 carries every proposal with the artifact it came from, in the three lists the
 generated file keeps apart — `checks` written, `candidates` found and not
 settled, `alternatives` read and deliberately left out.
+
+### Where the tracker syncs
+
+`init` also points the tracker at a remote, because a tracker that syncs
+nowhere is one backlog per machine, drifting apart with nothing to say so. The
+default is the project's own Git remote: Beads moves its data over an ordinary
+Git remote under refs of Dolt's own, so the tracker rides beside the code it
+tracks — one repository, one permission model, and nothing to stand up.
+
+- It reads the Git remote `origin` and configures the tracker remote of the
+  same name to sync there, printing what it configured.
+- A tracker that already has an `origin` remote is left exactly as it is, even
+  when it points somewhere other than this project's Git remote: that is a
+  decision `init` must not undo. A tracker whose remotes are all named
+  something else is untouched too, and gets an `origin` beside them.
+- `--tracker-remote <url>` names the remote instead, and replaces whatever
+  `origin` currently holds — which is what a tracker kept in a repository of its
+  own needs. Beads accepts any Git URL.
+- A project with no Git remote, or one whose `bd` is not initialized yet, is
+  told what to run rather than failing: the configuration is written and valid
+  either way, so `init` still exits 0 and `init --json` reports the outcome
+  under `tracker` — `configured`, `unchanged`, `skipped`, or `failed`.
+
+Two consequences of the tracker riding your repository are worth knowing before
+you adopt the default. Its history counts against the repository's size like any
+other history, and grows with the backlog rather than with the code. And a push
+writes `refs/dolt/data` and a `__dolt_remote_info__` branch: GitHub carries both
+without complaint, but a forge that restricts which refs it accepts, or a team
+that reads the branch list closely, is worth checking before you rely on it —
+that is the case `--tracker-remote` and a tracker repository of its own exist
+for.
 
 ## Layout
 
@@ -1162,10 +1194,11 @@ With both on, a run works like this:
    which is the authoritative one, and the run branch stays on the remote
    because that is what the forge still has to merge. `yoyo reconcile` settles
    it afterwards — it asks the forge, and either finishes the publication (merge
-   commit recorded, remote branch deleted) or, if the forge dropped the queued
-   merge because something it required went unmet, reports an outstanding
-   publication on the work item for you. It never merges anything itself: a
-   requirement that stopped the forge is yours to satisfy.
+   commit recorded, remote branch deleted, your local target branch caught up
+   onto the forge's merge commit) or, if the forge dropped the queued merge
+   because something it required went unmet, reports an outstanding publication
+   on the work item for you. It never merges anything itself: a requirement that
+   stopped the forge is yours to satisfy.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that
@@ -1210,12 +1243,32 @@ fast-forwards the local target exactly as it always has, and the forge merges
 the pull request carrying exactly that commit. One promotion, one reviewed
 commit, the same commit on both sides.
 
-The two branches do not end at the same commit, and no forge merge method would
-let them: **the remote target is your local target plus one merge commit per
-published run**, made by the forge and identical in content. The harness does
-not pull that merge commit back onto your local branch, and never rewrites or
-resets it. If you want the two to look the same locally, `git pull` — it is an
-ordinary fast-forward onto the merge commit.
+The merge itself does not leave the two at the same commit, and no forge merge
+method would: **the merge leaves the remote target at your local target plus one
+merge commit**, made by the forge and identical in content. The last step of the
+promotion is to catch your local branch up onto it, which is an ordinary
+fast-forward onto a commit that already contains the promotion and carries
+exactly its content. Nothing is rewritten, reset, or merged, and nothing is
+decided: that is the `git pull` you used to run yourself.
+
+A catch-up the harness cannot make cleanly is held rather than forced, and says
+why:
+
+- **Uncommitted work in your checkout that the incoming commits would
+  overwrite.** The branch is left where it is and the file is named. The
+  exception is the work tracker's own exports — `.beads/issues.jsonl` and
+  `.beads/interactions.jsonl`, the same two a run is allowed to rewrite in your
+  checkout while it works. They are derived from a store that is authoritative
+  elsewhere, so their churn is discarded and the catch-up goes through.
+- **A remote that has diverged from your local branch** — a history somebody
+  rewrote, or work that reached the remote another way. Which of the two is
+  right is your answer rather than the harness's, so it is reported and nothing
+  moves.
+
+A merge that landed after its run had finished, and any catch-up that was held,
+are swept by `yoyo reconcile`, which also removes the leftover local branches of
+settled runs whose work the target already carries. Catching a branch up takes
+that branch's promotion lease, so it never races a run promoting into it.
 
 Because the forge performs the merge, the harness checks that relationship
 rather than assuming it. Before the merge, the remote target must contain the

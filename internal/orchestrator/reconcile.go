@@ -18,14 +18,24 @@ import (
 // what a run's artifacts actually look like now, finishing the removal an
 // integrated run already earned, and — for a merge the forge performed after
 // the run that asked for it had finished — reading what that merge left on the
-// remote target and removing the branch it consumed. It is deliberately
-// narrower than the manager the pipeline uses, because reconciliation must
-// never create a worktree or promote a change.
+// remote target, removing the branch it consumed, and bringing local state onto
+// what it produced. It is deliberately narrower than the manager the pipeline
+// uses, because reconciliation must never create a worktree and must never
+// promote a change: the two writes here that move a ref only ever fast-forward
+// a target branch onto a commit that already contains it, or delete a branch
+// the target already carries.
 type ReconcileWorktrees interface {
 	Observe(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.Observation, error)
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+	// The two writes convergence needs, and the only ones here that move a ref.
+	// Both are fast-forward-or-nothing and both refuse on the evidence rather
+	// than on a record: a target branch is only ever advanced onto a remote
+	// commit that already contains it, and a run branch is only ever deleted
+	// once the target is proven to carry its work.
+	CatchUpTarget(ctx context.Context, targetBranch string) (gitworktree.Catchup, error)
+	RemoveMergedBranch(ctx context.Context, branch, targetBranch string) (gitworktree.Removal, error)
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
@@ -44,6 +54,16 @@ type ReconcileStore interface {
 	Outstanding() ([]runstate.State, error)
 	AdoptRun(ctx context.Context, runID string) (runstate.State, *runstate.Lease, error)
 	Save(state runstate.State) error
+	// Recorded is every run the harness holds, whatever became of it. Settling a
+	// run reads only the outstanding ones; converging local state reads all of
+	// them, because the branches and targets a finished run left behind are
+	// exactly what it has to sweep.
+	Recorded() ([]runstate.State, error)
+	// LeasePromotion admits this sweep to move one target branch, waiting its
+	// turn behind whatever is promoting into it now. Catching a branch up reads
+	// where it is and then moves it, which is the same race a promotion is, so
+	// it queues in the same place rather than beside it.
+	LeasePromotion(ctx context.Context, targetBranch string) (*runstate.Lease, error)
 }
 
 // Reconciler settles the runs an interrupted process left behind. It compares

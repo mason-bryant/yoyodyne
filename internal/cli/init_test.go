@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func TestRunInitWritesAProjectThatOwnsItsConfiguration(t *testing.T) {
@@ -216,6 +219,177 @@ func TestRunInitKeepsThePlaceholderWhenNothingIsDetected(t *testing.T) {
 	if !strings.Contains(stdout.String(), "nothing in this project proposed one") {
 		t.Errorf("stdout = %q, want it to say that nothing was proposed", stdout.String())
 	}
+}
+
+// The tracker syncs over the project's own Git remote, and nothing else in the
+// three-step adoption path configures it. An unconfigured tracker diverges per
+// machine silently, so init closes that at install time rather than leaving it
+// to be discovered at the first divergence.
+func TestRunInitPointsTheTrackerAtTheProjectsGitRemote(t *testing.T) {
+	t.Parallel()
+
+	runner := &trackerRunner{
+		gitRemoteURL: "git@github.com:acme/thing.git",
+		beads: map[string]string{
+			"dolt remote list": `[]`,
+			"dolt remote add origin git@github.com:acme/thing.git": `Added remote "origin"`,
+		},
+		beadsAfterAdd: `[{"name":"origin","url":"git+ssh://git@github.com/acme/thing.git"}]`,
+	}
+	tracker := configureTrackerRemote(context.Background(), t.TempDir(), "", runner)
+	if tracker.Status != trackerRemoteConfigured || tracker.URL != "git+ssh://git@github.com/acme/thing.git" {
+		t.Fatalf("tracker = %#v, want the Git remote configured", tracker)
+	}
+	if !strings.Contains(describeTrackerRemote(tracker), "git+ssh://git@github.com/acme/thing.git") {
+		t.Errorf("report = %q, want it to name what it configured", describeTrackerRemote(tracker))
+	}
+}
+
+// A project that deliberately syncs its tracker somewhere else must not have
+// that undone by a later init, and one that names a URL must have it applied.
+func TestRunInitLeavesAConfiguredTrackerAloneUnlessOneIsNamed(t *testing.T) {
+	t.Parallel()
+
+	configured := `[{"name":"origin","url":"git+ssh://git@github.com/acme/tracker.git"}]`
+	unchanged := &trackerRunner{
+		gitRemoteURL: "git@github.com:acme/thing.git",
+		beads:        map[string]string{"dolt remote list": configured},
+	}
+	tracker := configureTrackerRemote(context.Background(), t.TempDir(), "", unchanged)
+	if tracker.Status != trackerRemoteUnchanged || tracker.URL != "git+ssh://git@github.com/acme/tracker.git" {
+		t.Fatalf("tracker = %#v, want the tracker's own remote left alone", tracker)
+	}
+	if !strings.Contains(describeTrackerRemote(tracker), "--tracker-remote") {
+		t.Errorf("report = %q, want it to name the flag that would change it", describeTrackerRemote(tracker))
+	}
+
+	// The case the flag exists for: a tracker that already syncs somewhere,
+	// pointed at a repository of its own. What is already there must not make
+	// the named URL a no-op, and bd replaces a remote it already holds rather
+	// than refusing the name -- which is checked against bd itself in
+	// TestSyncRemoteConformance, since a scripted runner can only restate it.
+	named := &trackerRunner{
+		gitRemoteURL: "git@github.com:acme/thing.git",
+		beads: map[string]string{
+			"dolt remote list": configured,
+			"dolt remote add origin https://example.invalid/acme/tracker.git": "added",
+		},
+		beadsAfterAdd: `[{"name":"origin","url":"git+https://example.invalid/acme/tracker.git"}]`,
+	}
+	tracker = configureTrackerRemote(context.Background(), t.TempDir(), "https://example.invalid/acme/tracker.git", named)
+	if tracker.Status != trackerRemoteConfigured || tracker.URL != "git+https://example.invalid/acme/tracker.git" {
+		t.Fatalf("tracker = %#v, want the named URL configured over the one already there", tracker)
+	}
+	// A named URL is the operator's decision, so nothing about the project's own
+	// Git remote is consulted before applying it.
+	for _, args := range named.args {
+		if args[0] == "git" {
+			t.Errorf("a named tracker remote still asked Git where the project points: %v", args)
+		}
+	}
+}
+
+// bd is a separate tool with its own initialization, and everything init
+// promises is already on disk by the time the tracker is configured. A tracker
+// that could not be configured is reported with what to run, and does not turn
+// a written configuration into a failed init.
+func TestRunInitReportsATrackerItCouldNotConfigure(t *testing.T) {
+	t.Parallel()
+
+	refusing := &trackerRunner{gitRemoteURL: "git@github.com:acme/thing.git", beadsError: "no beads database in this directory"}
+	tracker := configureTrackerRemote(context.Background(), t.TempDir(), "", refusing)
+	if tracker.Status != trackerRemoteFailed || !strings.Contains(tracker.Reason, "no beads database") {
+		t.Fatalf("tracker = %#v, want bd's own refusal reported", tracker)
+	}
+	if report := describeTrackerRemote(tracker); !strings.Contains(report, "bd dolt remote add origin") {
+		t.Errorf("report = %q, want it to name what the operator would run", report)
+	}
+
+	// A project with nothing to sync to is not a failure, and the tracker is
+	// left untouched rather than pointed at a URL nobody named.
+	alone := &trackerRunner{}
+	tracker = configureTrackerRemote(context.Background(), t.TempDir(), "", alone)
+	if tracker.Status != trackerRemoteSkipped || !strings.Contains(tracker.Reason, "No such remote") {
+		t.Fatalf("tracker = %#v, want the skip and Git's reason for it", tracker)
+	}
+	if len(alone.args) != 1 {
+		t.Errorf("a project with no Git remote still ran %v", alone.args)
+	}
+}
+
+// The whole command is exercised over a real repository with no remote, so the
+// wiring from the flags through to the report is covered rather than only the
+// step in isolation.
+func TestRunInitReportsTheTrackerAlongsideWhatItWrote(t *testing.T) {
+	t.Parallel()
+
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+	git(t, project, "init", "-b", "main")
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--json"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	var result struct {
+		Tracker trackerRemote `json:"tracker"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if result.Tracker.Status != trackerRemoteSkipped || result.Tracker.Reason == "" {
+		t.Fatalf("tracker = %#v, want a skip that says why", result.Tracker)
+	}
+
+	stdout.Reset()
+	stderr.Reset()
+	if code := Run([]string{"init", "--directory", project, "--force"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "bd dolt remote add origin") {
+		t.Errorf("stdout = %q, want the tracker reported beside what was written", stdout.String())
+	}
+}
+
+// trackerRunner answers the two commands the tracker step runs: Git, for where
+// the project points, and bd, for what the tracker is configured with.
+type trackerRunner struct {
+	gitRemoteURL string
+	beads        map[string]string
+	// beadsAfterAdd is what `dolt remote list` answers once a remote has been
+	// added, which is how the read-back after a write is exercised.
+	beadsAfterAdd string
+	beadsError    string
+	added         bool
+	args          [][]string
+}
+
+func (r *trackerRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	r.args = append(r.args, append([]string{command.Name}, command.Args...))
+	if command.Name == "git" {
+		if r.gitRemoteURL == "" {
+			return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 2, Stderr: "error: No such remote 'origin'"}, nil
+		}
+		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.gitRemoteURL + "\n"}, nil
+	}
+	if r.beadsError != "" {
+		return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: r.beadsError}, nil
+	}
+	request := strings.Join(command.Args, " ")
+	if strings.HasPrefix(request, "dolt remote add") {
+		r.added = true
+	}
+	if r.added && request == "dolt remote list --json" {
+		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.beadsAfterAdd}, nil
+	}
+	response, known := r.beads[strings.TrimSuffix(request, " --json")]
+	if !known {
+		return execution.ProcessResult{}, fmt.Errorf("unexpected bd command %v", command.Args)
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: response}, nil
 }
 
 func TestRunInitRefusesToOverwriteWithoutForce(t *testing.T) {

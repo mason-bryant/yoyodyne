@@ -84,6 +84,11 @@ type WorktreeManager interface {
 	VerifyRemoteTarget(ctx context.Context, integration gitworktree.Integration) error
 	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+	// CatchUpTarget brings the local target branch onto what the forge has,
+	// which is the local half of the merge the forge just performed. It moves
+	// the same branch a promotion does, so it is only ever called while this run
+	// holds that branch's promotion lease.
+	CatchUpTarget(ctx context.Context, targetBranch string) (gitworktree.Catchup, error)
 }
 
 // PullRequests is the forge access publishing needs. The pipeline decides when
@@ -393,7 +398,15 @@ type Outcome struct {
 	// target branch is the authoritative one and it already moved, so this is an
 	// outstanding publication rather than a failed run.
 	PublishFailure string `json:"publish_failure,omitempty"`
-	WorkItemClosed bool   `json:"work_item_closed"`
+	// Catchup is the local aftermath of a merge the forge performed: the target
+	// branch brought onto the merge commit the forge made above the promotion,
+	// so the checkout a person reads carries what the forge has. It is recorded
+	// rather than made durable because it is idempotent and unowned — `yoyo
+	// reconcile` sweeps every target branch and would do it again — so a
+	// catch-up that was held is a fact to report, not outstanding work anybody
+	// has to track.
+	Catchup        *gitworktree.Catchup `json:"catchup,omitempty"`
+	WorkItemClosed bool                 `json:"work_item_closed"`
 	// WorktreeRemoved and BranchRemoved report each artifact separately, because
 	// cleanup removes them in two steps and a partial result must not describe
 	// a deleted artifact as remaining or a surviving one as gone.

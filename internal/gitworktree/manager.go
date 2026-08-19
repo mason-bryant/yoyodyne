@@ -481,31 +481,6 @@ func (m *Manager) ValidateReady(ctx context.Context) error {
 	return nil
 }
 
-func (m *Manager) unexpectedPrimaryChanges(ctx context.Context) ([]string, error) {
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "status", "--porcelain=v1", "--untracked-files=all")
-	if err != nil {
-		return nil, err
-	}
-	if result.Status != execution.ProcessSucceeded {
-		return nil, fmt.Errorf("inspect primary Git status failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
-	}
-	var unexpected []string
-	for _, line := range strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\n") {
-		if line == "" {
-			continue
-		}
-		if len(line) < 4 || strings.Contains(line, " -> ") {
-			unexpected = append(unexpected, line)
-			continue
-		}
-		path := filepath.ToSlash(line[3:])
-		if _, allowed := m.allowedPrimaryChanges[path]; !allowed {
-			unexpected = append(unexpected, path)
-		}
-	}
-	return unexpected, nil
-}
-
 func (m *Manager) SummarizeChanges(ctx context.Context, worktree Worktree) (ChangeSummary, error) {
 	path, _, err := m.verifyOwnedHead(ctx, worktree)
 	if err != nil {
