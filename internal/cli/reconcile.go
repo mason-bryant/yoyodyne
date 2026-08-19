@@ -105,6 +105,12 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			if result.Action == orchestrator.ActionCompleted {
 				fmt.Fprintf(stdout, "  worktree removed: %t, branch removed: %t\n", result.WorktreeRemoved, result.BranchRemoved)
 			}
+			if result.Catchup != nil && result.Catchup.Advanced {
+				fmt.Fprintf(stdout, "  %s caught up to %s\n", result.Catchup.TargetBranch, result.Catchup.RemoteCommit)
+			}
+			if result.Catchup != nil && result.Catchup.Held != "" {
+				fmt.Fprintf(stderr, "  %s not caught up: %s\n", result.Catchup.TargetBranch, result.Catchup.Held)
+			}
 			if result.Failure != "" {
 				fmt.Fprintf(stderr, "  not reconciled: %s\n", result.Failure)
 			}

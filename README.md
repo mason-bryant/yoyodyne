@@ -2100,18 +2100,27 @@ the target branch is closed and its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
-here too: reconcile asks the forge, finishes the publication once the merge has
-landed, and — if the forge dropped the queued merge because something it
-required went unmet — reports an outstanding publication on the work item
-instead of merging past the requirement. It never invokes a provider: a lost
-process handle is not a reason to start a second developer for an item.
+here too: reconcile asks the forge and, once the merge has landed, finishes the
+publication — merge commit recorded, remote branch deleted, and your local
+target branch caught up onto the merge commit the forge made. Settling a merge
+is complete on its own that way rather than leaning on the sweep below, so a
+checkout is never left behind by which command somebody happened to run.
 
-Once the runs are settled it converges local state, which is the post-merge
-hygiene you would otherwise do by hand. Every target branch the harness knows
-about is caught up onto its remote counterpart — the same fast-forward the run's
-own settle path makes, for merges that landed after their run was over or whose
-catch-up was held at the time — and every settled run's leftover branch whose
-work the target already carries is deleted. Both refuse on evidence rather than
+A merge the forge **dropped** is the one case here that reaches a person, and it
+is the only one. Something the base branch required went unmet, the harness does
+not merge past a requirement, and nothing about that publication is confirmed —
+so it is reported as an outstanding publication on the work item, and your local
+branch is deliberately left where it is rather than moved on a merge nothing
+verified. Everything else on this page is judgement-free and stays with the
+machinery. Reconcile never invokes a provider either: a lost process handle is
+not a reason to start a second developer for an item.
+
+Once the runs are settled it converges local state, which is the rest of the
+post-merge hygiene you would otherwise do by hand. Every target branch the
+harness knows about is caught up onto its remote counterpart — the same
+fast-forward the settle paths make, for a target left behind by something no run
+is going to finish, or a catch-up that was held at the time — and every settled
+run's leftover branch whose work the target already carries is deleted. Both refuse on evidence rather than
 on a record: a remote that has diverged from your local branch is reported for
 you to decide rather than reconciled, a branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
