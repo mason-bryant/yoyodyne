@@ -285,7 +285,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	if err != nil {
 		return nil, nil, err
 	}
-	lease, err := store.Hold(role)
+	// The conversation is held, recorded, and resumed under the agent that holds
+	// it, so two agents configured for one role are two conversations rather than
+	// one they would take turns overwriting.
+	lease, err := store.Hold(runstate.ConversationIdentity{Agent: name, Role: role})
 	if err != nil {
 		return nil, nil, err
 	}

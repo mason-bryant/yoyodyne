@@ -125,9 +125,11 @@ editing it. Remove one by deleting its block. Nothing has to be expressed as a
 deviation from something invisible.
 
 `yoyo agent list` reports them as they actually stand, with the durable
-conversation each one has, and `yoyo agent chat <name>` addresses one. What a
-role may do in that conversation is **not** configurable and is not what the
-persona says: the harness holds one contract and one authority table per role,
+conversation each one has, and `yoyo agent chat <name>` addresses one. The
+conversation belongs to the agent rather than to the role, so configuring two
+agents for one role gives you two conversations with two provider sessions —
+naming one of them reaches that one. What a role may do in that conversation is
+**not** configurable and is not what the persona says: the harness holds one contract and one authority table per role,
 sends the contract ahead of the persona on every turn, and refuses anything
 outside the table. A persona specializes how a role works; it cannot widen what
 the role is allowed to do. The README's

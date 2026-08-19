@@ -18,7 +18,7 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 
 	root := t.TempDir()
 	store := newConversationStore(t, root)
-	if _, err := store.Load(domain.RoleProductManager); !errors.Is(err, ErrNoConversation) {
+	if _, err := store.Load(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}); !errors.Is(err, ErrNoConversation) {
 		t.Fatalf("Load() error = %v, want ErrNoConversation", err)
 	}
 
@@ -53,7 +53,7 @@ func TestConversationStoreRoundTripsAcrossProcesses(t *testing.T) {
 	}
 
 	// A second store over the same root is what a restarted process sees.
-	loaded, err := newConversationStore(t, root).Load(domain.RoleProductManager)
+	loaded, err := newConversationStore(t, root).Load(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -103,11 +103,11 @@ func TestConversationStoreHoldsOneConversationAtATime(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
-	held, err := newConversationStore(t, root).Hold(domain.RoleProductManager)
+	held, err := newConversationStore(t, root).Hold(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	if _, err := newConversationStore(t, root).Hold(domain.RoleProductManager); err == nil ||
+	if _, err := newConversationStore(t, root).Hold(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}); err == nil ||
 		!strings.Contains(err.Error(), "already held") {
 		t.Fatalf("second Hold() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestConversationStoreHoldsOneConversationAtATime(t *testing.T) {
 		t.Fatalf("Release() error = %v", err)
 	}
 	// A released conversation is immediately available again.
-	regained, err := newConversationStore(t, root).Hold(domain.RoleProductManager)
+	regained, err := newConversationStore(t, root).Hold(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Hold() after release error = %v", err)
 	}
@@ -143,7 +143,7 @@ func TestConversationStoreRefusesForeignAndMalformedRecords(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`{"schema_version":1,"conversation_id":"chat-1"}`), 0o600); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
-	if _, err := store.Load(domain.RoleProductManager); err == nil {
+	if _, err := store.Load(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}); err == nil {
 		t.Fatal("Load() malformed error = nil")
 	}
 }
@@ -249,5 +249,107 @@ func testConversation(t *testing.T) Conversation {
 		Backend:        domain.BackendClaudeCode,
 		StartedAt:      started,
 		UpdatedAt:      started,
+	}
+}
+
+// Two agents filling one role hold two conversations, with two provider
+// sessions and two leases. A store that keyed on the role alone would have each
+// of them resuming the other's session under its own persona and model.
+func TestConversationsAreKeptPerAgentRatherThanPerRole(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	house := ConversationIdentity{Agent: "house-architect", Role: domain.RoleArchitect}
+	visiting := ConversationIdentity{Agent: "visiting-architect", Role: domain.RoleArchitect}
+
+	recorded := testConversation(t)
+	recorded.Agent = house.Agent
+	recorded.Role = house.Role
+	recorded.ProviderSessionID = "session-house"
+	recorded.ProviderModel = "opus"
+	recorded.Turns = 1
+	if err := store.Save(recorded); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	loaded, err := store.Load(house)
+	if err != nil || loaded.ProviderSessionID != "session-house" {
+		t.Fatalf("Load(house) = %q, err = %v", loaded.ProviderSessionID, err)
+	}
+	if _, err := store.Load(visiting); !errors.Is(err, ErrNoConversation) {
+		t.Fatalf("Load(visiting) error = %v, want ErrNoConversation", err)
+	}
+
+	// The lease is per agent for the same reason: one architect talking must not
+	// stop the other, because they are not sharing anything to serialize.
+	held, err := store.Hold(house)
+	if err != nil {
+		t.Fatalf("Hold(house) error = %v", err)
+	}
+	defer held.Release()
+	if _, err := store.Hold(house); !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("Hold(house) twice error = %v, want ErrConversationHeld", err)
+	}
+	sibling, err := store.Hold(visiting)
+	if err != nil {
+		t.Fatalf("Hold(visiting) error = %v, want it free while its sibling is held", err)
+	}
+	defer sibling.Release()
+
+	// A record whose agent disagrees with the file it is in is somebody's edit
+	// rather than a conversation, and resuming it would put one agent's session
+	// behind another's persona. It is written by hand here because nothing the
+	// store does can produce it.
+	misfiled, err := os.ReadFile(filepath.Join(store.Root(), "house-architect.json"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	rewritten := strings.Replace(string(misfiled), `"agent": "house-architect"`, `"agent": "visiting-architect"`, 1)
+	if rewritten == string(misfiled) {
+		t.Fatalf("the record does not name its agent, so this test proves nothing:\n%s", misfiled)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "house-architect.json"), []byte(rewritten), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.Load(house); err == nil || !strings.Contains(err.Error(), "belongs to agent") {
+		t.Fatalf("Load(house) error = %v, want a refusal naming the agent", err)
+	}
+}
+
+// A conversation recorded before the agent was part of the identity keeps
+// loading, under the agent named for its role — the only agent that could have
+// written it — and acquires the agent the next time it is saved.
+func TestAConversationRecordedWithoutAnAgentStillLoads(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	legacy := testConversation(t)
+	legacy.ProviderSessionID = "session-1"
+	legacy.ProviderModel = "opus"
+	legacy.Turns = 1
+	if legacy.Agent != "" {
+		t.Fatal("the fixture already names an agent; this test proves nothing")
+	}
+	if err := store.Save(legacy); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(store.Root(), "product-manager.json")); err != nil {
+		t.Fatalf("the record is not where the role-keyed layout put it: %v", err)
+	}
+
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	loaded, err := store.Load(identity)
+	if err != nil || loaded.ProviderSessionID != "session-1" {
+		t.Fatalf("Load() = %q, err = %v", loaded.ProviderSessionID, err)
+	}
+	loaded.Agent = identity.Agent
+	if err := store.Save(loaded); err != nil {
+		t.Fatalf("Save() stamped error = %v", err)
+	}
+	stamped, err := store.Load(identity)
+	if err != nil || stamped.Agent != "product-manager" {
+		t.Fatalf("Load() agent = %q, err = %v", stamped.Agent, err)
 	}
 }

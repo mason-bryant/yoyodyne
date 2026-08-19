@@ -9,6 +9,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // Every role the operator can address carries a contract of its own, and a
@@ -97,6 +98,7 @@ func TestEachRoleKeepsItsOwnDurableConversation(t *testing.T) {
 	}}
 	architectOptions := testOptions(t, architectBackend)
 	architectOptions.Role = domain.RoleArchitect
+	architectOptions.Agent = string(domain.RoleArchitect)
 	architectOptions.Store = newTestStore(t, root)
 	architect, err := Open(architectOptions)
 	if err != nil {
@@ -131,7 +133,7 @@ func TestEachRoleKeepsItsOwnDurableConversation(t *testing.T) {
 		domain.RoleProductManager: "session-pm",
 		domain.RoleArchitect:      "session-architect",
 	} {
-		recorded, err := store.Load(role)
+		recorded, err := store.Load(runstate.ConversationIdentity{Agent: string(role), Role: role})
 		if err != nil {
 			t.Fatalf("Load(%s) error = %v", role, err)
 		}
@@ -261,6 +263,7 @@ func TestTheDevelopmentManagerDecomposesAdmittedWork(t *testing.T) {
 		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Both are filed."},
 	}})
 	options.Role = domain.RoleDevelopmentManager
+	options.Agent = string(domain.RoleDevelopmentManager)
 	options.Tracker = tracker
 	options.Goals = recordedGoals(recordedGoal)
 	session, err := Open(options)
@@ -345,5 +348,90 @@ func TestTheProductManagerAdmitsWorkToTheBacklog(t *testing.T) {
 	rendered := renderTrackerOutcomes(domain.RoleProductManager, reply.Actions)
 	if !strings.Contains(rendered, "admitted yoyodyne-1 to the backlog at priority 1") {
 		t.Fatalf("the admission was not reported as one:\n%s", rendered)
+	}
+}
+
+// Two agents configured for one role are two identities, not one conversation
+// they take turns overwriting. The role decides what each may do; the agent
+// decides which record, which provider session, and which persona is resumed —
+// so naming the sibling must never continue the other one's session under a
+// different model.
+func TestTwoAgentsOnOneRoleKeepTwoConversations(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	house := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-house", ResolvedModel: "claude-opus-5-20260514", FinalText: "The design is sound."},
+		{SessionID: "session-house", ResolvedModel: "claude-opus-5-20260514", FinalText: "Still sound."},
+	}}
+	houseOptions := testOptions(t, house)
+	houseOptions.Role = domain.RoleArchitect
+	houseOptions.Agent = "house-architect"
+	houseOptions.Store = newTestStore(t, root)
+	houseSession, err := Open(houseOptions)
+	if err != nil {
+		t.Fatalf("Open() house error = %v", err)
+	}
+	if _, err := houseSession.Send(context.Background(), "Is the design sound?"); err != nil {
+		t.Fatalf("Send() house error = %v", err)
+	}
+
+	visiting := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-visiting", ResolvedModel: "claude-fable-5", FinalText: "I would argue otherwise."},
+	}}
+	visitingOptions := testOptions(t, visiting)
+	visitingOptions.Role = domain.RoleArchitect
+	visitingOptions.Agent = "visiting-architect"
+	visitingOptions.Model = "fable"
+	visitingOptions.Store = newTestStore(t, root)
+	visitingSession, err := Open(visitingOptions)
+	if err != nil {
+		t.Fatalf("Open() visiting error = %v", err)
+	}
+	if visitingSession.Resumed() {
+		t.Fatal("the visiting architect resumed a conversation its sibling started")
+	}
+	if visitingSession.Evidence().ConversationID == houseSession.Evidence().ConversationID {
+		t.Fatal("two agents on one role share a conversation identifier")
+	}
+	if _, err := visitingSession.Send(context.Background(), "Is the design sound?"); err != nil {
+		t.Fatalf("Send() visiting error = %v", err)
+	}
+	// The provider session is the thing that would actually carry one agent's
+	// history into the other's turn, so it is asserted directly.
+	if session := visiting.requests[0].SessionID; session != "" {
+		t.Fatalf("the visiting architect's first turn resumed session %q", session)
+	}
+
+	// A second turn on the first agent continues the first agent's session, which
+	// is the case a role-keyed record would have got wrong in the other
+	// direction.
+	if _, err := houseSession.Send(context.Background(), "Anything else?"); err != nil {
+		t.Fatalf("Send() house second error = %v", err)
+	}
+	if session := house.requests[1].SessionID; session != "session-house" {
+		t.Fatalf("the house architect's second turn resumed session %q", session)
+	}
+
+	// Both records survive the processes that held them, separately and under
+	// their own agents.
+	store := newTestStore(t, root)
+	for agent, want := range map[string]struct {
+		session string
+		turns   int
+	}{
+		"house-architect":    {session: "session-house", turns: 2},
+		"visiting-architect": {session: "session-visiting", turns: 1},
+	} {
+		recorded, err := store.Load(runstate.ConversationIdentity{Agent: agent, Role: domain.RoleArchitect})
+		if err != nil {
+			t.Fatalf("Load(%s) error = %v", agent, err)
+		}
+		if recorded.Agent != agent || recorded.Role != domain.RoleArchitect {
+			t.Fatalf("Load(%s) = agent %q role %q", agent, recorded.Agent, recorded.Role)
+		}
+		if recorded.ProviderSessionID != want.session || recorded.Turns != want.turns {
+			t.Fatalf("Load(%s) = session %q, %d turn(s)", agent, recorded.ProviderSessionID, recorded.Turns)
+		}
 	}
 }

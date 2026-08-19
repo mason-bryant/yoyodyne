@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // escapes finds anything a terminal would interpret rather than print, which is
@@ -80,7 +81,7 @@ func TestATurnSaysWhatItIsDoingWhileTheOperatorWaits(t *testing.T) {
 			t.Fatalf("the display reached the event stream: %s", event.Payload)
 		}
 	}
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}

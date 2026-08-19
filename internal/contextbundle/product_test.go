@@ -837,3 +837,74 @@ func TestAssembleProductGivesARoleItsOwnDocuments(t *testing.T) {
 		t.Fatal("AssembleProduct() accepted an unlabelled document set")
 	}
 }
+
+// The header says what actually arrived. A role told its designs are here when
+// the directory is empty answers as though it had read them, and — worse — is no
+// longer told that the design document is among what it has not read.
+func TestTheRoleDocumentNoteSaysWhatWasActuallyFound(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	writeProductFile(t, root, "docs/designs/v1-harness-design.md", "# Design\n\nArchitecture, not intent.\n")
+
+	sets := []DocumentSet{
+		{Label: "Design", Directory: "docs/designs"},
+		// Nothing has been written here, which is the case this is about.
+		{Label: "Architectural invariant", Directory: "docs/decisions/invariants"},
+	}
+	mixed, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments:           sets,
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"Your own documents are here too, from docs/designs.",
+		"Nothing was found under docs/decisions/invariants.",
+		"treat them as unwritten rather than as something you have read",
+	} {
+		if !strings.Contains(mixed.Text, required) {
+			t.Fatalf("the header is missing %q:\n%s", required, mixed.Text)
+		}
+	}
+	if strings.Contains(mixed.Text, "here too, from docs/designs, docs/decisions/invariants") {
+		t.Fatalf("an empty directory was reported as carrying documents:\n%s", mixed.Text)
+	}
+
+	// A role whose every directory is empty is told so, and is told the design
+	// document is among what it has not read — which is exactly what the product
+	// manager's own header says, and what a role given the designs must not be
+	// told.
+	empty, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments:           []DocumentSet{{Label: "Design", Directory: "docs/decisions"}},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if strings.Contains(empty.Text, "Your own documents are here too") {
+		t.Fatalf("documents nobody wrote were reported as present:\n%s", empty.Text)
+	}
+	for _, required := range []string{
+		"Nothing was found under docs/decisions.",
+		"the source, the design document, and any way to run a",
+	} {
+		if !strings.Contains(empty.Text, required) {
+			t.Fatalf("the empty-directory header is missing %q:\n%s", required, empty.Text)
+		}
+	}
+
+	// And the reserve still bounds what the note can cost, whichever way it went.
+	for _, bundle := range []Bundle{mixed, empty} {
+		if bundle.Bytes != len(bundle.Text) {
+			t.Fatalf("bundle bytes = %d, text = %d", bundle.Bytes, len(bundle.Text))
+		}
+	}
+	if longest := longestRoleDocumentNote(sets); longest < len(renderRoleDocumentNote(sets, map[string]bool{"docs/designs": true})) {
+		t.Fatalf("the reserved note bound %d is smaller than a note it must cover", longest)
+	}
+}

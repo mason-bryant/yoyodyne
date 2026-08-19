@@ -385,26 +385,81 @@ func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewConversationStore() error = %v", err)
 	}
-	inUse, problem := conversationInUse(store, domain.RoleArchitect)
+	architectIdentity := runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect}
+	inUse, problem := conversationInUse(store, architectIdentity)
 	if inUse || problem != "" {
 		t.Fatalf("a free conversation reported in use = %v, problem = %q", inUse, problem)
 	}
 
 	// Held by this process, which is what another process holding it looks like
 	// from outside.
-	lease, err := store.Hold(domain.RoleArchitect)
+	lease, err := store.Hold(architectIdentity)
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	defer lease.Release()
-	if inUse, problem = conversationInUse(store, domain.RoleArchitect); !inUse || problem != "" {
+	if inUse, problem = conversationInUse(store, architectIdentity); !inUse || problem != "" {
 		t.Fatalf("a held conversation reported in use = %v, problem = %q", inUse, problem)
 	}
 
 	// A role whose name could never be a path is the failure to ask: it is
 	// refused before any lock is taken, so it is a problem to report rather than
 	// a conversation to claim.
-	if inUse, problem = conversationInUse(store, "Not A Role"); inUse || problem == "" {
+	if inUse, problem = conversationInUse(store, runstate.ConversationIdentity{Agent: "Not An Agent", Role: domain.RoleArchitect}); inUse || problem == "" {
 		t.Fatalf("an unaskable lease reported in use = %v, problem = %q", inUse, problem)
+	}
+}
+
+// Two agents on one role are two identities in the listing as well as in the
+// store: the conversation one of them has had is reported against that one, and
+// the sibling is reported as never spoken to. Printing one record twice would
+// tell the operator that both had been in the conversation only one of them was.
+func TestAgentListReportsSiblingAgentsSeparately(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, twoArchitectsConfig)
+
+	store, err := runstate.NewConversationStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	spokenAt := time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC)
+	if err := store.Save(runstate.Conversation{
+		SchemaVersion:     runstate.ConversationSchemaVersion,
+		ConversationID:    "chat-0123456789abcdef0123456789abcdef",
+		ProductID:         "yoyodyne",
+		RepositoryID:      "yoyodyne",
+		Agent:             "visiting-architect",
+		Role:              domain.RoleArchitect,
+		Backend:           domain.BackendClaudeCode,
+		ProviderSessionID: "session-visiting",
+		ProviderModel:     "claude-opus-5-20260514",
+		Turns:             2,
+		StartedAt:         spokenAt.Add(-time.Hour),
+		UpdatedAt:         spokenAt,
+	}); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	stdout, stderr, code := runCLI(t, "agent", "list", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("agent list code = %d, stderr = %q", code, stderr)
+	}
+	var decoded struct {
+		Agents []agentReport `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	byName := map[string]agentReport{}
+	for _, agent := range decoded.Agents {
+		byName[agent.Name] = agent
+	}
+	visiting := byName["visiting-architect"]
+	if visiting.Conversation == nil || visiting.Conversation.Turns != 2 {
+		t.Fatalf("the conversation was not reported against the agent that had it: %#v", visiting)
+	}
+	if house := byName["house-architect"]; house.Conversation != nil {
+		t.Fatalf("the sibling was reported as having had a conversation: %#v", house.Conversation)
 	}
 }

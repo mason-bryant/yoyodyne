@@ -184,6 +184,7 @@ func newTestChatSession(t *testing.T, provider chat.Backend, reports ...report.R
 	}
 	session, err := chat.Open(chat.Options{
 		Role:         domain.RoleProductManager,
+		Agent:        "product-manager",
 		Backend:      provider,
 		Store:        store,
 		Reports:      collected,

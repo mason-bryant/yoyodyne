@@ -209,7 +209,11 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		return Bundle{}, err
 	}
 
-	header := productHeader(directory, roleDocuments)
+	// The header ends with a note about the role's own documents, and what that
+	// note says depends on which of them were actually found — so the header is
+	// charged at its longest here and rendered once the reading is done.
+	header := productHeader(directory)
+	headerNote := longestRoleDocumentNote(roleDocuments)
 	trackerState := renderWorkItems(request.WorkItems, request.WorkItemsUnavailable)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
@@ -218,7 +222,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// out the current state of the work, the answer to whether the product has a
 	// brief and goals at all, or the label saying what the documentation below is
 	// and is not.
-	reserved := len(header) + len(trackerState) + maxRecordedIntentBytes + len(directory) +
+	reserved := len(header) + headerNote + len(trackerState) + maxRecordedIntentBytes + len(directory) +
 		len(shippedSurface) + longestShippedDocumentationNote()
 	if reserved > maxBytes {
 		return Bundle{}, fmt.Errorf("product context is %d bytes before any specification, exceeding limit %d", reserved, maxBytes)
@@ -272,7 +276,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// documentation of what ships, so intent still wins the budget over
 	// everything and description still loses to both. What did not fit is named
 	// beside the specifications that did not fit, for the same reason.
-	roleSections, err := readRoleDocuments(root, roleDocuments, &bundle, maxBytes, &omitted)
+	roleSections, roleDocumentsFound, err := readRoleDocuments(root, roleDocuments, &bundle, maxBytes, &omitted)
 	if err != nil {
 		return Bundle{}, err
 	}
@@ -287,6 +291,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 
 	var output strings.Builder
 	output.WriteString(header)
+	output.WriteString(renderRoleDocumentNote(roleDocuments, roleDocumentsFound))
 	output.WriteString(renderRecordedIntent(directory, intent))
 	if bundle.SpecificationsIncluded == 0 {
 		output.WriteString(renderNoSpecifications(directory))
@@ -714,7 +719,7 @@ func renderIntentDocuments(documents []intentDocument) string {
 	return rendered + "."
 }
 
-func productHeader(directory string, roleDocuments []DocumentSet) string {
+func productHeader(directory string) string {
 	return fmt.Sprintf(`# Product context
 
 The sections below are the product as this repository records it today: what the
@@ -736,7 +741,6 @@ description — the implementation as built, as the people using it are told abo
 it — and it settles nothing about intent. Where the two disagree, report the
 conflict rather than resolving it silently.
 
-`+renderRoleDocumentNote(roleDocuments)+`
 `, directory)
 }
 
@@ -745,29 +749,74 @@ conflict rather than resolving it silently.
 // designs, and an architect that is would be told it had not read the one thing
 // it owns. Either way the instruction is the same — say you have not read
 // something rather than reasoning from what you would expect it to say.
-func renderRoleDocumentNote(sets []DocumentSet) string {
+// It is rendered from the directories that actually yielded documents rather
+// than from the ones that were asked for, because a role told its designs are
+// here when the directory is empty will answer as though it had read them. A
+// directory that yielded nothing is named as recording nothing, which is a fact
+// about the repository and is worth saying rather than leaving as silence.
+func renderRoleDocumentNote(sets []DocumentSet, found map[string]bool) string {
 	if len(sets) == 0 {
-		return `What is still not here is the source, the design document, and any way to run a
-command. Those say how the product is built rather than what it is for or what
-it ships. So when something outside these sections matters, say that you have
-not read it rather than reasoning from what you would expect it to say.
-
-`
+		return withheldNote("the source, the design document, and any way to run a\ncommand")
 	}
-	directories := make([]string, 0, len(sets))
+	var carried, empty []string
 	for _, set := range sets {
-		directories = append(directories, set.Directory)
+		if found[set.Directory] {
+			carried = append(carried, set.Directory)
+			continue
+		}
+		empty = append(empty, set.Directory)
 	}
-	return fmt.Sprintf(`Your own documents are here too, from %s. They are how this product is built
+
+	var note strings.Builder
+	if len(carried) > 0 {
+		fmt.Fprintf(&note, `Your own documents are here too, from %s. They are how this product is built
 rather than what it is for: they serve the intent above and never revise it, and
 where one of them contradicts a specification the contradiction is worth
 reporting rather than resolving quietly.
 
-What is still not here is the source and any way to run a command. So when
-something outside these sections matters, say that you have not read it rather
-than reasoning from what you would expect it to say.
+`, strings.Join(carried, ", "))
+	}
+	if len(empty) > 0 {
+		fmt.Fprintf(&note, `Nothing was found under %s. This repository has not written those down yet, so
+treat them as unwritten rather than as something you have read.
 
-`, strings.Join(directories, ", "))
+`, strings.Join(empty, ", "))
+	}
+	// What is withheld depends on what arrived: a role that was given the designs
+	// has read them, and a role whose designs directory is empty has not.
+	if len(carried) > 0 {
+		note.WriteString(withheldNote("the source and any way to run a command"))
+		return note.String()
+	}
+	note.WriteString(withheldNote("the source, the design document, and any way to run a\ncommand"))
+	return note.String()
+}
+
+// withheldNote closes the header with what is not here and the one instruction
+// that goes with it, so every variant says the same thing about what to do when
+// something outside these sections matters.
+func withheldNote(withheld string) string {
+	return fmt.Sprintf(`What is still not here is %s. So when something outside
+these sections matters, say that you have not read it rather than reasoning from
+what you would expect it to say.
+
+`, withheld)
+}
+
+// longestRoleDocumentNote bounds what the note can cost, so the header can be
+// reserved before the documents that decide its wording have been read. A note
+// where some directories carried documents and others did not takes one sentence
+// from each of the two variants and names every directory once, so the two
+// variants rendered in full bound it with room to spare.
+func longestRoleDocumentNote(sets []DocumentSet) int {
+	if len(sets) == 0 {
+		return len(renderRoleDocumentNote(nil, nil))
+	}
+	found := make(map[string]bool, len(sets))
+	for _, set := range sets {
+		found[set.Directory] = true
+	}
+	return len(renderRoleDocumentNote(sets, found)) + len(renderRoleDocumentNote(sets, nil))
 }
 
 // holds reports whether a document is already in the bundle, so a directory
@@ -788,12 +837,15 @@ func (b Bundle) holds(path string) bool {
 // as omitted rather than silently missing. A set whose directory does not exist
 // contributes nothing: a repository that has recorded no designs yet is a fact
 // about the repository, not a failure to assemble a context.
-func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes int, omitted *[]string) (string, error) {
+func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes int, omitted *[]string) (string, map[string]bool, error) {
 	var rendered strings.Builder
+	// Which directories actually carried a document into the context, so the
+	// header can say what is here rather than what was asked for.
+	found := map[string]bool{}
 	for _, set := range sets {
 		paths, err := discoverSpecifications(strings.ToLower(set.Label), root, set.Directory)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		for _, documentPath := range paths {
 			// A document reachable from two sets — decision records with the
@@ -809,7 +861,7 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 					*omitted = append(*omitted, documentPath)
 					continue
 				}
-				return "", err
+				return "", nil, err
 			}
 			section := fmt.Sprintf("\n## %s: %s\n\n%s", set.Label, reference.Path, reference.Content)
 			if !strings.HasSuffix(section, "\n") {
@@ -822,9 +874,13 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 			rendered.WriteString(section)
 			bundle.Bytes += len(section)
 			bundle.References = append(bundle.References, reference)
+			// A directory whose documents were all carried by an earlier set, or
+			// were all too large to fit, has told the reader nothing, so it counts
+			// as found only where something of it actually arrived.
+			found[set.Directory] = true
 		}
 	}
-	return rendered.String(), nil
+	return rendered.String(), found, nil
 }
 
 // readShippedDocumentation reads the operator-facing documentation into one

@@ -63,7 +63,7 @@ type Backend interface {
 // Store is the durable conversation state a process resumes from. It is
 // satisfied by runstate.ConversationStore.
 type Store interface {
-	Load(role domain.AgentRole) (runstate.Conversation, error)
+	Load(identity runstate.ConversationIdentity) (runstate.Conversation, error)
 	Save(conversation runstate.Conversation) error
 	AppendEvent(event execution.Event) error
 }
@@ -151,9 +151,11 @@ type Options struct {
 	// may specialize how the product manager works; it is placed after the
 	// immutable contract and can never replace or weaken it.
 	Persona string
-	// Agent is the configured agent name filling the role, recorded on anything
-	// this conversation reports so a project with more than one agent per role
-	// can tell which of them said it.
+	// Agent is the configured agent filling the role. It is required, because it
+	// is the conversation's identity: the durable record, the provider session,
+	// and the lease are all keyed on it, so two agents configured for one role
+	// hold two conversations rather than taking turns overwriting one. It is also
+	// what anything this conversation reports is attributed to.
 	Agent string
 	// Provider names the backend for the durable record.
 	Provider domain.Backend
@@ -384,11 +386,15 @@ func Open(options Options) (*Session, error) {
 		return nil, err
 	}
 	session := &Session{options: options, deliveredAmendments: map[string]bool{}}
-	existing, err := options.Store.Load(options.Role)
+	existing, err := options.Store.Load(options.identity())
 	switch {
 	case err == nil:
 		if !options.Fresh && existing.ProviderSessionID != "" {
 			session.state = existing
+			// A record written before the agent was part of the identity acquires
+			// it here, so the conversation an operator resumes today is recorded
+			// tomorrow as the agent's rather than only as the role's.
+			session.state.Agent = options.Agent
 			session.resumed = true
 			for _, id := range existing.DeliveredAmendmentIDs {
 				session.deliveredAmendments[id] = true
@@ -410,6 +416,7 @@ func Open(options Options) (*Session, error) {
 		ConversationID: conversationID,
 		ProductID:      options.ProductID,
 		RepositoryID:   options.RepositoryID,
+		Agent:          options.Agent,
 		Role:           options.Role,
 		Backend:        options.Provider,
 		StartedAt:      now,
@@ -1530,6 +1537,12 @@ func (o Options) validate() error {
 	if _, known := AuthorityFor(o.Role); !known {
 		problems = append(problems, fmt.Errorf("no conversation contract exists for role %q", o.Role))
 	}
+	// The agent is the conversation's identity rather than a label on it, so a
+	// conversation that cannot name one is refused instead of quietly becoming
+	// the role's and colliding with a sibling agent's record.
+	if err := domain.ValidateIdentifier("agent", o.Agent); err != nil {
+		problems = append(problems, err)
+	}
 	if o.Backend == nil {
 		problems = append(problems, errors.New("conversation backend is required"))
 	}
@@ -1558,6 +1571,11 @@ func (o Options) validate() error {
 		return fmt.Errorf("invalid conversation: %w", errors.Join(problems...))
 	}
 	return nil
+}
+
+// identity is the durable conversation this options set addresses.
+func (o Options) identity() runstate.ConversationIdentity {
+	return runstate.ConversationIdentity{Agent: o.Agent, Role: o.Role}
 }
 
 func (o Options) clock() execution.Clock {

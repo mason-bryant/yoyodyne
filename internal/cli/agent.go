@@ -298,7 +298,8 @@ func readAgents(parts components) ([]agentReport, error) {
 			report.Addressable = true
 			report.Owns = authority.Owns
 		}
-		recorded, err := store.Load(agent.Role)
+		identity := runstate.ConversationIdentity{Agent: name, Role: agent.Role}
+		recorded, err := store.Load(identity)
 		switch {
 		case err == nil:
 			report.Conversation = &conversationReport{
@@ -318,7 +319,7 @@ func readAgents(parts components) ([]agentReport, error) {
 		default:
 			report.Problem = err.Error()
 		}
-		inUse, problem := conversationInUse(store, agent.Role)
+		inUse, problem := conversationInUse(store, identity)
 		report.InUse = inUse
 		if problem != "" {
 			report.Problem = appendProblem(report.Problem, problem)
@@ -338,8 +339,8 @@ func readAgents(parts components) ([]agentReport, error) {
 // operator that every agent at once was mid-conversation whenever the state
 // directory could not be opened, which is both wrong and the opposite of what
 // they would do about it.
-func conversationInUse(store *runstate.ConversationStore, role domain.AgentRole) (bool, string) {
-	lease, err := store.Hold(role)
+func conversationInUse(store *runstate.ConversationStore, identity runstate.ConversationIdentity) (bool, string) {
+	lease, err := store.Hold(identity)
 	switch {
 	case errors.Is(err, runstate.ErrConversationHeld):
 		return true, ""

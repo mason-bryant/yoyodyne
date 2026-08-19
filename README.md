@@ -979,11 +979,18 @@ names none, so it takes the agent filling the product-manager role.
 
 **Each agent is a durable logical identity, not a process.** The provider that
 answers a turn is started for that turn and gone afterwards; what survives it is
-one conversation record per role, with its own provider session, its own turn
+one conversation record per agent, with its own provider session, its own turn
 count, and its own picture of the repository. Talking to the architect never
-resumes what the product manager was told, and `yoyo agent list` reads all of it
-without starting a provider — including whether another process is holding a
-conversation right now, which is why a second one would be refused.
+resumes what the product manager was told, and where two agents fill one role
+neither resumes the other: they are two identities with two sessions, and the
+lease that stops a second process talking to one of them leaves the other free.
+`yoyo agent list` reads all of it without starting a provider — including
+whether another process is holding a conversation right now, which is why a
+second one would be refused.
+
+An agent is conventionally named for its role, and `yoyo init` names every one
+of them that way, so a project that has never configured two agents on a role has
+its conversations exactly where the role would have put them.
 
 **What each role may do is fixed in the harness rather than in its persona.** A
 project rewrites any persona it likes and the boundaries do not move:

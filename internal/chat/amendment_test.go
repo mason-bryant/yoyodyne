@@ -11,6 +11,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // A change another role proposed to a document this one owns reaches the owner,
@@ -100,7 +101,7 @@ func TestAResumedConversationDoesNotDeliverWhatAnEarlierProcessAlreadySaid(t *te
 
 	// The process ends and another resumes the same conversation, with the
 	// proposal still pending because nobody has decided it.
-	recorded, err := store.Load(domain.RoleProductManager)
+	recorded, err := store.Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -335,6 +336,7 @@ func TestProposalsAgainstTheDesignsReachTheArchitect(t *testing.T) {
 	}}
 	options := testOptions(t, provider)
 	options.Role = domain.RoleArchitect
+	options.Agent = string(domain.RoleArchitect)
 	options.Amendments = &fakeAmendmentLog{records: []amendment.Record{
 		{Proposal: ptr(testDesignProposal("amendment-fedcba9876543210fedcba9876543210"))},
 		// The product manager's to answer, so the architect is never handed it.
