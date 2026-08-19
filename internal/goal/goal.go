@@ -152,7 +152,9 @@ func (p LinkProblem) String() string {
 // Problem names one goals document whose goals could not be read, and says why.
 // It is reported beside the goals that did load: a document nobody can read is
 // a gap in what work can be attributed to, and a gap nobody is told about looks
-// exactly like a repository with fewer goals.
+// exactly like a repository with fewer goals. The brief shares this listing
+// when it cannot be read — its Reason names it as the brief, so the shared
+// `goals not read:` rendering still says which document failed and why.
 type Problem struct {
 	Path   string `json:"path"`
 	Reason string `json:"reason"`
@@ -390,8 +392,8 @@ func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInFor
 				Statement:  candidate.Statement,
 				ArtifactID: candidate.ArtifactID,
 				Path:       candidate.Path,
-				Reason: fmt.Sprintf("it names no brief goal; a goal says what it supports in an emphasized `%s ...` line under it, and one that supports nothing in the brief is an orphan",
-					strings.TrimSuffix(supportsPrefix, ":")),
+				Reason: fmt.Sprintf("it names no brief goal; a goal says what it supports in an emphasized `%s ...` line directly under it, and one that supports nothing in the brief is an orphan",
+					supportsPrefix),
 			})
 		case !stated[fold(candidate.Supports)]:
 			problems = append(problems, LinkProblem{

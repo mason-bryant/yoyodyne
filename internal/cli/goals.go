@@ -148,7 +148,12 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 		})
 	}
 	if *flags.jsonOutput {
-		if code := writeJSON(stdout, stderr, goalsOutput{Attributions: attributions, Problems: goals.Problems}); code != 0 {
+		if code := writeJSON(stdout, stderr, goalsOutput{
+			Attributions: attributions,
+			Problems:     goals.Problems,
+			BriefGoals:   goals.BriefGoals,
+			LinkProblems: goals.LinkProblems,
+		}); code != 0 {
 			return code
 		}
 	} else {
