@@ -1682,7 +1682,7 @@ again is an item nothing was bounding. `yoyo status <id>` reports it under that
 item's runs, in text and in `--json`:
 
 ```text
-triage of yoyodyne-ifd.90: triaged 2 times
+triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
 ```
 
@@ -1694,7 +1694,15 @@ this item — at or past the cap of 4, so triage may only escalate or re-scope`.
   repair grants: 1; re-runs: 0; both are refused once no round remains
   merge re-arms: 1 of 2 permitted
   1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
+  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
 ```
+
+**The first line counts what has been spent, not how many times triage looked.**
+Three of the development manager's six decisions spend a budget here — a repair
+grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
+nothing and reach no counter, so an item that was escalated reads `triage has
+spent nothing on it`. Whether stopped work has been decided, and what was
+decided, is recorded on the work item itself.
 
 **A round is a reviewer verdict a developer attempt produced**, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a

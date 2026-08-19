@@ -174,10 +174,17 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 //
 // The rounds come first because they are the budget two of the three actions are
 // refused against, and the one figure that moves without anybody deciding
-// anything. An item nothing has triaged says so rather than printing three
-// zeroes, and an item triaged more than once says that in the first clause,
-// because that is the thing a reader is looking for: work that came back is work
-// where something other than the change may be wrong.
+// anything. An item triage has spent something on more than once says that in
+// the first clause, because that is the thing a reader is looking for: work that
+// came back is work where something other than the change may be wrong.
+//
+// Every figure here is a budget, and the last line says so. Three of the
+// development manager's six decisions spend one — a repair grant, a re-run, a
+// merge re-arm — and the other three cost nothing and reach no counter, so an
+// item that was escalated or told to wait shows zeroes. A reader looking for
+// whether anybody has looked at stopped work is looking at the item, and the
+// line points them there rather than letting these zeroes answer a question they
+// were never counting.
 func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps runstate.TriageCaps) {
 	fmt.Fprintf(writer, "triage of %s: %s\n", counters.WorkItemID, describeTriagePasses(counters))
 	// The branch is the gate's own predicate, so the line and the refusal
@@ -200,18 +207,25 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 		fmt.Fprintf(writer, "  %d grant(s) were cut down to the rounds the cap still had room for; %d round(s) were granted in total\n",
 			counters.TruncatedGrants, counters.GrantedRounds)
 	}
+	fmt.Fprintln(writer, "  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here")
 }
 
-// describeTriagePasses says how many times triage has acted on an item, in the
-// three cases that read differently: never, once, and again.
+// describeTriagePasses says how many times triage has spent something on an
+// item, in the three cases that read differently: never, once, and again.
+//
+// It counts spending rather than deciding, and says so, because those stopped
+// being the same thing when triage acquired decisions that cost nothing. An item
+// the development manager escalated has been triaged and has been given nothing,
+// and a line reading "triage has not acted on it" would tell an operator looking
+// for evidence somebody looked that nobody had.
 func describeTriagePasses(counters runstate.TriageCounters) string {
 	switch passes := counters.Passes(); passes {
 	case 0:
-		return "triage has not acted on it"
+		return "triage has spent nothing on it"
 	case 1:
-		return "triaged once"
+		return "triage has spent one pass on it"
 	default:
-		return fmt.Sprintf("triaged %d times", passes)
+		return fmt.Sprintf("triage has spent %d passes on it", passes)
 	}
 }
 

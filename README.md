@@ -2328,15 +2328,22 @@ Every budget a run spends starts again at zero in the next run, so an item hande
 back, run again, and handed back again is an item nothing bounds. The per-item
 counters are what bound it:
 
-An item the development manager has triaged reads like this; one nothing has
-triaged says `triage has not acted on it`:
-
 ```text
-triage of yoyodyne-ifd.90: triaged 2 times
+triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
   repair grants: 1; re-runs: 0; both are refused once no round remains
   merge re-arms: 1 of 2 permitted
+  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
 ```
+
+Every figure here is a budget, and the first line counts what has been spent
+rather than how many times somebody looked. Only three of the development
+manager's six decisions spend anything — a repair grant, a re-run, a merge
+re-arm — so an item it escalated or told to wait shows `triage has spent nothing
+on it` and zeroes across the rest. **That is not evidence nobody looked.** The
+decision itself is recorded on the work item, which is where to read whether
+stopped work has been decided and what was decided; an escalated item is blocked
+there as well.
 
 A **round** is a reviewer verdict a developer attempt produced, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
@@ -2352,10 +2359,10 @@ double-grant, and each is refused once its budget is spent — a grant truncated
 the rounds the cap still has room for, a re-run refused outright once none
 remain, a merge re-arm bounded on its own because it buys no round at all. The
 numbers are the `triage` keys and the integration retries in [the configuration
-guide](docs/configuration.md#what-one-work-item-has-been-given). An item triaged
-more than once says so in the first line, which is the fact worth looking for:
-work that keeps coming back is usually work where something other than the change
-is wrong.
+guide](docs/configuration.md#what-one-work-item-has-been-given). An item triage
+has spent more than one pass on says so in the first line, which is the fact
+worth looking for: work that keeps coming back is usually work where something
+other than the change is wrong.
 
 The listing folds each reason onto one line and bounds it at 160 bytes with
 an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;

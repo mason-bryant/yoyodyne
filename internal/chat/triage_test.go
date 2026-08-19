@@ -201,6 +201,107 @@ func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T
 	}
 }
 
+// A re-run buys a whole fresh run and is refused against the same rounds a
+// repair is, and a merge re-arm buys no round at all and is bounded on its own.
+// Both are exercised against the real record rather than a stand-in, because
+// what they promise is that the second one is refused — and a budget that only
+// ever counted up would look exactly the same from the conversation.
+func TestARerunAndAMergeRearmSpendTheirOwnBudgets(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name string
+		// decision is what the development manager records, spend is what the
+		// item has already been given before it does, and refusal is what the cap
+		// says when the second one asks.
+		decision string
+		spend    func(t *testing.T, budgets *triageBudgetGate)
+		summary  string
+		counted  func(runstate.TriageCounters) int
+		refusal  string
+	}{
+		{
+			name:     "a re-run against the review rounds",
+			decision: "rerun",
+			// The rounds a re-run is refused against are what the runs of the item
+			// spent, so the cap is reached by recording them rather than by
+			// re-running twice.
+			spend: func(t *testing.T, budgets *triageBudgetGate) {
+				t.Helper()
+
+				for attempt := 0; attempt < 2; attempt++ {
+					if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.68.3", runstate.RoundKey(stoppedRun, attempt), budgets.clock.Now()); err != nil {
+						t.Fatalf("RecordReviewRound() error = %v", err)
+					}
+				}
+			},
+			summary: "1 re-run(s) of it are now recorded",
+			counted: func(counters runstate.TriageCounters) int { return counters.Reruns },
+			refusal: "re-run is refused for yoyodyne-ifd.68.3: 2 of 2 permitted review round(s) are spent",
+		},
+		{
+			name:     "a merge re-arm against its own cap",
+			decision: "rearm",
+			spend:    func(t *testing.T, budgets *triageBudgetGate) { t.Helper() },
+			summary:  "1 merge re-arm(s) of it are now recorded",
+			counted:  func(counters runstate.TriageCounters) int { return counters.MergeRearms },
+			refusal:  "merge re-arm is refused for yoyodyne-ifd.68.3: 1 of 1 permitted merge re-arm(s) are spent",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 2, MergeRearms: 1}, 2)
+			decided := trackerReply("Decided.",
+				`{"action":"triage","id":"yoyodyne-ifd.68.3","run":"`+stoppedRun+`","decision":"`+testCase.decision+`","reason":"the change was right and the ground moved under it"}`)
+			first := &fakeTracker{items: map[string]beads.WorkItem{
+				"yoyodyne-ifd.68.3": {ID: "yoyodyne-ifd.68.3", Title: "the item that stopped", Status: "open"},
+			}}
+			reply := triageReply(t, first, budgets, decided)
+			if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+				t.Fatalf("actions = %#v", reply.Actions)
+			}
+			if !strings.Contains(reply.Actions[0].Summary, testCase.summary) {
+				t.Fatalf("the summary does not say what was spent: %q", reply.Actions[0].Summary)
+			}
+			if len(first.updates) != 1 {
+				t.Fatalf("updates = %#v", first.updates)
+			}
+			counters, err := budgets.store.Counters("yoyodyne-ifd.68.3")
+			if err != nil {
+				t.Fatalf("Counters() error = %v", err)
+			}
+			if testCase.counted(counters) != 1 {
+				t.Fatalf("counters after one %s = %#v", testCase.decision, counters)
+			}
+
+			// The budget is now gone, and the same decision asked for again is
+			// refused rather than counted a second time.
+			testCase.spend(t, budgets)
+			second := &fakeTracker{items: map[string]beads.WorkItem{
+				"yoyodyne-ifd.68.3": {ID: "yoyodyne-ifd.68.3", Title: "the item that stopped", Status: "open"},
+			}}
+			refused := triageReply(t, second, budgets, decided)
+			if len(refused.Actions) != 1 || refused.Actions[0].Applied {
+				t.Fatalf("actions = %#v", refused.Actions)
+			}
+			if !strings.Contains(refused.Actions[0].Failure, testCase.refusal) {
+				t.Fatalf("the refusal does not name the cap: %q", refused.Actions[0].Failure)
+			}
+			if len(second.updates) != 0 {
+				t.Fatalf("a refused decision wrote on the item: %#v", second.updates)
+			}
+			after, err := budgets.store.Counters("yoyodyne-ifd.68.3")
+			if err != nil {
+				t.Fatalf("Counters() error = %v", err)
+			}
+			if testCase.counted(after) != 1 {
+				t.Fatalf("a refused decision moved the counter: %#v", after)
+			}
+		})
+	}
+}
+
 // A conversation with no budget wired may still decide anything that spends
 // nothing, and may not grant, re-run, or re-arm. An unreadable budget is never
 // spent through as though it were empty.
