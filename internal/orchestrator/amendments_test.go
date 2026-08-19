@@ -296,6 +296,79 @@ func TestAPipelineWithNowhereToRecordSaysTheProposalWasLost(t *testing.T) {
 	}
 }
 
+// The proposal has to still be there when somebody decides it, which is in
+// another process and long after this run's own state is gone. Every other test
+// here records through a fake, so the one seam that decides whether the channel
+// works at all — the collected proposal reaching the log on disk, and a later
+// reader finding it through the same calls `yoyo amendment list` makes — is the
+// seam none of them cross. This crosses it with a real store, a real file, and a
+// second reader opened over the same root the way a separate process opens it.
+func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	provider.developerFinalText = "implemented the work item\n\n" +
+		amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Reports = &fakeReports{}
+
+	stateRoot := t.TempDir()
+	// Keyed to the pipeline's own product rather than to a literal, because a
+	// store built for a different product refuses every proposal the run makes
+	// while the run carries on succeeding — a silent drop nothing else here
+	// would catch.
+	recorder, err := runstate.NewAmendmentStore(stateRoot, pipeline.Config.Product.ID)
+	if err != nil {
+		t.Fatalf("NewAmendmentStore() error = %v", err)
+	}
+	pipeline.Amendments = recorder
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.AmendmentProblem != "" {
+		t.Fatalf("a readable proposal was reported as a problem: %q", outcome.AmendmentProblem)
+	}
+	if len(outcome.Amendments) != 1 {
+		t.Fatalf("the run reported %d proposal(s): %#v", len(outcome.Amendments), outcome.Amendments)
+	}
+
+	// A second store over the same root is what another process is: nothing this
+	// run held in memory carries into it.
+	later, err := runstate.NewAmendmentStore(stateRoot, pipeline.Config.Product.ID)
+	if err != nil {
+		t.Fatalf("NewAmendmentStore() error = %v", err)
+	}
+	records, err := later.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	// Read the way the operator's command reads it, so a proposal that is on disk
+	// but that `yoyo amendment list` would not show still fails here.
+	waiting := amendment.Pending(records)
+	if len(waiting) != 1 {
+		t.Fatalf("a proposal the run recorded is not waiting to be decided: %#v", records)
+	}
+	proposed := waiting[0]
+	if proposed.Artifact != "v1-design" || proposed.Kind != artifact.KindDesign || proposed.Owner != domain.RoleArchitect {
+		t.Fatalf("proposal = %#v", proposed)
+	}
+	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.item.ID {
+		t.Fatalf("proposal is not attributed to the run that made it: %#v", proposed)
+	}
+	// The proposal the operator will decide is the one the run said it made, so
+	// an outcome that reports a proposal the log does not hold cannot pass.
+	if proposed.ID != outcome.Amendments[0].ID {
+		t.Fatalf("recorded proposal %q is not the one the run reported, %q", proposed.ID, outcome.Amendments[0].ID)
+	}
+}
+
 func TestTheDeveloperContractSaysHowToProposeAChange(t *testing.T) {
 	t.Parallel()
 
