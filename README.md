@@ -2189,6 +2189,40 @@ the marker is never left for you to go and interpret out of the run's JSON.
 marker is said only of finished runs: one still in flight owes its own remaining
 steps by definition.
 
+Naming an item reports one more thing under its runs, because it is the one
+question no run can answer: what that item has cost and what it has been given.
+Every budget a run spends starts again at zero in the next run, so an item handed
+back, run again, and handed back again is an item nothing bounds. The per-item
+counters are what bound it:
+
+```text
+triage of yoyodyne-ifd.90: triaged 2 times
+  review rounds: 3 of 4 permitted across every run of this item
+  repair grants: 1; re-runs: 0; both are refused once no round remains
+  merge re-arms: 1 of 2 permitted
+```
+
+A **round** is a reviewer verdict a developer attempt produced, counted across
+every run of the item. A re-review no developer attempt produced is not one, so a
+promotion that [loses its race](docs/configuration.md#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it. Rounds are
+what runs actually spend, and every run records them.
+
+The lines under it are the budget for what triage can decide about work that did
+not land — another go at the change, a re-run, a re-armed merge. **No triage
+decision in this release takes any of those actions**, so they read as zero on
+every item today. What is in place is the durable budget and the gate on it: each
+is recorded before the action it counts takes effect, so a crash cannot
+double-grant, and each is refused once its budget is spent — a grant truncated to
+the rounds the cap still has room for, a re-run refused outright once none
+remain, a merge re-arm bounded on its own because it buys no round at all. The
+numbers are the `triage` keys and the integration retries in [the configuration
+guide](docs/configuration.md#what-one-work-item-has-been-given), and a triage
+action added later goes through that gate rather than around it. An item triaged
+more than once says so in the first line, which is the fact worth looking for:
+work that keeps coming back is usually work where something other than the change
+is wrong.
+
 The listing folds each reason onto one line and bounds it at 160 bytes with
 an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;
 `--json` carries what the record holds in full, along with the same figures.

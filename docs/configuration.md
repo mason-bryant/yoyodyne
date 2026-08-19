@@ -1540,11 +1540,15 @@ triage:
   repair_grant_attempts: 2   # what a grant is worth, when triage grants one
 ```
 
-**These load, validate, and are reported by `config show`; nothing reads them
-yet.** The triage workflow they belong to is not built, so setting one today
-changes no behavior. They are here now for the reason a threshold usually is not
-built with its workflow: a number that starts life as a constant in the code
-stays one, and every project inherits whatever the first project needed.
+**The triage workflow these belong to is not built**, so no decision the harness
+makes today grants a repair, causes a re-run, or re-arms a dropped merge. What
+exists is the budget those actions will be refused past, and it is a durable
+record rather than a number waiting to be read: `review_rounds_cap` bounds the
+[per-item counters](#what-one-work-item-has-been-given) below, which every run
+writes to and `yoyo status <id>` reports. `stuck_merge_age` still reads nothing —
+it is here for the reason a threshold usually is not built with its workflow: a
+number that starts life as a constant in the code stays one, and every project
+inherits whatever the first project needed.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -1567,6 +1571,69 @@ because a grant of nothing leaves the item exactly where granting nothing would
 have. A project that configured no routine repair attempts at all still gets a
 derived grant of 1 rather than a configuration that fails to load — the grant is
 triage's deliberate exception to that budget, not another helping of it.
+
+### What one work item has been given
+
+The thresholds above bound something, and what they bound is a durable record
+per work item: the repair grants triage has given it, the re-runs it has caused,
+the merge re-arms it has made, and the **review rounds** the item has cost across
+every run of it. It lives beside the runs under the state directory, one file per
+item, and it outlives them — a run is settled and its worktree and branch are
+removed, and what the item has been given is still there.
+
+That it is not on a run is the whole point. Every budget a run spends starts
+again at zero in the next run, so an item handed back, run again, and handed back
+again is an item nothing was bounding. `yoyo status <id>` reports it under that
+item's runs, in text and in `--json`:
+
+```text
+triage of yoyodyne-ifd.90: triaged 2 times
+  review rounds: 3 of 4 permitted across every run of this item
+  repair grants: 1; re-runs: 0; both are refused once no round remains
+  merge re-arms: 1 of 2 permitted
+  1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
+```
+
+**A round is a reviewer verdict a developer attempt produced**, counted across
+every run of the item. A re-review no developer attempt produced is not one, so a
+promotion that [loses its race](#losing-a-race-for-the-target-branch) and gets a
+fresh verdict on the replayed change is not charged for it — counting that would
+charge an item for losing a race it did not cause. A review re-asked for after an
+interrupted process is the same case and is counted once for the same reason.
+Rounds are recorded whatever a cap says, because a round is something that
+happened rather than something being asked for.
+
+**Each counter is written before the action it counts takes effect**, so a
+process that dies between the two has recorded a grant it did not give rather
+than given one it did not record — an unspent attempt rather than a duplicated
+one. Concurrent updates are serialized per item, so no increment is lost, and a
+record that cannot be read is a refusal rather than an empty budget: an
+unreadable budget read as empty is every cap in it stopping to mean anything.
+
+Which threshold refuses which action:
+
+| Action | Refused by |
+| --- | --- |
+| another repair grant | `triage.review_rounds_cap`, truncated to the rounds it still has room for |
+| another whole run of the item | `triage.review_rounds_cap`, refused outright once none remain |
+| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` |
+
+The first two buy review rounds, so the round cap is what bounds them, and a
+grant is **truncated** rather than refused where some rounds remain: at the
+defaults an item that has been through its repair budget once has spent three
+rounds of four, so the configured grant of two attempts is cut to the one round
+that is left, and the truncation is recorded. An untruncated grant would promise
+a round nothing would let it take, and one that overshot the cap would make the
+cap decorative. A merge re-arm buys no round at all, which is exactly why it
+needs a bound of its own: an action that costs nothing to take is the one that
+can be taken forever. It follows the integration retries a single run is already
+permitted, which is the same judgement about the same thing one level up.
+
+**These budgets are per machine.** Two collaborators running their own harnesses
+against one repository each hold a full set for the same item, so a cap of one is
+a cap of two across the pair. That is a recorded limit rather than a design, and
+[`docs/team-mode-scope.md`](team-mode-scope.md#a-recorded-gap-per-item-budgets-are-per-machine)
+states it where the team-mode design will need it.
 
 ## Merge and removal semantics
 
