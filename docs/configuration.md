@@ -671,8 +671,15 @@ section opens the goals at the document's top level, and nothing written below
 it can then end them by level, so everything in the file becomes something work
 may be admitted under.
 
-Each goal is one top-level list entry under that heading. Prose indented under
-an entry describes that goal rather than being another, and a heading below the
+Each goal is one top-level list entry under that heading, and its statement is
+**that entry's opening paragraph, rejoined onto one line**. Markdown is normally
+hard-wrapped, so a goal written across several lines is the ordinary case: the
+lines that continue it are joined with a single space, and the goal is recorded
+whole rather than as its first line. The statement ends at the first thing that
+is not more of the same sentence — a blank line, an unindented line, a nested
+list entry, or a wholly emphasized line such as the `*Supports: ...*` trailer
+naming what the goal serves upstream. Everything after that describes the goal
+rather than being part of it or being another, and a heading below the
 `Goals` heading divides the goals rather than ending them. The section ends at
 the next heading at the same level or above, **or at any heading stating what
 the product will not do** — a `Non-goals` heading ends it wherever it is

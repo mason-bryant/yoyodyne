@@ -351,15 +351,39 @@ var goalsHeadingPattern = regexp.MustCompile(`(?i)^goals?$`)
 var negatedGoalsHeadingPattern = regexp.MustCompile(`(?i)^non-?\s*goals?\b`)
 
 // listItemPattern matches a top-level Markdown list item and captures its text.
-// Only unindented items are goals: a goals document states each goal as one
-// entry, and what is indented under one describes that goal rather than being
-// another.
+// Only unindented items open a goal: a goals document states each goal as one
+// entry, and what is indented under one continues or describes that goal rather
+// than being another.
 var listItemPattern = regexp.MustCompile(`^[-*+]\s+(.*)$`)
 
+// nestedListItemPattern matches a list entry written under a goal, bulleted or
+// numbered. It ends the statement above it rather than continuing it: an entry
+// breaking a goal down is prose about the goal, and nobody hard-wraps a
+// sentence into a bullet.
+var nestedListItemPattern = regexp.MustCompile(`^\s+(?:[-*+]|\d+[.)])\s`)
+
+// emphasisTrailerPattern matches a line that is wholly emphasized, which is the
+// shape of the `*Supports: ...*` trailer naming what a goal serves upstream. It
+// ends the statement too: the trailer says what the goal is for, and reading it
+// as part of the goal would make the words the document states resolve to
+// nothing. Either spelling of emphasis is a trailer, because a document that
+// bolded the line meant the same thing by it. The whole line has to be the
+// emphasis, so a wrapped sentence that merely *contains* an emphasized phrase
+// still continues the statement.
+var emphasisTrailerPattern = regexp.MustCompile(`^(?:\*{1,2}[^*\s](?:.*[^*\s])?\*{1,2}|_{1,2}[^_\s](?:.*[^_\s])?_{1,2})$`)
+
 // statements reads the goals one document states, or says why it states none.
-// A goal is one top-level entry under the `Goals` heading, and its first line is
-// the statement: the entry may say more about the goal underneath, and that
-// prose supports the goal rather than being a second one.
+// A goal is one top-level entry under the `Goals` heading, and its statement is
+// that entry's opening paragraph rejoined onto one line. The rejoining is the
+// point: Markdown is normally hard-wrapped, and recording only the first
+// physical line would record a fragment of every wrapped goal — silently, so
+// the words the document does state would resolve to nothing and the reason
+// given would name the words rather than the truncation.
+//
+// A statement runs to the first thing that is not more of the same sentence: a
+// blank line, an unindented line, a nested entry, or the emphasized trailer
+// naming what the goal supports. What follows any of those describes the goal
+// rather than being part of it, and none of it is a second goal.
 //
 // The section runs to the next heading at the same level or above, or to any
 // heading stating what the product will not do. Both bounds exist because
@@ -371,17 +395,23 @@ func statements(content string) ([]string, string) {
 	level := 0
 	inGoals := false
 	inFence := false
+	// open says the statement collected last is still being read, so the line in
+	// hand may be the rest of it. Anything that is not more of that sentence
+	// closes it, which is why every branch below says so.
+	open := false
 	var stated []string
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
-			inFence = !inFence
+			inFence, open = !inFence, false
 			continue
 		}
 		if inFence || line == "" {
+			open = false
 			continue
 		}
 		if heading := headingPattern.FindStringSubmatch(line); heading != nil {
+			open = false
 			text := strings.TrimSpace(heading[2])
 			switch {
 			case negatedGoalsHeadingPattern.MatchString(text):
@@ -400,18 +430,31 @@ func statements(content string) ([]string, string) {
 			}
 			continue
 		}
-		if !inGoals || len(stated) >= maxGoalsPerDocument {
+		if !inGoals {
+			open = false
 			continue
 		}
 		// The raw line rather than the trimmed one decides what is a goal: an
 		// indented entry describes the goal above it.
-		item := listItemPattern.FindStringSubmatch(raw)
-		if item == nil {
+		if item := listItemPattern.FindStringSubmatch(raw); item != nil {
+			open = false
+			if len(stated) >= maxGoalsPerDocument {
+				continue
+			}
+			if statement := strings.TrimSpace(item[1]); statement != "" {
+				stated = append(stated, statement)
+				open = true
+			}
 			continue
 		}
-		if statement := strings.TrimSpace(item[1]); statement != "" {
-			stated = append(stated, statement)
+		if !open {
+			continue
 		}
+		if !indented(raw) || nestedListItemPattern.MatchString(raw) || emphasisTrailerPattern.MatchString(line) {
+			open = false
+			continue
+		}
+		stated[len(stated)-1] += " " + line
 	}
 	switch {
 	case level == 0:
@@ -421,6 +464,14 @@ func statements(content string) ([]string, string) {
 	default:
 		return stated, ""
 	}
+}
+
+// indented reports a line written under the entry above it rather than beside
+// it. Continuing a statement asks for the indentation Markdown itself asks for:
+// an unindented line under a goal is a new block, and joining it to the goal
+// would put prose the entry does not contain into what work is attributed to.
+func indented(raw string) bool {
+	return strings.HasPrefix(raw, " ") || strings.HasPrefix(raw, "\t")
 }
 
 // withoutFrontmatter drops the artifact identity metadata a goals document

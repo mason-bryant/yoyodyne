@@ -322,6 +322,92 @@ An introduction.
 	}
 }
 
+func TestAGoalHardWrappedAcrossLinesIsRecordedWhole(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// Markdown is normally hard-wrapped, and a goal written that way is the
+	// ordinary case rather than the odd one. Recording only its first physical
+	// line would record a fragment of every goal in a repository whose editor
+	// wraps, and the attribution naming the words the document states would then
+	// resolve to nothing.
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Run development nearly autonomously. The human's routine interface is the
+  product manager: they state intent, approve the brief and goals, and answer
+  questions the product manager escalates.
+  *Supports: the human's attention goes only where it is needed.*
+- Maintain a traceable chain.
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+	whole := "Run development nearly autonomously. The human's routine interface is the product manager: they state intent, approve the brief and goals, and answer questions the product manager escalates."
+	statements := stated(set.Goals)
+	// The wrapping is how the document was typed, not what it says: the entry
+	// states one goal, and the entry after it is still a second one.
+	if len(statements) != 2 || statements[0] != whole || statements[1] != "Maintain a traceable chain." {
+		t.Fatalf("goals = %q", statements)
+	}
+	// The trailer names what the goal supports upstream. Joined into the
+	// statement it would corrupt the goal exactly as truncation does.
+	if strings.Contains(statements[0], "Supports:") {
+		t.Fatalf("goal statement swallowed the trailer under it: %q", statements[0])
+	}
+	if !set.Attribute(whole).Resolved() {
+		t.Fatalf("the whole statement the document makes does not resolve: %#v", set.Attribute(whole))
+	}
+	// The fragment is not a goal the document states, and reading it as one is
+	// what let a truncated goal look like it resolved.
+	if set.Attribute("Run development nearly autonomously. The human's routine interface is the").State != StateUnresolved {
+		t.Fatalf("a fragment of a wrapped goal resolved as a goal")
+	}
+}
+
+func TestProseUnderAGoalIsNotJoinedIntoIt(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// A wrapped statement and a paragraph about the goal are told apart the way
+	// Markdown tells them apart: the statement is the entry's opening paragraph,
+	// and a blank line starts prose that describes it.
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the product brief through goals, designs,
+  work, code changes, and verification.
+
+  This matters because a change nobody can trace is a change nobody approved.
+
+- Review every change independently.
+  **Supports: nothing lands unreviewed by someone other than its author.**
+Not indented, so not part of the entry above it.
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	statements := stated(set.Goals)
+	if len(statements) != 2 {
+		t.Fatalf("goals = %q", statements)
+	}
+	if statements[0] != "Maintain a traceable chain from the product brief through goals, designs, work, code changes, and verification." {
+		t.Fatalf("goal = %q", statements[0])
+	}
+	// A trailer bolded rather than italicized means the same thing by it, and
+	// swallowing it corrupts the goal exactly as truncation does.
+	if statements[1] != "Review every change independently." {
+		t.Fatalf("goal = %q", statements[1])
+	}
+}
+
 func TestAGoalTooLongToNameOnAWorkItemIsReportedRatherThanOffered(t *testing.T) {
 	t.Parallel()
 
