@@ -57,6 +57,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return readReports(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
+	case "status":
+		return reportRunStatus(args[1:], stdout, stderr)
 	case "pause":
 		return pauseHarness(args[1:], stdout, stderr)
 	case "resume":
@@ -281,6 +283,7 @@ Commands:
   directive         record, resolve, and read durable user directives
   reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
+  status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider
   review            review what a branch accumulated over a base, as one change

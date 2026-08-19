@@ -1272,7 +1272,7 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	}
 	return phaseError{
 		status: statusForProcess(providerResult.Process.Status),
-		cause:  fmt.Errorf("developer reported failure: %s", nonEmpty(providerResult.StopReason, providerResult.FinalText)),
+		cause:  fmt.Errorf("developer reported failure: %s", describeProviderFailure(providerResult)),
 	}
 }
 
@@ -3553,4 +3553,45 @@ func nonEmpty(values ...string) string {
 		}
 	}
 	return "unknown provider failure"
+}
+
+// maxProviderFailureDetailBytes bounds the provider's own words in a recorded
+// failure. What the bound cuts is the tail of a message; nothing that identifies
+// the failure is at the end of one, and the whole of it is in the run's event
+// log either way.
+const maxProviderFailureDetailBytes = 512
+
+// describeProviderFailure says why a provider ended an invocation badly, in its
+// own name for the ending and its own words about it. The name alone is a
+// category -- `api_error` covers a transient 529 and a refused request alike --
+// and it is what the run's durable failure keeps, so a record carrying nothing
+// else leaves whoever reads it afterwards with no idea which of them happened.
+// The message is added when it says something the category does not, so a
+// provider that only names the category still reads as one reason rather than as
+// the same words twice.
+func describeProviderFailure(result backend.RunResult) string {
+	reason := strings.TrimSpace(result.StopReason)
+	detail := boundProviderDetail(result.FinalText)
+	if reason == "" || reason == detail {
+		return nonEmpty(reason, detail)
+	}
+	if detail == "" || strings.Contains(detail, reason) {
+		return nonEmpty(detail, reason)
+	}
+	return reason + ": " + detail
+}
+
+// boundProviderDetail folds the provider's message into one bounded line, so a
+// final reply that runs to pages becomes a reason somebody can read rather than
+// the body of a work item note.
+func boundProviderDetail(detail string) string {
+	folded := strings.Join(strings.Fields(detail), " ")
+	if len(folded) <= maxProviderFailureDetailBytes {
+		return folded
+	}
+	cut := maxProviderFailureDetailBytes
+	for cut > 0 && !utf8.RuneStart(folded[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(folded[:cut]) + "..."
 }
