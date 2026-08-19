@@ -42,16 +42,13 @@ func TestTwoRunsPromotingIntoOneTargetBranchSerializeAndBothLand(t *testing.T) {
 	// Both runs leave review together, so both arrive at the promotion queue at
 	// once rather than one happening to be finished before the other starts.
 	gate := newArrivalGate(2)
-	// Git's own worktree bookkeeping is what the two runs share before they share
-	// the target branch, and it is not what this test is about. See preparing.
-	preparing := &sync.Mutex{}
 
 	items := promotionRunItems
 	outcomes := make([]Outcome, len(items))
 	failures := make([]error, len(items))
 	var running sync.WaitGroup
 	for index, item := range items {
-		pipeline := witnessedPipeline(t, repository, stateRoot, worktreeRoot, witness, gate, preparing, item)
+		pipeline := witnessedPipeline(t, repository, stateRoot, worktreeRoot, witness, gate, item)
 		running.Add(1)
 		go func() {
 			defer running.Done()
@@ -163,9 +160,10 @@ func TestThisRepositoryDeliversThePromotionInvariantToEveryRoleThatCouldBreakIt(
 
 // witnessedPipeline builds one of the two concurrent pipelines: its own tracker,
 // its own provider, its own run state store over the shared root, and a worktree
-// manager that reports what is true while it promotes and takes its worktree one
-// at a time.
-func witnessedPipeline(t *testing.T, repository, stateRoot, worktreeRoot string, witness *promotionWitness, gate *arrivalGate, preparing *sync.Mutex, item string) Pipeline {
+// manager that reports what is true while it promotes. Nothing here serializes
+// worktree creation: the two runs take their worktrees exactly the way two
+// `yoyo run` invocations started at the same moment would.
+func witnessedPipeline(t *testing.T, repository, stateRoot, worktreeRoot string, witness *promotionWitness, gate *arrivalGate, item string) Pipeline {
 	t.Helper()
 	store, err := runstate.NewStore(stateRoot, "yoyodyne")
 	if err != nil {
@@ -198,7 +196,7 @@ func witnessedPipeline(t *testing.T, repository, stateRoot, worktreeRoot string,
 	developer.Instances = len(promotionRunItems)
 	pipeline.Config.Agents["developer"] = developer
 	pipeline.NewRunID = runstate.NewRunID
-	pipeline.Worktrees = &witnessedWorktrees{WorktreeManager: pipeline.Worktrees, witness: witness, probe: probe, preparing: preparing}
+	pipeline.Worktrees = &witnessedWorktrees{WorktreeManager: pipeline.Worktrees, witness: witness, probe: probe}
 	return pipeline
 }
 
@@ -260,26 +258,6 @@ type witnessedWorktrees struct {
 	// belongs to the open file description rather than to the process, so a lease
 	// this process holds refuses this probe exactly as another process's would.
 	probe *runstate.Store
-	// preparing is shared by both runs and serializes the one thing they share
-	// before they share the target branch: Git's own worktree bookkeeping under
-	// .git/worktrees, which `git worktree add` writes without a lock of its own.
-	// Two adds at the same instant can have one read the other's half-written
-	// commondir and fail outright, which says nothing about promotion and is not
-	// what this test is for. Serializing it here keeps that accident out of the
-	// test; the runs still meet at the review gate and still reach the promotion
-	// queue together, which is the race the test exists to make.
-	//
-	// The product has the same race and does not serialize it, so two `yoyo run`
-	// invocations started at the same moment can lose one to it. That is a defect
-	// in the worktree manager rather than in this test, and it is reported rather
-	// than worked around here.
-	preparing *sync.Mutex
-}
-
-func (w *witnessedWorktrees) Create(ctx context.Context, request gitworktree.CreateRequest) (gitworktree.Worktree, error) {
-	w.preparing.Lock()
-	defer w.preparing.Unlock()
-	return w.WorktreeManager.Create(ctx, request)
 }
 
 func (w *witnessedWorktrees) Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error) {

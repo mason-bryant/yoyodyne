@@ -3,11 +3,13 @@ package gitworktree
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -154,6 +156,169 @@ func TestManagerRejectsReuseAndDirtyPrimaryRepository(t *testing.T) {
 	if _, err := manager.Create(context.Background(), request); err == nil || !strings.Contains(err.Error(), "uncommitted") {
 		t.Fatalf("Create() dirty error = %v", err)
 	}
+}
+
+// Development is parallel, so several runs can be given a worktree at the same
+// instant — which is this repository's own configuration. Git's bookkeeping
+// under .git/worktrees has no lock of its own: an add registers the new entry
+// and then fills it in, so two adds at that instant can have one read the
+// other's half-written entry and exit outright, losing a run to nothing but
+// timing. Creation queues now, and every run that asked for a worktree gets one.
+//
+// The overlap is what this asserts rather than only the eight successes. Git's
+// own window is a few microseconds wide and a machine that happens not to hit it
+// would pass this test with nothing serializing anything at all, which is
+// precisely the reassurance that let the race reach production in the first
+// place.
+func TestManagerCreatesConcurrentWorktreesWithoutLosingAny(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &creationWitness{delegate: execution.OSProcessRunner{}}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	const concurrent = 8
+	// Every creation is released at once rather than one happening to be finished
+	// before the next starts, because the window this is about is only open while
+	// an add is in flight.
+	start := make(chan struct{})
+	worktrees := make([]Worktree, concurrent)
+	failures := make([]error, concurrent)
+	var creating sync.WaitGroup
+	for index := range concurrent {
+		creating.Add(1)
+		go func() {
+			defer creating.Done()
+			<-start
+			worktrees[index], failures[index] = manager.Create(context.Background(), CreateRequest{
+				RunID:      fmt.Sprintf("run-%08x%s", index, strings.Repeat("0", 24)),
+				WorkItemID: fmt.Sprintf("yoyodyne-concurrent-%d", index),
+				BaseRef:    "HEAD",
+			})
+		}()
+	}
+	close(start)
+	creating.Wait()
+
+	registered := gitOutput(t, repository, "worktree", "list", "--porcelain")
+	for index := range concurrent {
+		if failures[index] != nil {
+			t.Fatalf("Create(%d) error = %v", index, failures[index])
+		}
+		if !strings.Contains(registered, worktrees[index].Path) {
+			t.Fatalf("worktree %d at %s is not registered:\n%s", index, worktrees[index].Path, registered)
+		}
+	}
+	adds, overlaps := runner.observed()
+	if adds != concurrent {
+		t.Fatalf("git worktree add ran %d time(s), want one per creation", adds)
+	}
+	if overlaps != 0 {
+		t.Fatalf("%d worktree creation(s) started while another was still in flight", overlaps)
+	}
+}
+
+// What two runs race over is the repository's bookkeeping rather than the
+// configuration that points at it, so creations queue across managers and not
+// only within one. Two products aimed at one repository have separate worktree
+// roots and one worktrees/ directory between them, and two `yoyo run`
+// invocations have separate processes and the same directory; a queue held in a
+// manager would serialize neither.
+func TestManagerCreationQueuesAcrossManagersOnOneRepository(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &creationWitness{delegate: execution.OSProcessRunner{}}
+	const managers, each = 2, 3
+	start := make(chan struct{})
+	var creating sync.WaitGroup
+	failures := make([]error, managers*each)
+	for group := range managers {
+		manager, err := New(Options{
+			Runner:         runner,
+			RepositoryRoot: repository,
+			WorktreeRoot:   filepath.Join(t.TempDir(), fmt.Sprintf("worktrees-%d", group)),
+		})
+		if err != nil {
+			t.Fatalf("New(%d) error = %v", group, err)
+		}
+		for index := range each {
+			creating.Add(1)
+			go func() {
+				defer creating.Done()
+				<-start
+				_, failures[group*each+index] = manager.Create(context.Background(), CreateRequest{
+					RunID:      fmt.Sprintf("run-%08x%s", group*each+index, strings.Repeat("0", 24)),
+					WorkItemID: fmt.Sprintf("yoyodyne-shared-%d-%d", group, index),
+					BaseRef:    "HEAD",
+				})
+			}()
+		}
+	}
+	close(start)
+	creating.Wait()
+
+	for index, failure := range failures {
+		if failure != nil {
+			t.Fatalf("Create(%d) error = %v", index, failure)
+		}
+	}
+	adds, overlaps := runner.observed()
+	if adds != managers*each {
+		t.Fatalf("git worktree add ran %d time(s), want one per creation", adds)
+	}
+	if overlaps != 0 {
+		t.Fatalf("%d worktree creation(s) started while another manager's was still in flight", overlaps)
+	}
+}
+
+// creationWitness records what is true at the moment a worktree is registered:
+// whether another registration is already in flight. It watches the Git command
+// itself rather than the manager's method, because the bookkeeping two runs
+// race over is written by that command and by nothing else.
+type creationWitness struct {
+	delegate execution.ProcessRunner
+	mu       sync.Mutex
+	adding   int
+	adds     int
+	overlaps int
+}
+
+func (w *creationWitness) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if !containsArguments(command.Args, "worktree", "add") {
+		return w.delegate.Run(ctx, command, observer)
+	}
+	w.started()
+	defer w.finished()
+	return w.delegate.Run(ctx, command, observer)
+}
+
+func (w *creationWitness) started() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.adds++
+	if w.adding > 0 {
+		w.overlaps++
+	}
+	w.adding++
+}
+
+func (w *creationWitness) finished() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.adding--
+}
+
+func (w *creationWitness) observed() (adds, overlaps int) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.adds, w.overlaps
 }
 
 func TestManagerAllowsOnlyConfiguredPrimaryControlPlaneChanges(t *testing.T) {

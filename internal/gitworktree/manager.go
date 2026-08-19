@@ -370,6 +370,19 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 		return Worktree{}, fmt.Errorf("check branch %s failed with exit code %d: %s", branch, branchResult.ExitCode, strings.TrimSpace(branchResult.Stderr))
 	}
 
+	// Development is parallel, and every run on this repository writes the same
+	// worktree bookkeeping. Creation queues from here so a run is never lost to
+	// another one's half-written registration; the lease is held through the
+	// verification below, which reads that same bookkeeping.
+	lease, err := m.leaseCreation(ctx)
+	if err != nil {
+		return Worktree{}, err
+	}
+	// Releasing is this process letting the next creation in, and the operating
+	// system does it anyway when the process exits. A close that failed therefore
+	// says nothing about the worktree below, which either exists or does not.
+	defer func() { _ = lease.release() }()
+
 	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "add", "-b", branch, path, baseCommit)
 	if err != nil {
 		return Worktree{}, err
