@@ -202,17 +202,30 @@ func (c Cursor) Without(mark string) Cursor {
 	return dropped
 }
 
-// Cursors is every stream's position as it is stored.
+// Cursors is every stream's position as it is stored, and the moment reading
+// this product began.
 type Cursors struct {
 	SchemaVersion int               `json:"schema_version"`
 	Streams       map[string]Cursor `json:"streams"`
+	// Since is the watermark: the moment somebody first pointed a sink at this
+	// product. What the product recorded before it is history nobody turned
+	// reporting on to read, and a channel opened today would rather not have a
+	// month of finished work arriving at once.
+	//
+	// It is durable and it is written once, which is the whole of its value. A
+	// watermark taken freshly on every process start would move forward past
+	// every outage, so a report filed while the sink was down would be older than
+	// the restart and be read past as history — which is the one record an
+	// operator most needs when they come back. Fixed once, downtime is a gap the
+	// sink reads across rather than a gap in what it says.
+	Since time.Time `json:"since,omitempty"`
 }
 
 // LoadCursors reads the cursors. A sink that has never run has read nothing,
 // which is not the same as having read everything: the first pass therefore
-// reports the milestones a product already has. That is deliberate — a sink
-// started for the first time in the middle of a working day should say what is
-// going on, not stay silent until the next run starts — and the setup document
+// reports the milestones a product already has in flight. That is deliberate — a
+// sink started for the first time in the middle of a working day should say what
+// is going on, not stay silent until the next run starts — and the setup document
 // says so, because it is the one surprise in an otherwise quiet channel.
 func (s *Store) LoadCursors() (Cursors, error) {
 	var stored Cursors

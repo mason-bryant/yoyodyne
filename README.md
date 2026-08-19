@@ -2196,10 +2196,13 @@ beside it rather than a list of checkboxes to work through by hand.
 It is an observation and never a gate. Nothing waits on it: a workspace that is
 down delays messages rather than losing them, because the sink reads the same
 durable records the verbs above read and catches up from its own cursors when it
-returns. It is also the reason no run holds a Slack token — one separate process
-posts, so no agent's subprocess tree ever has a credential for your workspace in
-it. Replies are acknowledged and nothing acts on them yet; steering the harness
-from a thread is designed and not built.
+returns. The moment its history starts from is written down the first time you
+ever run it and never taken again, so time the sink itself spent stopped is a gap
+it reads across rather than a gap in what it says. It is also the reason no run
+holds a Slack token — one separate process posts, so no agent's subprocess tree
+ever has a credential for your workspace in it. Replies are acknowledged and
+nothing acts on them yet; steering the harness from a thread is designed and not
+built.
 
 ## Further reading
 

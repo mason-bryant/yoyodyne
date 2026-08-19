@@ -73,6 +73,10 @@ type Options struct {
 	// Dial opens the websocket transport. It is optional and exists so a test
 	// can exercise the connection without a network.
 	Dial dialFunc
+	// Now is read once, for the watermark this product's reporting begins at. It
+	// is optional and exists so a test can say when a sink was first pointed at a
+	// product without waiting for real time to pass.
+	Now func() time.Time
 }
 
 // Sink is the long-running reporting process for one product.
@@ -85,9 +89,20 @@ type Sink struct {
 	// refusal is how long to wait after a refusal only a person can clear. It is
 	// a field only so a test can drive that path without spending the wait;
 	// every sink the harness builds gets refusalBackoff.
-	refusal    time.Duration
+	refusal time.Duration
+	// now is the clock the watermark is taken from, injected for the same reason.
+	now        func() time.Time
 	log        func(format string, args ...any)
 	connection *connection
+}
+
+// clock is when this sink says it is. It is a function rather than time.Now so a
+// test can put a product's watermark where it needs it.
+func (s *Sink) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func New(options Options) (*Sink, error) {
@@ -122,6 +137,7 @@ func New(options Options) (*Sink, error) {
 		feed:    options.Feed,
 		poll:    poll,
 		refusal: refusalBackoff,
+		now:     options.Now,
 		log:     log,
 		connection: &connection{
 			api:    options.API,
@@ -244,6 +260,18 @@ func (s *Sink) pass(ctx context.Context) error {
 	cursors, err := s.store.LoadCursors()
 	if err != nil {
 		return err
+	}
+	// The watermark is taken once, on the first pass this product ever gets, and
+	// written before anything is read. Taking it afresh on every start would move
+	// it past every outage, and a report filed while the sink was down would then
+	// be older than the restart and be read past as history — which is exactly
+	// the record somebody coming back most needs to see.
+	if cursors.Since.IsZero() {
+		cursors.Since = s.clock().UTC()
+		if err := s.store.SaveCursors(cursors); err != nil {
+			return err
+		}
+		s.log("reporting on this product from %s; what it recorded before that is left in the durable records", cursors.Since.Format(time.RFC3339))
 	}
 	threads, err := s.store.LoadThreads()
 	if err != nil {

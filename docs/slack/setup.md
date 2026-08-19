@@ -142,17 +142,29 @@ yoyo slack --once
 
 That posts whatever is due and exits.
 
-**It reports what happens from when it first starts.** A product with two
-hundred runs behind it does not get two hundred threads on the day somebody
-turns reporting on: work that was already over is left in the records, where
-`yoyo status` and `yoyo reports` read it. Work still in flight is caught up on
-in full.
+**It reports what happens from the first time you ever start it.** A product
+with two hundred runs behind it does not get two hundred threads on the day
+somebody turns reporting on: work that was already over is left in the records,
+where `yoyo status` and `yoyo reports` read it. Work still in flight is caught up
+on in full, and the first pass prints the moment it is reporting from.
 
-That filter applies once and to what the sink has never read. Everything it has
-read before is caught up on whatever the dates say, so a run it has said
-something about is followed to its end however long that takes, and a report
-filed while the sink was stopped is posted when it comes back rather than
-treated as history. That is what makes an outage a delay rather than a gap.
+That moment is written down once, on that first pass, and every later start
+reads the same one back rather than taking a new one. It matters more than it
+sounds: a sink that started its history at each launch would treat everything
+that happened while it was stopped as work from before it cared, and the
+`critical` filed overnight is exactly the message that would go missing. Because
+the moment is fixed, downtime is a gap the sink reads across — a report filed
+while it was stopped, and a run that began and ended while it was stopped, are
+both posted when it comes back.
+
+If you do want to start the history over — a channel you have wiped, a product
+you are re-pointing at a new workspace — stop the sink and delete
+`products/<product id>/slack/cursors.json` under your state root. That is
+`$YOYODYNE_STATE_HOME` if you set it, `$XDG_STATE_HOME/yoyodyne` if you set that,
+and otherwise `~/Library/Application Support/Yoyodyne/state` on macOS or
+`~/.local/state/yoyodyne` elsewhere. The sink takes a new moment on its next pass
+and says which one. Leave `threads.json` beside it alone unless you also want new
+threads.
 
 **Do not run two.** One sink per product: two of them hold separate thread maps,
 so the second opens its own threads and posts everything twice. The second to
@@ -225,7 +237,7 @@ this channel and changes nothing about your setup.
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
-| Nothing is posted at all | Nothing has happened since the sink started that it had not already reported. Run something; work that finished beforehand is deliberately not replayed. |
+| Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 ## Where the tokens must not go
 

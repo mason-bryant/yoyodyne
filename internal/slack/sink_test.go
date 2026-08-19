@@ -250,6 +250,41 @@ func TestASilentDeliveryAdvancesTheCursorWithoutSayingAnything(t *testing.T) {
 	}
 }
 
+// The moment this product's reporting begins at is taken once, ever, written
+// before anything is read, and never taken again. A sink that took it afresh on
+// every start would carry it forward past every outage, and everything filed
+// while it was down would then be older than the restart and read past as
+// history — which is the one record somebody coming back most needs to see.
+func TestTheWatermarkIsTakenOnceAndSurvivesEveryRestart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	first := newTestSinkAt(t, root, &fixedFeed{}, &recordedPosts{}, moment)
+	if err := first.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	cursors, err := first.store.LoadCursors()
+	if err != nil {
+		t.Fatalf("LoadCursors() error = %v", err)
+	}
+	if !cursors.Since.Equal(moment) {
+		t.Fatalf("watermark = %s, want the moment the sink was first pointed at this product", cursors.Since)
+	}
+
+	// A second process, a day later, over the same durable state.
+	restarted := newTestSinkAt(t, root, &fixedFeed{}, &recordedPosts{}, moment.Add(24*time.Hour))
+	if err := restarted.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	cursors, err = restarted.store.LoadCursors()
+	if err != nil {
+		t.Fatalf("LoadCursors() error = %v", err)
+	}
+	if !cursors.Since.Equal(moment) {
+		t.Fatalf("watermark = %s, want it unmoved by a restart", cursors.Since)
+	}
+}
+
 // A sink assembled with a missing piece would discover it with a run in flight,
 // which is the one moment nobody is watching the reporting process.
 func TestASinkWithAMissingPieceIsRefusedAtAssembly(t *testing.T) {
@@ -520,17 +555,28 @@ func waitFor(t *testing.T, condition func() bool) {
 
 func newTestSink(t *testing.T, root string, feed Feed, posts *recordedPosts) *Sink {
 	t.Helper()
+	return newTestSinkAt(t, root, feed, posts, time.Time{})
+}
+
+// newTestSinkAt is a sink that says the time is whatever a test needs it to be,
+// which is the only way to watch a watermark not move.
+func newTestSinkAt(t *testing.T, root string, feed Feed, posts *recordedPosts, now time.Time) *Sink {
+	t.Helper()
 	store, err := NewStore(root, "yoyodyne")
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
 	}
-	sink, err := New(Options{
+	options := Options{
 		Channel: "C1",
 		Store:   store,
 		API:     newTestAPI(t, posts.handle),
 		Feed:    feed,
 		Log:     func(string, ...any) {},
-	})
+	}
+	if !now.IsZero() {
+		options.Now = func() time.Time { return now }
+	}
+	sink, err := New(options)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

@@ -26,7 +26,7 @@ func TestARunsCrossingsAreSaidOnceHoweverOftenTheRecordIsRead(t *testing.T) {
 	state := harness.run(t, runstate.StatusRunning)
 	harness.record(t, state)
 
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindRunStarted)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted)
 	harness.poll(t, cursors)
 
 	// The record moves on, and only what it crossed since is said.
@@ -49,7 +49,7 @@ func TestTheSameKindCrossedTwiceDifferentlyIsSaidTwice(t *testing.T) {
 	state.CheckFailure = &runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}
 	harness.record(t, state)
 
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindRunStarted, notify.KindChecksFailed)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted, notify.KindChecksFailed)
 
 	state.CheckFailure = &runstate.CheckFailure{Command: "go vet ./...", ExitCode: 2}
 	state.UpdatedAt = moment.Add(time.Minute)
@@ -70,7 +70,7 @@ func TestACrossingInterruptedHalfwayRepeatsRatherThanLosesTheRest(t *testing.T) 
 	state.CheckFailure = &runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}
 	harness.record(t, state)
 
-	batch, err := harness.feed.Poll(context.Background(), Cursors{Streams: map[string]Cursor{}})
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
 	if err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestARunThatWasOverBeforeTheSinkStartedIsReadPastSilently(t *testing.T) {
 	state := harness.run(t, runstate.StatusSucceeded)
 	harness.record(t, state)
 
-	batch, err := harness.feed.Poll(context.Background(), Cursors{Streams: map[string]Cursor{}})
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
 	if err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
@@ -115,7 +115,7 @@ func TestARunThatIsOverAndOwesNothingStopsBeingCarried(t *testing.T) {
 	harness := newTestHarness(t, time.Time{})
 	state := harness.run(t, runstate.StatusRunning)
 	harness.record(t, state)
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindRunStarted)
+	cursors := harness.poll(t, harness.start(), notify.KindRunStarted)
 	if cursors.Streams[runStream(state.RunID)].Reported == nil {
 		t.Fatal("a run still in flight must keep the reading it is compared against")
 	}
@@ -147,7 +147,7 @@ func TestReportsAndProposalsAreSaidOnceInTheOrderTheyWereRecorded(t *testing.T) 
 	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityWarning, moment)
 	harness.propose(t, "amendment-0123456789abcdef0123456789abcde0", moment)
 
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}},
+	cursors := harness.poll(t, harness.start(),
 		notify.KindReportFiled, notify.KindProposalRaised)
 	harness.poll(t, cursors)
 
@@ -165,7 +165,7 @@ func TestRecordsOlderThanTheSinkAreReadPastInOneAdvance(t *testing.T) {
 	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityNote, moment)
 	harness.file(t, "report-0123456789abcdef0123456789abcde1", report.SeverityNote, moment.Add(time.Minute))
 
-	batch, err := harness.feed.Poll(context.Background(), Cursors{Streams: map[string]Cursor{}})
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
 	if err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
@@ -184,19 +184,45 @@ func TestRecordsOlderThanTheSinkAreReadPastInOneAdvance(t *testing.T) {
 }
 
 // An outage delays messages rather than losing them, and the record filed while
-// the sink was down is exactly the one that would be lost: it is older than the
-// restart, so a sink that filtered by date on every pass would read past it and
-// call it history.
+// the sink was down is exactly the one that would be lost. The stream it arrives
+// on has never advanced — the normal state of a product that has not needed a
+// report for weeks — so "has this cursor moved" is no answer to "has this sink
+// ever run". Only the watermark answers that, and it does not move.
 func TestARecordFiledWhileTheSinkWasDownIsStillPosted(t *testing.T) {
 	t.Parallel()
 
-	// The sink has read this log before, and starts again an hour after the
-	// report it never got to.
-	harness := newTestHarness(t, moment.Add(time.Hour))
-	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityNote, moment.Add(-time.Hour))
-	harness.file(t, "report-0123456789abcdef0123456789abcde1", report.SeverityCritical, moment)
+	// Somebody turned reporting on, nothing was filed, and the sink stopped with
+	// its report cursor still at zero.
+	harness := newTestHarness(t, moment)
+	cursors := harness.poll(t, harness.start())
+	if cursors.Streams[reportStream].Position != 0 {
+		t.Fatalf("cursor = %#v, want a log nothing has been filed on left where it was", cursors.Streams[reportStream])
+	}
 
-	harness.poll(t, Cursors{Streams: map[string]Cursor{reportStream: {Position: 1}}}, notify.KindReportFiled)
+	// An hour of downtime, and a critical filed in the middle of it.
+	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityCritical, moment.Add(time.Hour))
+
+	// The restart reads the same watermark it wrote, so the report is news.
+	harness.poll(t, cursors, notify.KindReportFiled)
+}
+
+// The same thing for a run: one that both started and finished while the sink
+// was down has no cursor at all, so nothing but the watermark distinguishes it
+// from work that was over before reporting was ever turned on.
+func TestARunThatRanEntirelyWhileTheSinkWasDownIsStillReported(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment)
+	cursors := harness.poll(t, harness.start())
+
+	completed := moment.Add(time.Hour)
+	state := harness.run(t, runstate.StatusSucceeded)
+	state.StartedAt = moment.Add(30 * time.Minute)
+	state.UpdatedAt = completed
+	state.CompletedAt = &completed
+	harness.record(t, state)
+
+	harness.poll(t, cursors, notify.KindRunStarted, notify.KindChecksPassed)
 }
 
 // One record nobody can address must not hold up every record behind it for as
@@ -214,7 +240,7 @@ func TestARecordThatCannotBeAddressedIsReadPastRatherThanRetriedForever(t *testi
 	harness.fileOn(t, "report-0123456789abcdef0123456789abcde0", "not: an item", moment)
 	harness.file(t, "report-0123456789abcdef0123456789abcde1", report.SeverityNote, moment.Add(time.Minute))
 
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindReportFiled)
+	cursors := harness.poll(t, harness.start(), notify.KindReportFiled)
 	if len(logged) != 1 {
 		t.Fatalf("logged %v, want the record nobody can address said once", logged)
 	}
@@ -237,7 +263,7 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
 	// Held twice is the same hold, and it is said once.
 	cursors = harness.poll(t, cursors)
 
@@ -263,7 +289,7 @@ func TestTheOperatorHoldIsSaidSeparatelyFromTheIntakeHold(t *testing.T) {
 	if _, err := harness.holds.Hold(moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, Cursors{Streams: map[string]Cursor{}}, notify.KindHoldPlaced)
+	cursors := harness.poll(t, harness.start(), notify.KindHoldPlaced)
 
 	if _, _, err := harness.holds.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
@@ -274,6 +300,10 @@ func TestTheOperatorHoldIsSaidSeparatelyFromTheIntakeHold(t *testing.T) {
 // testHarness is a product's durable records and a feed reading them, so what a
 // test exercises is the reading rather than a stand-in for it.
 type testHarness struct {
+	// since is the product's watermark, which rides on the cursors rather than on
+	// the feed: it is one durable moment for the product rather than one per
+	// process, which is what makes downtime a gap the sink reads across.
+	since   time.Time
 	feed    *HarnessFeed
 	runs    *runstate.Store
 	reports *runstate.ReportStore
@@ -306,13 +336,13 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		t.Fatalf("NewOperatorHoldStore() error = %v", err)
 	}
 	return &testHarness{
+		since: since,
 		feed: &HarnessFeed{
 			Runs:      runs,
 			Reports:   reports,
 			Proposals: amend,
 			Intake:    intake,
 			Holds:     holds,
-			Since:     since,
 			Now:       func() time.Time { return moment.Add(time.Hour) },
 		},
 		runs:    runs,
@@ -332,7 +362,7 @@ func (h *testHarness) poll(t *testing.T, cursors Cursors, want ...notify.Kind) C
 	if err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
-	advanced := Cursors{SchemaVersion: CursorsSchemaVersion, Streams: map[string]Cursor{}}
+	advanced := Cursors{SchemaVersion: CursorsSchemaVersion, Since: cursors.Since, Streams: map[string]Cursor{}}
 	for stream, cursor := range cursors.Streams {
 		advanced.Streams[stream] = cursor
 	}
@@ -356,6 +386,12 @@ func (h *testHarness) poll(t *testing.T, cursors Cursors, want ...notify.Kind) C
 		}
 	}
 	return advanced
+}
+
+// start is the cursors a sink has on the first pass it ever makes over this
+// product: nothing read, and the watermark already taken.
+func (h *testHarness) start() Cursors {
+	return Cursors{SchemaVersion: CursorsSchemaVersion, Since: h.since, Streams: map[string]Cursor{}}
 }
 
 func (h *testHarness) run(t *testing.T, status runstate.Status) runstate.State {

@@ -59,6 +59,7 @@ func TestCursorsRecordBothWhatWasReadAndWhatWasSaid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCursors() error = %v", err)
 	}
+	cursors.Since = time.Date(2026, 8, 19, 10, 0, 0, 0, time.UTC)
 	cursors.Streams["reports"] = Cursor{Position: 3}
 	cursors.Streams["run:run-a"] = Cursor{Reported: &runstate.State{RunID: "run-a", Phase: runstate.PhaseReviewing}}.
 		With("run.started:x").With("checks.passed:y")
@@ -69,6 +70,12 @@ func TestCursorsRecordBothWhatWasReadAndWhatWasSaid(t *testing.T) {
 	reloaded, err := newStore(t, root).LoadCursors()
 	if err != nil {
 		t.Fatalf("LoadCursors() error = %v", err)
+	}
+	// The watermark is the one thing here that must never move: taken again on
+	// each start, it would carry forward past every outage and everything filed
+	// while the sink was down would read as history.
+	if !reloaded.Since.Equal(cursors.Since) {
+		t.Fatalf("watermark = %s, want the moment reporting on this product began", reloaded.Since)
 	}
 	if reloaded.Streams["reports"].Position != 3 {
 		t.Fatalf("reports cursor = %#v, want the log position it reached", reloaded.Streams["reports"])

@@ -87,15 +87,6 @@ type HarnessFeed struct {
 	Proposals *runstate.AmendmentStore
 	Intake    *runstate.IntakeHoldStore
 	Holds     *runstate.OperatorHoldStore
-	// Since is when this sink started. What was already over before then is
-	// history rather than news, and a channel opened today does not want a month
-	// of it: a product with two hundred recorded runs would get two hundred
-	// threads before it said anything about today's work. Only what nothing has
-	// been said about yet is filtered this way, so a run in flight is still
-	// caught up on in full, and a message an outage delayed is still posted when
-	// the workspace returns. The zero value reports everything, which is what a
-	// caller that wants the whole record asks for.
-	Since time.Time
 	// Now is read for the moment a hold was seen to have lifted, which is the one
 	// thing here no record holds: what lifts a hold is its absence. It is
 	// injected so a test can say when that was.
@@ -107,12 +98,21 @@ type HarnessFeed struct {
 }
 
 // Poll reads every stream and reports what the cursors say has not been posted.
+//
+// Everything the product recorded before the cursors' watermark is history and
+// is read past: a channel turned on today does not want a month of finished work
+// arriving at once. The watermark is one durable moment for the whole product
+// rather than this process's start time, which is what makes an outage a delay:
+// a record filed while the sink was down is after the watermark whatever the
+// cursor for its stream happens to say, so it is posted when the sink returns
+// rather than mistaken for history somebody has already read.
 func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) {
 	batch := Batch{Streams: map[string]struct{}{
 		reportStream:   {},
 		proposalStream: {},
 		productStream:  {},
 	}}
+	since := cursors.Since
 
 	states, err := f.Runs.Recorded()
 	if err != nil {
@@ -124,7 +124,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		}
 		stream := runStream(state.RunID)
 		batch.Streams[stream] = struct{}{}
-		deliveries, err := f.runDeliveries(state, cursors.Streams[stream])
+		deliveries, err := f.runDeliveries(state, cursors.Streams[stream], since)
 		if err != nil {
 			return Batch{}, err
 		}
@@ -135,7 +135,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the collected reports: %w", err)
 	}
-	reported, err := f.logDeliveries(reportStream, cursors.Streams[reportStream], len(filed),
+	reported, err := f.logDeliveries(reportStream, cursors.Streams[reportStream], len(filed), since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromReport(filed[index])
 			return filed[index].RecordedAt, notification, err
@@ -150,7 +150,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, fmt.Errorf("read the proposed changes: %w", err)
 	}
 	proposals := amendment.Proposals(records)
-	raised, err := f.logDeliveries(proposalStream, cursors.Streams[proposalStream], len(proposals),
+	raised, err := f.logDeliveries(proposalStream, cursors.Streams[proposalStream], len(proposals), since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromProposal(proposals[index])
 			return proposals[index].RaisedAt, notification, err
@@ -173,7 +173,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 // posted. A crash halfway therefore repeats what it had already said rather than
 // losing what it had not, which is the trade the design takes deliberately: the
 // durable record is authoritative and this is a view of it.
-func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor) ([]Delivery, error) {
+func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since time.Time) ([]Delivery, error) {
 	if cursor.Closed {
 		return nil, nil
 	}
@@ -181,9 +181,16 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor) ([]Deli
 	var before runstate.State
 	if cursor.Reported != nil {
 		before = *cursor.Reported
-	} else if len(cursor.Delivered) == 0 && f.predates(completion(state)) {
-		// A run that was already over before this sink started is history, and
-		// nothing was ever said about it. Its cursor closes without a word.
+	} else if len(cursor.Delivered) == 0 && predates(since, completion(state)) {
+		// A run that was over before the watermark is history nobody turned
+		// reporting on to read, so its cursor closes without a word. A run that
+		// both started and finished while the sink was down is not that: it
+		// finished after the watermark, so it is caught up on in full.
+		//
+		// A run this sink has already said something about is never history
+		// whatever its dates say. Nothing backdates a completion today, so the
+		// two cannot disagree, but if one ever did, a thread that stopped
+		// mid-narrative is a worse answer than a run reported to its end.
 		return []Delivery{{Stream: stream, Cursor: Cursor{Closed: true}}}, nil
 	}
 
@@ -225,16 +232,16 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor) ([]Deli
 	return pending, nil
 }
 
-// logDeliveries reads an append-only log from where the cursor left it. A log
-// this sink has never read is read past to its end in one silent advance,
-// because a channel opened today does not want a year of history arriving at
-// once; a log it has read before is caught up on in full whatever the dates say,
-// because an outage has to delay messages rather than lose them, and a record
-// filed while the sink was down is exactly the one that would be lost.
-func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, at func(int) (time.Time, notify.Notification, error)) ([]Delivery, error) {
+// logDeliveries reads an append-only log from where the cursor left it. What was
+// filed before the watermark is read past in one silent advance, because a
+// channel turned on today does not want a year of history arriving at once.
+// Nothing after the watermark is ever read past on age: the watermark is a fixed
+// moment rather than this process's start, so a record filed while the sink was
+// down is still news when it comes back, which is the difference between an
+// outage that delays messages and one that loses them.
+func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, since time.Time, at func(int) (time.Time, notify.Notification, error)) ([]Delivery, error) {
 	var deliveries []Delivery
 	skipped := cursor.Position
-	history := cursor.Position == 0
 	for index := int(cursor.Position); index < count; index++ {
 		recordedAt, notification, err := at(index)
 		position := uint64(index + 1)
@@ -246,7 +253,7 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, at 
 			skipped = position
 			continue
 		}
-		if history && f.predates(recordedAt) {
+		if predates(since, recordedAt) {
 			skipped = position
 			continue
 		}
@@ -337,9 +344,12 @@ func (f *HarnessFeed) now() time.Time {
 	return time.Now().UTC()
 }
 
-// predates reports what was already recorded before this sink started.
-func (f *HarnessFeed) predates(at time.Time) bool {
-	return !f.Since.IsZero() && !at.IsZero() && at.Before(f.Since)
+// predates reports what the product recorded before the watermark. A record with
+// no moment on it is never history, because absence of a date is not evidence of
+// age; nor is anything at all when there is no watermark, which is what a caller
+// asking for the whole record leaves behind.
+func predates(since, at time.Time) bool {
+	return !since.IsZero() && !at.IsZero() && at.Before(since)
 }
 
 // markOf names one crossing so that having posted it survives a crash. The kind

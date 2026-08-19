@@ -133,16 +133,19 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 		Channel: settings.Channel,
 		Store:   store,
 		API:     api,
-		// The sink reports what happens from when it starts. What was already
-		// over before then is in the records the reporting verbs read, and a
-		// channel opened today does not want a month of it arriving at once.
+		// The sink reports what happens from the moment somebody first pointed
+		// one at this product. What was already over before then is in the
+		// records the reporting verbs read, and a channel opened today does not
+		// want a month of it arriving at once. That moment is recorded once, in
+		// the sink's own state, rather than taken again on every start: a
+		// watermark that moved forward with each restart would read past
+		// everything filed while the sink was down.
 		Feed: &slack.HarnessFeed{
 			Runs:      runs,
 			Reports:   reports,
 			Proposals: proposals,
 			Intake:    intake,
 			Holds:     holds,
-			Since:     time.Now(),
 			Log:       log,
 		},
 		Poll: poll,
