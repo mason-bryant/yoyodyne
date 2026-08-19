@@ -8,15 +8,18 @@ revisions:
       by: architect
       at: 2026-08-17T00:00:00Z
       reason: identity added with the artifact metadata schema; the record itself is unchanged
+    - action: amended
+      by: architect
+      at: 2026-08-19T00:00:00Z
+      reason: drafting residue removed — a stray code fence and trailing rule, and the offer of ratification the architect has since given; the decision itself is unchanged
 ---
 
 # Claude Code is the default backend; Codex is an optional alternative
 
-**Status:** Accepted. Recorded by the operator, ratifiable by the architect when
-the role runs. This decision was made and acted on during the v1 design; it was
-stated in [the v1 goals](../product/goals/v1-goals.md) until it was moved here,
-because it is a decision about which tools Yoyodyne runs rather than an outcome
-the product is trying to reach.
+**Status:** Accepted. This decision was made and acted on during the v1 design;
+it was stated in [the v1 goals](../product/goals/v1-goals.md) until it was
+moved here, because it is a decision about which tools Yoyodyne runs rather
+than an outcome the product is trying to reach.
 
 ## Context
 
@@ -42,6 +45,3 @@ calling model APIs directly, and does not reimplement their tool execution.
   intent independent of which agents happen to run underneath it. Adding,
   replacing, or removing a backend is an architectural decision, not a change to
   what the product is for.
-```
-
----
