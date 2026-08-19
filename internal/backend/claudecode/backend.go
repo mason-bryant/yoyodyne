@@ -41,19 +41,41 @@ var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob",
 const readOnlyPermissionMode = "plan"
 
 // readOnlyTools is intentionally empty. A reviewer receives a bounded context,
-// patch, and check results, and a product manager receives bounded repository
-// and tracker evidence; disabling tools prevents injected evidence from reading
-// outside that evidence and exfiltrating unrelated local files, and is what
-// makes "this role runs nothing" enforced rather than asked for. A product
-// manager does change the work tracker, and none of that happens here: the
-// harness carries out validated actions on its behalf, so the authority never
-// takes the form of a tool this process could be talked into using.
+// patch, and check results, and the product manager, the architect, and the
+// development manager receive bounded repository and tracker evidence;
+// disabling tools prevents injected evidence from reading outside that evidence
+// and exfiltrating unrelated local files, and is what makes "this role runs
+// nothing" enforced rather than asked for. A product manager does change the
+// work tracker and an architect does decide what a design says, and none of
+// that happens here: the harness carries out validated actions on their behalf,
+// so the authority never takes the form of a tool this process could be talked
+// into using.
 var readOnlyTools = []string{}
 
 // readOnlyRole reports whether a role reasons over supplied evidence rather than
-// reaching outside it. Such a role gets no tools and cannot be given them.
+// reaching outside it. Such a role gets no tools and cannot be given them. Of
+// the roles this backend serves, every one but the developer is such a role: the
+// developer is the only one whose work is editing a worktree, and each of the
+// others decides something the harness then performs on its behalf. The roles
+// are listed rather than inverted so that a role nobody has decided a posture
+// for reaches the refusal in Run instead of inheriting one.
 func readOnlyRole(role domain.AgentRole) bool {
-	return role == domain.RoleReviewer || role == domain.RoleProductManager
+	switch role {
+	case domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager:
+		return true
+	default:
+		return false
+	}
+}
+
+// supportedRole reports whether this backend knows how to assemble an
+// invocation for a role: which tools it gets and which permission mode it may
+// run under. A role nobody has decided that for is refused rather than
+// defaulted, because the only default available would be the developer's, and
+// silently granting a shell to a role meant to have none is the failure this
+// guard exists to prevent.
+func supportedRole(role domain.AgentRole) bool {
+	return role == domain.RoleDeveloper || readOnlyRole(role)
 }
 
 type Backend struct {
@@ -120,10 +142,8 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	if strings.TrimSpace(request.Prompt) == "" {
 		return backend.RunResult{}, errors.New("prompt is required")
 	}
-	switch request.Role {
-	case domain.RoleDeveloper, domain.RoleReviewer, domain.RoleProductManager:
-	default:
-		return backend.RunResult{}, fmt.Errorf("Claude Code bootstrap backend does not yet support role %q", request.Role)
+	if !supportedRole(request.Role) {
+		return backend.RunResult{}, fmt.Errorf("Claude Code backend does not support role %q", request.Role)
 	}
 
 	permissionMode := request.PermissionMode
