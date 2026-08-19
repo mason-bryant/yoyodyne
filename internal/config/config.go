@@ -58,6 +58,7 @@ type Config struct {
 	Extends   string                 `yaml:"extends,omitempty" json:"extends,omitempty"`
 	Product   Product                `yaml:"product" json:"product"`
 	Execution Execution              `yaml:"execution" json:"execution"`
+	Triage    Triage                 `yaml:"triage" json:"triage"`
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
@@ -236,6 +237,59 @@ const (
 	defaultServerOverloadPause = Duration(90 * time.Second)
 )
 
+// Triage is what the triage workflow measures against: when work that has
+// stopped moving is docketed to be looked at, and what looking at it may spend.
+// The numbers are configuration rather than constants in the workflow because
+// each one is a judgement about a project's pace — how long a merge may take
+// before nobody merging it is news, how many times one change may go round with
+// a reviewer before going round again is the problem — and a project sets that
+// differently from the next one.
+type Triage struct {
+	// StuckMergeAge is how long an approved publication may sit unmerged before
+	// it is docketed. It is an age rather than a deadline because what makes a
+	// publication stuck is that nothing has happened to it, and nothing
+	// happening offers no event to hang a deadline on. Zero is refused rather
+	// than read as a choice: a threshold of no time at all dockets every
+	// publication the instant it is made, which is a docket of everything and a
+	// triage of nothing.
+	StuckMergeAge Duration `yaml:"stuck_merge_age" json:"stuck_merge_age"`
+	// ReviewRoundsCap bounds the review rounds one work item may accumulate in
+	// total — across repairs, across runs — past which triage may no longer hand
+	// it back for another repair. Past the cap triage still has both of its other
+	// actions: escalate the item, or re-scope it. What it may not do is buy the
+	// same argument another round. Zero is a deliberate choice rather than an
+	// error, which is why it is accepted: it says an item that reaches triage is
+	// never repaired again, only escalated or re-scoped.
+	ReviewRoundsCap int `yaml:"review_rounds_cap" json:"review_rounds_cap"`
+	// RepairGrantAttempts is how many repair attempts triage hands an item when
+	// it decides the work is worth another go. A project that states nothing
+	// gets its configured execution.repair_attempts_before_replan, because a
+	// grant is the same kind of budget a run starts with and a project that
+	// tuned one has said what it thinks that budget is worth. It is never zero:
+	// a grant of nothing changes nothing about the item it was granted to, so it
+	// is refused where it is stated and floored at one where it is derived from
+	// a repair budget of zero.
+	RepairGrantAttempts int `yaml:"repair_grant_attempts" json:"repair_grant_attempts"`
+}
+
+const (
+	// defaultStuckMergeAge is long enough that an ordinary merge lands well
+	// inside it — including one waiting on a person who stepped away from the
+	// keyboard — and short enough that a publication nobody is going to merge is
+	// looked at within the working session that produced it.
+	defaultStuckMergeAge = Duration(2 * time.Hour)
+	// defaultReviewRoundsCap is two rounds past the repair budget a run starts
+	// with, so an item reaches the cap only after triage has already bought it
+	// more rounds than the run itself would have taken. A change still arguing
+	// with its reviewer that far in is not a change another round fixes.
+	defaultReviewRoundsCap = 4
+	// minimumRepairGrant is the floor under a derived grant. A project that
+	// configured no routine repair attempts at all still gets a grant of one,
+	// because the grant is triage's deliberate exception to that budget rather
+	// than another helping of it, and a grant of nothing is not an exception.
+	minimumRepairGrant = 1
+)
+
 type Approvals struct {
 	// Brief, Goals, and Designs decide which canonical documents the operator's
 	// approval is asked for. `human` means the operator approves the document and
@@ -378,6 +432,24 @@ func (c Config) Validate() error {
 	// same overloaded server with nothing between the attempts.
 	if c.Execution.ServerOverloadPause <= 0 {
 		problems = append(problems, "execution.server_overload_pause must be positive")
+	}
+	// An age of zero is not the choice the pauses above make with theirs: it
+	// dockets every approved publication the instant it is made, which is not a
+	// stricter triage but the end of triage meaning anything.
+	if c.Triage.StuckMergeAge <= 0 {
+		problems = append(problems, "triage.stuck_merge_age must be positive")
+	}
+	// Zero is a choice here — an item that reaches triage is escalated or
+	// re-scoped rather than repaired again — so only a negative cap, which
+	// describes no round anybody could take, is refused.
+	if c.Triage.ReviewRoundsCap < 0 {
+		problems = append(problems, "triage.review_rounds_cap cannot be negative")
+	}
+	// And zero is not a choice here: triage granting no attempts leaves the item
+	// exactly where granting nothing would have, so it is refused rather than
+	// silently spent.
+	if c.Triage.RepairGrantAttempts < minimumRepairGrant {
+		problems = append(problems, "triage.repair_grant_attempts must be at least 1")
 	}
 
 	approvalValues := []struct {

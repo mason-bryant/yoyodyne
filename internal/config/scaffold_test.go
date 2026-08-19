@@ -21,17 +21,22 @@ func TestScaffoldedProjectLoadsWithoutTheBundle(t *testing.T) {
 	if len(resolved.Sources) != 1 || resolved.Sources[0] != resolved.Path {
 		t.Fatalf("sources = %v, want only the project file", resolved.Sources)
 	}
-	// Every value is the project file's own. The single exception is the
-	// repository id, which the generated file lets follow from the product id
-	// it does state -- a derivation from something in the same file rather than
-	// a value arriving from outside it. Nothing is a harness default either,
+	// Every value is the project file's own. The exceptions are the two the
+	// generated file deliberately leaves to follow something it does state: the
+	// repository id follows the product id, and the triage repair grant follows
+	// the repair budget -- derivations from values in the same file rather than
+	// values arriving from outside it. Nothing is a harness default either,
 	// because the generated file writes down what the harness would have filled
 	// in. This is what the documentation promises an operator reading
 	// `config show --origins`, so it is asserted exactly.
+	derived := map[string]string{
+		"product.repository_id":        OriginDerived,
+		"triage.repair_grant_attempts": OriginDerivedRepairGrant,
+	}
 	for key, origin := range resolved.Origins {
 		want := resolved.Path
-		if key == "product.repository_id" {
-			want = OriginDerived
+		if derivedOrigin, ok := derived[key]; ok {
+			want = derivedOrigin
 		}
 		if origin != want {
 			t.Errorf("origin[%q] = %q, want %q", key, origin, want)

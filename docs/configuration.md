@@ -130,6 +130,10 @@ execution:
   server_overload_pause: 90s
   check_timeout: 30m
 
+triage:
+  stuck_merge_age: 2h
+  review_rounds_cap: 4
+
 approvals:
   brief: human
   goals: human
@@ -199,11 +203,15 @@ therefore keeps meaning the project root. The artifact directories —
 ## Precedence
 
 A configuration `init` wrote has one layer: itself. Every configured value comes
-from the project file, and nothing is inherited from a bundle. One value is
-still reported as computed rather than written: `product.repository_id` has the
+from the project file, and nothing is inherited from a bundle. Two values are
+still reported as computed rather than written. `product.repository_id` has the
 origin `derived:product.id`, because the generated file states the product id
-and lets the repository id follow from it. That is a value derived from
-something in the same file, not something arriving from outside it.
+and lets the repository id follow from it, and
+`triage.repair_grant_attempts` has the origin
+`derived:execution.repair_attempts_before_replan` for the same reason: the
+generated file states the repair budget and lets the grant follow it, so raising
+one raises the other. Both are values derived from something in the same file,
+not something arriving from outside it.
 
 The rest of this section describes what happens when a project uses `extends`,
 and what the harness still fills in when a file leaves something out.
@@ -224,7 +232,13 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.usage_limit_unknown_reset_pause` (`30m`),
    `execution.server_overload_pause` (`90s`),
    `execution.check_timeout` (`30m`),
+   `triage.stuck_merge_age` (`2h`),
+   `triage.review_rounds_cap` (4),
    `approvals.publishing` (`human`), and an agent's `instances` (1).
+   `triage.repair_grant_attempts` is filled in too, but as a derivation rather
+   than a fixed default: it takes the size of the effective
+   `execution.repair_attempts_before_replan`, read after every layer has been
+   applied, and is floored at 1 for a project that repairs nothing routinely.
    `approvals.publishing` is the only approval with a harness default, because
    it was added after configurations existed: a file written before it keeps the
    behavior it was written for — the harness publishes nothing — rather than
@@ -1511,6 +1525,49 @@ compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
 
+## Triage thresholds
+
+Triage is what looks at work that has stopped moving. Its numbers are
+configuration rather than constants, because each one is a judgement about a
+project's pace — how long a merge may take before nobody merging it is news, how
+many times one change may go round with a reviewer before going round again is
+the problem:
+
+```yaml
+triage:
+  stuck_merge_age: 2h        # how long an approved publication may sit unmerged
+  review_rounds_cap: 4       # total review rounds one item may accumulate
+  repair_grant_attempts: 2   # what a grant is worth, when triage grants one
+```
+
+**These load, validate, and are reported by `config show`; nothing reads them
+yet.** The triage workflow they belong to is not built, so setting one today
+changes no behavior. They are here now for the reason a threshold usually is not
+built with its workflow: a number that starts life as a constant in the code
+stays one, and every project inherits whatever the first project needed.
+
+`stuck_merge_age` is how long an approved publication may sit unmerged before it
+is docketed. It is an age rather than a deadline because what makes a
+publication stuck is that nothing has happened to it, and nothing happening
+offers no event to hang a deadline on. It must be positive: an age of no time at
+all dockets every publication the instant it is made, which is a docket of
+everything and a triage of nothing.
+
+`review_rounds_cap` bounds the review rounds one work item may accumulate in
+total — across repairs, across runs — past which triage may no longer hand it
+back for another repair. Past the cap triage still has both of its other
+actions: escalate the item, or re-scope it. `0` is a choice somebody can mean and
+is accepted as one: an item that reaches triage at all is never repaired again.
+
+`repair_grant_attempts` is how many repair attempts triage hands an item when it
+decides the work is worth another go. Leave it out and it follows
+`execution.repair_attempts_before_replan`, tracking that budget rather than
+copying it: raise the budget and the grant rises with it. It may not be zero,
+because a grant of nothing leaves the item exactly where granting nothing would
+have. A project that configured no routine repair attempts at all still gets a
+derived grant of 1 rather than a configuration that fails to load — the grant is
+triage's deliberate exception to that budget, not another helping of it.
+
 ## Merge and removal semantics
 
 These describe how a project that uses `extends` combines with the bundle
@@ -1563,6 +1620,11 @@ These are all errors, reported before any work is claimed:
 - a persona override missing `version` or `path`;
 - a usage-limit pause bound that is not a duration, or that is negative — `0`
   is accepted, because "never wait" is a choice somebody can mean;
+- a `triage.stuck_merge_age` that is not a duration, or that is zero or
+  negative — unlike the usage-limit pauses, "no time at all" is not a choice
+  anybody can mean here;
+- a negative `triage.review_rounds_cap`, or a `triage.repair_grant_attempts`
+  below 1 — a cap of `0` is a choice and is accepted, a grant of `0` is not;
 - an `execution.remote` that is empty or is not a plain remote name, since it
   reaches a `git push` command line;
 - a `product.specifications` that is empty, absolute, or climbs out of the

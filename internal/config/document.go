@@ -20,6 +20,7 @@ type configDocument struct {
 	Extends   *string                  `yaml:"extends"`
 	Product   *productDocument         `yaml:"product"`
 	Execution *executionDocument       `yaml:"execution"`
+	Triage    *triageDocument          `yaml:"triage"`
 	Approvals *approvalsDocument       `yaml:"approvals"`
 	Checks    *[]string                `yaml:"checks"`
 	Agents    map[string]agentDocument `yaml:"agents"`
@@ -48,6 +49,17 @@ type executionDocument struct {
 	UsageLimitUnknownResetPause            *Duration `yaml:"usage_limit_unknown_reset_pause"`
 	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
+}
+
+type triageDocument struct {
+	StuckMergeAge   *Duration `yaml:"stuck_merge_age"`
+	ReviewRoundsCap *int      `yaml:"review_rounds_cap"`
+	// RepairGrantAttempts is absent from most files. A layer that does not
+	// supply it leaves the grant to follow execution.repair_attempts_before_replan,
+	// which is a derivation rather than an inherited value: it tracks whatever
+	// the effective repair budget turns out to be rather than whatever it was
+	// when some layer underneath was written.
+	RepairGrantAttempts *int `yaml:"repair_grant_attempts"`
 }
 
 type approvalsDocument struct {
