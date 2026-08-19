@@ -1106,6 +1106,38 @@ invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for.
 
+The development manager is given one more thing: the **triage docket**, the work
+that has stopped moving. It reaches that conversation the way the backlog
+reaches the product manager's — carried in the context rather than by you
+noticing something went quiet. Two things put an item on it. A run that ends on
+a durable blocker dockets itself as it stops, and so does a run a `yoyo
+reconcile` sweep stops for it. An approved publication that did not finish is
+docketed too: one the harness already recorded as
+outstanding — a merge the forge dropped, or one it performed that could not be
+confirmed — and one that has simply been sitting unmerged past
+`triage.stuck_merge_age`.
+
+Each entry carries the evidence rather than a summary of it: the blocker in the
+words it was recorded in, the reviewer's own findings, the check that was
+failing and what it printed, the branch and worktree that were preserved and
+whether they still exist, what the forge says about the merge, and the counters
+saying how many review rounds the item has accumulated against the configured
+cap and what a repair grant would be worth. A decision made without those last
+ones is a decision the cap then contradicts.
+
+An entry states that something stopped; it decides nothing, and nothing decides
+it for the development manager. Docketing is keyed to what stopped, so a run
+that dockets its own ending and a sweep that settles it afterwards produce one
+entry between them, and a run that is merely parked — waiting out a usage limit,
+held by a directive, or paused by you — is never docketed at all, because it is
+owed a continuation rather than a decision.
+
+Finding a publication nobody merged is a scan rather than an event, because
+nothing happening is not something anything can be present for. Two things scan:
+`yoyo reconcile`, and opening a development manager conversation. There is no
+scheduled process behind either, so the configured age is a floor rather than a
+promise about when the entry appears.
+
 Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 `/reports`, `/refresh` — means the same thing in every conversation, because
 those are your authority carried out by the harness rather than anything the
@@ -2095,7 +2127,10 @@ state onto what the forge has:
 ```
 
 It compares the recorded run against the repository and Beads, and then finishes
-the run's own remaining step or hands the item to you. A run whose work reached
+the run's own remaining step or hands the item to you. It also builds the triage
+docket on the way past, so a run it stopped and a publication the forge quietly
+never merged reach the development manager rather than waiting for somebody to
+go looking. A run whose work reached
 the target branch is closed and its worktree and branch removed, including when
 the run died before it could record the promotion. A run stopped anywhere
 earlier becomes a durable blocker naming the branch and worktree that were

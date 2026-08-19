@@ -257,6 +257,12 @@ type Pipeline struct {
 	// without one runs exactly as it would have and one that could not record a
 	// price names that on the outcome.
 	Prices Pricer
+	// Docket is where a run that ends on a durable blocker is put in front of the
+	// development manager. It is optional in the same way as the three above: a
+	// stoppage is already recorded on the work item and in this run's own record
+	// by the time it is docketed, so a pipeline wired without one stops exactly
+	// as it would have and loses only the delivery.
+	Docket *Docketer
 	Clock  execution.Clock
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
@@ -1023,7 +1029,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 	}
 	limit := a.pipeline.Config.Execution.IntegrationRetriesBeforeReconciliation
 	if a.state.IntegrationRetries >= limit {
-		return false, a.blockOnContendedIntegration(ctx, cause, limit)
+		return false, a.blockOnContendedIntegration(cause, limit)
 	}
 	a.state.IntegrationRetries++
 	a.outcome.IntegrationRetries = a.state.IntegrationRetries
@@ -1039,7 +1045,7 @@ func (a *activeRun) prepareIntegrationRetry(ctx context.Context, cause error) (b
 		return false, errors.Join(err, recordErr)
 	}
 	if errors.Is(err, gitworktree.ErrRebaseConflict) {
-		return false, a.blockOnRebaseConflict(ctx, err)
+		return false, a.blockOnRebaseConflict(err)
 	}
 	if err != nil {
 		return false, fmt.Errorf("replay the change onto the moved integration target: %w", err)
@@ -1094,19 +1100,41 @@ func (a *activeRun) recordRebase(rebase gitworktree.Rebase) error {
 	return nil
 }
 
+// block records one durable blocker on the work item and keeps its text on the
+// run. Every stoppage a person has to decide about goes through here, which is
+// what makes the blocker a triage docket entry carries the same words the item
+// carries rather than a second account assembled from the same evidence — and
+// what lets a reader of the run record afterwards say what stopped it without
+// working out which of the item's notes was this run's.
+//
+// It is recorded on its own deadline rather than on a context this run may have
+// exhausted: a run that stopped on something nobody was told about is the one
+// outcome this must never produce. The text is durable on the run only when the
+// tracker took it, so a blocker the item never carried is never claimed here.
+func (a *activeRun) block(notes string) error {
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, notes); err != nil {
+		return err
+	}
+	a.outcome.Blocked = true
+	// The terminal write that ends the run is a moment away and carries this
+	// with it, so nothing is saved here: a second write would be one more chance
+	// for the record and the item to disagree about what stopped the run.
+	a.state.Blocker = runstate.RecordBlocker(notes)
+	return nil
+}
+
 // blockOnContendedIntegration ends a run that kept losing its target branch. It
 // is the integration-side twin of the repair blockers: the change is sound as
 // far as every gate could tell, and what it needs is a person to say what the
 // target is supposed to look like.
-func (a *activeRun) blockOnContendedIntegration(ctx context.Context, cause error, limit int) error {
+func (a *activeRun) blockOnContendedIntegration(cause error, limit int) error {
 	blocked := fmt.Errorf("integration lost its target branch after %d of %d permitted retry(s): %w",
 		a.state.IntegrationRetries, limit, cause)
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
+	if err := a.block(renderIntegrationBlockerNotes(a.outcome, blocked.Error(), limit)); err != nil {
 		return errors.Join(blocked, fmt.Errorf("record the contended integration as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return blocked
 }
 
@@ -1114,13 +1142,10 @@ func (a *activeRun) blockOnContendedIntegration(ctx context.Context, cause error
 // target became. Nothing is forced and nothing is resolved: the worktree and the
 // branch stay exactly as they were, and the conflict is recorded for whoever
 // owns the decision.
-func (a *activeRun) blockOnRebaseConflict(ctx context.Context, cause error) error {
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRebaseConflictNotes(a.outcome, cause.Error())); err != nil {
+func (a *activeRun) blockOnRebaseConflict(cause error) error {
+	if err := a.block(renderRebaseConflictNotes(a.outcome, cause.Error())); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the replay conflict as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -1154,7 +1179,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			if errors.As(err, &refused) {
 				a.recordPathRefusal(refused.refusal)
 				if a.state.RepairAttempts >= limit {
-					return a.blockOnRefusedPaths(ctx, refused, limit)
+					return a.blockOnRefusedPaths(refused, limit)
 				}
 				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
 					return err
@@ -1169,7 +1194,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			}
 			a.recordCheckFailure(failing.result)
 			if a.state.RepairAttempts >= limit {
-				return a.blockOnFailingCheck(ctx, limit)
+				return a.blockOnFailingCheck(limit)
 			}
 			if err := a.repair(ctx, checkRepairPrompt(a.deliveredInvariants().Text(), *a.state.CheckFailure, a.state.RepairAttempts+1, limit)); err != nil {
 				return err
@@ -1184,7 +1209,7 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return nil
 		}
 		if a.state.RepairAttempts >= limit {
-			return a.blockOnUnresolvedFindings(ctx, limit)
+			return a.blockOnUnresolvedFindings(limit)
 		}
 		prompt, err := repairPrompt(a.deliveredInvariants().Text(), a.state.ReviewSummary, a.state.ReviewFindingDetails, a.state.RepairAttempts+1, limit)
 		if err != nil {
@@ -1242,17 +1267,12 @@ func (a *activeRun) recordPathRefusal(refusal runstate.PathRefusal) {
 // hands control back to a development manager at this point; that role does not
 // exist yet, so the unresolved findings are recorded as a durable blocker on the
 // work item rather than disappearing along with the failed run.
-func (a *activeRun) blockOnUnresolvedFindings(ctx context.Context, limit int) error {
+func (a *activeRun) blockOnUnresolvedFindings(limit int) error {
 	cause := fmt.Errorf("independent review requires repair after %d of %d permitted attempt(s): %s",
 		a.state.RepairAttempts, limit, a.outcome.ReviewSummary)
-	// The blocker is what a human or a later manager acts on, so it is recorded
-	// on its own deadline rather than on a context this run may have exhausted.
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderBlockerNotes(a.outcome, limit)); err != nil {
+	if err := a.block(renderBlockerNotes(a.outcome, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -1260,16 +1280,13 @@ func (a *activeRun) blockOnUnresolvedFindings(ctx context.Context, limit int) er
 // still fails. It is the check-side twin of blockOnUnresolvedFindings: the run
 // cannot reach review or integration, so what stopped it is recorded on the work
 // item rather than disappearing along with the failed run.
-func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
+func (a *activeRun) blockOnFailingCheck(limit int) error {
 	failure := *a.state.CheckFailure
 	cause := fmt.Errorf("verification failed after %d of %d permitted attempt(s): %s exited with %d",
 		a.state.RepairAttempts, limit, failure.Command, failure.ExitCode)
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderCheckBlockerNotes(a.outcome, failure, limit)); err != nil {
+	if err := a.block(renderCheckBlockerNotes(a.outcome, failure, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -1279,15 +1296,12 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // defect: either the change keeps reaching for something outside its item, or the
 // item is missing a grant it should have had. The note names both possibilities,
 // because only a person can say which one it is.
-func (a *activeRun) blockOnRefusedPaths(ctx context.Context, refused pathRefusal, limit int) error {
+func (a *activeRun) blockOnRefusedPaths(refused pathRefusal, limit int) error {
 	cause := fmt.Errorf("protected paths refused after %d of %d permitted attempt(s): %s",
 		a.state.RepairAttempts, limit, strings.Join(refused.refusal.Paths, ", "))
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderPathRefusalBlockerNotes(a.outcome, refused, limit)); err != nil {
+	if err := a.block(renderPathRefusalBlockerNotes(a.outcome, refused, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the refused protected paths as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -1453,12 +1467,9 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 		blocked = errors.Join(blocked, recorded)
 	}
 	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, limit)); err != nil {
+	if err := a.block(renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -1699,7 +1710,7 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 		// immediately into the same refusal, over and over, with nothing bounding
 		// the attempts; a clock skew or a window the provider has not rolled yet
 		// is a fact for a person, not something to spin on.
-		return a.blockOnUsageLimit(ctx, fmt.Sprintf("it reports resetting at %s, which is not in the future",
+		return a.blockOnUsageLimit(fmt.Sprintf("it reports resetting at %s, which is not in the future",
 			limit.ResetsAt.UTC().Format(time.RFC3339)))
 	case wait > maximum.Duration()-spent:
 		// The budget covers the run, not one pause. Checking each wait on its own
@@ -1714,7 +1725,7 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 		if spent > 0 {
 			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
 		}
-		return a.blockOnUsageLimit(ctx, reason)
+		return a.blockOnUsageLimit(reason)
 	}
 	// The deadline becomes durable before the wait starts, so a process that dies
 	// during the wait honors the same deadline on restart rather than retrying
@@ -1764,7 +1775,7 @@ func (a *activeRun) pauseForServerOverload(ctx context.Context, overload backend
 		if spent > 0 {
 			reason += fmt.Sprintf(", and it has already committed %s to waiting", spent)
 		}
-		return a.blockOnUsageLimit(ctx, reason)
+		return a.blockOnUsageLimit(reason)
 	}
 	resetsAt := p.clock().Now().Add(wait).UTC()
 	a.state.UsageLimitResetsAt = &resetsAt
@@ -1806,7 +1817,7 @@ func (a *activeRun) awaitRecordedUsageLimit(ctx context.Context) error {
 	// says nothing about a run that has already spent everything it was allowed to
 	// spend waiting.
 	if a.state.UsageLimitPaused() > p.Config.Execution.UsageLimitMaxPause.Duration() {
-		return a.blockOnUsageLimit(ctx, fmt.Sprintf("this run has committed %s to waiting, which is past the %s maximum pause",
+		return a.blockOnUsageLimit(fmt.Sprintf("this run has committed %s to waiting, which is past the %s maximum pause",
 			a.state.UsageLimitPaused(), p.Config.Execution.UsageLimitMaxPause))
 	}
 	// The operator may have released this wait while no process was serving it,
@@ -1944,17 +1955,12 @@ func (a *activeRun) clearUsageLimitPause() error {
 // stopped the run is recorded on the work item and a person decides what to do
 // about it. It serves both refusals, because what is undecidable about them is
 // the same thing — how long to wait — whichever one asked.
-func (a *activeRun) blockOnUsageLimit(ctx context.Context, reason string) error {
+func (a *activeRun) blockOnUsageLimit(reason string) error {
 	cause := fmt.Errorf("this run was refused by %s and cannot wait for it: %s",
 		runstate.DescribePause(a.state.PauseCause, a.state.UsageLimitKind), reason)
-	// The blocker is what a person acts on, so it is recorded on its own deadline
-	// rather than on a context this run may have exhausted.
-	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderUsageLimitBlockerNotes(a.outcome, reason)); err != nil {
+	if err := a.block(renderUsageLimitBlockerNotes(a.outcome, reason)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the provider's refusal as a blocker: %w", err))
 	}
-	a.outcome.Blocked = true
 	return cause
 }
 
@@ -2835,6 +2841,15 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 			cause = errors.Join(cause, fmt.Errorf("record failed run outcome: %w", recordErr))
 		}
 	}
+	// A run that stopped on something a person has to decide reaches the
+	// development manager by being docketed as it ends, rather than by an
+	// operator noticing the item went quiet. The write is keyed to this
+	// stoppage, so a later sweep that walks past the same run adds nothing.
+	if a.pipeline.Docket != nil {
+		if _, err := a.pipeline.Docket.RecordStoppedRun(a.state); err != nil {
+			cause = errors.Join(cause, fmt.Errorf("docket the stopped run: %w", err))
+		}
+	}
 	// A failed attempt spent real money, so it is priced exactly as a successful
 	// one is. An item priced only by the run that finished it would be recorded
 	// at less than it cost, which is the whole reason the price is per item.
@@ -3133,6 +3148,15 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
+		// One round with a reviewer is a verdict, whichever way it went, and the
+		// count of them is what triage measures a work item against. It is counted
+		// here rather than derived from the repair attempts because the two are not
+		// the same number: a refused path and a failing check are handed back
+		// without anybody reviewing anything, and an approved change was reviewed
+		// without a repair at all. Unlike the verdict beside it, it is never
+		// cleared: what the next attempt discards is the judgement, not the fact
+		// that this work has been round once more.
+		a.state.ReviewRounds++
 	}
 	if reviewErr != nil {
 		return "", providerEvidence{

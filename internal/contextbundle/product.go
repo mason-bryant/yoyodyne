@@ -14,6 +14,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // defaultMaxProductBytes bounds the product context. It is larger than a work
@@ -25,6 +26,16 @@ const defaultMaxProductBytes = 512 << 10
 // maxProductWorkItems bounds how many work items are listed. Beads state is
 // evidence about what is in flight, not a full export of the tracker.
 const maxProductWorkItems = 200
+
+// maxDocketEntries bounds how many docket entries one context lists, and
+// maxTriageDocketBytes bounds what the section may cost whatever it lists. The
+// docket is evidence about what has stopped, not an export of everything that
+// ever did, and one entry carries a blocker, a reviewer's findings, and a
+// check's output — so the count alone would not bound the section.
+const (
+	maxDocketEntries     = 25
+	maxTriageDocketBytes = 48 << 10
+)
 
 // maxWorkItemTitleBytes keeps one tracker-supplied title to one line.
 const maxWorkItemTitleBytes = 160
@@ -133,6 +144,18 @@ type ProductRequest struct {
 	// that could run a command to find out would be reading the implementation
 	// rather than a description of it.
 	CommandHelp string
+	// TriageDocket is the work that has stopped moving: a run that ended on a
+	// durable blocker, and an approved publication the forge has not merged. It
+	// is supplied for the development manager alone, because deciding what
+	// becomes of stopped work is that role's, and it reaches the conversation the
+	// way the backlog reaches the product manager's — carried by the harness
+	// rather than by an operator who noticed. Every other role supplies none and
+	// the section is simply absent.
+	TriageDocket []triage.Entry
+	// TriageDocketUnavailable explains why the docket is missing when it is. A
+	// docket that could not be read is stated rather than silently rendered as a
+	// product where nothing has stopped.
+	TriageDocketUnavailable string
 	// RoleDocuments are the directories of documents this role reads beyond the
 	// specifications: the architect's designs and decision records, and whatever
 	// else a role needs to answer for what it owns. The product manager supplies
@@ -215,6 +238,11 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	header := productHeader(directory)
 	headerNote := longestRoleDocumentNote(roleDocuments)
 	trackerState := renderWorkItems(request.WorkItems, request.WorkItemsUnavailable)
+	// The docket is charged with the tracker state and for the same reason: what
+	// has stopped moving is current state of the work, and a large specifications
+	// directory must not be able to push it out. It is bounded by construction,
+	// so what it costs is what it renders.
+	triageDocket := renderTriageDocket(request.TriageDocket, request.TriageDocketUnavailable)
 	shippedSurface := renderShippedSurface(request.CommandHelp)
 	// The tracker section, the recorded-intent section, and what the shipped
 	// surface costs before any of its documents are read are reserved before any
@@ -222,7 +250,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// out the current state of the work, the answer to whether the product has a
 	// brief and goals at all, or the label saying what the documentation below is
 	// and is not.
-	reserved := len(header) + headerNote + len(trackerState) + maxRecordedIntentBytes + len(directory) +
+	reserved := len(header) + headerNote + len(trackerState) + len(triageDocket) + maxRecordedIntentBytes + len(directory) +
 		len(shippedSurface) + longestShippedDocumentationNote()
 	if reserved > maxBytes {
 		return Bundle{}, fmt.Errorf("product context is %d bytes before any specification, exceeding limit %d", reserved, maxBytes)
@@ -302,6 +330,7 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	output.WriteString(documentation)
 	output.WriteString(renderShippedDocumentationNote(documentation, documentationOmitted))
 	output.WriteString(trackerState)
+	output.WriteString(triageDocket)
 	if len(bundle.SpecificationProblems) > 0 {
 		output.WriteString(renderSpecificationProblems(bundle.SpecificationProblems))
 	}
@@ -1050,6 +1079,74 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 	}
 	return rendered.String()
 }
+
+// renderTriageDocket carries the work that has stopped moving into the
+// development manager's context. A role that was given no docket renders
+// nothing at all, which is what keeps this the development manager's section
+// rather than another thing every conversation reads past.
+//
+// It is bounded twice over — by how many entries it lists and by what the
+// section may cost — because a docket grows with everything that ever stopped
+// and a conversation's budget does not. The newest are listed first, so what
+// the bound cuts is the oldest stoppage rather than the latest one, and how
+// many were cut is stated: a docket read as complete when it is not is worse
+// than one that says what it could not show.
+func renderTriageDocket(entries []triage.Entry, unavailable string) string {
+	if len(entries) == 0 && strings.TrimSpace(unavailable) == "" {
+		return ""
+	}
+	var rendered strings.Builder
+	rendered.WriteString(triageDocketHeader)
+	if strings.TrimSpace(unavailable) != "" {
+		rendered.WriteString("The triage docket could not be read: " + singleLine(unavailable, 512) + "\n")
+		rendered.WriteString("Do not assume nothing has stopped; say that the docket could not be read.\n")
+		return rendered.String()
+	}
+	if len(entries) == 0 {
+		rendered.WriteString("Nothing has stopped: no run ended on a blocker and no publication is unmerged.\n")
+		return rendered.String()
+	}
+	ordered := make([]triage.Entry, len(entries))
+	for index, entry := range entries {
+		ordered[len(entries)-1-index] = entry
+	}
+	listed := 0
+	spent := rendered.Len()
+	for _, entry := range ordered {
+		if listed >= maxDocketEntries {
+			break
+		}
+		section := entry.Render()
+		if spent+len(section) > maxTriageDocketBytes {
+			break
+		}
+		rendered.WriteString(section)
+		spent += len(section)
+		listed++
+	}
+	if listed < len(ordered) {
+		fmt.Fprintf(&rendered, "\n%d further docket entry(s) are not listed here. Treat what you cannot see as unread rather than as absent.\n",
+			len(ordered)-listed)
+	}
+	return rendered.String()
+}
+
+const triageDocketHeader = `
+## Triage docket
+
+The work that has stopped moving, newest first. A run that ended on a durable
+blocker is here, and so is an approved publication the forge has not merged.
+Each entry carries the evidence as it was recorded rather than a summary of it:
+the blocker in the words it was recorded in, the reviewer's own findings, the
+check that was failing, the branch and worktree that were preserved, what the
+forge says about the merge, and what the work item has already spent against
+what it is allowed to spend.
+
+An entry states that something stopped. It does not decide what becomes of it,
+and nothing has: an entry stands until somebody decides. Read the counters
+before deciding one — an item that has reached its review-round cap is one no
+further repair may be granted to, whatever else the evidence argues for.
+`
 
 func renderSpecificationProblems(problems []SpecificationProblem) string {
 	var rendered strings.Builder

@@ -12,7 +12,11 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The conversation asks the repository and the tracker how old its picture is
@@ -305,3 +309,105 @@ func (r *scriptedRunner) Run(_ context.Context, command execution.Command, _ exe
 type stoppedClock struct{ at time.Time }
 
 func (c stoppedClock) Now() time.Time { return c.at }
+
+// The docket reaches the development manager by being gathered with everything
+// else the conversation opens with. Nobody has to carry it there, which is the
+// whole of what the goal this serves asks for.
+func TestGatherCarriesTheTriageDocketToTheDevelopmentManager(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedRunState(t)
+	ground := conversationGround{
+		runner:         &scriptedRunner{outputs: map[string]string{"bd": "[]", "git": "a1a1a1a1a1a1\n"}},
+		repository:     t.TempDir(),
+		specifications: "docs/product",
+		docket:         docketerOverRuns(t, stopped),
+		gitBinary:      "git",
+		timeout:        time.Second,
+	}
+	briefing, err := ground.Gather(context.Background())
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	for _, required := range []string{
+		"## Triage docket",
+		"[stopped run]",
+		"the repair budget was spent",
+		"Branch (preserved): yoyodyne/task/abc",
+	} {
+		if !strings.Contains(briefing.Text, required) {
+			t.Fatalf("briefing is missing %q:\n%s", required, briefing.Text)
+		}
+	}
+}
+
+// Every other role gathers no docket at all: deciding what becomes of stopped
+// work belongs to one role, and a section the reader cannot act on is one every
+// conversation pays for and reads past.
+func TestGatherCarriesNoDocketForARoleThatCannotActOnIt(t *testing.T) {
+	t.Parallel()
+
+	if docketer := conversationDocket(components{}, domain.RoleProductManager); docketer != nil {
+		t.Fatalf("the product manager was wired a triage docket")
+	}
+	ground := conversationGround{
+		runner:         &scriptedRunner{outputs: map[string]string{"bd": "[]", "git": "a1a1a1a1a1a1\n"}},
+		repository:     t.TempDir(),
+		specifications: "docs/product",
+		gitBinary:      "git",
+		timeout:        time.Second,
+	}
+	briefing, err := ground.Gather(context.Background())
+	if err != nil {
+		t.Fatalf("Gather() error = %v", err)
+	}
+	if strings.Contains(briefing.Text, "Triage docket") {
+		t.Fatalf("a role with no docket was given one:\n%s", briefing.Text)
+	}
+}
+
+// stoppedRunState records one run that ended on a durable blocker, which is
+// what a docket build has to find.
+func stoppedRunState(t *testing.T) *runstate.Store {
+	t.Helper()
+	store, err := runstate.NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	completed := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	state := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    "yoyodyne-task",
+		Backend:       domain.BackendClaudeCode,
+		Status:        runstate.StatusFailed,
+		Phase:         runstate.PhaseReviewing,
+		StartedAt:     completed.Add(-time.Hour),
+		UpdatedAt:     completed,
+		CompletedAt:   &completed,
+		WorktreePath:  "/state/worktrees/task",
+		Branch:        "yoyodyne/task/abc",
+		BaseCommit:    strings.Repeat("a", 40),
+		ReviewRounds:  3,
+		Blocker:       "Yoyodyne stopped this item: the repair budget was spent.",
+	}
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	return store
+}
+
+func docketerOverRuns(t *testing.T, runs *runstate.Store) *orchestrator.Docketer {
+	t.Helper()
+	docket, err := runstate.NewDocketStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewDocketStore() error = %v", err)
+	}
+	return &orchestrator.Docketer{
+		Docket: docket,
+		Runs:   runs,
+		Triage: config.Triage{StuckMergeAge: config.Duration(2 * time.Hour), ReviewRoundsCap: 4, RepairGrantAttempts: 2},
+	}
+}

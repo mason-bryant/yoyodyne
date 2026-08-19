@@ -81,6 +81,12 @@ type components struct {
 	// built beside the reports because it is durable in the same way and for the
 	// same reason: the argument outlives the run that made it.
 	amendments *runstate.AmendmentStore
+	// docket is the work that has stopped moving, waiting for the development
+	// manager to decide what becomes of it. It is built beside the reports for
+	// the same reason: an entry outlives the run that produced it, and a run
+	// whose artifacts have been cleaned up leaves a stoppage that is still
+	// somebody's to decide.
+	docket *runstate.DocketStore
 	// branchReviews is where verdicts on accumulated changes are recorded. It is
 	// its own store for the same reason: a branch review outlives every run whose
 	// work it judged, and it belongs to no one of them.
@@ -146,6 +152,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	docket, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	branchReviews, err := runstate.NewBranchReviewStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -180,6 +190,7 @@ func buildComponents(configPath string) (components, error) {
 		store:         store,
 		reports:       reports,
 		amendments:    amendments,
+		docket:        docket,
 		branchReviews: branchReviews,
 		directives:    directives,
 		holds:         holds,
@@ -277,7 +288,13 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// served is already recorded beside it. This is the join: as a run ends,
 		// the item it was for is priced across every run ever made for it, and the
 		// price is put where the tracker carries it.
-		Prices:       ledgerFrom(parts),
+		Prices: ledgerFrom(parts),
+		// Where a run that ends on a durable blocker is put in front of the
+		// development manager. It is wired here rather than delivered into a
+		// prompt for the same reason the directives are: what has stopped moving
+		// is a fact the harness records, and the role that decides about it is not
+		// the one that stopped.
+		Docket:       docketerFrom(parts),
 		NewRunID:     runstate.NewRunID,
 		Repository:   parts.repository,
 		Config:       cfg,
@@ -296,6 +313,17 @@ func ledgerFrom(parts components) cost.Ledger {
 	tracker := parts.tracker()
 	tracker.Timeout = costTrackerTimeout
 	return cost.Ledger{Prices: parts.store, Tracker: tracker}
+}
+
+// docketerFrom wires the triage docket over parts that are already built, so
+// the entries a run makes, the ones a sweep finds, and the docket a development
+// manager reads are one log rather than three.
+func docketerFrom(parts components) *orchestrator.Docketer {
+	return &orchestrator.Docketer{
+		Docket: parts.docket,
+		Runs:   parts.store,
+		Triage: parts.config.Triage,
+	}
 }
 
 func buildReconciler(configPath string) (orchestrator.Reconciler, error) {
@@ -322,6 +350,10 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 			Remote:       parts.config.Execution.Remote,
 			RedactValues: parts.redactValues,
 		},
+		// A run this sweep stops is docketed as it is settled, so a stoppage the
+		// process that made it never got to record still reaches the development
+		// manager.
+		Docket: docketerFrom(parts),
 	}
 }
 

@@ -19,6 +19,8 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // maxInteractionsBytes bounds how much of the tracker's own log is read to
@@ -52,9 +54,15 @@ type conversationGround struct {
 	// role is answering for documents it would otherwise have to be told the
 	// contents of by the operator.
 	roleDocuments []contextbundle.DocumentSet
-	gitBinary     string
-	clock         execution.Clock
-	timeout       time.Duration
+	// docket is the work that has stopped moving. It is wired for the
+	// development manager alone, because that is the role that decides what
+	// becomes of a stoppage, and gathering it is what puts the docket in front of
+	// that role without an operator carrying it there. Every other role leaves it
+	// nil and gathers no docket at all.
+	docket    *orchestrator.Docketer
+	gitBinary string
+	clock     execution.Clock
+	timeout   time.Duration
 }
 
 func newConversationGround(parts components, role domain.AgentRole) conversationGround {
@@ -63,10 +71,22 @@ func newConversationGround(parts components, role domain.AgentRole) conversation
 		repository:     parts.repository,
 		specifications: parts.config.Product.Specifications,
 		roleDocuments:  roleDocumentSets(role, parts.config.Product),
+		docket:         conversationDocket(parts, role),
 		gitBinary:      "git",
 		clock:          execution.RealClock{},
 		timeout:        chatTrackerTimeout,
 	}
+}
+
+// conversationDocket wires the triage docket for the role that decides about
+// what it carries, and for no other. A development manager is the only role
+// that can act on stopped work, and a docket delivered to a role that cannot is
+// a section every conversation pays for and reads past.
+func conversationDocket(parts components, role domain.AgentRole) *orchestrator.Docketer {
+	if role != domain.RoleDevelopmentManager {
+		return nil
+	}
+	return docketerFrom(parts)
 }
 
 // roleDocumentSets names the documents a role reads beyond the specifications.
@@ -110,12 +130,18 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 		unavailable = listErr.Error()
 		briefing.Problems = append(briefing.Problems, fmt.Sprintf("Beads state is unavailable, continuing without it: %v", listErr))
 	}
+	docket, docketUnavailable, docketProblem := g.triageDocket()
+	if docketProblem != "" {
+		briefing.Problems = append(briefing.Problems, docketProblem)
+	}
 	bundle, err := contextbundle.AssembleProduct(contextbundle.ProductRequest{
 		RepositoryRoot:          g.repository,
 		SpecificationsDirectory: g.specifications,
 		RoleDocuments:           g.roleDocuments,
 		WorkItems:               items,
 		WorkItemsUnavailable:    unavailable,
+		TriageDocket:            docket,
+		TriageDocketUnavailable: docketUnavailable,
 		CommandHelp:             commandHelp(),
 	})
 	if err != nil {
@@ -137,6 +163,31 @@ func (g conversationGround) Gather(ctx context.Context) (chat.Briefing, error) {
 		briefing.Commit = commit
 	}
 	return briefing, nil
+}
+
+// triageDocket builds the docket and reports what it found: the entries, why
+// there are none when reading them failed, and a problem to tell the operator
+// about. Building it is a scan rather than an event, which is the whole reason
+// it happens here — the harness has no scheduled process, so a publication the
+// forge quietly never merged is found when somebody who can act on it opens a
+// conversation, and the configured stuck-merge age is a floor rather than a
+// promise about when that happens.
+//
+// A docket that could only be built in part still reaches the conversation. The
+// entries that were found are exactly the ones somebody needs, and the problem
+// is reported beside them rather than instead of them.
+func (g conversationGround) triageDocket() (entries []triage.Entry, unavailable, problem string) {
+	if g.docket == nil {
+		return nil, "", ""
+	}
+	built, err := g.docket.Build()
+	if err == nil {
+		return built.Entries, "", ""
+	}
+	if len(built.Entries) == 0 {
+		return nil, err.Error(), fmt.Sprintf("the triage docket could not be read, continuing without it: %v", err)
+	}
+	return built.Entries, "", fmt.Sprintf("the triage docket is incomplete: %v", err)
 }
 
 // Movement reports what the repository and the tracker have done since a
