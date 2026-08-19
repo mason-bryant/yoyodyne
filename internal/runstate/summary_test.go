@@ -87,6 +87,7 @@ func TestHistoryKeepsBookkeepingFailuresApartFromTheRunsOwn(t *testing.T) {
 	state := integratedState(t, PhaseCleaningUp)
 	state.CleanupFailure = "remove worktree: directory is busy"
 	state.PublishFailure = "push branch: remote rejected"
+	state.CompletionRecordingFailure = "save completed run state after cleanup: disk full"
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
@@ -102,7 +103,8 @@ func TestHistoryKeepsBookkeepingFailuresApartFromTheRunsOwn(t *testing.T) {
 	if reported.Failed() || reported.Failure != "" {
 		t.Fatalf("an integrated run with unfinished cleanup reads as failed: %#v", reported)
 	}
-	if reported.CleanupFailure != state.CleanupFailure || reported.PublishFailure != state.PublishFailure {
+	if reported.CleanupFailure != state.CleanupFailure || reported.PublishFailure != state.PublishFailure ||
+		reported.CompletionRecordingFailure != state.CompletionRecordingFailure {
 		t.Fatalf("bookkeeping failures = %#v", reported)
 	}
 	// Cleanup that did not finish is exactly what still owes somebody a step.

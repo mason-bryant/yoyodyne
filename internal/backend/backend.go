@@ -197,6 +197,9 @@ func (r RunResult) DescribeFailure() string {
 // boundFailureDetail folds the provider's message into one bounded line, so a
 // final reply that runs to pages becomes a reason somebody can read rather than
 // the body of a work item note.
+// boundFailureDetail and internal/cli's singleLine share the same
+// walk-back-to-a-rune-start fold with different bounds (512 bytes here, 160
+// there); a fix to either almost certainly belongs in both.
 func boundFailureDetail(detail string) string {
 	folded := strings.Join(strings.Fields(detail), " ")
 	if len(folded) <= maxFailureDetailBytes {

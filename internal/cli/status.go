@@ -277,8 +277,11 @@ kept. Naming an item reports only its runs.
 
 Each recorded reason is printed under the run and named for what it is. Only
 "reason" says the work itself failed; an outstanding publication, an outstanding
-cleanup, and a failing check are things recorded around the work, and a run can
-carry one of those with its change already promoted.
+cleanup, a failing check, and a completion recorded late are things recorded
+around the work, and a run can carry one of those with its change already
+promoted. The last is the class whose work-item note is itself unreliable —
+recording that note is part of what was failing — so this listing is its
+authoritative home.
 
 Reading a run decides nothing about it, so this holds nothing and settles
 nothing, and reporting a failure is not itself a failure: the exit status says

@@ -1991,8 +1991,8 @@ the marker is never left for you to go and interpret out of the run's JSON.
 marker is said only of finished runs: one still in flight owes its own remaining
 steps by definition.
 
-The listing folds each reason onto one line and cuts it at 160 characters with
-an ellipsis, so a reviewer's whole verdict does not become the listing;
+The listing folds each reason onto one line and bounds it at 160 bytes with
+an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;
 `--json` carries what the record holds in full, along with the same figures.
 
 Cost comes from the same recorded evidence [`yoyo cost`](#what-the-work-cost)

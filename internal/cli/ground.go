@@ -304,6 +304,9 @@ const maxSingleLineBytes = 160
 // falls on a rune boundary and is marked, because what is folded here is prose
 // somebody wrote — this repository's own em dashes among it — and half a rune is
 // not a shorter reason but a broken one.
+// singleLine and internal/backend's boundFailureDetail share the same
+// walk-back-to-a-rune-start fold with different bounds (160 bytes here, 512
+// there); a fix to either almost certainly belongs in both.
 func singleLine(value string) string {
 	folded := strings.Join(strings.Fields(value), " ")
 	if len(folded) <= maxSingleLineBytes {
