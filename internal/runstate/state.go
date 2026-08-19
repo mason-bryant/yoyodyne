@@ -32,7 +32,10 @@ import (
 // means no user directive ever held this run up, which is what every run
 // written before directives were enforced meant. The operator hold a run parked
 // on is the last of them: absent means the operator never held this run, which
-// is what every run written before the hold existed meant.
+// is what every run written before the hold existed meant. Why a run was
+// selected is the newest of them and behaves identically: absent means nothing
+// accounted for the choice, which is what every run written before selections
+// were recorded meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -334,7 +337,12 @@ type State struct {
 	ProductID     domain.ProductID `json:"product_id"`
 	RepositoryID  string           `json:"repository_id"`
 	WorkItemID    string           `json:"work_item_id"`
-	Backend       domain.Backend   `json:"backend"`
+	// Selection is why the harness is running this item: who chose it and on
+	// what grounds. It is written when the run is reserved and never rewritten.
+	// Absent means nothing accounted for the choice, which is not the same as a
+	// choice with no reason and is reported as such.
+	Selection *Selection     `json:"selection,omitempty"`
+	Backend   domain.Backend `json:"backend"`
 	// ProviderSessionID is the developer session. The reviewer's session is
 	// recorded separately because the two are always distinct invocations.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
@@ -579,6 +587,11 @@ func (s State) Validate() error {
 		}
 		if s.HarnessCommit == s.BaseCommit {
 			problems = append(problems, errors.New("harness_commit cannot be the base commit, which proves no commit was made"))
+		}
+	}
+	if s.Selection != nil {
+		if err := s.Selection.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("selection: %w", err))
 		}
 	}
 	if s.Phase != "" && !s.Phase.Valid() {

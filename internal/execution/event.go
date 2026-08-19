@@ -61,6 +61,13 @@ const (
 	EventWorkFinished EventType = "work.finished"
 	EventWorkStopped  EventType = "work.stopped"
 	EventWorkDirected EventType = "work.directed"
+	// The operator's hold on the work the harness chooses for itself passes
+	// through a conversation the same way. It lives in the product's own record
+	// and is enforced from there, so these say only that the operator placed or
+	// lifted it here — which is the thing that would otherwise be missing from an
+	// account of a queue that suddenly stopped moving.
+	EventIntakeHeld     EventType = "intake.held"
+	EventIntakeReleased EventType = "intake.released"
 	// A conversation's picture of the repository and the tracker is taken once
 	// and can be taken again on the operator's instruction. The refresh is
 	// recorded because it changes what the agent is reasoning from, which is

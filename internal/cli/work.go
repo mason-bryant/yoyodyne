@@ -42,8 +42,12 @@ var backlogStatuses = []string{"open", "blocked"}
 // read. Nothing here is a second path to development — it is the existing one,
 // reachable from the conversation the operator is already in.
 type conversationWork struct {
-	tracker    beads.Client
-	store      *runstate.Store
+	tracker beads.Client
+	store   *runstate.Store
+	// productID is what a record this conversation writes beside a run has to
+	// name. The store knows its own product, and a record it will not accept from
+	// the wrong one is exactly why this is carried rather than assumed.
+	productID  domain.ProductID
 	pipeline   orchestrator.Pipeline
 	reconciler orchestrator.Reconciler
 	// timeout bounds one tracker command taken on the conversation's behalf, so
@@ -55,6 +59,7 @@ func newConversationWork(parts components) conversationWork {
 	return conversationWork{
 		tracker:    parts.tracker(),
 		store:      parts.store,
+		productID:  parts.config.Product.ID,
 		pipeline:   pipelineFrom(parts),
 		reconciler: reconcilerFrom(parts),
 		timeout:    chatTrackerTimeout,
@@ -121,7 +126,16 @@ func (w conversationWork) Survey(ctx context.Context) (chat.Survey, error) {
 		survey.Unavailable = append(survey.Unavailable, chat.Unread{Group: chat.InFlightGroup(), Reason: err.Error()})
 	}
 	for _, state := range incomplete {
-		survey.InFlight = append(survey.InFlight, snapshotOf(state))
+		snapshot := snapshotOf(state)
+		// Whether the operator has already asked this run to stop is read beside the
+		// run, because that is where they wrote it. A request nobody could read is
+		// left out of the snapshot rather than failing the survey: what is in flight
+		// is still worth reading, and the run says the same thing about itself once
+		// it honors the request.
+		if _, requested, err := w.store.StopRequested(state.RunID); err == nil {
+			snapshot.StopRequested = requested
+		}
+		survey.InFlight = append(survey.InFlight, snapshot)
 	}
 	for _, group := range surveyedStatuses {
 		items, err := w.list(ctx, group.status)
@@ -172,9 +186,30 @@ func (w conversationWork) Backlog(ctx context.Context) (backlog.Queue, error) {
 // Run executes one work item through the pipeline. The outcome is reported even
 // when the run failed, because a failed run's branch, worktree, and blocker are
 // what the operator decides about next.
-func (w conversationWork) Run(ctx context.Context, workItemID string) (chat.RunReport, error) {
-	outcome, err := w.pipeline.Run(ctx, workItemID)
+func (w conversationWork) Run(ctx context.Context, workItemID string, selection chat.Selection) (chat.RunReport, error) {
+	// The pipeline is a value, so the selection is set on this run's copy of it
+	// and reaches the run state without becoming a property of the conversation:
+	// two runs started from one conversation record why each of them was started.
+	pipeline := w.pipeline
+	pipeline.Selection = runstate.Selection{By: selection.By, Reason: selection.Reason}
+	outcome, err := pipeline.Run(ctx, workItemID)
 	return runReportOf(outcome), err
+}
+
+// RequestStop records the operator's decision that one run should stop, where
+// the process working on that run reads it. It never adopts the run and never
+// takes its lease: the process holding it is the only thing entitled to end it,
+// and taking the lease to stop a run would be this process deciding something
+// about work it is not doing.
+func (w conversationWork) RequestStop(_ context.Context, request chat.StopRequest) error {
+	return w.store.RecordStop(runstate.StopRequest{
+		SchemaVersion: runstate.StopSchemaVersion,
+		ProductID:     w.productID,
+		RunID:         request.RunID,
+		WorkItemID:    request.WorkItemID,
+		RequestedAt:   time.Now().UTC(),
+		Reason:        request.Reason,
+	})
 }
 
 // Progress reports where the most recent recorded run of a work item has got
@@ -301,6 +336,13 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 		Phase:      string(state.Phase),
 		Branch:     state.Branch,
 		StartedAt:  state.StartedAt,
+	}
+	// Why the item was chosen comes from what the run recorded when it started. A
+	// run that recorded nothing leaves both fields empty, and a survey says so in
+	// those words rather than showing a blank line where a reason should be.
+	if state.Selection != nil {
+		snapshot.SelectedBy = state.Selection.By
+		snapshot.SelectedBecause = state.Selection.Reason
 	}
 	switch {
 	case state.DirectivePause != nil:
@@ -460,6 +502,14 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	if outcome.PausedByOperator != nil {
 		heldAt := outcome.PausedByOperator.HeldAt
 		report.OperatorHeldSince = &heldAt
+	}
+	// A held intake is carried the same way, with the reason beside it: unlike the
+	// hold over spending, this one is usually placed because something looked
+	// wrong, and what that was is the whole of what makes it actionable later.
+	if outcome.PausedByIntake != nil {
+		heldAt := outcome.PausedByIntake.HeldAt
+		report.IntakeHeldSince = &heldAt
+		report.IntakeHoldReason = outcome.PausedByIntake.Reason
 	}
 	return report
 }

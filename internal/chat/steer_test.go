@@ -647,7 +647,7 @@ func TestAnUnstoppableRunIsReportedRatherThanDescribedAsStopped(t *testing.T) {
 	if err := session.StartWork(context.Background(), "yoyodyne-1"); err != nil {
 		t.Fatalf("StartWork() error = %v", err)
 	}
-	stopped, err := session.StopWork(context.Background(), "enough")
+	stopped, err := session.StopWork(context.Background(), "", "enough")
 	if err == nil || !strings.Contains(err.Error(), "has not given up") {
 		t.Fatalf("StopWork() error = %v", err)
 	}
@@ -720,7 +720,7 @@ func TestStoppingARunThatAlreadyFinishedDoesNotClaimItWasStopped(t *testing.T) {
 			if err := session.StartWork(context.Background(), "yoyodyne-1"); err != nil {
 				t.Fatalf("StartWork() error = %v", err)
 			}
-			stopped, err := session.StopWork(context.Background(), "never mind")
+			stopped, err := session.StopWork(context.Background(), "", "never mind")
 			if err != nil {
 				t.Fatalf("StopWork() error = %v", err)
 			}
@@ -774,7 +774,7 @@ func TestStoppingAPausedRunRecordsTheStopAndSaysItIsPreserved(t *testing.T) {
 	if err := session.StartWork(context.Background(), "yoyodyne-1"); err != nil {
 		t.Fatalf("StartWork() error = %v", err)
 	}
-	stopped, err := session.StopWork(context.Background(), "we are not waiting for that")
+	stopped, err := session.StopWork(context.Background(), "", "we are not waiting for that")
 	if err != nil {
 		t.Fatalf("StopWork() error = %v", err)
 	}
@@ -912,6 +912,14 @@ type fakeWork struct {
 	queue      backlog.Queue
 	backlogErr error
 	started    []string
+	// selections records why each run was started, so "the run says who chose it"
+	// is an assertion rather than a claim.
+	selections []Selection
+	// stops records every run this was asked to stop, in order, and stopErr
+	// refuses the request, which is what an operator has to be told about rather
+	// than left believing a run is stopping.
+	stops      []StopRequest
+	stopErr    error
 	report     RunReport
 	runErr     error
 	changes    RunChanges
@@ -925,16 +933,19 @@ type fakeWork struct {
 	priceErr    error
 	pricesAsked []string
 	// progress is the readings a watcher gets from the run's record, in order,
-	// and progressAsked is every item it was asked about.
-	progress      []RunProgress
-	progressAsked []string
-	progressErr   error
-	notes         [][2]string
-	directErr     error
-	settlements   []Settlement
-	settleErr     error
-	settles       int
-	cancelled     bool
+	// and progressAsked is every item it was asked about. progressByItem answers
+	// per item instead, which is what a test with several runs in flight needs:
+	// one queue of readings cannot say different things about different items.
+	progress       []RunProgress
+	progressByItem map[string]RunProgress
+	progressAsked  []string
+	progressErr    error
+	notes          [][2]string
+	directErr      error
+	settlements    []Settlement
+	settleErr      error
+	settles        int
+	cancelled      bool
 	// gate holds every run until a test releases it, so a run can be observed
 	// in flight. A nil gate finishes at once.
 	gate chan struct{}
@@ -955,9 +966,10 @@ func (f *fakeWork) Backlog(context.Context) (backlog.Queue, error) {
 	return f.queue, f.backlogErr
 }
 
-func (f *fakeWork) Run(ctx context.Context, workItemID string) (RunReport, error) {
+func (f *fakeWork) Run(ctx context.Context, workItemID string, selection Selection) (RunReport, error) {
 	f.mu.Lock()
 	f.started = append(f.started, workItemID)
+	f.selections = append(f.selections, selection)
 	gate, ignoreCancel := f.gate, f.ignoreCancel
 	f.mu.Unlock()
 	if gate != nil {
@@ -979,6 +991,19 @@ func (f *fakeWork) Run(ctx context.Context, workItemID string) (RunReport, error
 	report := f.report
 	report.WorkItemID = workItemID
 	return report, f.runErr
+}
+
+// RequestStop records that a run was asked to stop. It changes nothing else:
+// what a real one does is write a file another process reads, and what that
+// process then does shows up in the progress readings rather than here.
+func (f *fakeWork) RequestStop(_ context.Context, request StopRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.stopErr != nil {
+		return f.stopErr
+	}
+	f.stops = append(f.stops, request)
+	return nil
 }
 
 func (f *fakeWork) Changes(_ context.Context, workItemID string) (RunChanges, error) {
@@ -1028,6 +1053,9 @@ func (f *fakeWork) Progress(_ context.Context, workItemID string) (RunProgress, 
 	if f.progressErr != nil {
 		return RunProgress{}, f.progressErr
 	}
+	if reading, recorded := f.progressByItem[workItemID]; recorded {
+		return reading, nil
+	}
 	if len(f.progress) == 0 {
 		return RunProgress{}, errors.New("no run has been recorded for " + workItemID)
 	}
@@ -1049,6 +1077,14 @@ func (f *fakeWork) startedRuns() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.started...)
+}
+
+// stopRequests reports every run this was asked to stop, so "the run somewhere
+// else was asked rather than something being cancelled here" is an assertion.
+func (f *fakeWork) stopRequests() []StopRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]StopRequest(nil), f.stops...)
 }
 
 func (f *fakeWork) takenNotes() [][2]string {
@@ -1557,7 +1593,10 @@ func TestASingleMessageCarriesOutCommandsInsteadOfSayingThemToTheProductManager(
 	}{
 		{line: "/work yoyodyne-ifd.70", want: "yoyo run <beads-id>"},
 		{line: "/wait", want: "never started one"},
-		{line: "/stop enough", want: "never started one"},
+		// Only the bare form is about a run this process started. Naming an item
+		// reads durable state and asks whichever process holds it, so it means the
+		// same thing here as in a conversation and is carried out below.
+		{line: "/stop", want: "never started one"},
 		{line: "/exit", want: "a single message is not one"},
 	} {
 		var refused strings.Builder

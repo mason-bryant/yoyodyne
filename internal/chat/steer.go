@@ -31,7 +31,11 @@ const commandHelp = `Commands the harness carries out for you:
   /refresh                    re-read the repository and tracker into this conversation
   /work <beads-id>            run one work item now, while you keep talking
   /wait                       wait for the run this conversation started and report it
-  /stop [reason]              stop the run this conversation started and settle what it left
+  /stop [beads-id] [reason]   stop one item's run wherever it is running, and settle what it left
+  /hold [reason]              stop the harness starting anything more on its own; running work carries on
+  /release                    let the harness start work on its own again
+  /intake                     whether the harness may start work on its own, and why not
+  /stop-everything [reason]   hold intake and stop every run in flight, settling what each left
   /redirect <beads-id> <what to do differently>
                               record direction on an item, stopping it first if it is running
   /directives                 what you have directed, and what is still unresolved
@@ -67,8 +71,8 @@ func IsCommand(line string) bool {
 // instead rather than half-carried-out.
 func (s *Session) Command(ctx context.Context, line string, out io.Writer) error {
 	trimmed := strings.TrimSpace(line)
-	name, _, _ := strings.Cut(trimmed, " ")
-	if why := needsConversation(strings.ToLower(name)); why != "" {
+	name, argument, _ := strings.Cut(trimmed, " ")
+	if why := needsConversation(strings.ToLower(name), strings.TrimSpace(argument)); why != "" {
 		return fmt.Errorf("%s %s", strings.ToLower(name), why)
 	}
 	// Only /exit and /quit end the loop, and both are refused above, so there is
@@ -81,14 +85,22 @@ func (s *Session) Command(ctx context.Context, line string, out io.Writer) error
 // what does the same job from a command line. Everything it does not name is
 // either read-only or durable, and answers a single message exactly as it
 // answers a conversation.
-func needsConversation(name string) string {
+func needsConversation(name, argument string) string {
 	switch name {
 	case "/exit", "/quit":
 		return "ends a conversation, and a single message is not one"
 	case "/work":
 		return "runs a work item in the background of the conversation that started it, and this process exits before such a run could finish; `yoyo run <beads-id>` runs one from a command line"
-	case "/wait", "/stop":
+	case "/wait":
 		return "acts on the run the conversation started, and a single message never started one"
+	case "/stop":
+		// Stopping a named item reads durable state and asks whichever process is
+		// working on it, so it means exactly the same thing in a single message as
+		// it does in a conversation. Only the bare form is about a run this process
+		// started, and a single message never started one.
+		if argument == "" {
+			return "with no work item acts on the run the conversation started, and a single message never started one; name the item to stop, as /stop <beads-id>"
+		}
 	}
 	return ""
 }
@@ -119,6 +131,10 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		// below is describing a queue that is not moving, and why it is not moving
 		// is the first thing the operator has to be told.
 		fmt.Fprint(out, s.operatorHoldBanner())
+		// A held intake leads for the same reason, and after the pause because it is
+		// the narrower fact: a harness that is paused is not choosing work either,
+		// and saying so twice at the top would bury the difference between them.
+		fmt.Fprint(out, s.intakeBanner())
 		survey, err := s.SurveyWork(ctx)
 		if err != nil {
 			return false, err
@@ -204,11 +220,52 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		s.printFinishedRun(out, finished, err)
 		return false, nil
 	case "/stop":
-		stopped, err := s.StopWork(ctx, argument)
+		// The first word is the item when it names something in flight, and part of
+		// the reason otherwise, so `/stop` and `/stop because it is looping` both
+		// still mean the run this conversation started.
+		id, reason := s.readStopArgument(ctx, argument)
+		stopped, err := s.StopWork(ctx, id, reason)
 		fmt.Fprint(out, stopped.Render())
 		if err != nil {
 			return false, err
 		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/stop-everything":
+		// What was achieved is printed before any failure, because holding intake
+		// and stopping four of five runs is most of what was asked for: reporting it
+		// as a failed command would send the operator to do it all again.
+		stopped, err := s.StopEverything(ctx, argument)
+		fmt.Fprint(out, stopped.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/hold":
+		// A hold is durable the moment it is placed, so what it achieved is printed
+		// before any failure that followed, for the same reason a directive's is.
+		intake, err := s.HoldIntake(argument)
+		fmt.Fprint(out, intake.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/release":
+		intake, err := s.ReleaseIntake()
+		fmt.Fprint(out, intake.Render())
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprintln(out)
+		return false, nil
+	case "/intake":
+		intake, err := s.ReadIntake()
+		if err != nil {
+			return false, err
+		}
+		fmt.Fprint(out, intake.Render())
 		fmt.Fprintln(out)
 		return false, nil
 	case "/redirect":
@@ -256,6 +313,42 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 	default:
 		return false, fmt.Errorf("%s is not a command; /help lists what this conversation understands", name)
 	}
+}
+
+// readStopArgument separates the item a stop names from the reason for it.
+//
+// It has to be decided rather than parsed, because a Beads identifier is a word
+// and so is the first word of a sentence: "enough" is a syntactically perfect
+// identifier, so shape alone cannot tell `/stop enough` — a reason for the run
+// this conversation started — from `/stop yoyodyne-ifd.26`, an item somewhere
+// else. What separates them is the world rather than the grammar, so the first
+// word is taken as an item when it names something the harness actually has in
+// flight, and as prose otherwise.
+//
+// A survey that cannot be read decides nothing here. The reading falls through
+// to the same answer it would have reached without it, and whichever path the
+// stop then takes reports its own failure rather than this inventing one.
+func (s *Session) readStopArgument(ctx context.Context, argument string) (string, string) {
+	trimmed := strings.TrimSpace(argument)
+	first, rest, _ := strings.Cut(trimmed, " ")
+	if first == "" || beads.ValidateIssueID(first) != nil {
+		return "", trimmed
+	}
+	if survey, err := s.SurveyWork(ctx); err == nil {
+		for _, run := range survey.InFlight {
+			if run.WorkItemID == first {
+				return first, strings.TrimSpace(rest)
+			}
+		}
+	}
+	// Nothing in flight answers to it. A conversation with a run of its own is
+	// almost certainly being given a reason for that run, which is what this
+	// command has always meant; one without is being named an item, and the stop
+	// says plainly that nothing is in flight for it.
+	if _, _, running := s.RunningWork(); running {
+		return "", trimmed
+	}
+	return first, strings.TrimSpace(rest)
 }
 
 // attention is how the run this conversation started interrupts the prompt, or
@@ -502,13 +595,22 @@ func (s *Session) StartWork(ctx context.Context, workItemID string) error {
 		wake:       make(chan struct{}, 1),
 	}
 	work := s.options.Work
+	// The operator named the item, so that is what the run records as why it
+	// exists. It names the conversation and the turn for the same reason a stopped
+	// item's note does: what shows up in a survey afterwards has to trace back to
+	// the intent that started it.
+	selection := Selection{
+		By: OperatorSelected,
+		Reason: fmt.Sprintf("the operator ran this item by name from product-manager conversation %s, after turn %d",
+			s.state.ConversationID, s.state.Turns),
+	}
 	go func() {
 		// The run ending is itself something the operator is waiting to hear, so
 		// it asks for their attention the same way a crossing does — after done
 		// is closed, so whoever it wakes finds a run that has actually ended.
 		defer run.signal()
 		defer close(run.done)
-		run.report, run.err = work.Run(runContext, id)
+		run.report, run.err = work.Run(runContext, id, selection)
 	}()
 	// The run is watched only where the console can say something about it
 	// without disturbing the operator. A stream has no moment at which it could:
@@ -573,21 +675,329 @@ func (s *Session) WaitForWork(ctx context.Context) (*FinishedRun, error) {
 	return s.CollectWork()
 }
 
-// StopWork stops the run this conversation started. It can only stop a run this
-// process owns: a run another process holds is that process's to stop, and a
-// survey names it rather than this pretending otherwise.
-func (s *Session) StopWork(ctx context.Context, reason string) (Stopped, error) {
+// StopWork stops one item's run. Naming nothing means the run this conversation
+// started, which is what it has always meant; naming an item stops that item's
+// run wherever it is running, including in a process this conversation has
+// nothing to do with.
+//
+// The two paths differ only in who does the cancelling. A run this process owns
+// is cancelled here and settled here. A run somewhere else is asked to stop,
+// which it does at its next provider call, and this waits for that to happen so
+// it can say what actually became of it — never that it stopped something it
+// only asked about.
+func (s *Session) StopWork(ctx context.Context, workItemID, reason string) (Stopped, error) {
 	if s.options.Work == nil {
 		return Stopped{}, errNoWork
-	}
-	if s.active == nil {
-		return Stopped{}, errors.New("this conversation is not running anything to stop; /status shows what the harness has in flight")
 	}
 	trimmed := strings.TrimSpace(reason)
 	if len(trimmed) > MaxOperatorMessageBytes {
 		return Stopped{}, fmt.Errorf("stop reason is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
 	}
-	return s.stopActive(ctx, s.stopNote(trimmed))
+	id := strings.TrimSpace(workItemID)
+	if id == "" {
+		if s.active == nil {
+			return Stopped{}, errors.New("this conversation is not running anything to stop; name the item to stop, as /stop <beads-id>, and /status shows what the harness has in flight")
+		}
+		return s.stopActive(ctx, s.stopNote(trimmed))
+	}
+	if err := beads.ValidateIssueID(id); err != nil {
+		return Stopped{}, err
+	}
+	if running, _, ok := s.RunningWork(); ok && running == id {
+		return s.stopActive(ctx, s.stopNote(trimmed))
+	}
+	return s.stopTracked(ctx, id, trimmed)
+}
+
+// StopEverything stops all the work there is: it holds intake so nothing more is
+// started, and then stops every run the harness has in flight, whichever process
+// is carrying each one. The order is deliberate — holding first is what stops
+// this becoming a race against a development manager starting the next item
+// while the last one is being stopped.
+//
+// It reports what happened to each run rather than what was asked of it, and one
+// run that could not be stopped never hides the others: an operator who reached
+// for this needs to know which of them is still going.
+func (s *Session) StopEverything(ctx context.Context, reason string) (Everything, error) {
+	if s.options.Work == nil {
+		return Everything{}, errNoWork
+	}
+	trimmed := strings.TrimSpace(reason)
+	if len(trimmed) > MaxOperatorMessageBytes {
+		return Everything{}, fmt.Errorf("stop reason is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
+	}
+	stopped := Everything{}
+	var problems []error
+	// Intake is held first and its failure does not stop the rest. Failing here
+	// would leave every run in flight untouched over a switch, which is the
+	// opposite of what somebody reaching for this verb wants.
+	if s.options.Intake != nil {
+		intake, err := s.HoldIntake(trimmed)
+		stopped.Intake = &intake
+		if err != nil {
+			problems = append(problems, err)
+		}
+	}
+	survey, err := s.SurveyWork(ctx)
+	if err != nil {
+		// Without the survey there is no list of runs to stop, so this is the one
+		// failure that ends the verb. What was already done — the hold — is reported
+		// with it rather than lost.
+		return stopped, errors.Join(append(problems, err)...)
+	}
+	// The run this conversation started is stopped through the path that owns it,
+	// because cancelling it here is faster and surer than asking it to notice a
+	// file. Everything else is asked.
+	if running, _, ok := s.RunningWork(); ok {
+		one, err := s.stopActive(ctx, s.stopNote(trimmed))
+		stopped.Stopped = append(stopped.Stopped, one)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("stop %s: %w", running, err))
+		}
+	}
+	for _, run := range survey.InFlight {
+		if stopped.covers(run.WorkItemID) {
+			continue
+		}
+		one, err := s.stopRun(ctx, run, trimmed)
+		stopped.Stopped = append(stopped.Stopped, one)
+		if err != nil {
+			problems = append(problems, fmt.Errorf("stop %s: %w", run.WorkItemID, err))
+		}
+	}
+	return stopped, errors.Join(problems...)
+}
+
+// Everything is what stopping everything achieved: what became of intake, and
+// what became of each run that was in flight when it started.
+type Everything struct {
+	// Intake is what holding intake did, and is absent from a conversation with
+	// no intake switch wired to it. Absent means nothing was held, so nothing
+	// claims it was.
+	Intake  *IntakeReport `json:"intake,omitempty"`
+	Stopped []Stopped     `json:"stopped,omitempty"`
+}
+
+// covers reports an item already accounted for, so a run this conversation
+// started is never also asked to stop from the survey listing.
+func (e Everything) covers(workItemID string) bool {
+	for _, stopped := range e.Stopped {
+		if stopped.WorkItemID == workItemID {
+			return true
+		}
+	}
+	return false
+}
+
+// Render describes what stopping everything did. It says the whole of it: the
+// hold, every run it stopped, and every run it only asked.
+func (e Everything) Render() string {
+	var rendered strings.Builder
+	if e.Intake != nil {
+		rendered.WriteString(e.Intake.Render())
+	}
+	if len(e.Stopped) == 0 {
+		rendered.WriteString("nothing was in flight, so no run was stopped.\n")
+		return rendered.String()
+	}
+	for _, stopped := range e.Stopped {
+		rendered.WriteString(stopped.Render())
+	}
+	return rendered.String()
+}
+
+// stopTracked stops the run in flight for one item, from outside the process
+// working on it. It finds the run by reading rather than by holding anything: a
+// run another process owns is that process's to end, so what happens here is a
+// request, a wait, and an honest account of what the wait found.
+func (s *Session) stopTracked(ctx context.Context, workItemID, reason string) (Stopped, error) {
+	survey, err := s.SurveyWork(ctx)
+	if err != nil {
+		return Stopped{}, err
+	}
+	for _, run := range survey.InFlight {
+		if run.WorkItemID == workItemID {
+			return s.stopRun(ctx, run, reason)
+		}
+	}
+	// Nothing is in flight for the item. That is usually because the work is over,
+	// and saying which is worth more than refusing: an operator who typed this was
+	// looking at something, and "it finished" and "the harness has never run it"
+	// are different answers.
+	if progress, err := s.options.Work.Progress(ctx, workItemID); err == nil {
+		return Stopped{}, fmt.Errorf("nothing is in flight for %s, so there is nothing to stop; its last run %s ended with status %s",
+			workItemID, progress.RunID, progress.Status)
+	}
+	return Stopped{}, fmt.Errorf("nothing is in flight for %s, so there is nothing to stop; /status shows what is", workItemID)
+}
+
+// stopRun asks one recorded run to stop and reports what became of it.
+//
+// The request is recorded before it is made, so a process that dies while
+// carrying it out leaves evidence that the operator asked. Then it waits, and
+// what it waits for is the run's own record going terminal — which is the run
+// itself saying it has ended, rather than this concluding anything on its
+// behalf. A run that reaches its own conclusion in the meantime is reported as
+// exactly that: the stop arrived too late and stopped nothing.
+func (s *Session) stopRun(ctx context.Context, run RunSnapshot, reason string) (Stopped, error) {
+	stopped := Stopped{WorkItemID: run.WorkItemID, RunID: run.RunID, Requested: true}
+	note := s.stopNote(reason)
+	var problems []error
+	if err := s.emit(execution.EventWorkStopped, map[string]any{
+		"work_item_id": run.WorkItemID,
+		"run_id":       run.RunID,
+		"note":         note,
+		"requested":    true,
+	}); err != nil {
+		problems = append(problems, fmt.Errorf("record stopping work on %s: %w", run.WorkItemID, err))
+	}
+	if err := s.options.Work.RequestStop(ctx, StopRequest{
+		RunID:      run.RunID,
+		WorkItemID: run.WorkItemID,
+		Reason:     reason,
+	}); err != nil {
+		// Nothing was asked, so nothing is waited for and nothing is settled: a
+		// request that was not recorded will never reach the run.
+		return stopped, errors.Join(append(problems, fmt.Errorf("ask the run on %s to stop: %w", run.WorkItemID, err))...)
+	}
+	s.notice("the operator asked the run on %s to stop", run.WorkItemID)
+	ended, err := s.awaitStoppedRun(ctx, run)
+	if err != nil {
+		problems = append(problems, err)
+	}
+	if ended == nil {
+		// The run has not ended within the grace. It keeps everything it has and
+		// stops at its next provider call, so nothing here decides anything about
+		// it: saying it stopped would be a claim about a run that is still going.
+		return stopped, errors.Join(append(problems, s.recordStopOutcome(stopped))...)
+	}
+	stopped.Finished = true
+	stopped.Report = *ended
+	if endedBeforeStopped(ended.Status) {
+		// The run reached its own conclusion before the request reached it. Nothing
+		// was stopped, so nothing says it was, and nothing is written on the item.
+		stopped.AlreadyFinished = true
+		s.notice("the operator asked to stop work on %s, but it had already finished: %s", run.WorkItemID, stopped.Report.Headline())
+		return stopped, errors.Join(append(problems, s.recordStopOutcome(stopped))...)
+	}
+	s.notice("the operator stopped work on %s", run.WorkItemID)
+	if err := s.options.Work.Direct(ctx, run.WorkItemID, note); err != nil {
+		problems = append(problems, fmt.Errorf("record why work on %s was stopped: %w", run.WorkItemID, err))
+	}
+	// A run stopped in another process leaves exactly what one stopped here
+	// leaves: a worktree, a branch, and a claimed item nobody is acting on. It is
+	// settled the same way, by the same reconciliation, which is what keeps
+	// stopping one verb rather than one verb and a follow-up.
+	settlements, err := s.options.Work.Settle(ctx)
+	if err != nil {
+		problems = append(problems, fmt.Errorf("settle what the stopped run left behind: %w", err))
+	}
+	stopped.Settlements = settlements
+	return stopped, errors.Join(append(problems, s.recordStopOutcome(stopped))...)
+}
+
+// awaitStoppedRun waits for a run to end after being asked to, and reports what
+// it ended as. Nothing at all means it had not ended when the grace ran out,
+// which is a fact about the run rather than a failure: a provider invocation
+// already streaming is not interrupted, so a run mid-generation stops only once
+// that generation is over.
+//
+// It reads the run's record rather than watching a process, because there is no
+// process here to watch. That is also what makes it truthful about the case this
+// exists to report: a run that finished on its own reads as succeeded, and a run
+// the request ended reads as cancelled.
+func (s *Session) awaitStoppedRun(ctx context.Context, run RunSnapshot) (*RunReport, error) {
+	// The wait is counted in probes rather than measured against a clock, which
+	// is what keeps it bounded: this waits on another process's record changing,
+	// and a wait that read the time to decide whether to give up would depend on a
+	// clock this conversation may not be the one advancing.
+	for probes := probesWithin(s.options.stopGrace()); ; probes-- {
+		progress, err := s.options.Work.Progress(ctx, run.WorkItemID)
+		if err != nil {
+			return nil, fmt.Errorf("read what became of the run on %s: %w", run.WorkItemID, err)
+		}
+		if progress.RunID == run.RunID && terminalRunStatus(progress.Status) {
+			return stoppedReport(run, progress), nil
+		}
+		if probes <= 1 {
+			return nil, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(stopProbe):
+		}
+	}
+}
+
+// stopProbe is how often a stopped run's record is re-read while waiting for it
+// to end. It costs one small file read and never a request to the provider, so
+// it is short enough that a run that stops promptly is reported promptly.
+const stopProbe = 250 * time.Millisecond
+
+// probesWithin is how many readings of a run's record fit in the grace. It is
+// never fewer than one: a grace of nothing still means look once, because the
+// run may already have ended and reporting it as still going would be wrong in
+// exactly the direction that matters.
+func probesWithin(grace time.Duration) int {
+	probes := int(grace / stopProbe)
+	if probes < 1 {
+		return 1
+	}
+	return probes
+}
+
+// terminalRunStatus reports a run that has stopped. The statuses are named here
+// rather than imported for the reason the pause causes are: a conversation stays
+// independent of how a run is executed, and a status this does not recognize is
+// treated as still going, because concluding the wrong way would report a run
+// that is still working as one that stopped.
+func terminalRunStatus(status string) bool {
+	switch status {
+	case "succeeded", "failed", "cancelled", "timed_out":
+		return true
+	default:
+		return false
+	}
+}
+
+// endedBeforeStopped reports a run that reached its own conclusion rather than
+// being ended by the request, which is the one case where a stop stopped nothing.
+//
+// The recorded status is what says so, and it can, because a run that honors a
+// stop request records itself as cancelled — the same status a run cancelled in
+// this process records. Anything else is a run that succeeded, failed, or was
+// stopped on time under its own steam, all of which happened without reference to
+// the request. It is the counterpart of endedOnItsOwn for a run this process
+// never held: there is no returned error to read here and no in-memory report,
+// only what the run wrote down.
+func endedBeforeStopped(status string) bool {
+	return status != "cancelled"
+}
+
+// stoppedReport describes an ended run from what its record says, which is all
+// there is: this process never ran it and has no outcome of its own to report.
+// It claims integration only from the recorded promotion, exactly as the
+// pipeline's own report does.
+func stoppedReport(run RunSnapshot, progress RunProgress) *RunReport {
+	report := RunReport{
+		RunID:        progress.RunID,
+		WorkItemID:   run.WorkItemID,
+		Status:       progress.Status,
+		Branch:       run.Branch,
+		Integrated:   progress.Integrated,
+		TargetBranch: progress.TargetBranch,
+	}
+	if progress.Integrated {
+		return &report
+	}
+	// A run that ended without integrating and was not asked to succeed is
+	// reported as having been stopped, in the terms the record supports: it did
+	// not finish. The status beside it says which way it went.
+	if progress.Status != "succeeded" {
+		report.Failure = "the run ended with status " + progress.Status
+	}
+	return &report
 }
 
 // DirectWork records durable operator direction on a work item, where the next

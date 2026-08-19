@@ -2490,7 +2490,12 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		// before it spends, so every test pipeline has somewhere to read that from
 		// too. A store nobody paused is a harness that is running, which is what all
 		// but the hold tests are about.
-		Holds:      newOperatorHoldStore(t),
+		Holds: newOperatorHoldStore(t),
+		// And every pipeline reads whether the operator has held what the harness
+		// chooses for itself before it starts anything new. A store nobody held is a
+		// harness that may choose work, which is what all but the intake tests are
+		// about.
+		Intake:     newIntakeHoldStore(t),
 		Repository: repository, Config: cfg,
 	}
 }
@@ -2503,6 +2508,19 @@ func newOperatorHoldStore(t *testing.T) *runstate.OperatorHoldStore {
 	store, err := runstate.NewOperatorHoldStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("runstate.NewOperatorHoldStore() error = %v", err)
+	}
+	return store
+}
+
+// newIntakeHoldStore builds the durable record of the operator's hold on what
+// the harness starts by itself. A test that drives one keeps its own reference
+// and hands the same store to the pipeline, because a hold recorded anywhere
+// else is one no run sees.
+func newIntakeHoldStore(t *testing.T) *runstate.IntakeHoldStore {
+	t.Helper()
+	store, err := runstate.NewIntakeHoldStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
 	return store
 }

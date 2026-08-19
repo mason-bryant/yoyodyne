@@ -118,6 +118,11 @@ type StateStore interface {
 	// holds the run's lease and the operator releasing it does not.
 	ReleasedWait(runID string) (runstate.Release, bool, error)
 	ClearRelease(runID string) error
+	// StopRequested reports whether the operator has asked one run to stop. It is
+	// read from beside the run for the same reason a release is: the operator does
+	// not hold the run's lease, so they state the fact in a file of their own and
+	// the run reads it at the boundaries where it would otherwise spend.
+	StopRequested(runID string) (runstate.StopRequest, bool, error)
 	// Incomplete lists the runs still in flight. It is how a step that declines to
 	// act on a run can still say what it is leaving alone, which is the whole of
 	// what it is for here: reading a record is not acting on it, so this takes no
@@ -167,6 +172,24 @@ type OperatorHolds interface {
 	Held() (runstate.OperatorHold, bool, error)
 }
 
+// IntakeHolds is the operator's switch over the work the harness chooses for
+// itself, as a run reads it.
+//
+// It is the narrower of the two switches and it is asked in exactly one place:
+// where a run would be started for a reason other than the operator naming the
+// item. A hold on intake stops the harness pulling anything more and leaves
+// everything already running alone, which is the point of having it apart from
+// the hold over spending — an operator who suspects the queue is heading
+// somewhere wrong wants the queue stopped, not the half-finished change thrown
+// away.
+//
+// It is satisfied by runstate.IntakeHoldStore.
+type IntakeHolds interface {
+	// Held reports whether the operator is holding intake for this product. Not
+	// held is the ordinary answer and means the harness may choose work.
+	Held() (runstate.IntakeHold, bool, error)
+}
+
 type Pipeline struct {
 	Tracker   WorkTracker
 	Worktrees WorktreeManager
@@ -190,6 +213,22 @@ type Pipeline struct {
 	// operator has paused everything would spend against a hold that is in force,
 	// and a pause the harness can miss is not a pause.
 	Holds OperatorHolds
+	// Intake is the operator's switch over work the harness chooses for itself.
+	// It is required for the same reason, and it stops nothing an operator asked
+	// for by name: what it holds is the choosing, so a run this pipeline was told
+	// to make proceeds under it exactly as it would have.
+	Intake IntakeHolds
+	// Selection is why this pipeline is running what it runs: who chose the work
+	// and on what grounds. It is recorded with the run so that an operator reading
+	// what is in flight can see why each item was picked, which is the question
+	// with no answer at all once something other than them does the picking. It is
+	// also what tells this pipeline whether an intake hold applies to it.
+	//
+	// The zero value is a pipeline that cannot account for its choice. It is
+	// permitted — a caller that says nothing records nothing rather than being
+	// refused — and it is treated as the harness choosing rather than the
+	// operator, because unaccounted work is the case the hold exists to catch.
+	Selection runstate.Selection
 	// Reports is where what this run's agents noticed is collected. It is
 	// optional: a pipeline wired without one still runs exactly as it would
 	// have, and a report it cannot keep is named on the outcome rather than
@@ -310,6 +349,12 @@ type Outcome struct {
 	// than only saying there is one, because when it was placed is what tells an
 	// operator whether they are looking at a system they paused or one that died.
 	PausedByOperator *runstate.OperatorHold `json:"paused_by_operator,omitempty"`
+	// PausedByIntake is the operator's hold on the work the harness chooses for
+	// itself, present on work this pipeline declined to start because of it.
+	// Unlike the four pauses above it never appears on a run: what it holds is the
+	// choosing, so there is nothing claimed, nothing developed, and nothing to
+	// resume — only an item that was not started and says why.
+	PausedByIntake *runstate.IntakeHold `json:"paused_by_intake,omitempty"`
 	// UsageLimitResetsAt is when the provider said the exhausted limit resets,
 	// and UsageLimitKind is the provider's own name for it. They are reported on
 	// a paused run and on a run that stopped because the reset was unusable.
@@ -471,6 +516,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		}
 		return Outcome{}, fmt.Errorf("adopt run in flight: %w", err)
 	}
+	// Nothing is in flight for this item, so what follows would start something
+	// new — which is the one thing an intake hold stops. It is asked here rather
+	// than at the top because that is exactly the distinction the hold is for:
+	// everything above this point either resumed a run or found none, and a run
+	// already under way carries on while intake is held.
+	if outcome, held, err := p.holdIntake(workItemID); err != nil || held {
+		return outcome, err
+	}
 	if err := validateReadyItem(item, workItemID); err != nil {
 		return Outcome{}, err
 	}
@@ -517,6 +570,12 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		Status:        runstate.StatusPending,
 		StartedAt:     now,
 		UpdatedAt:     now,
+	}
+	// Why this item was chosen is written with the run and never rewritten. A
+	// caller that said nothing records nothing, which is reported afterwards as a
+	// run nothing accounted for rather than as a run whose reason was empty.
+	if selection, stated := p.Selection.Stamped(now); stated {
+		state.Selection = &selection
 	}
 	reservation, err := p.Store.Reserve(ctx, state, p.Config.Execution.MaxConcurrentDevelopers)
 	if err != nil {
@@ -650,6 +709,13 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			PullRequest:    state.PullRequest,
 			PublishSkipped: skipped,
 		},
+	}
+	// A stop the operator asked for is honored before anything is resumed. The
+	// process that was serving this run may have exited before it reached a
+	// boundary, so without this a later invocation would pick the run up and carry
+	// on with work somebody has already stopped.
+	if err := run.stopRequested(); err != nil {
+		return run.stop(ctx, err)
 	}
 	// A recorded directive pause is lifted rather than honored. Nothing reaches
 	// this point while a directive still pauses the item — they were read before
@@ -1140,6 +1206,11 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // stops the run.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
 	for {
+		// A stop is asked for before the hold, so a run the operator both stopped
+		// and paused stops rather than parking on a hold nothing will lift for it.
+		if err := a.stopRequested(); err != nil {
+			return err
+		}
 		// The operator's hold is asked before every attempt, including the reissue
 		// after a refusal: a developer invocation is the largest thing this harness
 		// spends, and a pause that only covered the first one would let a run keep
@@ -1891,6 +1962,73 @@ func (p Pipeline) holdWorkItem(workItemID string, hold runstate.OperatorHold) (O
 	return outcome, nil
 }
 
+// holdIntake reports work this pipeline declined to start because the operator
+// is holding intake, and reports nothing at all in the ordinary case. It is the
+// whole of what holding intake means: nothing is claimed, nothing is developed,
+// and the item stays exactly where it was, so lifting the hold is all that
+// stands between here and the work starting.
+//
+// A hold never stops the operator. They are the one who placed it, and an item
+// they then name is them deciding that this piece of work is the exception —
+// which is the distinction between holding what the harness chooses and pausing
+// everything, and the reason both switches exist.
+func (p Pipeline) holdIntake(workItemID string) (Outcome, bool, error) {
+	if !p.Selection.SelectedByHarness() {
+		return Outcome{}, false, nil
+	}
+	hold, held, err := p.Intake.Held()
+	if err != nil {
+		return Outcome{}, false, fmt.Errorf("read whether the operator has held intake: %w", err)
+	}
+	if !held {
+		return Outcome{}, false, nil
+	}
+	return Outcome{
+		WorkItemID:     workItemID,
+		Paused:         true,
+		PausedByIntake: &hold,
+	}, true, nil
+}
+
+// stopRequested reports the operator asking this run to stop, and nothing at all
+// in the ordinary case. It is asked at the boundaries where the operator's hold
+// is asked, and for the same reason: those are the points at which a run is about
+// to spend, so they are the points at which stopping it costs the least.
+//
+// A record that cannot be read stops nothing and fails nothing. It is deliberately
+// the opposite of how an unreadable hold is treated, because the two protect
+// against opposite mistakes: an unreadable hold might be a pause being spent
+// through, while an unreadable stop request would be a run killed on the strength
+// of a file nobody could parse. The failure travels back with the run instead.
+func (a *activeRun) stopRequested() error {
+	request, requested, err := a.pipeline.Store.StopRequested(a.state.RunID)
+	if err != nil {
+		return fmt.Errorf("read whether the operator asked this run to stop: %w", err)
+	}
+	if !requested {
+		return nil
+	}
+	return operatorStop{request: request}
+}
+
+// operatorStop reports a run the operator asked to stop. Unlike the pauses it is
+// a real ending: the run is made terminal and cancelled, its artifacts are left
+// exactly where they are, and settling what they amount to is reconciliation's
+// job rather than this one's — which is what stopping has always done here, and
+// is why a stop aimed at another process's run leaves the same thing behind as a
+// stop aimed at this one's.
+type operatorStop struct {
+	request runstate.StopRequest
+}
+
+func (e operatorStop) Error() string {
+	stopped := "the operator stopped this run at " + e.request.RequestedAt.Format(time.RFC3339)
+	if strings.TrimSpace(e.request.Reason) != "" {
+		stopped += ": " + strings.TrimSpace(e.request.Reason)
+	}
+	return stopped
+}
+
 // holdForOperator parks a run at a provider-call boundary for as long as the
 // operator holds harness activity, and does nothing at all when they do not,
 // which is the ordinary case. It is the whole of what "pause" means to a run:
@@ -2254,6 +2392,14 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	if errors.As(cause, &operatorHeld) {
 		return a.pauseForOperatorHold(operatorHeld)
 	}
+	// A stop the operator asked for is the one ending here that is not a pause and
+	// not a failure of the work. It is recorded as cancelled, which is exactly
+	// what a run this process cancelled itself is recorded as, so what it leaves
+	// behind reads the same to reconciliation whichever way the stop arrived.
+	var stoppedByOperator operatorStop
+	if errors.As(cause, &stoppedByOperator) {
+		return a.fail(cause, runstate.StatusCancelled)
+	}
 	return a.fail(cause, failureStatus(ctx, cause))
 }
 
@@ -2536,8 +2682,13 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	reasked := false
 	for {
 		// A review is a provider invocation like the developer's, so it passes the
-		// same boundary: a run that reached the gate while the operator was holding
-		// activity waits there rather than buying one more invocation.
+		// same two boundaries in the same order: a run the operator stopped stops
+		// here rather than buying a verdict on a change nobody is going to take.
+		if err := a.stopRequested(); err != nil {
+			return "", err
+		}
+		// A run that reached the gate while the operator was holding activity waits
+		// there rather than buying one more invocation.
 		if err := a.holdForOperator(ctx); err != nil {
 			return "", err
 		}

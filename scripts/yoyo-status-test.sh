@@ -234,6 +234,31 @@ rm "$hold_file"
 running="$("$status" --product demo -l 2>&1)"
 missing "$running" "PAUSED" "a running harness says nothing about a pause"
 
+step "a held intake is announced, for the product it was held on"
+# The narrower switch. A machine finishing what it has and starting nothing new
+# looks like a machine that ran out of work, so this is the one thing that says
+# otherwise — and it belongs to one backlog, which is the whole reason it is not
+# the switch above.
+intake_file="$YOYODYNE_STATE_HOME/products/demo/intake-hold.json"
+cat > "$intake_file" <<'JSON'
+{
+  "schema_version": 1,
+  "product_id": "demo",
+  "held_at": "2026-08-18T18:15:00Z",
+  "reason": "the queue looks wrong"
+}
+JSON
+held_intake="$("$status" --product demo -l 2>&1)"
+contains "$held_intake" "INTAKE HELD: the harness starts nothing more on its own since 2026-08-18T18:15:00Z" \
+  "a held intake leads with when it was held"
+contains "$held_intake" "the queue looks wrong" "the banner says why intake was held"
+contains "$held_intake" "$one_run" "the listing itself is still reported while intake is held"
+other_intake="$("$status" --product chatty -l 2>&1)"
+missing "$other_intake" "INTAKE HELD" "holding one product's intake says nothing about another's"
+rm "$intake_file"
+choosing="$("$status" --product demo -l 2>&1)"
+missing "$choosing" "INTAKE HELD" "a harness that may choose work says nothing about a hold"
+
 step "cost reporting counts conversation turns in the total"
 if ! command -v jq >/dev/null 2>&1; then
   cost="$("$status" --product demo -c 2>&1 || true)"
