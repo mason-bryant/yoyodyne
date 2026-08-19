@@ -21,6 +21,12 @@
 # both.
 version: 1
 
+slack:
+  enabled: true
+  channel: C0BQY3ZHE8P
+  operators:
+    - U0BR9M2EKKP # the operator's Slack member id, from your profile → "Copy member ID"
+
 product:
   id: yoyodyne
   repository: .
