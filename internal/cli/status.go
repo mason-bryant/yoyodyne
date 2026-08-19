@@ -135,7 +135,10 @@ func printRunHistory(writer io.Writer, history runstate.RunHistory, workItemID s
 		fmt.Fprintf(writer, "%s %s started %s [%s] %s\n",
 			run.RunID, run.WorkItemID, run.StartedAt.UTC().Format(time.RFC3339),
 			renderRunState(run), renderSummaryCost(run))
-		reasoned = printRunReasons(writer, run) || reasoned
+		if printRunReasons(writer, run) {
+			reasoned = true
+		}
+		printOutstandingSteps(writer, run)
 	}
 	if remaining := history.Matched - len(history.Runs); remaining > 0 {
 		fmt.Fprintf(writer, "%d further run(s) are not listed here; --limit reports more, and 0 reports all of them\n", remaining)
@@ -148,8 +151,9 @@ func printRunHistory(writer io.Writer, history runstate.RunHistory, workItemID s
 // printRunReasons prints what one run recorded about how it went, and reports
 // whether it recorded anything at all. Each reason is labelled, because the
 // record keeps them apart on purpose: only the first says the work failed, and
-// the other three are things that happened around work that may well have
-// landed.
+// the other two are things that happened around work that may well have landed.
+// Each is folded and bounded by singleLine, so a reviewer's verdict is one row
+// of the listing rather than a page of it; --json carries the whole of it.
 func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	printed := false
 	for _, reason := range []struct {
@@ -171,6 +175,34 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		printed = true
 	}
 	return printed
+}
+
+// printOutstandingSteps says what a finished run still owes, so a run marked
+// outstanding is never marked and then left unexplained — which would be the
+// "go and read the run's JSON" case this verb exists to remove.
+//
+// Nothing here is a recorded reason, and that is why it is derived rather than
+// read out of a field: what a finished run owes is decided by the state it is
+// in, and there are exactly two things it can be. The last branch is not dead
+// code but the honest answer if that ever stops being true: a run the record
+// says owes something, whose state does not say what, is reported as owing
+// something rather than silently as owing nothing.
+func printOutstandingSteps(writer io.Writer, run runstate.RunSummary) {
+	if !run.Outstanding || !run.Status.Terminal() {
+		return
+	}
+	printed := false
+	if run.Integrated && run.Phase != runstate.PhaseComplete {
+		fmt.Fprintln(writer, "  outstanding: its work is promoted, and cleaning up after it is not recorded as finished")
+		printed = true
+	}
+	if run.MergeQueued {
+		fmt.Fprintln(writer, "  outstanding: the forge queued the merge of its pull request and nothing has settled it since")
+		printed = true
+	}
+	if !printed {
+		fmt.Fprintln(writer, "  outstanding: it still owes a step; `yoyo reconcile` reports which and settles it")
+	}
 }
 
 // describeRunSelection names what was asked for, so an empty answer says which

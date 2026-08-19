@@ -1976,12 +1976,19 @@ Each reason is printed under the run it belongs to and named for what it is,
 because the records keep them apart deliberately. Only `reason` says the work
 itself failed. An `outstanding publication`, an `outstanding cleanup`, and a
 `failing check` are recorded around the work, and a run can carry one of them
-with its change already promoted — `outstanding` in the brackets marks a
-finished run that still owes somebody a step, which is what
-[`yoyo reconcile`](#recovering-interrupted-runs) settles. It is said only of
-finished runs: one still in flight owes its own remaining steps by definition.
-The listing folds each reason onto one line; `--json` carries what the record
-holds in full, along with the same figures.
+with its change already promoted.
+
+`outstanding` in the brackets marks a finished run that still owes somebody a
+step, and the `outstanding:` line under it says which — cleanup that is not
+recorded as finished, or a merge the forge queued and nothing has settled — so
+the marker is never left for you to go and interpret out of the run's JSON.
+[`yoyo reconcile`](#recovering-interrupted-runs) is what settles either. The
+marker is said only of finished runs: one still in flight owes its own remaining
+steps by definition.
+
+The listing folds each reason onto one line and cuts it at 160 characters with
+an ellipsis, so a reviewer's whole verdict does not become the listing;
+`--json` carries what the record holds in full, along with the same figures.
 
 Cost comes from the same recorded evidence [`yoyo cost`](#what-the-work-cost)
 prices from, so a run still going reports what it has spent so far, and one
@@ -1998,9 +2005,9 @@ against the answer.
 `bin/yoyo-status` follows the normalized event stream a run, a conversation, or
 a [branch review](#reviewing-what-a-branch-adds-up-to) records, which is the
 closest thing there is to watching an agent work. It is a different thing from
-the `yoyo status` verb above despite the name: that reads back what finished
-runs recorded about themselves, and this follows one as it happens. It is a
-shell script that
+the `yoyo status` verb above despite the name: that reads back what the records
+hold now — a run still in flight as readily as one that finished — and this
+follows a run's events as they arrive. It is a shell script that
 lives in a checkout of this repository rather than part of the `yoyo` binary, so
 `go install` and a release download do not carry it; clone the repository, or
 copy the single file out of it, if you want it:

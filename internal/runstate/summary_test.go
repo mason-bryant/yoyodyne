@@ -109,8 +109,37 @@ func TestHistoryKeepsBookkeepingFailuresApartFromTheRunsOwn(t *testing.T) {
 	if !reported.Integrated || !reported.Outstanding {
 		t.Fatalf("reported = %#v, want an integrated run that is still outstanding", reported)
 	}
-	// Selecting the runs that went wrong must not sweep this one up: nothing
-	// about its work failed.
+	// A merge the forge has not performed is the other thing a finished run can
+	// owe, and it is carried so a reader can tell the two apart rather than only
+	// being told that something is owed.
+	queued := integratedState(t, PhaseComplete)
+	queued.RunID = mustRunID(t)
+	queued.WorktreeRemoved = true
+	queued.BranchRemoved = true
+	queued.PullRequest = &PullRequest{
+		Remote:      "origin",
+		Branch:      queued.Branch,
+		Number:      73,
+		URL:         "https://forge.example/pull/73",
+		HeadCommit:  queued.Integration.SourceCommit,
+		MergeQueued: true,
+	}
+	if err := store.Create(queued); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	waiting, err := store.History(RunQuery{WorkItemID: queued.WorkItemID})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(waiting.Runs) != 1 {
+		t.Fatalf("history = %#v", waiting)
+	}
+	if !waiting.Runs[0].MergeQueued || !waiting.Runs[0].Outstanding {
+		t.Fatalf("queued run = %#v, want an outstanding run waiting on its queued merge", waiting.Runs[0])
+	}
+
+	// Selecting the runs that went wrong must not sweep either of them up:
+	// nothing about their work failed.
 	failed, err := store.History(RunQuery{FailedOnly: true})
 	if err != nil {
 		t.Fatalf("History() error = %v", err)

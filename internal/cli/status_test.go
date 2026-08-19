@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -206,6 +207,9 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 		"[succeeded, cleaning_up, integrated, outstanding] $19.02",
 		"outstanding publication: push branch: remote rejected",
 		"outstanding cleanup: remove worktree: directory is busy",
+		// The marker in the brackets is never left for a reader to interpret:
+		// what the run owes is said under it.
+		"outstanding: its work is promoted, and cleaning up after it is not recorded as finished",
 		// A run still going has not finished spending, so its figure says so.
 		"[running, checking] $3.50 so far",
 		"failing check: make test exited 2",
@@ -235,6 +239,97 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 	}, "", true)
 	if !strings.Contains(out.String(), "cost unknown") {
 		t.Fatalf("rendered = %q", out.String())
+	}
+}
+
+// A run marked outstanding with nothing under it is the "go and read the run's
+// JSON" case this verb exists to remove, and the marker has two causes worth
+// telling apart: cleanup that never finished, and a merge the forge queued and
+// has not performed. The second outlives the run by minutes or hours, so a run
+// carrying it looks finished in every other respect.
+func TestStatusSaysWhatAnOutstandingRunStillOwes(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	finished := runstate.RunSummary{
+		RunID:       "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:  "yoyodyne-ifd.41",
+		Status:      runstate.StatusSucceeded,
+		Phase:       runstate.PhaseComplete,
+		StartedAt:   completedAt,
+		CompletedAt: &completedAt,
+		Integrated:  true,
+		Outstanding: true,
+		MergeQueued: true,
+		CostUSD:     19.02,
+	}
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{finished}}, "", false)
+	if !strings.Contains(out.String(), "outstanding: the forge queued the merge of its pull request") {
+		t.Fatalf("rendered = %q", out.String())
+	}
+	// Cleanup is finished on this one, so nothing may claim otherwise.
+	if strings.Contains(out.String(), "cleaning up after it is not recorded as finished") {
+		t.Fatalf("a complete cleanup was reported as unfinished: %q", out.String())
+	}
+
+	// A run that owes something the rendering cannot name is still reported as
+	// owing something, rather than marked outstanding and left bare.
+	unexplained := finished
+	unexplained.Integrated = false
+	unexplained.MergeQueued = false
+	out.Reset()
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{unexplained}}, "", false)
+	if !strings.Contains(out.String(), "outstanding: it still owes a step") {
+		t.Fatalf("rendered = %q", out.String())
+	}
+
+	// Every run still in flight owes its remaining steps, so saying so of one
+	// would be noise rather than news.
+	running := finished
+	running.Status = runstate.StatusRunning
+	running.CompletedAt = nil
+	running.Phase = runstate.PhaseDeveloping
+	out.Reset()
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{running}}, "", false)
+	if strings.Contains(out.String(), "outstanding") {
+		t.Fatalf("an in-flight run was reported as outstanding: %q", out.String())
+	}
+}
+
+// A reason is prose somebody wrote, and a reviewer's verdict runs to
+// paragraphs. The listing bounds it so a run stays one row, and cuts on a rune
+// boundary: this repository's own reasons are full of em dashes, and half a
+// rune is not a shorter reason but a broken one.
+func TestStatusBoundsAReasonWithoutBreakingARune(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 16, 9, 0, 0, 0, time.UTC)
+	// Em dashes laid so that the byte the bound falls on is inside one.
+	verdict := "independent review requires repair " + strings.Repeat("—", 200)
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{{
+		RunID:       "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:  "yoyodyne-ifd.41",
+		Status:      runstate.StatusFailed,
+		StartedAt:   completedAt,
+		CompletedAt: &completedAt,
+		Failure:     verdict,
+	}}}, "", true)
+	rendered := out.String()
+	if !utf8.ValidString(rendered) {
+		t.Fatalf("the listing is not valid UTF-8: %q", rendered)
+	}
+	for _, line := range strings.Split(rendered, "\n") {
+		if !strings.HasPrefix(strings.TrimSpace(line), "reason:") {
+			continue
+		}
+		if !strings.HasSuffix(line, "...") {
+			t.Fatalf("an unbounded reason was listed: %q", line)
+		}
+		if len(line) > maxSingleLineBytes+32 {
+			t.Fatalf("the listed reason is %d bytes: %q", len(line), line)
+		}
 	}
 }
 

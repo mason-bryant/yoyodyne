@@ -37,6 +37,12 @@ type RunSummary struct {
 	// because a run that owes something and a run that is over look identical
 	// from the status alone.
 	Outstanding bool `json:"outstanding,omitempty"`
+	// MergeQueued reports a merge the forge accepted but has not performed. It
+	// is one of exactly two things a finished run can owe -- the other is the
+	// cleanup that an integrated run short of the complete phase still owes --
+	// so carrying it is what lets a reader say which of the two a run marked
+	// outstanding is waiting on, rather than only that it is waiting.
+	MergeQueued bool `json:"merge_queued,omitempty"`
 	// Failure is the run's own reason for ending, and it is the only one of the
 	// four recorded reasons that says the run failed. The three below happened
 	// around the work rather than to it, and are kept apart here for the reason
@@ -147,6 +153,7 @@ func (s *Store) summarize(state State) RunSummary {
 		CompletedAt:    state.CompletedAt,
 		Integrated:     state.Integration != nil,
 		Outstanding:    state.Outstanding(),
+		MergeQueued:    state.PullRequest != nil && state.PullRequest.MergeQueued,
 		Failure:        state.Failure,
 		PublishFailure: state.PublishFailure,
 		CleanupFailure: state.CleanupFailure,
