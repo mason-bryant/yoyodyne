@@ -84,7 +84,11 @@ type Reconciler struct {
 	// only to settle a run that has one, which is a run a publishing project
 	// produced; a purely local project never records one.
 	Publisher ReconcilePullRequests
-	Clock     execution.Clock
+	// Docket is where a run this sweep stops is put in front of the development
+	// manager. It is optional: a sweep wired without one settles runs exactly as
+	// it would have, and what it settled is still on the work item.
+	Docket *Docketer
+	Clock  execution.Clock
 }
 
 // ReconcileAction names what reconciliation did with one run.
@@ -130,6 +134,13 @@ type Reconciliation struct {
 	BranchRemoved   bool                  `json:"branch_removed"`
 	CleanupFailure  string                `json:"cleanup_failure,omitempty"`
 	Failure         string                `json:"failure,omitempty"`
+	// DocketProblem names a stoppage this sweep settled and could not put on the
+	// triage docket. It is deliberately not a settlement failure: the run is
+	// settled and its blocker is on the work item either way, and the blocker is
+	// durable on the run itself, so the next docket build finds the same stoppage
+	// from the same record. Reporting it as a failed settlement would describe a
+	// settled run as outstanding, which no later sweep would correct.
+	DocketProblem string `json:"docket_problem,omitempty"`
 	// Catchup is the local target branch brought onto the merge commit the forge
 	// made, present only on a run whose queued merge this sweep settled. It is
 	// reported rather than made durable for the reason the run's own catch-up is:
@@ -345,14 +356,17 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 	// The blocker reaches the item before the record is disturbed, so an
 	// interruption here leaves the run outstanding with the blocker already
 	// recorded rather than a settled run nobody was told about.
-	if err := r.recordBlocker(ctx, state, itemStatus, observation, reason); err != nil {
+	notes, err := r.recordBlocker(ctx, state, itemStatus, observation, reason)
+	if err != nil {
 		return reconciliationOf(state, ActionBlocked), err
 	}
 	state.Integration = nil
-	settled, err := r.saveTerminalFailure(state, reason)
+	state.Blocker = runstate.RecordBlocker(notes)
+	settled, saveErr := r.saveTerminalFailure(state, reason)
 	result := reconciliationOf(settled, ActionBlocked)
 	result.Detail = reason
-	return result, err
+	result.DocketProblem = r.docketStoppedRun(settled)
+	return result, saveErr
 }
 
 // settleQueuedMerge asks the forge what became of a merge it queued, and
@@ -599,19 +613,46 @@ func (r Reconciler) abandon(ctx context.Context, state runstate.State, observati
 // interruption here leaves the run outstanding and the blocker recorded rather
 // than a settled run nobody was told about.
 func (r Reconciler) blockRun(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) (Reconciliation, error) {
-	if err := r.recordBlocker(ctx, state, itemStatus, observation, reason); err != nil {
+	notes, err := r.recordBlocker(ctx, state, itemStatus, observation, reason)
+	if err != nil {
 		return reconciliationOf(state, ActionBlocked), err
 	}
-	settled, err := r.recordTerminalFailure(state, reason)
+	// The blocker is kept on the run as well as on the item, so what stopped
+	// this run is readable from its own record rather than from whichever of the
+	// item's notes turns out to have been this one's.
+	state.Blocker = runstate.RecordBlocker(notes)
+	settled, saveErr := r.recordTerminalFailure(state, reason)
 	result := reconciliationOf(settled, ActionBlocked)
 	result.Detail = reason
-	return result, err
+	result.DocketProblem = r.docketStoppedRun(settled)
+	return result, saveErr
 }
 
-// recordBlocker puts this run's evidence on the work item. An item already
-// blocked keeps the status it has; the reason is still recorded, because this
-// run's evidence is what a replan needs.
-func (r Reconciler) recordBlocker(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) error {
+// docketStoppedRun puts a run this sweep stopped in front of the development
+// manager. It is idempotent and keyed to the stoppage, so a run that docketed
+// its own ending before the process died adds nothing here, and a sweep that
+// runs twice over the same run dockets it once.
+//
+// It never fails the settlement: the blocker is already on the work item and the
+// run is already settled by the time this runs, so a docket that could not be
+// written is a delivery that did not happen rather than a run that has to be
+// settled again. What it could not write is reported instead, and the next
+// docket build finds the same stoppage on the run's own record.
+func (r Reconciler) docketStoppedRun(state runstate.State) string {
+	if r.Docket == nil {
+		return ""
+	}
+	if _, err := r.Docket.RecordStoppedRun(state); err != nil {
+		return fmt.Errorf("docket the stopped run %s: %w", state.RunID, err).Error()
+	}
+	return ""
+}
+
+// recordBlocker puts this run's evidence on the work item and returns the words
+// it recorded, which are what the run's own record and the triage docket carry
+// afterwards. An item already blocked keeps the status it has; the reason is
+// still recorded, because this run's evidence is what a replan needs.
+func (r Reconciler) recordBlocker(ctx context.Context, state runstate.State, itemStatus string, observation gitworktree.Observation, reason string) (string, error) {
 	notes := renderReconcileBlockerNotes(state, observation, reason)
 	var err error
 	if itemStatus == "blocked" {
@@ -620,9 +661,9 @@ func (r Reconciler) recordBlocker(ctx context.Context, state runstate.State, ite
 		_, err = r.Tracker.Block(ctx, state.WorkItemID, notes)
 	}
 	if err != nil {
-		return fmt.Errorf("record blocker for run %s: %w", state.RunID, err)
+		return "", fmt.Errorf("record blocker for run %s: %w", state.RunID, err)
 	}
-	return nil
+	return notes, nil
 }
 
 // recordTerminalFailure makes an unfinishable run durably terminal in the phase

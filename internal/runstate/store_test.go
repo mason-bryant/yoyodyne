@@ -1537,3 +1537,41 @@ func TestLatestReportsTheMostRecentRunOfAWorkItem(t *testing.T) {
 		t.Fatal("Latest() accepted no work item at all")
 	}
 }
+
+// The cap triage measures against is a total for the work item, so the rounds
+// are summed across every run ever made for it. A count kept per run would let
+// an item argue with a reviewer indefinitely by being run again.
+func TestReviewRoundsAreSummedAcrossEveryRunOfOneItem(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	for _, rounds := range []int{2, 3} {
+		state := testState(t, StatusFailed)
+		state.WorkItemID = "yoyodyne-task"
+		state.ReviewRounds = rounds
+		if err := store.Create(state); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	}
+	// Another item's rounds are not this item's, however many runs it took.
+	elsewhere := testState(t, StatusFailed)
+	elsewhere.WorkItemID = "yoyodyne-other"
+	elsewhere.ReviewRounds = 4
+	if err := store.Create(elsewhere); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	rounds, err := store.ReviewRounds("yoyodyne-task")
+	if err != nil {
+		t.Fatalf("ReviewRounds() error = %v", err)
+	}
+	if rounds != 5 {
+		t.Fatalf("ReviewRounds() = %d, want 5", rounds)
+	}
+	// An item nothing has ever reviewed has taken no rounds, which is an answer
+	// rather than a failure to look.
+	unrun, err := store.ReviewRounds("yoyodyne-unrun")
+	if err != nil || unrun != 0 {
+		t.Fatalf("ReviewRounds() = %d, error = %v, want no rounds", unrun, err)
+	}
+}

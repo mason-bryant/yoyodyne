@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // StateSchemaVersion stays 1 because every addition since has been an optional
@@ -38,7 +39,10 @@ import (
 // were recorded meant. The protected paths a change was refused for is the
 // newest of them and behaves the same way: absent means no such refusal was
 // ever recorded against this run, which is what every run written before the
-// gate existed meant.
+// gate existed meant. The review rounds a run accumulated and the blocker it
+// stopped on are the two newest, and both behave identically: absent means
+// nothing counted the rounds and nothing blocked this run, which is what every
+// run written before triage docketed anything meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -338,6 +342,34 @@ func boundChangeRecord(text string) string {
 
 const changeRecordCutNote = "\n[cut; the rest of this summary was not recorded]"
 
+// MaxBlockerBytes bounds the durable blocker a run carries. It is the docket's
+// own bound, shared rather than restated: a docket entry has to carry the
+// blocker in the words it was recorded in, and two bounds that could drift
+// would be a blocker the harness recorded and the docket then refused.
+const MaxBlockerBytes = triage.MaxBlockerBytes
+
+// RecordBlocker makes a bounded record of a blocker the harness recorded on a
+// work item. A blocker too long to keep is cut rather than refused, exactly as
+// a verbose change summary is: losing a run's state file over a reviewer that
+// wrote at length would cost far more than the tail of one blocker, and the
+// tracker holds the whole of it either way.
+func RecordBlocker(notes string) string {
+	trimmed := strings.TrimRight(notes, "\n")
+	if strings.TrimSpace(trimmed) == "" {
+		return ""
+	}
+	if len(trimmed) <= MaxBlockerBytes {
+		return trimmed
+	}
+	cut := MaxBlockerBytes - len(blockerCutNote)
+	for cut > 0 && !utf8.RuneStart(trimmed[cut]) {
+		cut--
+	}
+	return strings.TrimRight(trimmed[:cut], "\n") + blockerCutNote
+}
+
+const blockerCutNote = "\n[cut; the work item carries the whole of this blocker]"
+
 // DirectivePause is the user directive a run stopped short for. It is recorded
 // before the run returns, for the same reason a usage-limit deadline is: the
 // pause has to survive the process, so a later invocation can tell a run that is
@@ -438,6 +470,17 @@ type State struct {
 	// always did, so a state file written before the repair loop existed keeps
 	// decoding unchanged.
 	ReviewFindingDetails []Finding `json:"review_finding_details,omitempty"`
+	// ReviewRounds counts the reviews this run obtained a verdict from, whichever
+	// way each of them went. It is not the same thing as the repair attempts
+	// below and cannot be derived from them: a repair attempt handed back a
+	// refused path or a failing check never reaches a reviewer, and an approved
+	// change was reviewed without any repair at all. It is cumulative rather
+	// than descriptive of the current attempt, so unlike every other piece of
+	// review evidence it survives an attempt being cleared — what triage measures
+	// against its configured cap is how many rounds the work has taken in total,
+	// across repairs and across runs, and a counter reset by the next attempt
+	// would answer a different question every time it was read.
+	ReviewRounds int `json:"review_rounds,omitempty"`
 	// CheckFailure carries the failing deterministic check a repair attempt was
 	// handed. It and ReviewFindingDetails are the two kinds of repair input, and
 	// at most one of them describes the current attempt: the checks are re-run
@@ -557,6 +600,16 @@ type State struct {
 	// kind of fact as an outstanding cleanup.
 	PublishFailure string `json:"publish_failure,omitempty"`
 	Failure        string `json:"failure,omitempty"`
+	// Blocker is the durable blocker exactly as it was recorded on the work item
+	// when this run stopped on something no further attempt of the harness could
+	// resolve. The tracker holds the authoritative copy; this one is kept because
+	// the blocker is evidence about the run and the run is what outlives the
+	// process that wrote it — a triage docket entry built from this record has to
+	// carry the blocker in the words it was recorded in, and a later reader of the
+	// run must not have to go and find which of the item's notes was this run's.
+	// Absent means this run stopped on nothing anybody has to decide, which is
+	// what every record written before the docket existed means.
+	Blocker string `json:"blocker,omitempty"`
 	// CleanupFailure explains why post-completion cleanup did not finish
 	// cleanly. The run's work is already integrated, closed, and durable when it
 	// is set, so it is reconciliation input rather than a run failure. It says
@@ -708,6 +761,12 @@ func (s State) Validate() error {
 	}
 	if s.RepairAttempts < 0 {
 		problems = append(problems, errors.New("repair_attempts cannot be negative"))
+	}
+	if s.ReviewRounds < 0 {
+		problems = append(problems, errors.New("review_rounds cannot be negative"))
+	}
+	if len(s.Blocker) > MaxBlockerBytes {
+		problems = append(problems, fmt.Errorf("blocker is %d bytes, which exceeds the %d byte bound", len(s.Blocker), MaxBlockerBytes))
 	}
 	if s.IntegrationRetries < 0 {
 		problems = append(problems, errors.New("integration_retries cannot be negative"))

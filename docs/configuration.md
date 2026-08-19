@@ -1540,11 +1540,18 @@ triage:
   repair_grant_attempts: 2   # what a grant is worth, when triage grants one
 ```
 
-**These load, validate, and are reported by `config show`; nothing reads them
-yet.** The triage workflow they belong to is not built, so setting one today
-changes no behavior. They are here now for the reason a threshold usually is not
-built with its workflow: a number that starts life as a constant in the code
-stays one, and every project inherits whatever the first project needed.
+**These are read by the triage docket**, which is where work that has stopped
+moving is collected and delivered to the development manager: `stuck_merge_age`
+decides when an unmerged publication is docketed, and the two budgets are
+carried on every entry so a decision about one is made against what the item is
+allowed to spend rather than against the evidence alone. Nothing enforces the
+cap automatically — deciding what becomes of a docketed item is the development
+manager's, and the counters are what that decision is measured against.
+
+The docket is built when something scans: `yoyo reconcile`, and the moment a
+development manager conversation opens. There is no scheduled process behind it,
+so `stuck_merge_age` is a floor rather than a promise — a publication becomes
+docketable at that age and is docketed the next time one of those happens.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a

@@ -458,6 +458,31 @@ func (s *Store) Latest(workItemID string) (State, error) {
 	return latest, nil
 }
 
+// ReviewRounds counts the review rounds one work item has accumulated across
+// every run ever made for it. It is read from the records rather than carried
+// on the item because that is what makes it a total: a run is one attempt at
+// the item, and what triage measures against its configured cap is how many
+// times the work has been round with a reviewer whichever run did the going.
+//
+// Reading records decides nothing about them, so a run a live process owns is
+// counted here exactly as a finished one is — a cap read while the current run
+// is still arguing with its reviewer should include that argument.
+func (s *Store) ReviewRounds(workItemID string) (int, error) {
+	id := strings.TrimSpace(workItemID)
+	if id == "" {
+		return 0, errors.New("a work item is required to count its review rounds")
+	}
+	states, err := s.scan("recorded", func(state State) bool { return state.WorkItemID == id })
+	if err != nil {
+		return 0, err
+	}
+	rounds := 0
+	for _, state := range states {
+		rounds += state.ReviewRounds
+	}
+	return rounds, nil
+}
+
 // ErrNoRecordedRun reports a work item the harness has never run, which is a
 // plain answer rather than a failure to look.
 var ErrNoRecordedRun = errors.New("no run of this work item is recorded")

@@ -15,7 +15,12 @@ import (
 type reconcileOutput struct {
 	Runs        []orchestrator.Reconciliation `json:"runs"`
 	Convergence orchestrator.Convergence      `json:"convergence"`
-	Error       string                        `json:"error,omitempty"`
+	// Docketed is how many entries this sweep is what put on the triage docket.
+	// It is a count rather than the entries because the docket is read where it
+	// is acted on, which is the development manager's conversation; what this
+	// command reports is that the sweep found something, not what it found.
+	Docketed int    `json:"docketed"`
+	Error    string `json:"error,omitempty"`
 }
 
 // reconcileRuns settles every run an interrupted process left outstanding and
@@ -37,10 +42,11 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 		return 2
 	}
 
-	reconciler, err := buildReconciler(*configPath)
+	parts, err := buildComponents(*configPath)
 	if err != nil {
-		return reportReconcileResult(stdout, stderr, *jsonOutput, nil, orchestrator.Convergence{}, err)
+		return reportReconcileResult(stdout, stderr, *jsonOutput, nil, orchestrator.Convergence{}, 0, err)
 	}
+	reconciler := reconcilerFrom(parts)
 	results, err := reconciler.Reconcile(ctx)
 	// Convergence is swept even when settling a run failed. The two are
 	// independent — one finishes runs, the other finishes branches — and a
@@ -52,10 +58,19 @@ func reconcileRuns(ctx context.Context, args []string, stdout, stderr io.Writer)
 	} else if convergeErr != nil {
 		err = errors.Join(err, convergeErr)
 	}
-	return reportReconcileResult(stdout, stderr, *jsonOutput, results, convergence, err)
+	// The docket is built for the same reason the convergence sweep runs: this
+	// is one of the two moments anything scans. A publication the forge quietly
+	// never merged is not an event anybody can be present for, so it is found
+	// here or when a development manager opens a conversation, and a sweep that
+	// settled runs without looking would leave it for the other one.
+	docketed, docketErr := docketerFrom(parts).Build()
+	if docketErr != nil {
+		err = errors.Join(err, docketErr)
+	}
+	return reportReconcileResult(stdout, stderr, *jsonOutput, results, convergence, docketed.Added, err)
 }
 
-func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []orchestrator.Reconciliation, convergence orchestrator.Convergence, err error) int {
+func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []orchestrator.Reconciliation, convergence orchestrator.Convergence, docketed int, err error) int {
 	// A run reconciliation could not settle stays outstanding, so the command
 	// reports failure rather than folding it into the settled results. A branch
 	// the sweep could not remove is the same kind of fact.
@@ -71,7 +86,7 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 	}
 	if jsonOutput {
-		output := reconcileOutput{Runs: results, Convergence: convergence}
+		output := reconcileOutput{Runs: results, Convergence: convergence, Docketed: docketed}
 		if results == nil {
 			output.Runs = []orchestrator.Reconciliation{}
 		}
@@ -94,6 +109,11 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		if len(results) == 0 && err == nil {
 			fmt.Fprintln(stdout, "no runs need reconciliation")
 		}
+		// What was docketed is said only when there is some: a line saying nothing
+		// stopped, on every sweep, is a line nobody reads.
+		if docketed > 0 {
+			fmt.Fprintf(stdout, "%d stopped item(s) added to the triage docket for the development manager\n", docketed)
+		}
 		for _, result := range results {
 			fmt.Fprintf(stdout, "%s (%s): %s\n", result.RunID, result.WorkItemID, result.Action)
 			if result.Detail != "" {
@@ -113,6 +133,12 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			}
 			if result.Failure != "" {
 				fmt.Fprintf(stderr, "  not reconciled: %s\n", result.Failure)
+			}
+			// A stoppage that was settled and could not be docketed is reported
+			// without the run reading as unsettled: what is missing is the
+			// delivery to the development manager, not the settlement.
+			if result.DocketProblem != "" {
+				fmt.Fprintf(stderr, "  not docketed: %s\n", result.DocketProblem)
 			}
 		}
 		printConvergence(stdout, stderr, convergence)
@@ -157,6 +183,11 @@ Settles every run an interrupted process left outstanding, then converges local
 state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
+
+It then builds the triage docket: the runs that ended on a durable blocker and
+the approved publications the forge has not merged, put where the development
+manager reads them. Docketing is keyed to what stopped, so sweeping twice
+dockets nothing twice.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

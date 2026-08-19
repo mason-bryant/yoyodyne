@@ -1,12 +1,15 @@
 package contextbundle
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // wellFormed is a specification that follows the contract: an introduction
@@ -906,5 +909,129 @@ func TestTheRoleDocumentNoteSaysWhatWasActuallyFound(t *testing.T) {
 	}
 	if longest := longestRoleDocumentNote(sets); longest < len(renderRoleDocumentNote(sets, map[string]bool{"docs/designs": true})) {
 		t.Fatalf("the reserved note bound %d is smaller than a note it must cover", longest)
+	}
+}
+
+// docketEntry is one stopped piece of work as the docket carries it.
+func docketEntry(runID, item string) triage.Entry {
+	return triage.Entry{
+		SchemaVersion: triage.SchemaVersion,
+		Key:           triage.Key(triage.ClassStoppedRun, runID),
+		Class:         triage.ClassStoppedRun,
+		ProductID:     "yoyodyne",
+		RunID:         runID,
+		WorkItemID:    item,
+		RecordedAt:    time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+		Blocker:       "Yoyodyne stopped this item: the repair budget was spent.",
+		Findings:      []triage.Finding{{Severity: "blocker", Message: "add the missing file", File: "feature.txt", Line: 1}},
+		Artifacts:     triage.Artifacts{Branch: "yoyodyne/task/abc", WorktreePath: "/state/worktrees/task"},
+		Counters:      triage.Counters{ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2},
+	}
+}
+
+// The docket reaches the conversation the way the backlog does: carried in the
+// context rather than by an operator who noticed something had stopped.
+func TestAssembleProductCarriesTheTriageDocket(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		TriageDocket:            []triage.Entry{docketEntry("run-0123456789abcdef0123456789abcdef", "yoyodyne-task")},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"## Triage docket",
+		"An entry states that something stopped.",
+		"[stopped run] 2026-08-19T12:00:00Z on yoyodyne-task",
+		"Blocker: Yoyodyne stopped this item: the repair budget was spent.",
+		"Finding [blocker] (feature.txt:1): add the missing file",
+		"Branch (preserved): yoyodyne/task/abc",
+		"3 of 4 review round(s) used",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("product context is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+}
+
+// A role that was given no docket has no docket section at all, which is what
+// keeps this the development manager's evidence rather than another thing every
+// conversation reads past.
+func TestAssembleProductCarriesNoDocketSectionForARoleWithoutOne(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if strings.Contains(bundle.Text, "Triage docket") {
+		t.Fatalf("a role with no docket was given one:\n%s", bundle.Text)
+	}
+}
+
+// A docket that could not be read is stated. Rendering it as a product where
+// nothing has stopped is the one thing that must not happen: the role would
+// read an absence as an answer.
+func TestAssembleProductSaysWhenTheDocketCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		TriageDocketUnavailable: "open docket: permission denied",
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, required := range []string{
+		"The triage docket could not be read: open docket: permission denied",
+		"Do not assume nothing has stopped",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("product context is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+}
+
+// The docket grows with everything that ever stopped and the context budget
+// does not, so it is bounded — and what it could not show is stated rather than
+// left to read as a complete docket.
+func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	entries := make([]triage.Entry, 0, maxDocketEntries+5)
+	for index := range maxDocketEntries + 5 {
+		entry := docketEntry(fmt.Sprintf("run-%032x", index), fmt.Sprintf("yoyodyne-%d", index))
+		entries = append(entries, entry)
+	}
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		TriageDocket:            entries,
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "5 further docket entry(s) are not listed here") {
+		t.Fatalf("a cut docket did not say what it cut:\n%s", bundle.Text)
+	}
+	// The newest are what is kept, because the oldest stoppage is the one a
+	// reader can most afford not to see first.
+	if !strings.Contains(bundle.Text, "on yoyodyne-29") || strings.Contains(bundle.Text, "on yoyodyne-0 ") {
+		t.Fatalf("the docket kept the oldest entries rather than the newest:\n%s", bundle.Text)
 	}
 }
