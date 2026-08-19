@@ -13,8 +13,8 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// TriageCaps is the configured ceiling on what triage may spend on one work
-// item across every run of it.
+// TriageCaps is the ceiling on what triage may spend on one work item across
+// every run of it.
 //
 // Two of the three actions — another repair, another whole run — buy review
 // rounds, and `triage.review_rounds_cap` is what an operator states about those:
@@ -23,12 +23,28 @@ import (
 // retries a single run is already permitted, which is the same judgement about
 // the same thing one level up: how many times a promotion that did not land may
 // be tried again before it is a person's problem.
+//
+// The other two are triage's own and are not configured, because they are not a
+// judgement about a project's pace: they are the workflow itself, which is that
+// triage acts alone once per item on each of them and a second is a person's
+// decision rather than a bigger budget. Nothing an operator could set here would
+// mean anything else, and the rounds cap cannot stand in for them — an item
+// whose runs stop before any reviewer verdict spends no round, so without these
+// it could be handed back and re-run without bound.
 func TriageCaps(execution config.Execution, triage config.Triage) runstate.TriageCaps {
 	return runstate.TriageCaps{
 		ReviewRounds: triage.ReviewRoundsCap,
+		RepairGrants: triageActsAlone,
+		Reruns:       triageActsAlone,
 		MergeRearms:  execution.IntegrationRetriesBeforeReconciliation,
 	}
 }
+
+// triageActsAlone is how many times triage takes one of its own decisions about
+// one work item without a person: once. Past it the decision is not a bigger
+// budget but an escalation, which is what the development manager's workflow
+// says and what the item's durable counters are what make true.
+const triageActsAlone = 1
 
 // TriageRepairGrantRounds is how many review rounds triage hands an item when it
 // decides the work is worth another go, before the round cap truncates it.

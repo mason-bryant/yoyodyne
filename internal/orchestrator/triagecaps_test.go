@@ -94,22 +94,34 @@ func TestPipelineCountsNoRoundForAReviewThatReachedNoVerdict(t *testing.T) {
 	}
 }
 
-// The caps a triage action is refused past are the configured ones, assembled in
-// one place so the action that refuses and the listing that says how close an
-// item is to being refused cannot be working from different numbers. They come
-// from the triage vocabulary an operator writes down, and the one action that
-// buys no review round takes the size of the integration retries a single run is
-// already permitted.
-func TestTriageCapsComeFromTheConfiguration(t *testing.T) {
+// The caps a triage action is refused past are assembled in one place so the
+// action that refuses and the listing that says how close an item is to being
+// refused cannot be working from different numbers. Two come from the triage
+// vocabulary an operator writes down — the rounds an item may accumulate, and
+// the integration retries the one action that buys no round follows. The other
+// two are the workflow rather than a setting: triage takes each of its own
+// decisions about one item once, and a second is an escalation rather than a
+// larger budget, so there is nothing for an operator to state.
+func TestTriageCapsComeFromTheConfigurationAndTheWorkflow(t *testing.T) {
 	t.Parallel()
 
 	caps := TriageCaps(
 		config.Execution{IntegrationRetriesBeforeReconciliation: 3},
 		config.Triage{ReviewRoundsCap: 7},
 	)
-	want := runstate.TriageCaps{ReviewRounds: 7, MergeRearms: 3}
+	want := runstate.TriageCaps{ReviewRounds: 7, RepairGrants: 1, Reruns: 1, MergeRearms: 3}
 	if caps != want {
 		t.Fatalf("TriageCaps() = %+v, want %+v", caps, want)
+	}
+	// The two that are not configured must not move with what is: an operator
+	// raising the round cap is saying an item may cost more, not that triage may
+	// decide the same thing about it twice.
+	generous := TriageCaps(
+		config.Execution{IntegrationRetriesBeforeReconciliation: 9},
+		config.Triage{ReviewRoundsCap: 40},
+	)
+	if generous.RepairGrants != 1 || generous.Reruns != 1 {
+		t.Fatalf("TriageCaps() under a raised configuration = %+v, want triage still acting alone once", generous)
 	}
 }
 

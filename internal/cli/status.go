@@ -197,8 +197,13 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item; triage may hand back repairs while under the cap of %d\n",
 			counters.ReviewRounds, caps.ReviewRounds)
 	}
-	fmt.Fprintf(writer, "  repair grants: %d; re-runs: %d; both are refused once no round remains\n",
-		counters.RepairGrants, counters.Reruns)
+	// Each of these is refused by two budgets rather than one, and the line says
+	// both: the rounds above, which bound what the item may cost, and its own,
+	// which bounds how often triage may decide the same thing about it. An
+	// operator told only about the rounds would read an item refused a second
+	// re-run with rounds to spare as a bug.
+	fmt.Fprintf(writer, "  repair grants: %d of %d permitted; re-runs: %d of %d; each is refused by its own budget or once no round remains\n",
+		counters.RepairGrants, caps.RepairGrants, counters.Reruns, caps.Reruns)
 	fmt.Fprintf(writer, "  merge re-arms: %d of %d permitted\n", counters.MergeRearms, caps.MergeRearms)
 	// A grant that was cut is said out loud, because it is the fact that says the
 	// item is at the end of what it will be given: the next grant has nothing left

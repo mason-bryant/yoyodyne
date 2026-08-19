@@ -569,7 +569,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 
 	// The caps the harness defaults give this configuration: four rounds in
 	// total, and two merge re-arms following the integration retries a run has.
-	caps := runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2}
+	caps := runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
 	triage := store.Triage()
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
 		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, started); err != nil {
@@ -598,7 +598,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 		// first.
 		"triage of yoyodyne-ifd.2.7: triage has spent 2 passes on it",
 		"review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4",
-		"repair grants: 1; re-runs: 0; both are refused once no round remains",
+		"repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains",
 		"merge re-arms: 1 of 2 permitted",
 		"1 grant(s) were cut down to the rounds the cap still had room for",
 	} {
@@ -638,16 +638,18 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 }
 
-// The JSON keys are a machine commitment: this fails if either caps key
-// drifts from snake_case, independent of the Go type the payload decodes into.
+// The JSON keys are a machine commitment: this fails if any caps key drifts
+// from snake_case, independent of the Go type the payload decodes into. Each
+// cap carries a distinct value so a key rendered from the wrong field is a
+// failure rather than a coincidence.
 func TestTriageCapsSerializeWithSnakeCaseKeys(t *testing.T) {
 	t.Parallel()
 
-	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 2, MergeRearms: 3})
 	if err != nil {
 		t.Fatalf("marshal caps: %v", err)
 	}
-	for _, want := range []string{"\"review_rounds\":4", "\"merge_rearms\":2"} {
+	for _, want := range []string{"\"review_rounds\":4", "\"repair_grants\":1", "\"reruns\":2", "\"merge_rearms\":3"} {
 		if !strings.Contains(string(payload), want) {
 			t.Fatalf("caps json = %s, want it to carry %s", payload, want)
 		}

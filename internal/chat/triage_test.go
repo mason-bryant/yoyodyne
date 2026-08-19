@@ -152,7 +152,7 @@ func TestAnEscalationWithNoReportIsRefusedAndChangesNothing(t *testing.T) {
 func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T) {
 	t.Parallel()
 
-	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 2, MergeRearms: 1}, 2)
+	budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 2, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
 	// One round is already spent by the run that stopped, so a grant of two is
 	// cut to the one the cap still has room for.
 	if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.90", runstate.RoundKey(stoppedRun, 0), budgets.clock.Now()); err != nil {
@@ -178,11 +178,8 @@ func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T
 		t.Fatalf("counters after one grant = %#v", counters)
 	}
 
-	// The rounds the grant was cut to are then spent, and the next decision that
-	// would buy another has nothing left to buy it with.
-	if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.90", runstate.RoundKey(stoppedRun, 1), budgets.clock.Now()); err != nil {
-		t.Fatalf("RecordReviewRound() error = %v", err)
-	}
+	// Triage grants one repair per item and a second is a person's decision, so
+	// the next one is refused whatever the rounds say.
 	spent := &fakeTracker{items: map[string]beads.WorkItem{
 		"yoyodyne-ifd.90": {ID: "yoyodyne-ifd.90", Title: "the item that stopped", Status: "open"},
 	}}
@@ -191,7 +188,7 @@ func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T
 	if len(refused.Actions) != 1 || refused.Actions[0].Applied {
 		t.Fatalf("actions = %#v", refused.Actions)
 	}
-	if !strings.Contains(refused.Actions[0].Failure, "2 of 2 permitted review round(s) are spent") {
+	if !strings.Contains(refused.Actions[0].Failure, "repair grant is refused for yoyodyne-ifd.90: 1 of 1 permitted repair grant(s) are spent") {
 		t.Fatalf("the refusal does not name the cap: %q", refused.Actions[0].Failure)
 	}
 	// A refused decision writes nothing: an item that carried a repair note the
@@ -201,48 +198,39 @@ func TestARepairGrantSpendsTheDurableBudgetAndIsRefusedOnceItIsGone(t *testing.T
 	}
 }
 
-// A re-run buys a whole fresh run and is refused against the same rounds a
-// repair is, and a merge re-arm buys no round at all and is bounded on its own.
-// Both are exercised against the real record rather than a stand-in, because
-// what they promise is that the second one is refused — and a budget that only
-// ever counted up would look exactly the same from the conversation.
+// A re-run and a merge re-arm each spend a budget of their own, and neither is
+// bounded by the review rounds: a re-run buys a whole fresh run and spends no
+// round itself, and a re-arm buys no round at all. Both are exercised against
+// the real record rather than a stand-in, because what they promise is that the
+// second one is refused — and a budget that only ever counted up would look
+// exactly the same from the conversation.
+//
+// The item here has no reviewer verdict against it at all, which is the case the
+// shared round budget cannot bound: with only that budget, an item whose runs
+// keep stopping before review could be re-run for ever.
 func TestARerunAndAMergeRearmSpendTheirOwnBudgets(t *testing.T) {
 	t.Parallel()
 
 	for _, testCase := range []struct {
 		name string
-		// decision is what the development manager records, spend is what the
-		// item has already been given before it does, and refusal is what the cap
-		// says when the second one asks.
+		// decision is what the development manager records, summary is what the
+		// operator is told it spent, and refusal is what the budget says when the
+		// second one asks.
 		decision string
-		spend    func(t *testing.T, budgets *triageBudgetGate)
 		summary  string
 		counted  func(runstate.TriageCounters) int
 		refusal  string
 	}{
 		{
-			name:     "a re-run against the review rounds",
+			name:     "a re-run",
 			decision: "rerun",
-			// The rounds a re-run is refused against are what the runs of the item
-			// spent, so the cap is reached by recording them rather than by
-			// re-running twice.
-			spend: func(t *testing.T, budgets *triageBudgetGate) {
-				t.Helper()
-
-				for attempt := 0; attempt < 2; attempt++ {
-					if _, err := budgets.store.RecordReviewRound(context.Background(), "yoyodyne-ifd.68.3", runstate.RoundKey(stoppedRun, attempt), budgets.clock.Now()); err != nil {
-						t.Fatalf("RecordReviewRound() error = %v", err)
-					}
-				}
-			},
-			summary: "1 re-run(s) of it are now recorded",
-			counted: func(counters runstate.TriageCounters) int { return counters.Reruns },
-			refusal: "re-run is refused for yoyodyne-ifd.68.3: 2 of 2 permitted review round(s) are spent",
+			summary:  "1 re-run(s) of it are now recorded",
+			counted:  func(counters runstate.TriageCounters) int { return counters.Reruns },
+			refusal:  "re-run is refused for yoyodyne-ifd.68.3: 1 of 1 permitted re-run(s) are spent",
 		},
 		{
-			name:     "a merge re-arm against its own cap",
+			name:     "a merge re-arm",
 			decision: "rearm",
-			spend:    func(t *testing.T, budgets *triageBudgetGate) { t.Helper() },
 			summary:  "1 merge re-arm(s) of it are now recorded",
 			counted:  func(counters runstate.TriageCounters) int { return counters.MergeRearms },
 			refusal:  "merge re-arm is refused for yoyodyne-ifd.68.3: 1 of 1 permitted merge re-arm(s) are spent",
@@ -251,7 +239,7 @@ func TestARerunAndAMergeRearmSpendTheirOwnBudgets(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 2, MergeRearms: 1}, 2)
+			budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
 			decided := trackerReply("Decided.",
 				`{"action":"triage","id":"yoyodyne-ifd.68.3","run":"`+stoppedRun+`","decision":"`+testCase.decision+`","reason":"the change was right and the ground moved under it"}`)
 			first := &fakeTracker{items: map[string]beads.WorkItem{
@@ -275,9 +263,9 @@ func TestARerunAndAMergeRearmSpendTheirOwnBudgets(t *testing.T) {
 				t.Fatalf("counters after one %s = %#v", testCase.decision, counters)
 			}
 
-			// The budget is now gone, and the same decision asked for again is
-			// refused rather than counted a second time.
-			testCase.spend(t, budgets)
+			// The budget is now gone — with rounds to spare, which is the point —
+			// and the same decision asked for again is refused rather than counted
+			// a second time.
 			second := &fakeTracker{items: map[string]beads.WorkItem{
 				"yoyodyne-ifd.68.3": {ID: "yoyodyne-ifd.68.3", Title: "the item that stopped", Status: "open"},
 			}}

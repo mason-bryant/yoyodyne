@@ -366,6 +366,72 @@ func TestGatherCarriesNoDocketForARoleThatCannotActOnIt(t *testing.T) {
 	}
 }
 
+// The durable budget a triage decision spends is wired for the role that spends
+// it, over the product's own record and the configured caps. A conversation
+// wired without one refuses every decision that spends a budget, which is a
+// failure only the real binary would show: every conversation test supplies its
+// own budget, so a mistake here leaves the suite green and the development
+// manager unable to grant a repair.
+func TestTheDevelopmentManagerIsWiredTheProductsTriageBudget(t *testing.T) {
+	// Not parallel: the state root the components read is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	parts, err := buildComponents(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatalf("buildComponents() error = %v", err)
+	}
+
+	// Deciding what becomes of stopped work is one role's, and so is spending
+	// what the decision costs.
+	for _, role := range []domain.AgentRole{
+		domain.RoleProductManager, domain.RoleArchitect, domain.RoleDeveloper, domain.RoleReviewer,
+	} {
+		if budgets := conversationTriage(parts, role); budgets != nil {
+			t.Fatalf("the %s was wired a triage budget", role)
+		}
+	}
+
+	budgets := conversationTriage(parts, domain.RoleDevelopmentManager)
+	if budgets == nil {
+		t.Fatal("the development manager was wired no triage budget, so every decision that spends one would be refused")
+	}
+	// Spending through it is what says it is wired to something usable: the
+	// right store, caps that permit the decision, and a grant of the configured
+	// size rather than of zero.
+	granted, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90")
+	if err != nil {
+		t.Fatalf("GrantRepair() through the wired budget error = %v", err)
+	}
+	if granted.Rounds != orchestrator.TriageRepairGrantRounds(parts.config.Triage) || granted.Truncated {
+		t.Fatalf("granted = %+v, want the configured grant in full", granted)
+	}
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); err != nil {
+		t.Fatalf("RecordRerun() through the wired budget error = %v", err)
+	}
+	if _, err := budgets.RecordMergeRearm(context.Background(), "yoyodyne-ifd.90"); err != nil {
+		t.Fatalf("RecordMergeRearm() through the wired budget error = %v", err)
+	}
+
+	// It is the product's own record under the state root, which is what
+	// `yoyo status` reads back: a budget wired to a store of its own would bound
+	// nothing across conversations.
+	counters, err := parts.store.Triage().Counters("yoyodyne-ifd.90")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.RepairGrants != 1 || counters.Reruns != 1 || counters.MergeRearms != 1 {
+		t.Fatalf("counters after spending through the wired budget = %+v", counters)
+	}
+	// And the caps it enforces are the assembled ones, so the second of each is
+	// refused rather than counted.
+	if _, err := budgets.GrantRepair(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+		t.Fatalf("a second grant through the wired budget error = %v, want a cap refusal", err)
+	}
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+		t.Fatalf("a second re-run through the wired budget error = %v, want a cap refusal", err)
+	}
+}
+
 // stoppedRunState records one run that ended on a durable blocker, which is
 // what a docket build has to find.
 func stoppedRunState(t *testing.T) *runstate.Store {

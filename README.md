@@ -1155,21 +1155,31 @@ what was refused as out of scope, `rearm` repeats a merge the forge dropped,
 lands in the item's notes, so the next reader of a run that stopped finds the
 reasoning beside the evidence rather than deciding it a second time.
 
-Two of those the harness holds to more than a note. **A repair, a re-run, and a
-re-arm each spend the item's durable budget as they are recorded**, and are
-refused once it is gone — the refusal names the cap, which is the evidence for
-escalating instead. **An escalation is a durable blocker on the item and a report
-at `warning` severity or above**, in the same reply: the item itself says it is
+Four of the six the harness holds to more than a note. **A repair, a re-run, and
+a re-arm each spend the item's durable budget as they are recorded**, and are
+refused once it is gone — the refusal names the budget, which is the evidence for
+escalating instead. Triage takes each of those once per item: a second is an
+escalation rather than a larger budget, and past the [review-round
+cap](docs/configuration.md#what-one-work-item-has-been-given) even the first is
+refused. **An escalation is a durable blocker on the item and a report at
+`warning` severity or above**, in the same reply: the item itself says it is
 waiting on a person, and the report reaches [the pile you
 read](#what-agents-report-and-where-it-reaches-you). Prose alone is not an escalation, and the
 harness refuses one carrying no such report rather than blocking an item you
-were never told about.
+were never told about. `rescope` and `wait` are the two that are a note and
+nothing else — a re-scope's real work is the child item it creates beside the
+note, and a wait asks for nothing at all.
 
-What the harness does not do is carry the decision out. Nothing starts a run or
-asks a forge for anything because a decision was recorded: acting on one is
-still yours, and `yoyo run <id>` is how. What triage changed is that stopped
-work is decided by the role that owns it, the decision is durable on the item,
-and it reaches you only when the development manager judged it had to.
+What the harness does not do is carry any of it out. Nothing starts a run or
+asks a forge for anything because a decision was recorded, so acting on one is
+yours: `yoyo run <id>` for a repair or a re-run, and for a re-arm, asking the
+forge to merge the pull request again yourself — nothing in the harness repeats
+a merge request the forge dropped. The budget is spent when the decision is
+recorded whether or not you act on it, which is the same direction every counter
+here fails in: an attempt nobody took rather than one nobody counted. What
+triage changed is that stopped work is decided by the role that owns it, the
+decision is durable on the item, and it reaches you only when the development
+manager judged it had to.
 
 Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 `/reports`, `/refresh` — means the same thing in every conversation, because
@@ -2331,7 +2341,7 @@ counters are what bound it:
 ```text
 triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
-  repair grants: 1; re-runs: 0; both are refused once no round remains
+  repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
   a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
 ```
@@ -2355,9 +2365,12 @@ The lines under it are the budget for what triage can decide about work that did
 not land — another go at the change, a re-run, a re-armed merge — and they move
 when [the development manager decides one](#deciding-what-becomes-of-stopped-work).
 Each is recorded before the action it counts takes effect, so a crash cannot
-double-grant, and each is refused once its budget is spent — a grant truncated to
-the rounds the cap still has room for, a re-run refused outright once none
-remain, a merge re-arm bounded on its own because it buys no round at all. The
+double-grant, and each is refused once its budget is spent. A grant and a re-run
+are each once per item and are also refused by the rounds — the grant truncated
+to what the cap still has room for, the re-run refused outright once none
+remain — and a merge re-arm is bounded on its own because it buys no round at
+all. The rounds alone would bound neither of the first two on an item whose runs
+keep stopping before a reviewer ever sees them. The
 numbers are the `triage` keys and the integration retries in [the configuration
 guide](docs/configuration.md#what-one-work-item-has-been-given). An item triage
 has spent more than one pass on says so in the first line, which is the fact
