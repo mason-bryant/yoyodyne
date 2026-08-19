@@ -514,6 +514,52 @@ func (m *Manager) SummarizeChanges(ctx context.Context, worktree Worktree) (Chan
 	return m.summarize(ctx, path, worktree)
 }
 
+// ChangedPaths lists every repository-relative path a worktree's change
+// touches, tracked and untracked, against the recorded base commit. It is
+// base-relative for the same reason the summary is: publishing commits each
+// developer attempt, so a listing built from uncommitted status would report a
+// published change as touching nothing.
+//
+// Rename detection is deliberately off. A rename reported as one entry names the
+// path the file arrived at and says nothing about the one it left, and a caller
+// deciding whether a change may touch a path has to see both sides: moving a
+// document out of a protected home is exactly as much of an edit to that home as
+// writing in it. Without detection Git reports the two halves as a deletion and
+// an addition, which is what this needs.
+//
+// It only reads, and it is bounded by nothing: a listing of names is small even
+// where the patch it describes is not, and a caller that gates on paths must see
+// all of them rather than the first few hundred.
+func (m *Manager) ChangedPaths(ctx context.Context, worktree Worktree) ([]string, error) {
+	path, _, err := m.verifyOwnedHead(ctx, worktree)
+	if err != nil {
+		return nil, err
+	}
+	// The NUL-separated form is used here for the reason it is used for untracked
+	// files: a path containing a space, a quote, or a newline survives it, and
+	// Git's quoted form would have to be parsed back.
+	names, err := m.run(ctx, "-C", path, "diff", "--name-only", "-z", "--no-renames", "--no-ext-diff", worktree.BaseCommit, "--")
+	if err != nil {
+		return nil, err
+	}
+	if names.Status != execution.ProcessSucceeded {
+		return nil, fmt.Errorf("list changed worktree paths failed with exit code %d: %s", names.ExitCode, strings.TrimSpace(names.Stderr))
+	}
+	var changed []string
+	for _, entry := range strings.Split(strings.TrimSuffix(names.Stdout, "\n"), "\x00") {
+		if entry != "" {
+			changed = append(changed, entry)
+		}
+	}
+	untracked, err := m.untrackedFiles(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	changed = append(changed, untracked...)
+	sort.Strings(changed)
+	return changed, nil
+}
+
 // UnifiedChanges reports the actual change a developer produced, tracked and
 // untracked, as one bounded patch. It only reads: the untracked half is built
 // from `git diff --no-index` rather than from a staged index, so inspecting a

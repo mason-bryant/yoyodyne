@@ -238,7 +238,8 @@ review is not a change anybody can trust.
 
 ## Goals
 
-- A run integrates only behind deterministic checks and an independent review.
+- A run integrates only behind [protected paths](#protected-paths-in-a-developers-change),
+  deterministic checks, and an independent review.
 - A run that cannot finish leaves its work recoverable rather than lost.
 ```
 
@@ -530,10 +531,62 @@ a file that could neither load nor be corrected. So the document keeps loading,
 keeps governing, and stays amendable by its owner, and the entry stays reported
 until somebody decides what to do about it.
 
-What is still not enforced anywhere is an agent with an editor in its worktree
-changing a document without recording that it did — the same gap the design
-records for pushing and merging, where the contract in the prompt and the
-reviewer are what stand in the way.
+**A third place, and the one that catches an editor.** Both halves above are
+about the document — who wrote it, and what its log says. Neither notices a
+developer that simply opens the file. That is what the protected-path gate below
+is for, and it is why an agent with an editor in its worktree is no longer the
+open case it was: the edit is refused before anybody reviews it, whatever the
+revision log does or does not say about it.
+
+### Protected paths in a developer's change
+
+The documents above are upstream of every change a developer makes. A developer
+that edits one is redefining what its own work is measured against, and reading
+the diff does not tell that from a legitimate edit — both are a file that
+changed. So these paths are **default-deny for a developer's diff**:
+
+| Protected | Setting it follows |
+| --- | --- |
+| `.yoyodyne/` | fixed; the configuration directory |
+| `docs/product/` | `product.specifications` |
+| `docs/designs/` | `product.designs` |
+| `docs/decisions/` | `product.decisions` |
+| `docs/decisions/invariants/` | `product.invariants` |
+
+The set follows your configuration rather than the default layout: a project
+that keeps its designs elsewhere has not thereby made them a developer's to
+rewrite.
+
+**How it behaves.** The gate runs in front of the deterministic checks, on every
+attempt, over every path the change touches — tracked, untracked, and both sides
+of a move. A change that touches one of these paths without a grant is refused
+and handed back to the same developer inside the same repair loop a failing check
+uses, spending from the same budget, and the refusal names how a grant is made.
+No reviewer is asked about it: the class of finding this replaces used to cost an
+Opus review cycle to reach, and it costs a string comparison here. A run whose
+repair budget is spent still refusing is blocked on the work item, with the
+refused paths and the item's grants both named, because which of the two is wrong
+is a person's decision.
+
+**Granting a path.** An exception is declared in the work item's own text — which
+is written and reviewed before the run starts, so it is somebody's decision
+rather than the developer's. Any field of the item works, on a line beginning
+with the marker:
+
+```text
+Protected-path grant: docs/designs/v1-harness-design.md
+```
+
+Several paths on one line are separated by commas or spaces, and several such
+lines are read together. A grant naming a file admits that file alone; a grant
+naming a directory admits what is inside it. A grant of the repository root is
+not a grant, and prose that merely discusses these paths grants nothing — the
+marker has to begin the line, which is why it is an unlovely token rather than a
+phrase an item could produce by accident.
+
+Nothing an agent writes grants a path. A developer that genuinely needs one says
+so in its summary and [proposes the change](#proposing-a-change-to-a-document-you-do-not-own);
+adding the grant to the item is the product manager's.
 
 ### Proposing a change to a document you do not own
 
@@ -1446,7 +1499,8 @@ These are all errors, reported before any work is claimed:
 - a `product.specifications` that is empty, absolute, or climbs out of the
   repository, since it decides what the product manager reads; and the same of
   `product.invariants`, `product.designs`, and `product.decisions`, since they
-  decide which documents the harness treats as canonical artifacts;
+  decide which documents the harness treats as canonical artifacts and which
+  paths a developer's change may not touch;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's five, which is how a typo in an
@@ -1507,9 +1561,9 @@ for is checked in beside it.
 
 A persona is a Markdown file describing how an agent works. Personas specialize
 behavior; they never grant it. The harness invariants — agent authority,
-worktree sandboxing, the review verdict contract, integration preconditions, and
-cleanup — are enforced in Go and are not configurable, so a persona cannot
-weaken them:
+worktree sandboxing, the protected paths a developer's change may not touch, the
+review verdict contract, integration preconditions, and cleanup — are enforced in
+Go and are not configurable, so a persona cannot weaken them:
 
 - the developer prompt starts with the harness contract verbatim, and the
   persona follows it as subordinate guidance;

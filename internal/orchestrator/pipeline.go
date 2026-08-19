@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
@@ -57,6 +58,11 @@ type WorktreeManager interface {
 	Create(ctx context.Context, request gitworktree.CreateRequest) (gitworktree.Worktree, error)
 	SummarizeChanges(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.ChangeSummary, error)
 	UnifiedChanges(ctx context.Context, worktree gitworktree.Worktree, limits gitworktree.DiffLimits) (gitworktree.ChangeDiff, error)
+	// ChangedPaths names every path the change touches. It is what the gate in
+	// front of the checks decides on, so it is separate from the summary and the
+	// patch above: those are bounded for a reader, and a gate that saw a bounded
+	// listing would pass whatever the bound had cut.
+	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
@@ -756,7 +762,8 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
-		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text, p.Config.Execution.RepairAttemptsBeforeReplan)
+		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
+			protectedpath.Protect(p.Config), p.Config.Execution.RepairAttemptsBeforeReplan)
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -769,13 +776,17 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 
 // resumedDeveloperPrompt rebuilds the prompt the interrupted attempt was given
 // from what survived on disk. Only one kind of repair input is ever recorded at
-// a time, and a failing check is the more recent trigger when both are somehow
-// present: the checks are re-run after every attempt, so findings recorded
-// beside a failing check describe a change the gate has already moved past. A
-// run that recorded neither never had a failure returned to it — it paused
-// before or during its first attempt — so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, limit int) (string, error) {
+// a time, and where more than one is somehow present the later gate wins,
+// because each gate is re-run after every attempt and a record from an earlier
+// one describes a change this run has already moved past. That orders them the
+// way a run meets them: the refused paths are decided in front of the checks,
+// and the checks in front of the review. A run that recorded none of the three
+// never had a failure returned to it — it paused before or during its first
+// attempt — so what it is owed is that attempt.
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
+	case state.PathRefusal != nil:
+		return pathRefusalRepairPrompt(invariants, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
 	case state.CheckFailure != nil:
 		return checkRepairPrompt(invariants, *state.CheckFailure, state.RepairAttempts, limit), nil
 	case len(state.ReviewFindingDetails) > 0:
@@ -1080,16 +1091,16 @@ func (a *activeRun) blockOnRebaseConflict(ctx context.Context, cause error) erro
 }
 
 // repairLoop returns each failure to the same developer until an attempt both
-// passes the deterministic checks and is approved, or the configured repair
-// budget is spent. A failing check and a reviewer's findings are the same kind
-// of event here: both are repair input for the developer that produced the
-// change, and both draw on one shared budget. Sharing it is what bounds the
-// total number of developer invocations a run can make, which is what the
-// budget exists to do; separate budgets would let a run alternating between the
-// two spend far more than the operator configured. Every attempt re-runs the
-// checks and obtains its own independent review, so an approval always belongs
-// to a change whose checks passed, and nothing an earlier attempt was granted
-// carries forward.
+// passes the deterministic gates and is approved, or the configured repair
+// budget is spent. A refused path, a failing check, and a reviewer's findings
+// are the same kind of event here: each is repair input for the developer that
+// produced the change, and all three draw on one shared budget. Sharing it is
+// what bounds the total number of developer invocations a run can make, which is
+// what the budget exists to do; separate budgets would let a run alternating
+// between them spend far more than the operator configured. Every attempt puts
+// the change through both gates again and obtains its own independent review, so
+// an approval always belongs to a change that passed them, and nothing an
+// earlier attempt was granted carries forward.
 func (a *activeRun) repairLoop(ctx context.Context) error {
 	limit := a.pipeline.Config.Execution.RepairAttemptsBeforeReplan
 	for {
@@ -1102,6 +1113,20 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return err
 		}
 		if err := a.verify(ctx); err != nil {
+			// A change refused for what it touched is answered before anything else,
+			// because it is what the gate decided first: the checks never ran on this
+			// attempt, so there is no check failure competing with it.
+			var refused pathRefusal
+			if errors.As(err, &refused) {
+				a.recordPathRefusal(refused.refusal)
+				if a.state.RepairAttempts >= limit {
+					return a.blockOnRefusedPaths(ctx, refused, limit)
+				}
+				if err := a.repair(ctx, pathRefusalRepairPrompt(a.deliveredInvariants().Text(), refused.refusal, refused.set, a.state.RepairAttempts+1, limit)); err != nil {
+					return err
+				}
+				continue
+			}
 			// Verification that could not run at all is not something a developer
 			// can repair, so it ends the run rather than spending an attempt.
 			var failing checkFailure
@@ -1167,6 +1192,18 @@ func (a *activeRun) recordCheckFailure(result checks.Result) {
 	}
 }
 
+// recordPathRefusal makes the refused paths the run's outstanding repair input.
+// It clears both of the others for the reason recordCheckFailure clears the
+// findings, and it clears one more of them than that does: this gate is decided
+// in front of the checks, so a check failure recorded beside it describes a
+// suite that did not run on the change now in the worktree.
+func (a *activeRun) recordPathRefusal(refusal runstate.PathRefusal) {
+	a.clearReviewEvidence()
+	a.state.CheckFailure = nil
+	recorded := refusal
+	a.state.PathRefusal = &recorded
+}
+
 // blockOnUnresolvedFindings ends a run whose repair budget is spent. The design
 // hands control back to a development manager at this point; that role does not
 // exist yet, so the unresolved findings are recorded as a durable blocker on the
@@ -1197,6 +1234,24 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 	defer cancel()
 	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderCheckBlockerNotes(a.outcome, failure, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
+}
+
+// blockOnRefusedPaths ends a run whose repair budget was spent still touching
+// paths its work item does not grant. It is the scope-side twin of
+// blockOnFailingCheck, and what it hands to a person is a decision rather than a
+// defect: either the change keeps reaching for something outside its item, or the
+// item is missing a grant it should have had. The note names both possibilities,
+// because only a person can say which one it is.
+func (a *activeRun) blockOnRefusedPaths(ctx context.Context, refused pathRefusal, limit int) error {
+	cause := fmt.Errorf("protected paths refused after %d of %d permitted attempt(s): %s",
+		a.state.RepairAttempts, limit, strings.Join(refused.refusal.Paths, ", "))
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderPathRefusalBlockerNotes(a.outcome, refused, limit)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the refused protected paths as a blocker: %w", err))
 	}
 	a.outcome.Blocked = true
 	return cause
@@ -1366,7 +1421,7 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
 	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, limit)); err != nil {
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, a.state.PathRefusal, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
 	}
 	a.outcome.Blocked = true
@@ -2285,13 +2340,21 @@ func (p Pipeline) sleep(ctx context.Context, duration time.Duration) error {
 	}
 }
 
-// verify runs the configured deterministic checks over the worktree as it
-// stands. Every attempt runs them again: no attempt inherits an earlier
+// verify puts the change through the two deterministic gates in front of the
+// reviewer: what it was allowed to touch, and then the configured checks over
+// what it did. Every attempt runs both again: no attempt inherits an earlier
 // attempt's verification, and review and integration are only reachable through
-// checks that passed on the change being judged.
+// a change that passed both on the change being judged.
 func (a *activeRun) verify(ctx context.Context) error {
 	p := a.pipeline
 	a.state.Phase = runstate.PhaseChecking
+	// Scope is settled before the suite runs, because it costs a listing of names
+	// against a handful of prefixes and the suite costs whatever the project's
+	// suite costs. A change that is not allowed to stand does not get a check
+	// suite spent on it first.
+	if err := a.gateProtectedPaths(ctx); err != nil {
+		return err
+	}
 	checkResults, lastSequence, err := p.Checks.Run(ctx, a.state.RunID, a.worktree.Path, p.Config.Checks, a.state.LastSequence, a.sink)
 	a.outcome.Checks = checkResults
 	a.state.LastSequence = lastSequence
@@ -2326,6 +2389,68 @@ func (a *activeRun) verify(ctx context.Context) error {
 	// was handed is no longer this run's outstanding repair input.
 	a.state.CheckFailure = nil
 	return nil
+}
+
+// gateProtectedPaths refuses a change that touched an upstream artifact this
+// work item never admitted into its scope. The paths are the harness's own
+// configuration and the artifact homes the roles above the developer own, and
+// the grants are read from the work item's own text — which is the whole point
+// of doing it this way. An exception written into an item was decided before the
+// run started and reviewed with the rest of it; an exception the run discovers
+// is the developer deciding what its work was allowed to redefine.
+//
+// It answers with a refusal rather than a verdict. Nothing here says the change
+// is wrong, only that part of it is not this run's to make, so it goes back to
+// the same developer inside the same repair loop as any other failure that
+// stands between a change and its reviewer.
+func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
+	changed, err := a.pipeline.Worktrees.ChangedPaths(ctx, a.worktree)
+	if err != nil {
+		return fmt.Errorf("list the paths this change touches: %w", err)
+	}
+	protected := protectedpath.Protect(a.pipeline.Config)
+	granted := protectedpath.Grants(workItemEvidence(a.item)...)
+	refused := protected.Refused(changed, granted)
+	if len(refused) == 0 {
+		// The change in the worktree is within its scope now, so a refusal an
+		// earlier attempt was handed no longer describes it.
+		a.state.PathRefusal = nil
+		return nil
+	}
+	return phaseError{status: runstate.StatusFailed, cause: pathRefusal{
+		refusal: boundedPathRefusal(refused, granted),
+		set:     protected,
+	}}
+}
+
+// boundedPathRefusal is what a refusal is allowed to carry into durable state
+// and into the developer's next attempt. A change that rewrote a whole artifact
+// home is refused on all of it and told about the first of it, with the rest
+// counted rather than dropped silently: the developer has to take every one of
+// them back out, and a listing that stopped without saying so would read as the
+// whole of what the gate caught.
+func boundedPathRefusal(refused, granted []string) runstate.PathRefusal {
+	recorded := runstate.PathRefusal{Paths: refused, Grants: granted}
+	if len(refused) > runstate.MaxRefusedPaths {
+		recorded.Paths = refused[:runstate.MaxRefusedPaths]
+		recorded.Omitted = len(refused) - runstate.MaxRefusedPaths
+	}
+	return recorded
+}
+
+// pathRefusal is a change refused for the paths it touched. Like a failing check
+// it is its own error type because it is repair input for the developer that
+// produced the change, which has to be told apart from the gate failing to run
+// at all — an unreadable worktree is not something a developer can fix by
+// editing its change.
+type pathRefusal struct {
+	refusal runstate.PathRefusal
+	set     protectedpath.Set
+}
+
+func (e pathRefusal) Error() string {
+	return fmt.Sprintf("change touches protected paths this work item does not grant: %s",
+		strings.Join(e.refusal.Paths, ", "))
 }
 
 // checkFailure is a deterministic check that ran and failed. It is its own error
@@ -3032,8 +3157,8 @@ func durableFindings(findings []review.Finding) []runstate.Finding {
 // loop, which is the only interrupted run this pipeline picks up. It needs the
 // worktree every attempt shares, the developer session the next attempt
 // continues, a recorded attempt count, and, when an attempt was in flight, the
-// repair input that attempt was given: either the failing check or the
-// reviewer's findings. Anything else is left to reconciliation rather than
+// repair input that attempt was given: the refused paths, the failing check, or
+// the reviewer's findings. Anything else is left to reconciliation rather than
 // reconstructed from guesswork.
 func resumableRepair(state runstate.State) bool {
 	if state.Status != runstate.StatusRunning || state.RepairAttempts == 0 {
@@ -3047,7 +3172,7 @@ func resumableRepair(state runstate.State) bool {
 	}
 	switch state.Phase {
 	case runstate.PhaseDeveloping:
-		return state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+		return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
 	case runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:
@@ -3224,6 +3349,8 @@ const developerContract = `You are the developer for one bounded Yoyodyne work i
 
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
+That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item's own text grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + `. Nothing you write grants a path. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
+
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
 Documentation that describes behavior you change is part of the assigned work, not a follow-up: leave no document asserting what your change has made false. Update the ones you may edit in this same change, and for a stale upstream artifact you may not edit, propose the correction it needs.
@@ -3290,6 +3417,39 @@ func repairPrompt(invariants, summary string, findings []runstate.Finding, attem
 	prompt.Write(encoded)
 	prompt.WriteString("\n\nFix each finding, re-run the relevant checks, and finish with a concise summary of what you changed. If a finding is wrong, say why in your summary rather than leaving it unaddressed.")
 	return prompt.String(), nil
+}
+
+// pathRefusalRepairPrompt hands a refused change back to the developer that
+// produced it. It says what was refused, what the item did grant, and how a
+// grant is made, in that order: the first is what has to come back out of the
+// change, and the last is the whole reason this is a refusal rather than a
+// finding — a developer that genuinely needs one of these paths has to be able
+// to ask instead of quietly reaching for it again. The harness contract is
+// repeated for the reason both other repair prompts repeat it: it bounds the
+// attempt whether or not the provider actually restored the session.
+func pathRefusalRepairPrompt(invariants string, refusal runstate.PathRefusal, protected protectedpath.Set, attempt, limit int) string {
+	var prompt strings.Builder
+	prompt.WriteString(developerContract)
+	prompt.WriteString("\n\n")
+	prompt.WriteString(deliveredInvariantSection(invariants))
+	prompt.WriteString("# Protected paths: repair required\n\n")
+	fmt.Fprintf(&prompt, "Your change touches paths this work item does not grant, so it was refused before any check ran and before it reached a reviewer. This is repair attempt %d of %d. Continue the change already in your worktree instead of starting over, and take these paths back out of it.\n\n", attempt, limit)
+	prompt.WriteString("Refused paths:\n\n")
+	for _, refused := range refusal.Paths {
+		prompt.WriteString("- " + refused + "\n")
+	}
+	if refusal.Omitted > 0 {
+		fmt.Fprintf(&prompt, "- and %d further refused path(s) not listed here\n", refusal.Omitted)
+	}
+	fmt.Fprintf(&prompt, "\nProtected by this project: %s\n", strings.Join(protected.Directories(), ", "))
+	if len(refusal.Grants) > 0 {
+		fmt.Fprintf(&prompt, "Granted by this work item: %s\n", strings.Join(refusal.Grants, ", "))
+	} else {
+		prompt.WriteString("Granted by this work item: nothing\n")
+	}
+	prompt.WriteString("\n" + protectedpath.GrantInstruction + "\n")
+	prompt.WriteString("\nRestore each refused path to what it held before your change, finish the work you were assigned within the paths that are yours, and finish with a concise summary of what you changed. The harness applies this gate again afterwards; the checks, review, and integration stay out of reach until the change touches nothing it was not granted.")
+	return prompt.String()
 }
 
 // checkRepairPrompt hands one failing deterministic check back to the developer
@@ -3394,6 +3554,34 @@ func renderCheckBlockerNotes(outcome Outcome, failure runstate.CheckFailure, lim
 	return strings.Join(lines, "\n")
 }
 
+// renderPathRefusalBlockerNotes describes a run that kept reaching for paths its
+// work item does not grant. Unlike the other blockers this one names a decision
+// somebody has to take rather than a defect somebody has to fix: the grant is
+// the product manager's to add to the item, so the note says what was refused
+// and what the item grants today, and leaves which of the two is wrong to the
+// reader.
+func renderPathRefusalBlockerNotes(outcome Outcome, refused pathRefusal, limit int) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its change kept touching paths the work item does not grant, after every permitted attempt.",
+		fmt.Sprintf("Repair attempts: %d of %d permitted", outcome.RepairAttempts, limit),
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"The branch and worktree are preserved. Either the change reaches outside this item, or this item is missing a grant it should have had; the grant belongs in the item's own text.",
+		"Refused paths: " + strings.Join(refused.refusal.Paths, ", "),
+	}
+	if refused.refusal.Omitted > 0 {
+		lines = append(lines, fmt.Sprintf("Further refused paths not listed: %d", refused.refusal.Omitted))
+	}
+	lines = append(lines, "Protected by this project: "+strings.Join(refused.set.Directories(), ", "))
+	if len(refused.refusal.Grants) > 0 {
+		lines = append(lines, "Granted by this work item: "+strings.Join(refused.refusal.Grants, ", "))
+	} else {
+		lines = append(lines, "Granted by this work item: nothing")
+	}
+	return strings.Join(lines, "\n")
+}
+
 // renderIntegrationBlockerNotes describes a run that kept losing its target
 // branch. It says plainly that nothing was found wrong with the change, because
 // the artifacts it preserves are worth picking up rather than replanning: what
@@ -3421,10 +3609,10 @@ func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) s
 // What the run was already carrying when the provider killed it is a separate
 // question, and the note answers it rather than assuming. A provider can die
 // during a repair attempt as easily as during the first one, so the run may hold
-// a spent repair attempt, a failing check, and a reviewer's findings — all of
-// which are named here, because a reader told only about the provider would go
-// looking for a clean change and find a dirty one.
-func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, checkFailure *runstate.CheckFailure, limit int) string {
+// a spent repair attempt, refused paths, a failing check, and a reviewer's
+// findings — all of which are named here, because a reader told only about the
+// provider would go looking for a clean change and find a dirty one.
+func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, checkFailure *runstate.CheckFailure, refusal *runstate.PathRefusal, limit int) string {
 	lines := []string{
 		"Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
 		fmt.Sprintf("Relaunches: %d of %d permitted", outcome.TransientRelaunches, limit),
@@ -3435,6 +3623,9 @@ func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailur
 	}
 	if outcome.RepairAttempts > 0 {
 		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(outcome.RepairAttempts))
+	}
+	if refusal != nil {
+		lines = append(lines, "Refused protected paths: "+strings.Join(refusal.Paths, ", "))
 	}
 	if checkFailure != nil {
 		lines = append(lines, fmt.Sprintf("Last failing check: %s (exit %d)", checkFailure.Command, checkFailure.ExitCode))

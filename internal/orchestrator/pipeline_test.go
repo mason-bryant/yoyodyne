@@ -2285,6 +2285,10 @@ func (partialWorktreeManager) UnifiedChanges(context.Context, gitworktree.Worktr
 	return gitworktree.ChangeDiff{}, nil
 }
 
+func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree) ([]string, error) {
+	return nil, nil
+}
+
 func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
 }

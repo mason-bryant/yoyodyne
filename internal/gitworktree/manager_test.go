@@ -743,6 +743,70 @@ func TestManagerUnifiedChangesCoversTrackedAndUntrackedWorkWithoutMutating(t *te
 	}
 }
 
+func TestManagerChangedPathsNamesBothSidesOfEveryChange(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-paths", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// A tracked file moved somewhere else. A caller deciding what a change was
+	// allowed to touch has to see the path it left as well as the one it
+	// arrived at, because moving a file out of a directory is as much of an
+	// edit to that directory as writing in it.
+	if err := os.Rename(filepath.Join(worktree.Path, "README.txt"), filepath.Join(worktree.Path, "MOVED.txt")); err != nil {
+		t.Fatalf("Rename() error = %v", err)
+	}
+	writeFile(t, worktree.Path, filepath.Join("sub", "odd name.txt"), "nested\n")
+	writeFile(t, worktree.Path, ".gitignore", "ignored.txt\n")
+	writeFile(t, worktree.Path, "ignored.txt", "should not be gated\n")
+
+	before := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all")
+	changed, err := manager.ChangedPaths(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("ChangedPaths() error = %v", err)
+	}
+	want := []string{".gitignore", "MOVED.txt", "README.txt", "sub/odd name.txt"}
+	if !reflect.DeepEqual(changed, want) {
+		t.Fatalf("ChangedPaths() = %#v, want %#v", changed, want)
+	}
+	// Inspecting a change never alters it, here for the same reason the unified
+	// diff never does.
+	if after := gitOutput(t, worktree.Path, "status", "--porcelain=v1", "--untracked-files=all"); after != before {
+		t.Errorf("worktree status changed during inspection:\nbefore %q\nafter  %q", before, after)
+	}
+}
+
+func TestManagerChangedPathsSeesWhatAnAttemptAlreadyCommitted(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{RunID: testRunID, WorkItemID: "yoyodyne-committed", BaseRef: "HEAD"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "implemented\n")
+	// Publishing commits each developer attempt, so a listing built from
+	// uncommitted status would report a published change as touching nothing.
+	runGit(t, worktree.Path, "add", ".")
+	runGit(t, worktree.Path,
+		"-c", "user.name="+harnessCommitAuthorName,
+		"-c", "user.email="+harnessCommitAuthorEmail,
+		"commit", "-m", "yoyodyne: published attempt")
+	worktree.HarnessCommit = gitLine(t, worktree.Path, "rev-parse", "HEAD")
+
+	changed, err := manager.ChangedPaths(context.Background(), worktree)
+	if err != nil {
+		t.Fatalf("ChangedPaths() error = %v", err)
+	}
+	if !reflect.DeepEqual(changed, []string{"feature.txt"}) {
+		t.Fatalf("ChangedPaths() = %#v, want the committed change", changed)
+	}
+}
+
 func TestManagerUnifiedChangesEnforcesDiffBounds(t *testing.T) {
 	t.Parallel()
 

@@ -18,12 +18,18 @@ package artifact
 // Beads work rather than Markdown — which falls out of this table rather than
 // being stated separately: no kind names it, so it owns none.
 //
-// What this does not bound is an agent with an editor in its worktree, which is
-// the same gap the design records for pushing and merging. Two things narrow it.
-// Every mutation the harness performs comes through here, and a revision log
-// that records a change by a role which does not own the artifact is reported
-// every time the set is loaded, so a hand-edited claim of somebody else's
-// authority is a named problem rather than something only a reader would notice.
+// What this does not bound by itself is an agent with an editor in its worktree.
+// Three things narrow it. Every mutation the harness performs comes through
+// here; a revision log that records a change by a role which does not own the
+// artifact is reported every time the set is loaded, so a hand-edited claim of
+// somebody else's authority is a named problem rather than something only a
+// reader would notice; and a developer's diff is gated on the paths these
+// documents live in before it reaches a reviewer, so an edit made with an editor
+// is refused and handed back unless the work item granted the path
+// (internal/protectedpath). That gate is about the file rather than the
+// document, which is why it does not replace this: it refuses the edit whether
+// or not the editor also touched the revision log, and it says nothing about who
+// may amend what.
 //
 // That report is deliberately not a refusal, and the difference matters most for
 // a revision recorded before this rule existed. The revision log is append-only:

@@ -1360,6 +1360,18 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+Then the change is gated on what it touched. The project configuration and the
+artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
+`docs/designs/`, and `docs/decisions/` by default — are default-deny for a
+developer's diff, because a developer that edits one is redefining what its own
+work is measured against. A change that touches one without the work item
+granting it is refused before any check runs and before any reviewer is asked,
+and handed back to the same developer in the same repair loop a failing check
+uses. An item grants an exception in its own text, on a line beginning
+`Protected-path grant:`, so every exception is declared in reviewed item text
+rather than discovered in a diff. [Configuration](docs/configuration.md#protected-paths-in-a-developers-change)
+has the details.
+
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
 the work item, its design guidance and acceptance criteria, the invariants
