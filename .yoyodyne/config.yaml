@@ -166,7 +166,10 @@ agents:
   development-manager:
     role: development-manager
     backend: claude-code
-    model: opus
+    # The judgment model, per the operator's decision when the hierarchy was
+    # planned: the decision-owning roles run on Fable. Same reasoning as the
+    # product manager below.
+    model: fable
     instances: 1
     persona:
       version: v1
