@@ -568,10 +568,8 @@ repair budget is spent still refusing is blocked on the work item, with the
 refused paths and the item's grants both named, because which of the two is wrong
 is a person's decision.
 
-**Granting a path.** An exception is declared in the work item's own text — which
-is written and reviewed before the run starts, so it is somebody's decision
-rather than the developer's. Any field of the item works, on a line beginning
-with the marker:
+**Granting a path.** An exception is declared in the work item's text, on a line
+beginning with the marker:
 
 ```text
 Protected-path grant: docs/designs/v1-harness-design.md
@@ -584,12 +582,27 @@ not a grant, and prose that merely discusses these paths grants nothing — the
 marker has to begin the line, which is why it is an unlovely token rather than a
 phrase an item could produce by accident.
 
-Nothing an agent writes grants a path. A developer that genuinely needs one says
-so in its summary and [proposes the change](#proposing-a-change-to-a-document-you-do-not-own);
-the grant goes into the work item, which is not a developer's to write. Which
-role writes it there is a question about the fixed set of roles rather than about
-this gate, and is not answered here — **you** write it, as the operator, and so
-does any agent you have directed to maintain the item.
+**Which fields count, and why it is not "whoever wrote it".** A grant is read
+from the item's **title, description, design guidance, and acceptance criteria**,
+and **not from its notes**. The gate does not ask who typed a grant — it cannot,
+because the tracker records no authorship the harness could check. What it relies
+on instead is *when*: those four fields exist before the run starts and no part of
+the harness writes to them, so a grant in one of them predates the change it
+admits. The notes are the opposite — the harness appends each run's own record
+there, including the reviewer's summary and findings — so a grant read from the
+notes could be an agent's own prose, admitted to the next run of the same item.
+That is the case this gate exists to stop, so the notes do not count.
+
+The practical consequence: **a grant written into the notes silently does not
+count.** A run refused despite an item that plainly names the path is usually
+this. Both the refusal and the blocker name the fields a grant is read from.
+
+Nothing any agent produces during a run grants a path. A developer that
+genuinely needs one says so in its summary and
+[proposes the change](#proposing-a-change-to-a-document-you-do-not-own); the
+grant goes into the item, which is not a developer's to write. Which role
+maintains an item's text is a question about the fixed set of roles rather than
+about this gate, and this document does not answer it.
 
 ### Proposing a change to a document you do not own
 

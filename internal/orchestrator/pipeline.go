@@ -883,6 +883,26 @@ func workItemEvidence(item beads.WorkItem) []string {
 	return []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria, item.Notes}
 }
 
+// grantEvidence is the part of a work item that can admit a protected path, and
+// it is deliberately narrower than the evidence above: the fields somebody
+// authored, and not the notes.
+//
+// The notes are where the harness appends what a run produced, and some of that
+// is written by an agent — the reviewer's verdict summary and every finding
+// message go into the item's notes through RecordOutcome and Block. Reading
+// grants from there would mean an agent's own prose could admit a protected path
+// for the next run of the same item, which is exactly the thing this gate exists
+// to stop, and it would make "nothing an agent writes grants a path" false in the
+// contract that says it. Nothing the harness writes touches the four fields below.
+//
+// The consequence is worth stating because it is the failure an operator would
+// meet: a grant written into the notes does not count. The refusal names the
+// fields a grant is read from, so an item that visibly says the words and is
+// still refused says why.
+func grantEvidence(item beads.WorkItem) []string {
+	return []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria}
+}
+
 // recordDeliveredInvariants keeps the run's account of which constraints its
 // change was held to. It merges rather than replaces, because a run delivers
 // twice — once to the developer and once to the reviewer — and the second
@@ -2410,7 +2430,7 @@ func (a *activeRun) gateProtectedPaths(ctx context.Context) error {
 		return fmt.Errorf("list the paths this change touches: %w", err)
 	}
 	protected := protectedpath.Protect(a.pipeline.Config)
-	granted := protectedpath.Grants(workItemEvidence(a.item)...)
+	granted := protectedpath.Grants(grantEvidence(a.item)...)
 	refused := protected.Refused(changed, granted)
 	if len(refused) == 0 {
 		// The change in the worktree is within its scope now, so a refusal an
@@ -3350,7 +3370,7 @@ const developerContract = `You are the developer for one bounded Yoyodyne work i
 
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
-That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item's own text grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + `. Nothing you write grants a path. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
+That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 

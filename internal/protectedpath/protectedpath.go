@@ -45,7 +45,8 @@ const GrantMarker = "protected-path grant:"
 // which is the architect's to settle and not something a refusal message should
 // decide by being worded one way rather than another.
 const GrantInstruction = "These paths are yours to change only when the work item says so. An item grants one by naming it after `" + GrantMarker +
-	"` on a line of its own, and that grant covers every attempt the item makes. Nothing you write grants a path: the item is written and reviewed before the run starts, which is what makes an exception somebody's decision rather than yours. " +
+	"` on a line of its own, in the item's title, description, design guidance, or acceptance criteria — the fields somebody authored, not the notes the harness appends a run's own record to. " +
+	"That grant covers every attempt the item makes. Nothing you write grants a path: the item is written and reviewed before the run starts, which is what makes an exception somebody's decision rather than yours. " +
 	"If your work genuinely needs one of these paths, take it back out of your change, and use your summary and an amendment proposal to say which path you need and why. The grant goes into the work item, which is not yours to write."
 
 // Set is the paths one project protects, as repository-relative directory
@@ -121,10 +122,11 @@ func (s Set) Refused(changed, granted []string) []string {
 	return refused
 }
 
-// Grants reads the paths a work item's own text admits. Every field of the item
-// is read, because which field an operator writes a grant into is a habit rather
-// than a rule, and a grant that only counts in one of them is a grant that
-// silently does not count.
+// Grants reads the paths a work item's text admits, from whichever of the
+// item's fields the caller passes. Several are passed rather than one, because
+// which field somebody writes a grant into is a habit rather than a rule; which
+// fields those are is the caller's decision, because it is the caller that knows
+// which of them the harness itself writes into.
 func Grants(texts ...string) []string {
 	var granted []string
 	for _, text := range texts {
@@ -134,7 +136,8 @@ func Grants(texts ...string) []string {
 				continue
 			}
 			for _, entry := range strings.FieldsFunc(remainder, isSeparator) {
-				if clean, ok := normalize(strings.Trim(entry, "`'\"*_()[]")); ok {
+				undecorated := strings.TrimRight(strings.TrimLeft(entry, leadingDecoration), trailingDecoration)
+				if clean, ok := normalize(undecorated); ok {
 					granted = appendUnique(granted, clean)
 				}
 			}
@@ -159,6 +162,22 @@ func cutMarker(line string) (string, bool) {
 func isSeparator(r rune) bool {
 	return r == ',' || r == ';' || r == ' ' || r == '\t'
 }
+
+// What an item's prose puts around a path that is not part of the path:
+// Markdown emphasis and code spans, quotes, brackets, and — at the end only —
+// the punctuation that closes the sentence a grant was written as. Trimming it
+// is not cosmetic. A grant written `docs/designs/v1.md`. would otherwise
+// normalize to a path carrying a backtick and a stop, match nothing, and grant
+// nothing, and what the operator would see is a run refused and blocked for a
+// path their item plainly names.
+//
+// The two sets differ by the full stop, and deliberately: a leading one is part
+// of the path rather than decoration around it, and trimming it would make
+// `.yoyodyne` — the path most worth granting explicitly — impossible to grant.
+const (
+	leadingDecoration  = "`'\"*_(["
+	trailingDecoration = "`'\"*_)].,;:!?"
+)
 
 // normalize turns a written path into the repository-relative slash form both
 // sides are compared in. It reports false for anything that cannot name a file

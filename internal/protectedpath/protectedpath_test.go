@@ -81,7 +81,7 @@ func TestAGrantAdmitsOneFileWithoutAdmittingItsHome(t *testing.T) {
 	}
 }
 
-func TestGrantsAreReadFromEveryFieldAndOnlyFromTheMarker(t *testing.T) {
+func TestGrantsAreReadFromEveryTextGivenAndOnlyFromTheMarker(t *testing.T) {
 	t.Parallel()
 
 	granted := Grants(
@@ -94,6 +94,38 @@ func TestGrantsAreReadFromEveryFieldAndOnlyFromTheMarker(t *testing.T) {
 	want := []string{".yoyodyne/personas", "docs/designs/v1-harness-design.md", "docs/product/goals/v1-goals.md"}
 	if !slices.Equal(granted, want) {
 		t.Fatalf("Grants() = %v, want %v", granted, want)
+	}
+}
+
+// A grant is usually written as a sentence, and the punctuation that ends one is
+// not part of the path. Without this an item that plainly names the path is
+// refused and blocked for it, which is the worst way to learn about a parser.
+func TestAGrantSurvivesThePunctuationOfTheSentenceItIsWrittenIn(t *testing.T) {
+	t.Parallel()
+
+	for _, line := range []string{
+		"Protected-path grant: docs/designs/v1-harness-design.md.",
+		"Protected-path grant: `docs/designs/v1-harness-design.md`.",
+		"Protected-path grant: **docs/designs/v1-harness-design.md**!",
+		"Protected-path grant: (docs/designs/v1-harness-design.md)",
+		"Protected-path grant: docs/designs/v1-harness-design.md,",
+	} {
+		granted := Grants(line)
+		if !slices.Equal(granted, []string{"docs/designs/v1-harness-design.md"}) {
+			t.Fatalf("Grants(%q) = %v, want the path it names", line, granted)
+		}
+	}
+	// A leading stop is part of the path rather than decoration around it, and
+	// the path it belongs to is the one most worth granting explicitly.
+	for _, line := range []string{
+		"Protected-path grant: .yoyodyne/config.yaml",
+		"Protected-path grant: `.yoyodyne/config.yaml`.",
+		"Protected-path grant: **.yoyodyne/config.yaml**",
+	} {
+		granted := Grants(line)
+		if !slices.Equal(granted, []string{".yoyodyne/config.yaml"}) {
+			t.Fatalf("Grants(%q) = %v, want the dotted path intact", line, granted)
+		}
 	}
 }
 
