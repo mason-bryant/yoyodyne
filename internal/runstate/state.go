@@ -635,6 +635,15 @@ var (
 	branchPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
 )
 
+// ValidRunID reports a run identifier of the shape this package mints. It is
+// exported because a run is named from outside the harness too: a triage
+// decision names the run whose stoppage it settles, copied out of a docket entry
+// by an agent, and a name that could never have identified a run is refused
+// where it is read rather than written onto a work item.
+func ValidRunID(runID string) bool {
+	return runIDPattern.MatchString(strings.TrimSpace(runID))
+}
+
 // validLocalBranch mirrors the integration target rule the worktree manager
 // enforces: a plain local branch name, never HEAD and never a fully qualified
 // ref. Durable evidence is re-read by a reconciler that acts on it, so it is

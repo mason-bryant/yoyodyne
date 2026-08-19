@@ -638,12 +638,23 @@ func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	t.Parallel()
 
 	contract := SystemPrompt(domain.RoleProductManager, "")
-	// An action the harness runs but never states is one the product manager will
-	// not use, and an action stated but not implemented is one it will ask for and
-	// be refused. Both are ways for the contract and the harness to disagree.
-	for _, action := range trackerActionNames {
-		if !strings.Contains(contract, `{"action":"`+action+`"`) {
-			t.Fatalf("the contract does not offer the %q action it can carry out", action)
+	// An action a role may ask for but is never shown is one it will not use, and
+	// one shown to a role that may not ask for it is one it will ask for and be
+	// refused. Both are ways for a contract and the authority table to disagree,
+	// so every role is held to its own list rather than to the whole vocabulary:
+	// the actions are no longer one role's since triage became the development
+	// manager's alone.
+	for _, role := range ConversationalRoles() {
+		authority, _ := AuthorityFor(role)
+		offered := SystemPrompt(role, "")
+		for _, action := range trackerActionNames {
+			shown := strings.Contains(offered, `{"action":"`+action+`"`)
+			if authority.MayAct(action) && !shown {
+				t.Fatalf("the %s contract does not offer the %q action that role can carry out", role, action)
+			}
+			if !authority.MayAct(action) && shown {
+				t.Fatalf("the %s contract offers the %q action that role is refused", role, action)
+			}
 		}
 	}
 	for _, required := range []string{

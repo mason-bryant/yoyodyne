@@ -1621,23 +1621,29 @@ triage:
 moving is collected and delivered to the development manager: `stuck_merge_age`
 decides when an unmerged publication is docketed, and the two budgets are
 carried on every entry so a decision about one is made against what the item is
-allowed to spend rather than against the evidence alone. Nothing enforces the
-cap automatically — deciding what becomes of a docketed item is the development
-manager's, and the counters are what that decision is measured against.
+allowed to spend rather than against the evidence alone. Deciding what becomes
+of a docketed item is the development manager's; the caps are what refuse a
+decision that would spend more than the item is allowed.
 
 The docket is built when something scans: `yoyo reconcile`, and the moment a
 development manager conversation opens. There is no scheduled process behind it,
 so `stuck_merge_age` is a floor rather than a promise — a publication becomes
 docketable at that age and is docketed the next time one of those happens.
 
-**Two of these are already read, and the three triage actions are not built.**
-The docket above consumes `stuck_merge_age` — an approved publication older than
-it is docketed at the next scan — and `review_rounds_cap` bounds the
-[per-item counters](#what-one-work-item-has-been-given) below, which every run
-writes to and `yoyo status <id>` reports. What no decision the harness makes
-today does is spend the budget: nothing yet grants a repair, causes a re-run, or
-re-arms a dropped merge, so `repair_grant_attempts` has no caller and the caps
-are a recorded budget awaiting the actions that will be refused past it.
+**All three are read.** The docket above consumes `stuck_merge_age` — an approved
+publication older than it is docketed at the next scan — and `review_rounds_cap`
+bounds the [per-item counters](#what-one-work-item-has-been-given) below, which
+every run writes to and `yoyo status <id>` reports. The development manager's
+triage decisions spend them: a decision of `repair` takes a grant of
+`repair_grant_attempts` rounds truncated to what the cap has room for, `rerun`
+and `rearm` spend their own budgets, and each is refused once its budget is gone.
+
+What a recorded decision does not do is carry itself out. Nothing starts a run,
+hands a developer a grant, or asks a forge for anything on the strength of one:
+the decision and the budget are recorded, and starting the run is still
+`yoyo run <id>`. The budget is spent when the decision is recorded, which is the
+same order every counter here is written in — an attempt nobody took rather than
+one nobody counted.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
