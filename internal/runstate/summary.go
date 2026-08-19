@@ -56,6 +56,9 @@ type RunSummary struct {
 	FailingCheck   *CheckFailure `json:"failing_check,omitempty"`
 	PublishFailure string        `json:"publish_failure,omitempty"`
 	CleanupFailure string        `json:"cleanup_failure,omitempty"`
+	// CompletionRecordingFailure is on the summary for the reason it is on the
+	// state: the run record is the one durable home this failure class has.
+	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
 	// CostUSD is what the provider reported for every invocation in this run's
 	// log, and UnknownCost says why there is no figure rather than reporting one
 	// of zero: a run whose evidence is gone did not cost nothing.
@@ -157,6 +160,8 @@ func (s *Store) summarize(state State) RunSummary {
 		Failure:        state.Failure,
 		PublishFailure: state.PublishFailure,
 		CleanupFailure: state.CleanupFailure,
+
+		CompletionRecordingFailure: state.CompletionRecordingFailure,
 	}
 	if state.CheckFailure != nil {
 		failing := *state.CheckFailure

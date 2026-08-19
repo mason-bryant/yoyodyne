@@ -2224,7 +2224,7 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 		// not a cleanup warning about artifacts that are already gone.
 		a.state.UpdatedAt = p.clock().Now()
 		if retryErr := p.Store.Save(a.state); retryErr != nil {
-			return p.reportCompletionRecordingFailure(a.outcome,
+			return p.reportCompletionRecordingFailure(a.state, a.outcome,
 				fmt.Errorf("save completed run state after cleanup: %w", errors.Join(err, retryErr)))
 		}
 	}
@@ -2495,8 +2495,18 @@ func (a *activeRun) recordHarnessCommit(commit string) {
 // outstanding to clean up, so this must never be described as an incomplete
 // cleanup. The durable state keeps the pre-cleanup marker, and resolving it
 // costs nothing: a resumed cleanup over absent artifacts is a safe no-op.
-func (p Pipeline) reportCompletionRecordingFailure(outcome Outcome, cause error) (Outcome, error) {
+func (p Pipeline) reportCompletionRecordingFailure(state runstate.State, outcome Outcome, cause error) (Outcome, error) {
 	outcome.CompletionRecordingFailure = cause.Error()
+	// A further write is attempted with the failure on it. The store just
+	// refused this record twice, so this is best effort — but when it lands,
+	// the terminal record is whole and carries why it was late, which is the
+	// only durable home this failure class has: the work-item note below may
+	// itself fail, and that is part of what makes this class distinct.
+	state.CompletionRecordingFailure = outcome.CompletionRecordingFailure
+	state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(state); err != nil {
+		outcome.CompletionRecordingFailure = errors.Join(cause, fmt.Errorf("record the completion problem in the run record: %w", err)).Error()
+	}
 	notesCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := p.Tracker.RecordOutcome(notesCtx, outcome.WorkItemID, renderCompletionRecordingNotes(outcome)); err != nil {

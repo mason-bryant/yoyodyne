@@ -151,7 +151,9 @@ func printRunHistory(writer io.Writer, history runstate.RunHistory, workItemID s
 // printRunReasons prints what one run recorded about how it went, and reports
 // whether it recorded anything at all. Each reason is labelled, because the
 // record keeps them apart on purpose: only the first says the work failed, and
-// the other two are things that happened around work that may well have landed.
+// the others are things that happened around work that may well have landed —
+// including a completion record that took a late write to land, the one class
+// whose work-item note is itself unreliable.
 // Each is folded and bounded by singleLine, so a reviewer's verdict is one row
 // of the listing rather than a page of it; --json carries the whole of it.
 func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
@@ -163,6 +165,7 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		{label: "reason", text: run.Failure},
 		{label: "outstanding publication", text: run.PublishFailure},
 		{label: "outstanding cleanup", text: run.CleanupFailure},
+		{label: "completion recorded late", text: run.CompletionRecordingFailure},
 	} {
 		if reason.text == "" {
 			continue

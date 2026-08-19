@@ -1961,6 +1961,8 @@ reasons its record kept:
 ./bin/yoyo status --limit 0 --json   # every recorded run, for a script
 ```
 
+The listing below is `./bin/yoyo status --failed --limit 2`:
+
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
@@ -1974,9 +1976,12 @@ each reason is shown as one line; --json carries what the record holds in full
 
 Each reason is printed under the run it belongs to and named for what it is,
 because the records keep them apart deliberately. Only `reason` says the work
-itself failed. An `outstanding publication`, an `outstanding cleanup`, and a
-`failing check` are recorded around the work, and a run can carry one of them
-with its change already promoted.
+itself failed. An `outstanding publication`, an `outstanding cleanup`, a
+`failing check`, and a `completion recorded late` are recorded around the work,
+and a run can carry one of them with its change already promoted. The last of
+those is the class whose work-item note is itself unreliable — recording that
+note is part of what was failing — so the run record this verb reads is its
+authoritative home.
 
 `outstanding` in the brackets marks a finished run that still owes somebody a
 step, and the `outstanding:` line under it says which — cleanup that is not
