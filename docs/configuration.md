@@ -1629,11 +1629,14 @@ one. Concurrent updates are serialized per item, so no increment is lost, and a
 record that cannot be read is a refusal rather than an empty budget: an
 unreadable budget read as empty is every cap in it stopping to mean anything.
 Recovery from one is a decision, not a repair: the record is one JSON file per
-item under the state root's `triage/` directory, so read it and fix what is
-malformed if the history is worth keeping — or delete it, which resets every
-budget the item had spent, and is therefore a deliberate re-budgeting to record
-on the work item in the same breath, not a cleanup. Nothing automated deletes
-one, for exactly the reason nothing reads one as empty.
+item at `<state root>/products/<product id>/triage/`, named by a slugged
+rendering of the item id with a digest suffix (so a listing reads which item
+each file belongs to, and two ids that render alike still get their own files
+— match on the slug). Read it and fix what is malformed if the history is
+worth keeping — or delete it, which resets every budget the item had spent,
+and is therefore a deliberate re-budgeting to record on the work item in the
+same breath, not a cleanup. Nothing automated deletes one, for exactly the
+reason nothing reads one as empty.
 
 Which threshold refuses which action:
 

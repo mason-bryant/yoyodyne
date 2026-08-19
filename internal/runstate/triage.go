@@ -379,7 +379,7 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 // It is written before the developer is handed anything, so a process that dies
 // between the two has spent a grant it did not give. That is the direction this
 // record exists to fail in: the other one is a grant given twice.
-func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds int, caps TriageCaps) (RepairGrant, error) {
+func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds int, at time.Time, caps TriageCaps) (RepairGrant, error) {
 	if rounds < 1 {
 		return RepairGrant{}, errors.New("a repair grant gives at least one round")
 	}
@@ -387,7 +387,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		return RepairGrant{}, err
 	}
 	granted := RepairGrant{Requested: rounds}
-	counters, err := s.update(ctx, workItemID, time.Time{}, func(counters *TriageCounters) error {
+	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		remaining := counters.RoundsRemaining(caps.ReviewRounds)
 		if remaining == 0 {
 			return TriageCapError{
@@ -432,11 +432,11 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 // reason recorded as the run's selection reason. Both belong to the caller —
 // this store counts budgets, it does not start runs — and an action that
 // reached here without them has gone around the invariant, not through it.
-func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, caps TriageCaps) (TriageCounters, error) {
+func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at time.Time, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err
 	}
-	return s.update(ctx, workItemID, time.Time{}, func(counters *TriageCounters) error {
+	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
 			return TriageCapError{
 				Action:     TriageRerun,
@@ -465,11 +465,11 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, caps T
 // that lease, and the re-arm repeats only the identical, already-authorized
 // forge request against a head and target the original gate's checks still
 // pass. Those belong to the action; this store counts what it has been given.
-func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, caps TriageCaps) (TriageCounters, error) {
+func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, at time.Time, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err
 	}
-	return s.update(ctx, workItemID, time.Time{}, func(counters *TriageCounters) error {
+	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
 		if counters.MergeRearms >= caps.MergeRearms {
 			return TriageCapError{
 				Action:     TriageMergeRearm,

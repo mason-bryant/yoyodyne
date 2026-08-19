@@ -46,11 +46,12 @@ type statusOutput struct {
 	// run, and this says what the item has been given across all of them.
 	Triage     *runstate.TriageCounters `json:"triage,omitempty"`
 	TriageCaps *runstate.TriageCaps     `json:"triage_caps,omitempty"`
-	// Error may accompany a successful listing: a named item whose triage
+	// TriageError accompanies a successful listing: a named item whose triage
 	// record could not be read reports that here while the runs it found are
-	// still returned, so error being set is not the same as the command having
-	// failed — the exit status is what says that.
-	Error string `json:"error,omitempty"`
+	// still returned. It is its own key so error keeps meaning what it always
+	// meant — the command failed, and the exit status agrees.
+	TriageError string `json:"triage_error,omitempty"`
+	Error       string `json:"error,omitempty"`
 }
 
 // defaultStatusRuns is how many runs are reported when nobody says. It is a
@@ -120,7 +121,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 			recorded := caps
 			output.TriageCaps = &recorded
 		}
-		output.Error = triageFailure
+		output.TriageError = triageFailure
 		return writeJSON(stdout, stderr, output)
 	}
 	printRunHistory(stdout, history, flags.Arg(0), *failedOnly)

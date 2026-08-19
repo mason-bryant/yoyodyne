@@ -59,7 +59,7 @@ func TestTriageCountersSurviveTheProcessThatWroteThem(t *testing.T) {
 	if _, err := first.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", "run-a#0", time.Now()); err != nil {
 		t.Fatalf("RecordReviewRound() error = %v", err)
 	}
-	if _, err := first.RecordRerun(context.Background(), "yoyodyne-ifd.7", caps); err != nil {
+	if _, err := first.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestARepairGrantIsTruncatedToTheRoundsTheCapHasRoomFor(t *testing.T) {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, caps)
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps)
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestARepairGrantWithRoomIsGivenInFull(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
-	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, TriageCaps{ReviewRounds: 4})
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), TriageCaps{ReviewRounds: 4})
 	if err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 				return err
 			},
 			take: func(store *TriageStore) error {
-				_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, caps)
+				_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
 				return err
 			},
 			spent: func(counters TriageCounters) int { return counters.RepairGrants },
@@ -195,7 +195,7 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 				return err
 			},
 			take: func(store *TriageStore) error {
-				_, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", caps)
+				_, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
 				return err
 			},
 			spent: func(counters TriageCounters) int { return counters.Reruns },
@@ -204,11 +204,11 @@ func TestTriageActionsAreRefusedPastTheirCaps(t *testing.T) {
 			name:   TriageMergeRearm,
 			budget: TriageMergeRearmBudget,
 			spend: func(store *TriageStore) error {
-				_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", caps)
+				_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
 				return err
 			},
 			take: func(store *TriageStore) error {
-				_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", caps)
+				_, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), caps)
 				return err
 			},
 			spent: func(counters TriageCounters) int { return counters.MergeRearms },
@@ -261,12 +261,12 @@ func TestARepairGrantIsRefusedWhenNoRoundsRemain(t *testing.T) {
 			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
 		}
 	}
-	_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, caps)
+	_, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
 	if !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() error = %v, want a refusal for want of rounds", err)
 	}
 	// And so is a re-run, which buys a whole run of rounds the item cannot spend.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", caps); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordRerun() error = %v, want a refusal for want of rounds", err)
 	}
 }
@@ -303,7 +303,7 @@ func TestASecondTriagePassIsVisibleFromTheItemsRecordAlone(t *testing.T) {
 
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 4, MergeRearms: 1}
-	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, caps); err != nil {
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps); err != nil {
 		t.Fatalf("GrantRepair() error = %v", err)
 	}
 	after, err := store.Counters("yoyodyne-ifd.7")
@@ -313,7 +313,7 @@ func TestASecondTriagePassIsVisibleFromTheItemsRecordAlone(t *testing.T) {
 	if after.Passes() != 1 || after.TriagedAgain() {
 		t.Fatalf("counters after one pass = %+v, want one pass and no repeat", after)
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	again, err := store.Counters("yoyodyne-ifd.7")
@@ -333,15 +333,15 @@ func TestTriageCountersAreKeptPerWorkItem(t *testing.T) {
 
 	store := newTriageStore(t)
 	caps := TriageCaps{ReviewRounds: 4}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.8", caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.8", time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() on a second item error = %v", err)
 	}
 	// Two identifiers that a naive file name would fold together stay apart, which
 	// is what the digest in the name is for.
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd-7", caps); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd-7", time.Now(), caps); err != nil {
 		t.Fatalf("RecordRerun() on a similarly named item error = %v", err)
 	}
 	for _, item := range []string{"yoyodyne-ifd.7", "yoyodyne-ifd.8", "yoyodyne-ifd-7"} {
@@ -397,7 +397,7 @@ func TestUnreadableTriageCountersAreARefusalRatherThanAnEmptyBudget(t *testing.T
 	t.Parallel()
 
 	store := newTriageStore(t)
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", TriageCaps{ReviewRounds: 4}); err != nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 4}); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	entries, err := os.ReadDir(store.Root())
@@ -420,7 +420,7 @@ func TestUnreadableTriageCountersAreARefusalRatherThanAnEmptyBudget(t *testing.T
 	if _, err := store.Counters("yoyodyne-ifd.7"); err == nil {
 		t.Fatal("Counters() over an unreadable record = nil error, want a refusal")
 	}
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", TriageCaps{ReviewRounds: 5}); err == nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 5}); err == nil {
 		t.Fatal("RecordRerun() over an unreadable record = nil error, want a refusal")
 	}
 }
@@ -436,7 +436,7 @@ func TestTriageCountersOfAnotherProductAreRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewTriageStore() error = %v", err)
 	}
-	if _, err := mine.RecordRerun(context.Background(), "yoyodyne-ifd.7", TriageCaps{ReviewRounds: 4}); err != nil {
+	if _, err := mine.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: 4}); err != nil {
 		t.Fatalf("RecordRerun() error = %v", err)
 	}
 	theirs, err := NewTriageStore(root, domain.ProductID("other"))
@@ -529,17 +529,17 @@ func TestNegativeTriageCapsAreRefused(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
-	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", TriageCaps{ReviewRounds: -1}); err == nil {
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{ReviewRounds: -1}); err == nil {
 		t.Fatal("RecordRerun() with a negative cap = nil error, want a refusal")
 	}
 	// Zero is a choice -- never do this, hand it to a person -- and refuses the
 	// action rather than the caps. `triage.review_rounds_cap` accepts zero for
 	// exactly this: an item that reaches triage is escalated or re-scoped rather
 	// than repaired again.
-	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.RecordMergeRearm(context.Background(), "yoyodyne-ifd.7", time.Now(), TriageCaps{}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("RecordMergeRearm() under a zero cap = %v, want a cap refusal", err)
 	}
-	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), TriageCaps{ReviewRounds: 0}); !errors.Is(err, ErrTriageCapReached) {
 		t.Fatalf("GrantRepair() under a zero round cap = %v, want a cap refusal", err)
 	}
 }
