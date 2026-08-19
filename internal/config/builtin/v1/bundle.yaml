@@ -49,11 +49,25 @@ execution:
   # every suite without multiplying the cores it runs on.
   check_timeout: 30m
 
-# Conservative defaults: a project opts in to automatic integration, which the
-# harness then refuses unless deterministic checks and a reviewer agent exist.
-# Publishing is opted in to separately and for the same reason: pushing a branch
-# and opening a pull request is visible outside the machine the harness runs on,
-# so a project says so rather than inheriting it.
+# What the operator approves, and what runs without asking.
+#
+# The brief and the goals are "human" deliberately rather than by omission: they
+# are what a person states, they are the whole of what the design asks anybody to
+# approve routinely, and everything else traces back to them. Approving one is
+# recorded in its frontmatter against the revision it was given for, so an
+# approved document, a draft, and one amended since it was approved are three
+# distinguishable things. Recording it gates nothing -- an unapproved document
+# still loads and still governs what is downstream of it.
+#
+# Designs are "automatic" for that same reason read the other way: a design
+# serving an approved goal is the architect's judgement about how, and approving
+# each one is the per-change gate that autonomy is the absence of.
+#
+# Integration is conservative: a project opts in to automatic integration, which
+# the harness then refuses unless deterministic checks and a reviewer agent
+# exist. Publishing is opted in to separately and for the same reason: pushing a
+# branch and opening a pull request is visible outside the machine the harness
+# runs on, so a project says so rather than inheriting it.
 approvals:
   brief: human
   goals: human

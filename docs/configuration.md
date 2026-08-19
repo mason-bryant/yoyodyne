@@ -366,6 +366,7 @@ The document itself, unchanged by any of the above.
 | `supports` | The artifacts upstream of this one, by id: the goal a design serves, the brief a goal serves. Optional — the brief is the root and supports nothing. |
 | `status` | `draft` (written, not yet in force), `active` (what the product currently intends), `superseded` (replaced by a later artifact), or `retired` (stopped applying, not replaced). |
 | `revisions` | Append-only: what changed (`created`, `amended`, `superseded`, `retired`), the role it was recorded under, when, and why. At least the creation is required, and the role must be the one that [owns the kind](#who-may-change-an-artifact). |
+| `approvals` | Append-only, and optional: [your approval of the document](#approving-a-document), each entry naming the revision it was given for. |
 
 Everything below the frontmatter is the document, and nothing about it is
 prescribed here: a brief, a goals document, and a decision record have nothing in
@@ -393,14 +394,83 @@ document nobody decided on — and each refusal names the other file.
 ```sh
 yoyo artifact list                  # the recorded artifacts; what is not one goes to stderr
 yoyo artifact list --kind decision  # one kind
-yoyo artifact show v1-goals         # one artifact and its revisions
+yoyo artifact show v1-goals         # one artifact, its revisions, and your approvals
 ```
 
 There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
 artifact's content is written by the role that owns it, and its frontmatter is
 edited in the same file at the same time. What the harness owns is refusing a
-document whose identity is missing, malformed, or claimed by something else, and
-[reporting a change recorded by a role that does not own it](#who-may-change-an-artifact).
+document whose identity is missing, malformed, or claimed by something else,
+[reporting a change recorded by a role that does not own it](#who-may-change-an-artifact),
+and [recording your approval](#approving-a-document).
+
+### Approving a document
+
+Approving the brief and the goals is the one thing the design asks of you
+routinely, and until it is written down it lives only in the conversation where
+you said it — which leaves an approved goal and a draft one indistinguishable to
+everything downstream. `yoyo artifact approve` records it in the document:
+
+```sh
+yoyo artifact approve brief --reason "approved in conversation on 2026-08-17"
+yoyo artifact approve v1-goals --reason "approved with the adoption goal added"
+```
+
+```yaml
+approvals:
+    - revision: 1
+      by: operator
+      at: 2026-08-18T09:00:00Z
+      reason: approved in conversation, with the adoption goal added
+```
+
+`at` is when the approval was **recorded**, which is not always when it was given
+— an approval given in conversation is written down afterwards — so say when and
+how you gave it in `--reason`, which is the half only you can attest to.
+
+**The approval names the revision it was given for**, which is the index into the
+revision log above it. The log is append-only, so that index means one change
+forever, and the arithmetic that follows is the point: an approval of the last
+revision is a document approved as it stands, and an approval of an earlier one
+is a document that has been amended since you saw it. `yoyo artifact list` and
+`show` say which:
+
+```
+v1-goals [goals, active] V1 goals
+  file: docs/product/goals/v1-goals.md
+  supports: brief
+  approval: approved and amended since — given by the operator 2026-08-18T09:00:00Z,
+            for revision 1, and one revision was recorded after it, so the document
+            as it now reads is not what was approved
+```
+
+**Your `approvals` configuration decides what is asked of you.** `approvals.brief`
+and `approvals.goals` are `human` by default and `approvals.designs` is
+`automatic`, deliberately rather than by inheritance: the brief and the goals are
+what you state and what everything else traces back to, while a design serving an
+approved goal is the architect's judgement about how, and approving each one is
+the per-change gate autonomy is the absence of. `approvals.goals` covers the
+non-goals with the goals, because a bound on intent nobody approved is as much
+unapproved intent as a goal is. A decision record is the architect's account of
+how something was decided rather than a statement of what the product should do,
+and no setting asks you to approve one.
+
+**Recording an approval moves no gate.** An unapproved document still loads, still
+governs what is downstream of it, and stops nothing; an amendment after approval
+changes what is reported about the document rather than what is allowed. What
+`human` buys you is that the difference is visible — in the document, in the
+listings, and in `--json`, where each artifact's `state` is `approved`,
+`amended`, or `unapproved`.
+
+**Approving writes nothing but the approval.** The prose, the title, what the
+document supports, and its status are untouched, so an approval can never become
+a way to edit a document by another name — the document itself stays the owning
+role's to change. Approval is recorded as yours rather than as a role's, because
+every one of these documents is drafted by the role that owns it, and an
+approval a role could record would be that role approving its own document.
+Refused, rather than recorded: an approval with no reason saying how you gave it,
+a second approval of a revision already approved, and approving a document that
+has been superseded or retired.
 
 ### Who may change an artifact
 

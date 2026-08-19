@@ -266,7 +266,7 @@ Commands:
   chat              talk with the product manager and steer the work from there
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
-  artifact          read the canonical artifacts and their identity metadata
+  artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
   goals             read the recorded goals, and what admitted work serves
   stale             read what a change upstream left unanswered downstream

@@ -9,9 +9,12 @@ package artifact
 // agreed to on top of the identity this adds. A mutation carries that prose
 // through unchanged unless it was asked to replace it.
 //
-// Reading is open to anything that needs the set; writing goes through
-// Authorize, so the ownership boundary is enforced by the only code that can
-// change an artifact rather than by the callers that ask it to.
+// Reading is open to anything that needs the set; writing the document goes
+// through Authorize, so the ownership boundary is enforced by the only code that
+// can change an artifact rather than by the callers that ask it to. Recording
+// the operator's approval of one is the exception and lives in approval.go,
+// which says why: Authorize is the boundary between the roles the harness runs,
+// and the operator is not one of them.
 
 import (
 	"errors"
@@ -491,6 +494,7 @@ func render(recorded Artifact, body string) (string, error) {
 		Supports:  recorded.Supports,
 		Status:    recorded.Status,
 		Revisions: recorded.Revisions,
+		Approvals: recorded.Approvals,
 	})
 	if err != nil {
 		return "", fmt.Errorf("render artifact %q frontmatter: %w", recorded.ID, err)
@@ -626,6 +630,7 @@ type frontmatter struct {
 	Supports  []string   `yaml:"supports,omitempty"`
 	Status    Status     `yaml:"status"`
 	Revisions []Revision `yaml:"revisions"`
+	Approvals []Approval `yaml:"approvals,omitempty"`
 }
 
 // parse reads one artifact's frontmatter. Unknown keys are refused rather than
@@ -649,6 +654,7 @@ func parse(content string) (Artifact, error) {
 		Supports:  trimmedList(decoded.Supports),
 		Status:    decoded.Status,
 		Revisions: decoded.Revisions,
+		Approvals: decoded.Approvals,
 	}, nil
 }
 

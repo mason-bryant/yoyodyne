@@ -172,6 +172,137 @@ func TestBrokenArtifactRelationshipsAreReportedRatherThanRefused(t *testing.T) {
 	}
 }
 
+func TestApprovalIsRecordedAgainstTheDocumentAndSurvivesReadingItBack(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md", artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"}))
+	writeArtifact(t, project, "docs/designs/v1-harness.md", artifactDocument("v1-harness", "design", "V1 harness design", []string{"v1-goals"}))
+
+	stdout, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "brief",
+		"--reason", "approved by the operator in conversation on 2026-08-17")
+	if code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{"approved as it stands", "given by the operator", "no gate moved"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("approve stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	// What the configuration asks for is what each unapproved document is
+	// reported against: the goals are the operator's to approve and the design,
+	// under `approvals.designs: automatic`, is asked of nobody.
+	stdout, stderr, code = runCLI(t, "artifact", "list", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"approval: approved as it stands",
+		"none recorded, and approvals.goals is human, so this document is yours to approve",
+		"none recorded; approvals.designs is automatic, so none is asked for",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("list stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "artifact", "show", "--config", configPath, "--json", "brief")
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	var shown struct {
+		Approvals map[string]struct {
+			State    string `json:"state"`
+			Required bool   `json:"required"`
+			Setting  string `json:"setting"`
+			Mode     string `json:"mode"`
+			Approval *struct {
+				Revision int    `json:"revision"`
+				By       string `json:"by"`
+				Reason   string `json:"reason"`
+			} `json:"approval"`
+			RevisionsSinceApproval int `json:"revisions_since_approval"`
+		} `json:"approvals"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &shown); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	brief := shown.Approvals["brief"]
+	if brief.State != "approved" || !brief.Required || brief.Setting != "approvals.brief" || brief.Mode != "human" {
+		t.Fatalf("brief approval = %#v", brief)
+	}
+	if brief.Approval == nil || brief.Approval.Revision != 0 || brief.Approval.By != "operator" {
+		t.Fatalf("brief approval = %#v", brief.Approval)
+	}
+
+	// The document is edited in the file by the role that owns it, which is how
+	// an approval comes to be about a version that no longer exists. It reads as
+	// what it is rather than staying quietly approved.
+	writeArtifact(t, project, "docs/product/brief.md",
+		strings.TrimSuffix(artifactDocument("brief", "brief", "Product brief", nil), "---\n")+
+			"    - action: amended\n      by: product-manager\n      at: 2026-08-18T12:00:00Z\n      reason: restated what the product is for\n"+
+			"approvals:\n    - revision: 0\n      by: operator\n      at: 2026-08-17T12:00:00Z\n      reason: approved by the operator in conversation\n"+
+			"---\n\nIntent in, software out.\n")
+
+	stdout, stderr, code = runCLI(t, "artifact", "show", "--config", configPath, "brief")
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"approved and amended since",
+		"one revision was recorded after it",
+		"approved by the operator 2026-08-17T12:00:00Z: approved by the operator in conversation",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("show stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	// Approving again is what makes the current document approved, and it is
+	// recorded against the revision that changed it rather than replacing what
+	// was approved before.
+	if _, stderr, code = runCLI(t, "artifact", "approve", "--config", configPath, "brief", "--reason", "approved again after the restatement"); code != 0 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	stdout, _, _ = runCLI(t, "artifact", "show", "--config", configPath, "brief")
+	// Both approvals are printed, each under the revision it was given for: the
+	// record of how the document came to be approved is the point of keeping it.
+	if !strings.Contains(stdout, "approved as it stands") || strings.Count(stdout, "\n  approved by the operator ") != 2 {
+		t.Fatalf("show stdout = %q", stdout)
+	}
+}
+
+func TestApprovingWithoutSayingHowItWasGivenIsRefused(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	before, err := os.ReadFile(filepath.Join(project, "docs/product/brief.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	// This record speaks for a person, so it says how they gave it or it is not
+	// recorded at all.
+	if _, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "brief"); code != 1 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	if _, stderr, code := runCLI(t, "artifact", "approve", "--config", configPath, "nothing-by-this-name", "--reason", "because"); code != 1 {
+		t.Fatalf("approve code = %d, stderr = %q", code, stderr)
+	}
+	after, err := os.ReadFile(filepath.Join(project, "docs/product/brief.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("a refused approval wrote to the document: %q", after)
+	}
+}
+
 // artifactDocument renders a well-formed artifact's frontmatter, so a test about
 // the relationships between documents says only what they support. The creating
 // role is the one that owns the kind, because a revision recorded by any other

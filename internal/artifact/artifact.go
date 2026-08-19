@@ -35,6 +35,12 @@
 // the document is reported over the loaded set, beside the broken relationships
 // and for the same reason — losing a document nobody can now correct is worse
 // than carrying a named problem against one that still holds.
+//
+// Whether the operator approved one, and approved which version of it, is a
+// fourth question, and it is answered in approval.go. It is separate from
+// ownership because it is a different boundary: every one of these documents is
+// drafted by the role that owns it, so approval a role could record would be
+// that role approving its own document.
 package artifact
 
 import (
@@ -168,6 +174,11 @@ type Artifact struct {
 	// Revisions is the append-only record of what changed and why. It carries at
 	// least the creation, so an artifact always says where it came from.
 	Revisions []Revision `yaml:"revisions" json:"revisions"`
+	// Approvals is the append-only record of the operator approving this document,
+	// each naming the revision it was given for. It is empty for a document nobody
+	// has approved, which is not the same as one nothing requires approving: what
+	// requires approval is the project's configuration, and see approval.go.
+	Approvals []Approval `yaml:"approvals,omitempty" json:"approvals,omitempty"`
 	// Path is the repository-relative file this was read from.
 	Path string `yaml:"-" json:"path,omitempty"`
 }
@@ -225,6 +236,7 @@ func (a Artifact) Validate() error {
 			problems = append(problems, fmt.Errorf("revisions[%d]: %w", index, err))
 		}
 	}
+	problems = append(problems, a.approvalProblems()...)
 	// The two halves of an ending have to agree, the same way an invariant's
 	// retirement does: a file that says superseded without the revision that
 	// superseded it records no decision, and an artifact still in force that
