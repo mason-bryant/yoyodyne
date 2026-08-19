@@ -322,6 +322,152 @@ func (w *creationWitness) observed() (adds, overlaps int) {
 	return w.adds, w.overlaps
 }
 
+// The creation lease serializes writers against each other, and nothing
+// serializes a reader against them: a creation holds the lease while it
+// verifies what it made, which is itself a listing, so a listing that waited
+// for the lease would wait for itself. That leaves `git worktree list` able to
+// cross an entry another run has registered and not yet filled in, where it
+// fails the whole command rather than skipping the one entry — observed as
+// `failed to read .git/worktrees/<other run>/commondir` in a run doing nothing
+// but summarizing its own change. So the listing is read again, and a run is
+// not lost to an instant that has already passed.
+func TestManagerReadsTheWorktreeListingAgainWhenItCrossesACreation(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: 1}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-crossed",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v, want the half-written listing to have been read again", err)
+	}
+	if listings, refused := runner.observed(); refused != 1 || listings < 2 {
+		t.Fatalf("listings = %d after %d refusal(s), want the refusal to have been followed by another read", listings, refused)
+	}
+	if _, err := manager.Inspect(context.Background(), worktree); err != nil {
+		t.Fatalf("Inspect() error = %v", err)
+	}
+}
+
+// A listing that keeps failing is still a failure, reported with what Git said.
+// The retry is for the instant that passes; a repository Git cannot describe at
+// all must not be waited on forever or reported as empty.
+func TestManagerReportsAWorktreeListingThatKeepsFailing(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: worktreeListAttempts}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-unreadable",
+		BaseRef:    "HEAD",
+	})
+	if err == nil {
+		t.Fatal("Create() succeeded with a listing Git never answered")
+	}
+	if !strings.Contains(err.Error(), "list worktrees failed with exit code 128") || !strings.Contains(err.Error(), "commondir") {
+		t.Fatalf("Create() error = %v, want it to carry what Git said", err)
+	}
+	if listings, _ := runner.observed(); listings != worktreeListAttempts {
+		t.Fatalf("listings = %d, want %d attempts and no more", listings, worktreeListAttempts)
+	}
+}
+
+// A listing that timed out is not the passing instant, and it has already spent
+// the command's whole budget. Reading it again would make a slow repository
+// three times slower to fail, so the retry is for a Git that ran and refused
+// and for nothing else.
+func TestManagerDoesNotReadAWorktreeListingAgainAfterATimeout(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	runner := &listRefusingRunner{delegate: execution.OSProcessRunner{}, refusals: 1, status: execution.ProcessTimedOut}
+	manager, err := New(Options{
+		Runner:         runner,
+		RepositoryRoot: repository,
+		WorktreeRoot:   filepath.Join(t.TempDir(), "worktrees"),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	_, err = manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-slow",
+		BaseRef:    "HEAD",
+	})
+	if err == nil {
+		t.Fatal("Create() succeeded with a listing that never answered")
+	}
+	if listings, _ := runner.observed(); listings != 1 {
+		t.Fatalf("listings = %d, want the timeout to have been believed the first time", listings)
+	}
+}
+
+// listRefusingRunner fails the first refusals listings the way Git fails one
+// that crossed a creation: the whole command exits 128 over a single entry it
+// could not read. status is what the refusal is reported as, so a refusal and a
+// listing that never answered can be told apart. Everything else runs for real,
+// so what is being tested is the manager's own reading of the bookkeeping rather
+// than a simulation of Git.
+type listRefusingRunner struct {
+	delegate execution.ProcessRunner
+	status   execution.ProcessStatus
+	mu       sync.Mutex
+	refusals int
+	refused  int
+	listings int
+}
+
+func (r *listRefusingRunner) Run(ctx context.Context, command execution.Command, observer execution.OutputObserver) (execution.ProcessResult, error) {
+	if !containsArguments(command.Args, "worktree", "list") {
+		return r.delegate.Run(ctx, command, observer)
+	}
+	r.mu.Lock()
+	r.listings++
+	refuse := r.refused < r.refusals
+	if refuse {
+		r.refused++
+	}
+	r.mu.Unlock()
+	if refuse {
+		status := r.status
+		if status == "" {
+			status = execution.ProcessFailed
+		}
+		return execution.ProcessResult{
+			Status:   status,
+			ExitCode: 128,
+			Stderr:   "fatal: failed to read .git/worktrees/yoyodyne-other-2113a23c/commondir: Result too large\n",
+		}, nil
+	}
+	return r.delegate.Run(ctx, command, observer)
+}
+
+func (r *listRefusingRunner) observed() (listings, refused int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.listings, r.refused
+}
+
 // Git prunes worktree registrations during automatic maintenance, and it judges
 // one stale by whether its gitdir file is there — which is precisely what an add
 // still filling its entry in has not written yet. A prune reaching that window
