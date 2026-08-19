@@ -248,3 +248,35 @@ harness posts, and agents have no path to a token because no run process ever
 has one in its environment. Exporting the tokens globally would hand them to
 every subprocess the harness starts, which is the one thing this arrangement
 exists to prevent.
+
+Where they should go instead: somewhere only the sink's own launch reads. Two
+recipes, best first.
+
+**A keychain-backed launcher** (macOS) keeps the tokens encrypted at rest and
+decrypts them into exactly one process:
+
+```sh
+# once:
+security add-generic-password -s yoyo-slack-bot -a yoyo -w 'xoxb-…'
+security add-generic-password -s yoyo-slack-app -a yoyo -w 'xapp-…'
+```
+
+```sh
+#!/bin/sh
+# ~/bin/yoyo-slack — the env assignments are on the exec line, so the tokens
+# exist only in the sink's environment, never in your shell's.
+SLACK_BOT_TOKEN="$(security find-generic-password -s yoyo-slack-bot -w)" \
+SLACK_APP_TOKEN="$(security find-generic-password -s yoyo-slack-app -w)" \
+exec yoyo slack "$@"
+```
+
+**A `chmod 600` env file sourced only at launch** is simpler and plaintext at
+rest — write the two `export` lines into `~/.config/yoyo/slack.env`, then:
+
+```sh
+(set -a; . ~/.config/yoyo/slack.env; exec yoyo slack)
+```
+
+The subshell keeps them out of your interactive environment. Either way, the
+property the design depends on holds: your shells stay clean, runs stay clean,
+and exactly one process ever sees the credentials.
