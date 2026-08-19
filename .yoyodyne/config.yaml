@@ -148,7 +148,10 @@ agents:
   architect:
     role: architect
     backend: claude-code
-    model: opus
+    # The judgment model, per the operator's decision 2026-08-19: the
+    # architect's decisions bind everything downstream, which is where
+    # judgment pays. Same rule as the product and development managers.
+    model: fable
     instances: 1
     persona:
       version: v1
