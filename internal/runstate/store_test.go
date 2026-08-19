@@ -416,6 +416,11 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "repair_attempts cannot be negative",
 		},
 		{
+			name:    "negative transient relaunches",
+			mutate:  func(state *State) { state.TransientRelaunches = -1 },
+			problem: "transient_relaunches cannot be negative",
+		},
+		{
 			name:    "a failing check the developer cannot re-run",
 			mutate:  func(state *State) { state.CheckFailure = &CheckFailure{ExitCode: 3} },
 			problem: "check_failure: command is required",
@@ -612,6 +617,9 @@ func TestStoreRoundTripsReviewAndIntegrationEvidence(t *testing.T) {
 		{Severity: SeverityMinor, Message: "this name reads as a verb"},
 	}
 	state.RepairAttempts = 1
+	// The relaunch budget is durable so that a crash cannot refill it, which is
+	// worth nothing if the count does not survive the file it is written to.
+	state.TransientRelaunches = 2
 	state.TargetBranch = "main"
 	state.Integration = &Integration{
 		TargetBranch:         "main",

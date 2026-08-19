@@ -118,6 +118,52 @@ type ServerOverload struct {
 	Detail string
 }
 
+// TransientFailure is a provider invocation that died of something that judged
+// nothing about the work: the API answered with an error the provider's own
+// retries did not outlast, or the connection carrying the response went away
+// before the invocation reached a terminal at all.
+//
+// It is not a refusal the way UsageLimit and ServerOverload are. Those two say
+// in advance that the attempt was never served and name the condition; this one
+// is the provider ending an invocation badly with nothing to say about why it
+// would go better next time. What makes it the same kind of answer operationally
+// is what it leaves behind: a change part-made in a worktree and a session that
+// can still be continued, and no verdict on any of it. So it asks the harness to
+// ask again against a budget it keeps, rather than to wait on a clock it does
+// not have.
+//
+// For yoyodyne-ifd.32, which turns this package into a plugin contract.
+//
+// A transient death is a fifth answer that contract has to name. It is not the
+// ordinary retry a provider takes itself, because the provider has already
+// stopped by the time it says this; not a usage limit, because nothing about the
+// account is exhausted; not an overload, because no condition is named that will
+// lift; and not a refusal that stands, because the same request may well be
+// served on the next attempt. A contract that folded it into the last of those
+// would fail a whole run on weather, which is what this harness did until
+// yoyodyne-ifd.101.
+//
+// The evidence, so a plugin author has the shape rather than the assertion. Run
+// run-80f99e14210681e07bb07722f1b91483, developing yoyodyne-ifd.68.2 on
+// 2026-08-19, ended on terminal_reason "api_error" with the text
+//
+//	API Error: Connection closed mid-response. The response above may be
+//	incomplete.
+//
+// which names no HTTP status because nothing answered — the transport went away
+// mid-reply. An earlier run, run-77cd11f0f96309286ddf3d2d2449ca26, recorded the
+// bare category "api_error" and nothing else, because its record predates the
+// harness keeping the provider's message beside it. That it can no longer be told
+// apart from any other member of the category is part of the point: the category
+// alone does not say what happened, so a harness that reads every member of it as
+// a judgement of the work is guessing.
+type TransientFailure struct {
+	// Detail is the provider's own account of the death, carried as evidence
+	// rather than interpreted by the harness. It is bounded, because it is what a
+	// durable failure record and a blocker on a work item both keep.
+	Detail string
+}
+
 // RunResult is what one provider invocation is worth: the invocation's own
 // terminal, and nothing nested inside it.
 //
@@ -158,6 +204,13 @@ type RunResult struct {
 	// error — and it asks the same thing of the caller an exhausted limit does:
 	// wait and ask again rather than end the run.
 	ServerOverload *ServerOverload
+	// TransientFailure is set when the invocation died of something that judged
+	// nothing about the work and may not happen again. It travels beside IsError
+	// like an overload does, and it is never set alongside one: an overload is
+	// the transient death the caller already has a wait for, so a backend that
+	// reported both would leave which answer a run took depending on the order
+	// the caller read them.
+	TransientFailure *TransientFailure
 }
 
 // maxFailureDetailBytes bounds the provider's own words in a described failure.

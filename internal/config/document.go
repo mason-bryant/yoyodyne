@@ -39,6 +39,7 @@ type executionDocument struct {
 	MaxConcurrentDevelopers                *int      `yaml:"max_concurrent_developers"`
 	RepairAttemptsBeforeReplan             *int      `yaml:"repair_attempts_before_replan"`
 	IntegrationRetriesBeforeReconciliation *int      `yaml:"integration_retries_before_reconciliation"`
+	TransientRelaunchesBeforeBlocking      *int      `yaml:"transient_relaunches_before_blocking"`
 	WorktreeRoot                           *string   `yaml:"worktree_root"`
 	Remote                                 *string   `yaml:"remote"`
 	UsageLimitMaxPause                     *Duration `yaml:"usage_limit_max_pause"`

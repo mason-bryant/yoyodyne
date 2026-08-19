@@ -1914,7 +1914,9 @@ Ordinary transient throttling still never reaches any of this: the provider CLI
 retries that on its own, and the harness does not duplicate the wait. What it
 does act on is the terminal result the CLI ends on once its own retries are
 spent — an `api_error` reporting HTTP 529 — because at that point the provider
-has stopped retrying and somebody has to.
+has stopped retrying and somebody has to. An overload is the only terminal
+`api_error` that becomes a wait;
+[the rest of them](#when-the-provider-dies-mid-run) become a relaunch.
 
 ### Releasing a wait early
 
@@ -1949,6 +1951,49 @@ worst a premature release costs is one refused request. It is refused when the
 named item has no run in flight, or has one that is not waiting on the provider
 at all, because a release recorded against a run that is not waiting would be
 acted on by whatever pause that run took next.
+
+### When the provider dies mid-run
+
+Not every way a provider ends an invocation is a refusal it names in advance.
+Sometimes it simply dies: the API answers with an error its own retry ladder did
+not outlast, or the connection carrying the response goes away before the reply
+is finished — `API Error: Connection closed mid-response`, which quotes no HTTP
+status because nothing answered. Nothing was judged and nothing is wrong with the
+change; the run just stops existing. That used to fail the run outright and leave
+a person to reconcile it, reopen the item, and launch it again — twice in the
+week before this was built.
+
+The run relaunches itself now. The dead invocation is reissued in the same
+worktree and the same developer session, up to
+`execution.transient_relaunches_before_blocking` times — two by default — and
+then the run carries on as if nothing had happened. Continuing the session is
+what makes this cheap rather than merely automatic: an attempt that died
+mid-response had already made part of the change, and the relaunch picks that up
+instead of asking a developer to derive it a second time. There is no wait
+attached, because there is no condition to wait out: a dropped connection is
+already gone, and the provider's own retries are spent before the harness sees
+the terminal.
+
+One budget covers both provider invocations a run makes. A review the provider
+killed is asked for again on the same count, without redeveloping the change,
+because what the budget bounds is how much of the provider's weather one run
+absorbs rather than how often either role is asked. Nothing is handed back to the
+developer either way, so a relaunch spends no repair attempt — the change is not
+what went wrong.
+
+Relaunches are counted in durable run state before each one begins, so a process
+that dies mid-relaunch resumes against the budget it had rather than a fresh one.
+A run that spends the budget stops and records a blocker on the work item naming
+the provider's own last message, and saying plainly that no check failed and no
+reviewer asked for repair. That is the only case a person sees. Setting the bound
+to `0` restores the earlier behavior: the first provider death ends the run.
+
+A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
+4xx status — a malformed request, a key that is not permitted, a limit the
+provider is enforcing — would earn the identical answer on the next attempt, so
+it fails the run exactly as it always did. So does a 529, which is
+[a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
+any terminal the API did not report at all.
 
 ### When a provider stalls or runs out of budget
 

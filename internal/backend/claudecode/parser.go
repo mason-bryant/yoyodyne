@@ -150,6 +150,46 @@ func transientServerOverload(result backend.RunResult) *backend.ServerOverload {
 	return &backend.ServerOverload{Detail: result.FinalText}
 }
 
+// clientErrorPrefix marks the API statuses that describe the request rather than
+// the server's ability to serve it. A relaunch would put the identical request in
+// front of the provider again and earn the identical refusal, so nothing in this
+// class is transient — an exhausted key and a malformed request both stay what
+// they are however many times they are asked.
+const clientErrorPrefix = "4"
+
+// transientProviderFailure reports an invocation the provider ended on something
+// that judged nothing about the work and may well not happen again. It is what is
+// left of the terminal API errors once the narrower readings have taken theirs:
+// an overload is already a waitable refusal and never reaches here, and a status
+// describing the request is a refusal that stands. What remains is a server-side
+// status that named no wait, or a terminal API error carrying no status at all —
+// the shape of a connection that went away, since "Connection closed
+// mid-response" quotes no status because nothing answered.
+//
+// Reading the leftovers as transient rather than the recognized ones as such is
+// deliberate, and it is the opposite of how the overload above is matched. That
+// one turns a failure into a wait, so a message it does not recognize has to keep
+// failing the run. This one turns a failure into another attempt against a
+// budget, so the cost of being wrong is one more invocation and a blocker that
+// arrives three attempts later than it might have — while the cost of missing a
+// case is the whole run, which is what a person spent this week reconciling by
+// hand. Being narrow is the safe direction there only if the harness is content
+// to keep failing on weather it has not seen yet, and it is not.
+//
+// Claude Code's dialect again: what generalizes is on backend.TransientFailure.
+func transientProviderFailure(result backend.RunResult) *backend.TransientFailure {
+	if !result.IsError || result.StopReason != terminalAPIError {
+		return nil
+	}
+	if status := apiErrorStatus.FindStringSubmatch(result.FinalText); status != nil && strings.HasPrefix(status[1], clientErrorPrefix) {
+		return nil
+	}
+	// The provider's own account of the death, bounded: the category alone does
+	// not say what happened, and the message beside it is the difference between
+	// a record somebody can act on and three runs that all read "api_error".
+	return &backend.TransientFailure{Detail: result.DescribeFailure()}
+}
+
 // rateLimitRejected is the provider's name for a limit that is refusing work.
 // Its other statuses describe a limit that is still serving, and the transient
 // throttles the provider CLI retries by itself arrive separately as the system
@@ -495,6 +535,13 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 		p.result.StopReason = envelope.StopReason
 	}
 	p.result.ServerOverload = transientServerOverload(p.result)
+	// An overload is the transient death the harness already has a wait for, so
+	// it is never also reported as one to relaunch on. Deciding it here rather
+	// than inside the classifier keeps the two answers mutually exclusive by
+	// construction instead of by each one remembering the other.
+	if p.result.ServerOverload == nil {
+		p.result.TransientFailure = transientProviderFailure(p.result)
+	}
 	eventType := execution.EventRunCompleted
 	if envelope.IsError {
 		eventType = execution.EventRunFailed

@@ -2659,16 +2659,22 @@ func automatic(pipeline Pipeline, provider *fakeBackend) Pipeline {
 // what an interrupted process leaves behind: a non-terminal run recorded at the
 // last step it managed to write down. Varying allowSaves is what chooses the
 // step the process died on.
+//
+// reached overrides which step that is, for a test interested in a budget other
+// than the repair one. It is the only part of the shape that differs between
+// them: what a killed process leaves behind is the same story whichever count it
+// was in the middle of.
 type interruptedStore struct {
 	StateStore
 	atAttempt  int
+	reached    func(runstate.State) bool
 	allowSaves int
 	saved      int
 	stopped    bool
 }
 
 func (s *interruptedStore) Save(state runstate.State) error {
-	if state.RepairAttempts >= s.atAttempt {
+	if s.reachedStep(state) {
 		if s.saved >= s.allowSaves {
 			s.stopped = true
 			return errors.New("state store is unavailable")
@@ -2676,6 +2682,13 @@ func (s *interruptedStore) Save(state runstate.State) error {
 		s.saved++
 	}
 	return s.StateStore.Save(state)
+}
+
+func (s *interruptedStore) reachedStep(state runstate.State) bool {
+	if s.reached != nil {
+		return s.reached(state)
+	}
+	return state.RepairAttempts >= s.atAttempt
 }
 
 // restartableFixture returns a repository, worktree root, and run state store
@@ -2993,6 +3006,297 @@ func refusingBackend(refusals int, refuse func(backend.RunResult) backend.RunRes
 		}
 	}
 	return provider
+}
+
+// connectionClosedMessage is what the provider wrote on the run that died
+// developing yoyodyne-ifd.68.2, kept whole so the relaunch a test observes is
+// the one that message earns.
+const connectionClosedMessage = "API Error: Connection closed mid-response. The response above may be incomplete."
+
+// transientDeathBackend kills the developer's first deaths invocations the way a
+// provider that dropped the connection does, and serves the work afterwards. The
+// death carries the session the dead attempt had already established, because
+// that is what the relaunch continues in.
+func transientDeathBackend(deaths int, verdicts ...string) *fakeBackend {
+	return refusingBackend(deaths, func(result backend.RunResult) backend.RunResult {
+		result.StopReason = "api_error"
+		result.FinalText = connectionClosedMessage
+		result.TransientFailure = &backend.TransientFailure{Detail: "api_error: " + connectionClosedMessage}
+		return result
+	}, verdicts...)
+}
+
+// dyingRepairBackend serves the first developer attempt and then dies the way a
+// dropped connection does on every attempt after it. What it produces is a run
+// that reaches its repair loop and is killed inside it, which is the interrupted
+// run a later process actually picks up.
+func dyingRepairBackend() *fakeBackend {
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	attempts := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role != domain.RoleDeveloper {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		attempts++
+		if attempts > 1 {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				IsError: true, StopReason: "api_error", FinalText: connectionClosedMessage,
+				TransientFailure: &backend.TransientFailure{Detail: "api_error: " + connectionClosedMessage},
+				Process:          execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:        request.LastSequence,
+			}, nil
+		}
+		if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+			return backend.RunResult{}, err
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+			ResolvedModel: developerResolved, FinalText: "implemented the work item",
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	return provider
+}
+
+// A run that dies of a provider hiccup used to leave a claimed item and a
+// preserved worktree for a person to reconcile, reopen, and relaunch by hand.
+// It relaunches itself now, in the same worktree and the same session, and
+// nothing about the change is redone.
+func TestRunRelaunchesAfterATransientProviderDeath(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := transientDeathBackend(1, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+	clock := &pausingClock{now: baseTime}
+	pipeline = waiting(pipeline, clock, 6*time.Hour, 6*time.Hour)
+
+	// The relaunch has to be counted on disk before it happens, or a process that
+	// died here would come back to a fresh budget. The request is already
+	// recorded by the time the provider is asked, so the relaunch is the second.
+	var recorded runstate.State
+	served := provider.run
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleDeveloper && len(provider.requestsForRole(domain.RoleDeveloper)) == 2 {
+			loaded, err := store.Load(pipelineRunID)
+			if err != nil {
+				t.Errorf("Load() at the relaunch error = %v", err)
+			}
+			recorded = loaded
+		}
+		return served(request)
+	}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if recorded.TransientRelaunches != 1 {
+		t.Fatalf("relaunches recorded before the relaunch = %d, want 1", recorded.TransientRelaunches)
+	}
+	// Nothing here is a wait: a connection that dropped is already gone, and the
+	// provider's own retry ladder was spent before the harness saw the terminal.
+	if clock.waited() != 0 {
+		t.Fatalf("waited %s before relaunching, want a relaunch to take no pause", clock.waited())
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the relaunched run did not complete normally: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	developerRequests := provider.requestsForRole(domain.RoleDeveloper)
+	if len(developerRequests) != 2 {
+		t.Fatalf("developer invocations = %d, want the dead attempt and its relaunch", len(developerRequests))
+	}
+	// The attempt that died mid-response had already made part of the change, so
+	// the relaunch continues its session rather than deriving the work again.
+	if developerRequests[1].SessionID != provider.developerSession {
+		t.Fatalf("relaunched attempt session = %q, want %q", developerRequests[1].SessionID, provider.developerSession)
+	}
+	// Nothing was wrong with the change, so nothing is charged to the developer.
+	if outcome.RepairAttempts != 0 || outcome.TransientRelaunches != 1 {
+		t.Fatalf("outcome = %#v, want one relaunch and no repair attempt", outcome)
+	}
+	finished, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if finished.TransientRelaunches != 1 {
+		t.Fatalf("finished state relaunches = %d, want the one it spent", finished.TransientRelaunches)
+	}
+}
+
+// A provider that keeps dying must not become a run that relaunches forever.
+// The budget is what stops it, and only a spent budget reaches a person.
+func TestRunBlocksWhenTheRelaunchBudgetIsSpent(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// More deaths than the budget can pay for, so what stops the run is the budget
+	// rather than the provider recovering.
+	provider := transientDeathBackend(10, approveVerdict)
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatalf("Run() error = nil, want the run to stop once its budget was spent")
+	}
+	if attempts := len(provider.requestsForRole(domain.RoleDeveloper)); attempts != 3 {
+		t.Fatalf("developer invocations = %d, want the dead attempt and the two relaunches it paid for", attempts)
+	}
+	if !tracker.blocked || !outcome.Blocked {
+		t.Fatalf("the spent budget left no blocker: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	}
+	for _, want := range []string{"Relaunches: 2 of 2 permitted", connectionClosedMessage, "nothing here says the change is wrong"} {
+		if !strings.Contains(tracker.blockReason, want) {
+			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+		}
+	}
+	stopped, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !stopped.Status.Terminal() || stopped.TransientRelaunches != 2 {
+		t.Fatalf("stopped state = %#v, want a terminal run that spent its whole budget", stopped)
+	}
+	// The change is preserved for whoever picks the item up.
+	if _, statErr := os.Stat(stopped.WorktreePath); statErr != nil {
+		t.Fatalf("the stopped run's worktree did not survive: %v", statErr)
+	}
+}
+
+// A review the provider killed was never made either, and it costs more to lose
+// than a developer attempt: the change is already built and checked. It is asked
+// for again on the same budget, without redeveloping anything.
+func TestRunRelaunchesATransientlyKilledReview(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := &fakeBackend{developerSession: "developer-session", reviewerSession: "reviewer-session"}
+	reviews := 0
+	provider.run = func(request backend.RunRequest) (backend.RunResult, error) {
+		if request.Role == domain.RoleDeveloper {
+			if err := os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600); err != nil {
+				return backend.RunResult{}, err
+			}
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.developerSession,
+				ResolvedModel: developerResolved, FinalText: "implemented the work item",
+				Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+			}, nil
+		}
+		reviews++
+		if reviews == 1 {
+			return backend.RunResult{
+				Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+				IsError: true, StopReason: "api_error", FinalText: connectionClosedMessage,
+				TransientFailure: &backend.TransientFailure{Detail: "api_error: " + connectionClosedMessage},
+				Process:          execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1},
+				LastEvent:        request.LastSequence,
+			}, nil
+		}
+		return backend.RunResult{
+			Backend: domain.BackendClaudeCode, SessionID: provider.reviewerSession,
+			ResolvedModel: reviewerResolved, FinalText: approveVerdict,
+			Process: execution.ProcessResult{Status: execution.ProcessSucceeded}, LastEvent: request.LastSequence,
+		}, nil
+	}
+	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
+	pipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Integration == nil || !tracker.closed || tracker.blocked {
+		t.Fatalf("the run did not complete after the review was asked again: %#v (blocked=%t)", outcome, tracker.blocked)
+	}
+	if developerRuns := len(provider.requestsForRole(domain.RoleDeveloper)); developerRuns != 1 {
+		t.Fatalf("developer invocations = %d, want the review relaunched without redeveloping", developerRuns)
+	}
+	if reviews != 2 {
+		t.Fatalf("reviews = %d, want the dead review asked for again", reviews)
+	}
+	// One budget covers both roles, so a review that died is counted where a
+	// developer death would be.
+	if outcome.TransientRelaunches != 1 {
+		t.Fatalf("relaunches = %d, want the review death counted against the shared budget", outcome.TransientRelaunches)
+	}
+	finished, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if finished.TransientRelaunches != 1 {
+		t.Fatalf("finished state relaunches = %d, want the one it spent", finished.TransientRelaunches)
+	}
+}
+
+// The whole point of a durable budget is that a crash cannot refill it. A
+// process that died having spent the budget comes back to a run with no room
+// left, and the next death blocks rather than buying another relaunch.
+func TestARestartCannotBuyAFreshRelaunchBudget(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// A check the first attempt cannot pass, so the run reaches its repair loop —
+	// the interrupted run a later process picks up at all.
+	command := `test -f fixed.txt || { echo "fixed.txt is missing" >&2; exit 3; }`
+
+	// The first process is interrupted the moment its first relaunch is recorded:
+	// that write is let through and nothing after it is, so what survives is a
+	// non-terminal run carrying a relaunch it already spent.
+	interrupted := &interruptedStore{
+		StateStore: store,
+		reached:    func(state runstate.State) bool { return state.TransientRelaunches >= 1 },
+		allowSaves: 1,
+	}
+	first := dyingRepairBackend()
+	firstPipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, interrupted, tracker, first, []string{command}), first)
+	firstPipeline.Config.Execution.TransientRelaunchesBeforeBlocking = 2
+	firstOutcome, err := firstPipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil || !interrupted.stopped {
+		t.Fatalf("interrupted Run() error = %v, stopped = %t", err, interrupted.stopped)
+	}
+	interruptedState, err := store.Load(firstOutcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() interrupted state error = %v", err)
+	}
+	if interruptedState.Status.Terminal() || interruptedState.TransientRelaunches != 1 || interruptedState.RepairAttempts != 1 {
+		t.Fatalf("interrupted state = %#v, want a live run in its repair loop with one relaunch spent", interruptedState)
+	}
+
+	// The second process adopts it, with room for one relaunch that the run has
+	// already spent, and the same provider keeps killing it.
+	second := transientDeathBackend(10, approveVerdict)
+	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{command}), second)
+	resumed.Config.Execution.TransientRelaunchesBeforeBlocking = 1
+	outcome, err := resumed.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatalf("resumed Run() error = nil, want the spent budget to stop the run")
+	}
+	if outcome.RunID != firstOutcome.RunID {
+		t.Fatalf("resumed run = %q, want the interrupted run %q", outcome.RunID, firstOutcome.RunID)
+	}
+	// One invocation and no more: the recorded relaunch is inherited rather than
+	// forgotten, so this process has nothing left to spend.
+	if attempts := len(second.requestsForRole(domain.RoleDeveloper)); attempts != 1 {
+		t.Fatalf("resumed developer invocations = %d, want the restart to buy no relaunch", attempts)
+	}
+	if !tracker.blocked || !outcome.Blocked {
+		t.Fatalf("the spent budget left no blocker: tracker=%t outcome=%t", tracker.blocked, outcome.Blocked)
+	}
+	if !strings.Contains(tracker.blockReason, "Relaunches: 1 of 1 permitted") {
+		t.Fatalf("blocker did not name the inherited budget:\n%s", tracker.blockReason)
+	}
 }
 
 // A transiently overloaded provider is the most retryable refusal there is, and

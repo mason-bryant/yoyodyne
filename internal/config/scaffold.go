@@ -178,6 +178,12 @@ execution:
   # conflicts is never resolved automatically: it stops the run and is left for
   # a person.
   integration_retries_before_reconciliation: %d
+  # A provider invocation that dies without judging the work -- an API error its
+  # own retries did not outlast, or a response cut off mid-flight -- is reissued
+  # in the same worktree and the same session, up to this many times, rather than
+  # failing the run. Nothing here is a fault in the change, so a relaunch spends
+  # no repair attempt. A run that spends this budget stops and records a blocker.
+  transient_relaunches_before_blocking: %d
   worktree_root: %s
   # The remote publishing pushes to and opens pull requests against. It is only
   # consulted when approvals.publishing is automatic; a repository with no
@@ -233,6 +239,7 @@ approvals:
 		effective.Execution.MaxConcurrentDevelopers,
 		effective.Execution.RepairAttemptsBeforeReplan,
 		effective.Execution.IntegrationRetriesBeforeReconciliation,
+		effective.Execution.TransientRelaunchesBeforeBlocking,
 		effective.Execution.WorktreeRoot,
 		effective.Execution.Remote,
 		renderScaffoldDuration(effective.Execution.UsageLimitMaxPause),

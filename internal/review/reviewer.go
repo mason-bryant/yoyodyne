@@ -123,6 +123,13 @@ type Result struct {
 	// is: a review that was refused was never made, and the caller can wait and
 	// ask again rather than ending the run over an absent verdict.
 	ServerOverload *backend.ServerOverload
+	// TransientFailure is set when the invocation died of something that judged
+	// nothing about the work: an API error the provider's own retries did not
+	// outlast, or a response cut off mid-flight. It is carried for the same reason
+	// the two above are — the review was never made, and the change waiting to be
+	// judged is untouched by it — with the difference that what it asks the caller
+	// for is another invocation rather than a wait.
+	TransientFailure *backend.TransientFailure
 	// ProcessStatus is how the reviewer's own process ended, carried so a caller
 	// can tell a review the provider answered badly from one the harness stopped
 	// on time. A stopped review was never made either, and the change it was
@@ -215,11 +222,12 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	})
 	if err != nil {
 		return Result{
-			RequestedModel: r.Model,
-			LastSequence:   lastSequence,
-			UsageLimit:     providerResult.UsageLimit,
-			ServerOverload: providerResult.ServerOverload,
-			ProcessStatus:  providerResult.Process.Status,
+			RequestedModel:   r.Model,
+			LastSequence:     lastSequence,
+			UsageLimit:       providerResult.UsageLimit,
+			ServerOverload:   providerResult.ServerOverload,
+			TransientFailure: providerResult.TransientFailure,
+			ProcessStatus:    providerResult.Process.Status,
 		}, fmt.Errorf("reviewer backend failed: %w", err)
 	}
 	sequence = execution.NewSequence(lastSequence)
@@ -241,15 +249,16 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	// with it too, because a report survives a verdict the harness rejected.
 	evidence := func() Result {
 		return Result{
-			RequestedModel: r.Model,
-			ResolvedModel:  providerResult.ResolvedModel,
-			SessionID:      providerResult.SessionID,
-			LastSequence:   lastSequence,
-			UsageLimit:     providerResult.UsageLimit,
-			ServerOverload: providerResult.ServerOverload,
-			ProcessStatus:  providerResult.Process.Status,
-			Reports:        reported,
-			ReportProblem:  reportProblem,
+			RequestedModel:   r.Model,
+			ResolvedModel:    providerResult.ResolvedModel,
+			SessionID:        providerResult.SessionID,
+			LastSequence:     lastSequence,
+			UsageLimit:       providerResult.UsageLimit,
+			ServerOverload:   providerResult.ServerOverload,
+			TransientFailure: providerResult.TransientFailure,
+			ProcessStatus:    providerResult.Process.Status,
+			Reports:          reported,
+			ReportProblem:    reportProblem,
 		}
 	}
 	if providerResult.IsError {

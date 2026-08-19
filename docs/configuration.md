@@ -89,6 +89,7 @@ execution:
   max_concurrent_developers: 1
   repair_attempts_before_replan: 2
   integration_retries_before_reconciliation: 2
+  transient_relaunches_before_blocking: 2
   worktree_root: auto
   remote: origin
   usage_limit_max_pause: 6h
@@ -183,6 +184,7 @@ Up to three layers produce the effective configuration, later ones winning:
    `product.decisions` (`docs/decisions`), `execution.max_concurrent_developers` (1),
    `execution.repair_attempts_before_replan` (2),
    `execution.integration_retries_before_reconciliation` (2),
+   `execution.transient_relaunches_before_blocking` (2),
    `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -1286,7 +1288,9 @@ Ordinary transient throttling still never reaches any of this: the provider CLI
 retries that itself, and the harness does not duplicate the wait. What the
 harness acts on is the terminal result that CLI ends on once its own retries are
 spent — an `api_error` reporting HTTP 529 — because the provider has stopped
-retrying by then and something has to.
+retrying by then and something has to. An overload is the only terminal
+`api_error` that becomes a wait; the rest are covered by
+[the relaunch budget](#relaunching-a-run-the-provider-killed) below.
 
 `yoyo resume <beads-id>` is the one thing that overrides a recorded deadline,
 and it overrides nothing else. It moves the next probe to now, for when the
@@ -1297,6 +1301,45 @@ acts on the release within seconds, and the run keeps its claim, its branch, its
 worktree, and its developer session. If the provider still refuses, the run
 records the new report and waits again, so a premature release costs one refused
 request. See the README for the whole of that behavior.
+
+## Relaunching a run the provider killed
+
+Not every way a provider ends an invocation is a refusal it names in advance.
+Sometimes it dies: the API answers with an error its own retry ladder did not
+outlast, or the connection carrying the response goes away before the reply is
+finished — `API Error: Connection closed mid-response`, which quotes no HTTP
+status because nothing answered. The work was never judged and nothing is wrong
+with the change. Rather than failing, the run relaunches itself:
+
+```yaml
+execution:
+  transient_relaunches_before_blocking: 2
+```
+
+The dead invocation is reissued in the same worktree and the same developer
+session, so an attempt that died mid-response continues the change it had already
+started rather than deriving it again. No wait is attached, because there is no
+condition to wait out: a dropped connection is already gone, and the provider's
+own retries are spent before the harness sees the terminal.
+
+One budget covers both provider invocations a run makes. A review the provider
+killed is asked for again on the same count, without redeveloping the change,
+because what the budget bounds is how much of the provider's weather a single run
+absorbs rather than how often either role is asked. Nothing is handed back to the
+developer, so a relaunch spends no repair attempt.
+
+Relaunches are counted in durable run state before each one begins, so a process
+that dies mid-relaunch resumes against the budget it had rather than a fresh one.
+A run that spends the budget stops and records a blocker on the work item naming
+the provider's own last message and saying plainly that no check failed and no
+reviewer asked for repair. Setting the bound to `0` restores the earlier
+behavior: the first provider death ends the run.
+
+A refusal that would stand is never relaunched. A terminal `api_error` quoting a
+4xx status — a malformed request, a key that is not permitted, a limit the
+provider is enforcing — earns the identical answer on the next attempt, so it
+fails the run as it always did; so does a 529, which is a wait rather than a
+relaunch, and so does any terminal the API did not report at all.
 
 ## Losing a race for the target branch
 

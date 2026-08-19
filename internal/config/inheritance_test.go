@@ -647,6 +647,34 @@ func TestUsageLimitPauseBoundsFailClosed(t *testing.T) {
 	}
 }
 
+// The relaunch budget is inherited from the bundle and overridable like every
+// other bound, including down to the pre-ifd.101 behavior of failing on the
+// first provider death. Only a negative bound, which describes no relaunch
+// anybody could take, is refused.
+func TestTransientRelaunchBudgetIsInheritedAndOverridable(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Execution.TransientRelaunchesBeforeBlocking != 2 {
+		t.Fatalf("inherited relaunch budget = %d, want the bundle's 2", inherited.Config.Execution.TransientRelaunchesBeforeBlocking)
+	}
+	if origin := inherited.Origins["execution.transient_relaunches_before_blocking"]; origin != "builtin:v1" {
+		t.Fatalf("relaunch budget origin = %q, want the bundle it came from", origin)
+	}
+
+	never := loadProject(t, minimalProjectConfig+"execution:\n  transient_relaunches_before_blocking: 0\n", nil)
+	if never.Config.Execution.TransientRelaunchesBeforeBlocking != 0 {
+		t.Fatalf("overridden relaunch budget = %d, want the explicit zero to survive", never.Config.Execution.TransientRelaunchesBeforeBlocking)
+	}
+
+	project := t.TempDir()
+	writeProject(t, project, minimalProjectConfig+"execution:\n  transient_relaunches_before_blocking: -1\n", nil)
+	_, err := LoadResolved(filepath.Join(project, DirectoryName, FileName))
+	if err == nil || !strings.Contains(err.Error(), "transient_relaunches_before_blocking cannot be negative") {
+		t.Fatalf("LoadResolved() error = %v, want one refusing a negative relaunch budget", err)
+	}
+}
+
 // Publishing is opted in to the way integration is, and a project that says
 // nothing about it publishes nothing. The remote is inherited rather than
 // written down, so opting in is one line.

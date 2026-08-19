@@ -322,8 +322,15 @@ type Outcome struct {
 	// target went and put it back through the checks and a fresh independent
 	// review, so it is evidence about the target moving rather than about the
 	// change being wrong.
-	IntegrationRetries int  `json:"integration_retries,omitempty"`
-	Blocked            bool `json:"blocked,omitempty"`
+	IntegrationRetries int `json:"integration_retries,omitempty"`
+	// TransientRelaunches counts the provider invocations this run reissued after
+	// one died without judging the work. It is evidence about the provider rather
+	// than about the change or the target branch, and a run reporting some and
+	// finishing anyway is the whole point of the budget: the deaths cost nobody
+	// anything. Blocked reports the budget spent, with what killed the last
+	// attempt recorded on the work item.
+	TransientRelaunches int  `json:"transient_relaunches,omitempty"`
+	Blocked             bool `json:"blocked,omitempty"`
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
@@ -699,6 +706,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			ProviderModel:         state.ProviderModel,
 			ProviderResolvedModel: state.ProviderResolvedModel,
 			RepairAttempts:        state.RepairAttempts,
+			TransientRelaunches:   state.TransientRelaunches,
 			UsageLimitKind:        state.UsageLimitKind,
 			PauseCause:            state.PauseCause,
 			// A resumed run keeps the pull request the interrupted process
@@ -1204,6 +1212,16 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // reissued in the same worktree and the same session. Only a wait the harness
 // cannot take — an unusable reset time, or one beyond the configured maximum —
 // stops the run.
+//
+// An attempt the provider killed rather than refused is reissued too, against a
+// budget rather than a clock. There is no condition to wait out: a connection
+// that dropped is already gone, and the provider's own retry ladder is spent
+// before the harness ever sees the terminal, so what a relaunch waits for has
+// already been waited. The relaunch keeps the worktree and the session for the
+// same reason a refusal's reissue does, and here it matters more: the attempt
+// that died mid-response had already made part of the change, and continuing the
+// session is what carries that work into the next attempt instead of asking a
+// developer to derive it a second time.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
 	for {
 		// A stop is asked for before the hold, so a run the operator both stopped
@@ -1221,9 +1239,18 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
-		if !refusedForLimit && !refusedForOverload {
-			if err := a.recordDevelopment(ctx, providerResult, err); err != nil {
-				return err
+		transient, died := diedTransiently(providerResult.TransientFailure, providerResult.Process.Status, providerResult.IsError, err)
+		if !refusedForLimit && !refusedForOverload && !a.mayRelaunch(died) {
+			recorded := a.recordDevelopment(ctx, providerResult, err)
+			// A transient death with the budget already spent is recorded exactly as
+			// any other developer failure is — the attempt's changes are part of what
+			// the run has to say about itself — and then handed to a person, because
+			// nothing else is going to relaunch it.
+			if died {
+				return a.blockOnSpentRelaunchBudget(ctx, transient, recorded)
+			}
+			if recorded != nil {
+				return recorded
 			}
 			// The attempt that just finished is what publishes. Doing it here
 			// covers every developer invocation a run makes — the first and each
@@ -1249,10 +1276,101 @@ func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error
 			}
 			continue
 		}
-		if err := a.pauseForServerOverload(ctx, overload); err != nil {
+		// An overload is answered before a transient death for the same reason: a
+		// terminal the backend somehow reported as both is the one condition here
+		// that names a wait, and taking the wait costs a relaunch nothing while
+		// skipping it spends the budget on a server that has not recovered yet.
+		if refusedForOverload {
+			if err := a.pauseForServerOverload(ctx, overload); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := a.recordRelaunch(); err != nil {
 			return err
 		}
 	}
+}
+
+// mayRelaunch reports a provider death this run still has budget to absorb. It
+// reads the durable count rather than anything this process is holding, so a run
+// resumed after a crash mid-relaunch is bounded by what it already spent.
+func (a *activeRun) mayRelaunch(died bool) bool {
+	return died && a.state.TransientRelaunches < a.pipeline.Config.Execution.TransientRelaunchesBeforeBlocking
+}
+
+// diedTransiently reports an invocation the provider ended without judging the
+// work, on something that may not happen again. It takes the same shape as the
+// two refusals beside it: a transient failure reported alongside an invocation
+// that still produced its answer is evidence rather than a death, so only one
+// accompanying a failed attempt relaunches the run.
+//
+// An invocation the harness stopped on time is never one of these, however the
+// provider's last words read. That stop is the harness's own decision, the run it
+// leaves behind is owed a continuation rather than a relaunch, and charging it to
+// a budget for the provider's weather would spend the run's tolerance on the
+// harness's own clock.
+func diedTransiently(failure *backend.TransientFailure, status execution.ProcessStatus, isError bool, err error) (backend.TransientFailure, bool) {
+	if failure == nil || (err == nil && !isError) {
+		return backend.TransientFailure{}, false
+	}
+	if _, stopped := providerStopReason(status); stopped {
+		return backend.TransientFailure{}, false
+	}
+	return *failure, true
+}
+
+// recordRelaunch counts one provider death against the budget and records what
+// killed the attempt. Like a repair attempt it is recorded before the relaunch it
+// authorizes happens, so a process that dies here comes back to the budget it had
+// spent rather than to a fresh one — which is the difference between a bounded
+// self-repair and an unbounded loop that a crash resets.
+//
+// Nothing about the attempt's own outcome is recorded, because there is no
+// outcome: the provider judged nothing, and writing a failure the next attempt
+// will overwrite would make a run that recovered look like one that failed first.
+// What killed the attempt is already durable without this — the terminal the
+// provider sent is in the run's event stream — so the count is all this has to
+// add.
+func (a *activeRun) recordRelaunch() error {
+	a.state.TransientRelaunches++
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	a.outcome.TransientRelaunches = a.state.TransientRelaunches
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("save transient relaunch %d: %w", a.state.TransientRelaunches, err)
+	}
+	return nil
+}
+
+// blockOnSpentRelaunchBudget ends a run the provider kept killing. It is the
+// provider-side twin of the repair blockers, and it says the opposite thing about
+// the change: every gate that ran was satisfied or never got to run, and nothing
+// here found anything wrong with the work. What the reader has to look at is why
+// the provider will not carry this run, which is the one question the harness
+// cannot answer by asking again.
+//
+// recorded is what recording the dead attempt reported, and it is read rather
+// than discarded. Its status is the run's, so a provider killed by a cancelled
+// context is not filed as one that failed; and anything it says beyond the
+// provider's own failure — a store that would not take the record, a change
+// summary that could not be taken — travels with the blocker, because that is a
+// second thing wrong rather than another way of saying this one.
+func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure backend.TransientFailure, recorded error) error {
+	limit := a.pipeline.Config.Execution.TransientRelaunchesBeforeBlocking
+	blocked := fmt.Errorf("the provider ended this run without judging the work after %d of %d permitted relaunch(es): %s",
+		a.state.TransientRelaunches, limit, failure.Detail)
+	var reported phaseError
+	if recorded != nil && !errors.As(recorded, &reported) {
+		blocked = errors.Join(blocked, recorded)
+	}
+	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
+	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, limit)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
+	}
+	a.outcome.Blocked = true
+	return cause
 }
 
 // attemptDevelopment makes one developer invocation.
@@ -2717,6 +2835,21 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			}
 			continue
 		}
+		// A review the provider killed rather than refused was not made either, and
+		// it costs more to lose than a developer attempt does: the change is already
+		// built, checked, and waiting on the one thing that has to happen before it
+		// can be promoted. So it is asked for again against the same budget a
+		// developer death spends, and a run that spends the budget here stops with
+		// the provider named rather than the change.
+		if transient, died := diedTransiently(reported.transientFailure, reported.processStatus, false, err); died {
+			if !a.mayRelaunch(true) {
+				return "", a.blockOnSpentRelaunchBudget(ctx, transient, err)
+			}
+			if relaunchErr := a.recordRelaunch(); relaunchErr != nil {
+				return "", relaunchErr
+			}
+			continue
+		}
 		// A review the harness stopped on time was never made either, and the
 		// change waiting to be judged is untouched by it. Continuing that run
 		// costs one more review; failing it would cost the whole change.
@@ -2750,9 +2883,10 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 // process ended. Each decides whether the run continues, and none is legible
 // from the error alone.
 type providerEvidence struct {
-	usageLimit     *backend.UsageLimit
-	serverOverload *backend.ServerOverload
-	processStatus  execution.ProcessStatus
+	usageLimit       *backend.UsageLimit
+	serverOverload   *backend.ServerOverload
+	transientFailure *backend.TransientFailure
+	processStatus    execution.ProcessStatus
 }
 
 // refusedReviewForUsageLimit reports a review the provider declined for want of
@@ -2843,9 +2977,10 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	}
 	if reviewErr != nil {
 		return "", providerEvidence{
-			usageLimit:     result.UsageLimit,
-			serverOverload: result.ServerOverload,
-			processStatus:  result.ProcessStatus,
+			usageLimit:       result.UsageLimit,
+			serverOverload:   result.ServerOverload,
+			transientFailure: result.TransientFailure,
+			processStatus:    result.ProcessStatus,
 		}, fmt.Errorf("independent review failed: %w", reviewErr)
 	}
 	// The reviewer reports the selector it actually ran with. Auditing that
@@ -3277,6 +3412,24 @@ func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) s
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
+// renderRelaunchBlockerNotes describes a run the provider kept killing. Like the
+// integration blocker it says plainly that nothing was found wrong with the
+// change, because what it preserves is worth picking up rather than replanning:
+// the developer's session is still resumable and the worktree holds whatever the
+// last attempt reached. What needs looking at is the provider.
+func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, limit int) string {
+	lines := []string{
+		"Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
+		fmt.Sprintf("Relaunches: %d of %d permitted", outcome.TransientRelaunches, limit),
+		"Last provider failure: " + failure.Detail,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
 // renderRebaseConflictNotes describes a change that cannot be replayed onto what
 // its target became. This is the one integration outcome that is genuinely a
 // decision rather than a retry, so it names both sides and says explicitly that
@@ -3459,6 +3612,13 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.IntegrationRetries > 0 {
 		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
 	}
+	// A run that absorbed the provider dying under it and finished anyway says
+	// nothing about the change, but it is the only place the deaths are counted
+	// where somebody watching the item will see them: a provider degrading run
+	// after run is visible here before it is visible as a blocked item.
+	if outcome.TransientRelaunches > 0 {
+		lines = append(lines, "Relaunches after a provider death: "+strconv.Itoa(outcome.TransientRelaunches))
+	}
 	if outcome.ProviderSessionID != "" {
 		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
 	}
@@ -3506,9 +3666,10 @@ func renderFailureNotes(outcome Outcome) string {
 		headline = "Yoyodyne run failed after the change was already integrated; the integrated commit, branch, and worktree are preserved for reconciliation."
 	}
 	if outcome.Blocked {
-		// A run is blocked by a spent repair budget or by a target branch it could
-		// not promote into, and the recorded blocker says which. This headline
-		// deliberately does not: naming one of them would be wrong half the time.
+		// A run is blocked by a spent repair budget, by a target branch it could
+		// not promote into, or by a provider that kept killing it, and the recorded
+		// blocker says which. This headline deliberately does not: naming one of
+		// them would be wrong more often than not.
 		headline = "Yoyodyne blocked this item; the branch and worktree are preserved, and the blocker recorded on the item says what stopped it."
 	}
 	lines := []string{
@@ -3524,6 +3685,9 @@ func renderFailureNotes(outcome Outcome) string {
 	}
 	if outcome.IntegrationRetries > 0 {
 		lines = append(lines, "Integration retries: "+strconv.Itoa(outcome.IntegrationRetries))
+	}
+	if outcome.TransientRelaunches > 0 {
+		lines = append(lines, "Relaunches after a provider death: "+strconv.Itoa(outcome.TransientRelaunches))
 	}
 	if outcome.Branch != "" {
 		lines = append(lines, "Branch: "+outcome.Branch)

@@ -100,8 +100,17 @@ type Execution struct {
 	// independent review, because the reviewed change is not the change that
 	// would now be promoted. Zero never retries, which is the behavior a run had
 	// before this bound existed: the first refusal ends it.
-	IntegrationRetriesBeforeReconciliation int    `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
-	WorktreeRoot                           string `yaml:"worktree_root" json:"worktree_root"`
+	IntegrationRetriesBeforeReconciliation int `yaml:"integration_retries_before_reconciliation" json:"integration_retries_before_reconciliation"`
+	// TransientRelaunchesBeforeBlocking bounds how many times a run reissues a
+	// provider invocation that died without judging the work — an API error the
+	// provider's own retries did not outlast, or a response cut off mid-flight.
+	// The relaunch continues the same worktree and the same session, so nothing
+	// the dead attempt built is redone. One budget covers the developer and the
+	// reviewer, because what it bounds is how much of the provider's weather one
+	// run absorbs. Zero never relaunches, which is the behavior a run had before
+	// this bound existed: the first transient death ends it.
+	TransientRelaunchesBeforeBlocking int    `yaml:"transient_relaunches_before_blocking" json:"transient_relaunches_before_blocking"`
+	WorktreeRoot                      string `yaml:"worktree_root" json:"worktree_root"`
 	// Remote names the Git remote publishing pushes to and opens pull requests
 	// against. It is only consulted when `approvals.publishing` is automatic, and
 	// a repository that has no remote by this name publishes nothing rather than
@@ -304,6 +313,11 @@ func (c Config) Validate() error {
 	// refused.
 	if c.Execution.IntegrationRetriesBeforeReconciliation < 0 {
 		problems = append(problems, "integration_retries_before_reconciliation cannot be negative")
+	}
+	// And here, for the same reason: zero says fail on the first transient death,
+	// which is a choice, and a negative bound is not one.
+	if c.Execution.TransientRelaunchesBeforeBlocking < 0 {
+		problems = append(problems, "transient_relaunches_before_blocking cannot be negative")
 	}
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")

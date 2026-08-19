@@ -412,6 +412,19 @@ type State struct {
 	// thing: how long a run keeps chasing a moving target, rather than how many
 	// times a developer is asked to fix its own change.
 	IntegrationRetries int `json:"integration_retries,omitempty"`
+	// TransientRelaunches counts the provider invocations this run has reissued
+	// after one died without judging the work — an API error the provider's own
+	// retries did not outlast, or a response cut off mid-flight. One budget covers
+	// the developer and the reviewer both, because what it bounds is how many
+	// times a run absorbs the provider dying under it rather than how often either
+	// role is asked; separate budgets would let a run alternating between them
+	// absorb twice what an operator configured. It is bounded apart from the
+	// repair budget for the reason that budget is bounded apart from the
+	// integration one: nothing here is a fault in the change, so spending a repair
+	// attempt on it would charge the developer for the provider's weather. It is
+	// recorded before each relaunch begins, so a process that dies mid-relaunch
+	// resumes against the budget it had rather than buying a fresh one.
+	TransientRelaunches int `json:"transient_relaunches,omitempty"`
 	// UsageLimitResetsAt is the deadline a run paused for an exhausted provider
 	// usage limit is waiting on. It is written before the wait begins, so a
 	// process that dies during the wait does not lose the deadline and a restart
@@ -638,6 +651,9 @@ func (s State) Validate() error {
 	}
 	if s.IntegrationRetries < 0 {
 		problems = append(problems, errors.New("integration_retries cannot be negative"))
+	}
+	if s.TransientRelaunches < 0 {
+		problems = append(problems, errors.New("transient_relaunches cannot be negative"))
 	}
 	if s.UsageLimitPausedSeconds < 0 {
 		problems = append(problems, errors.New("usage_limit_paused_seconds cannot be negative"))

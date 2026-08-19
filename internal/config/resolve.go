@@ -184,13 +184,18 @@ func newResolution() *resolution {
 				// for a target that moved under a run to be caught up with, and far
 				// short of a run that keeps re-reviewing a change it can never land.
 				IntegrationRetriesBeforeReconciliation: 2,
-				WorktreeRoot:                           "auto",
-				Remote:                                 defaultRemote,
-				UsageLimitMaxPause:                     defaultUsageLimitMaxPause,
-				UsageLimitInProcessPause:               defaultUsageLimitInProcessPause,
-				UsageLimitUnknownResetPause:            defaultUsageLimitUnknownResetPause,
-				ServerOverloadPause:                    defaultServerOverloadPause,
-				CheckTimeout:                           defaultCheckTimeout,
+				// And the same shape again, for the third thing a run absorbs rather
+				// than fails on: enough that the provider dropping a connection twice
+				// running is survived, and short of a run that keeps asking a provider
+				// that is not going to answer it.
+				TransientRelaunchesBeforeBlocking: 2,
+				WorktreeRoot:                      "auto",
+				Remote:                            defaultRemote,
+				UsageLimitMaxPause:                defaultUsageLimitMaxPause,
+				UsageLimitInProcessPause:          defaultUsageLimitInProcessPause,
+				UsageLimitUnknownResetPause:       defaultUsageLimitUnknownResetPause,
+				ServerOverloadPause:               defaultServerOverloadPause,
+				CheckTimeout:                      defaultCheckTimeout,
 			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
@@ -208,6 +213,7 @@ func newResolution() *resolution {
 			"execution.max_concurrent_developers":                 OriginDefault,
 			"execution.repair_attempts_before_replan":             OriginDefault,
 			"execution.integration_retries_before_reconciliation": OriginDefault,
+			"execution.transient_relaunches_before_blocking":      OriginDefault,
 			"execution.worktree_root":                             OriginDefault,
 			"execution.remote":                                    OriginDefault,
 			"execution.usage_limit_max_pause":                     OriginDefault,
@@ -236,6 +242,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.max_concurrent_developers", execution.MaxConcurrentDevelopers, &r.config.Execution.MaxConcurrentDevelopers, applied.origin)
 		setValue(r.origins, "execution.repair_attempts_before_replan", execution.RepairAttemptsBeforeReplan, &r.config.Execution.RepairAttemptsBeforeReplan, applied.origin)
 		setValue(r.origins, "execution.integration_retries_before_reconciliation", execution.IntegrationRetriesBeforeReconciliation, &r.config.Execution.IntegrationRetriesBeforeReconciliation, applied.origin)
+		setValue(r.origins, "execution.transient_relaunches_before_blocking", execution.TransientRelaunchesBeforeBlocking, &r.config.Execution.TransientRelaunchesBeforeBlocking, applied.origin)
 		setValue(r.origins, "execution.worktree_root", execution.WorktreeRoot, &r.config.Execution.WorktreeRoot, applied.origin)
 		setValue(r.origins, "execution.remote", execution.Remote, &r.config.Execution.Remote, applied.origin)
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
