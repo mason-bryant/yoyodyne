@@ -406,6 +406,77 @@ func mustLoadConfig(t *testing.T, configPath string) config.Config {
 	return resolved.Config
 }
 
+// Why the harness was running an item is the one thing a listing of runs cannot
+// infer once something other than the operator does the choosing, so it is
+// reported for every run -- including, in those words, for a run that recorded
+// no reason at all. A missing line would read as a reason already read.
+func TestStatusSaysWhyEachRunWasChosenAndNamesTheRunsNothingAccountsFor(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here, and the
+	// records it reads are written under it.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 19, 8, 0, 0, 0, time.UTC)
+
+	chosen := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-chosen", started.Add(time.Hour))
+	chosen.Selection = &runstate.Selection{
+		By:     runstate.SelectedByScheduler,
+		Reason: "the scheduler pulled yoyodyne-chosen from the backlog: position 1 of 4 admitted item(s)",
+		At:     started.Add(time.Hour),
+	}
+	saveRun(t, store, chosen)
+	// A run recorded before selections existed accounts for nothing, which is
+	// exactly the case worth seeing.
+	unaccounted := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-unaccounted", started)
+	saveRun(t, store, unaccounted)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"selected by the scheduler: the scheduler pulled yoyodyne-chosen from the backlog",
+		"selected: no reason recorded",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status --json code = %d, stderr = %q", code, stderr)
+	}
+	var output struct {
+		Runs []struct {
+			WorkItemID string              `json:"work_item_id"`
+			Selection  *runstate.Selection `json:"selection"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", stdout, err)
+	}
+	if len(output.Runs) != 2 {
+		t.Fatalf("runs = %d, want both recorded runs", len(output.Runs))
+	}
+	for _, run := range output.Runs {
+		switch run.WorkItemID {
+		case "yoyodyne-chosen":
+			if run.Selection == nil || run.Selection.By != runstate.SelectedByScheduler {
+				t.Fatalf("selection = %#v, want the scheduler's own record", run.Selection)
+			}
+		case "yoyodyne-unaccounted":
+			if run.Selection != nil {
+				t.Fatalf("selection = %#v, want nothing invented for a run that recorded none", run.Selection)
+			}
+		}
+	}
+}
+
 // recordedRun creates one run record, so a test can then set what it is about
 // and save it.
 func recordedRun(t *testing.T, store *runstate.Store, status runstate.Status, workItemID string, startedAt time.Time) runstate.State {

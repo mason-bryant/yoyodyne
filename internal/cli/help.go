@@ -28,6 +28,7 @@ func commandHelp() string {
 		printDirectiveUsage,
 		printReportsUsage,
 		printRunUsage,
+		printWorkUsage,
 		printStatusUsage,
 		printPauseUsage,
 		printResumeUsage,

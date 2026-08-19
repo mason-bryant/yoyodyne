@@ -97,15 +97,19 @@ from-source routes, for anyone who would rather not have Go.
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
 
-- **One run at a time**, and nothing pulls from the backlog on its own. You say
-  `/work <id>` when you want the next thing run. The product manager owns the
-  backlog and its order; the development manager that would take from the top of
-  it without being told is not built yet, and neither is a scheduler.
+- **One run at a time by default**, and choosing is a separate verb. In a
+  conversation you say `/work <id>` when you want the next thing run, one at a
+  time. [`yoyo work`](#letting-the-harness-choose-the-work) is the harness
+  choosing for itself: it pulls the ready items from the top of the backlog and
+  runs up to
+  `execution.max_concurrent_developers` of them at once, which defaults to one.
+  The product manager still owns the backlog and its order.
 - **The product manager is the agent you drive the work from**, and it is no
   longer the only one you can talk to: `yoyo agent chat <name>` addresses any
   configured agent, each with its own durable conversation and its own authority.
-  What none of them do yet is act without you — nothing pulls from the backlog or
-  decomposes a design on its own.
+  What none of them do yet is act without you — the pulling above is the harness
+  reading the order and the readiness the tracker already holds, not an agent
+  deciding anything, and nothing decomposes a design on its own.
 - **Claude Code is the backend that runs.** `codex` exists as a name in the
   configuration vocabulary; the adapter behind it is designed and not built, and
   a run refuses a developer configured for anything but `claude-code`.
@@ -1476,6 +1480,64 @@ would now be promoted. A replay that conflicts is never
 resolved automatically: the run stops, both sides survive untouched, and the
 blocker on the item says so.
 
+### Letting the harness choose the work
+
+`/work <id>` and `yoyo run <id>` are you naming an item. `yoyo work` is the
+harness choosing:
+
+```sh
+./bin/yoyo work                 # drain what is ready
+./bin/yoyo work --limit 2       # start two runs and stop choosing
+./bin/yoyo work --json
+```
+
+It reads the admitted work in the order the product manager set, takes the items
+the tracker itself reports as ready to pull, and starts as many of them at once
+as `execution.max_concurrent_developers` leaves free — which is `1` until you
+raise it. Each run is the run above: its own branch, its own worktree, the same
+checks, the same independent reviewer, the same serial promotion. The command
+returns once every run it started has ended.
+
+Capacity is enforced where a run is reserved rather than by the scheduler, so two
+of these, or one of these and a `yoyo run` beside it, share one limit rather than
+getting one each. A run that loses the race for the last free slot is reported as
+declined and the pass exits zero: that is two schedulers doing exactly what they
+should, not a failure.
+
+Four things keep an item out of a pass, and the pass accounts for them at two
+different grains. An **unresolved directive** is named against the item it paused,
+with the directive's own words, because it needs a person and nothing else would
+report that this item was passed over for it. The other three — the tracker not
+reporting an item as ready, a run for it already being in flight anywhere, and no
+free slot — are facts about the pass rather than about any one item, so that is
+how they are reported: the stop reason says which of them ended the choosing, and
+a pass that got as far as reading the queue prints how many items were admitted,
+how many the tracker called ready to pull, and how many slots were taken. Counts
+rather than a list, deliberately — a line per unready item would be a line per
+backlog entry on every pass, which is how a listing stops being read. A pass that
+stopped before reading the queue at all, because you were holding intake or the
+machine was already full, says nothing about the backlog rather than reporting
+zeroes it never looked up.
+
+A fifth thing deliberately keeps nothing out: an item whose goal was amended after
+it was admitted is pulled exactly as it would have been, because
+[staleness reports rather than decides](#what-a-change-upstream-leaves-stale),
+and what changed goes into the run's recorded reason instead.
+
+Two things make this accountable rather than work happening behind your back.
+Holding intake stops it choosing anything more while what is running finishes,
+and it is read at every pull rather than once at the start, so a hold you place
+mid-pass takes effect at the next selection. And every run it starts records, in
+durable state, why that item was chosen — where it sat in the order, how much of
+the queue was pullable, how much of the machine was free, and anything upstream
+that had moved. `yoyo status` reads it back.
+
+The configuration is re-read before every pull for the same reason: a capacity
+you raise or a priority you reorder while a pass is running is picked up the next
+time it chooses something, rather than at the next restart. Runs already in
+flight keep the configuration they started under.
+[Configuration](docs/configuration.md#scheduling-ready-work) has the rest.
+
 Documentation counts as part of a work item rather than as follow-up: the
 developer contract makes updating the documents that describe changed behavior
 part of the assigned work, and the reviewer reports a change that leaves a
@@ -2184,8 +2246,8 @@ for that command to pick up.
 ### What became of the runs, and why one failed
 
 `yoyo status` reads back what the runs themselves recorded — newest first, the
-work item, the status and the phase the run reached, what it cost, and the
-reasons its record kept:
+work item, the status and the phase the run reached, what it cost, why the item
+was chosen, and the reasons its record kept:
 
 ```sh
 ./bin/yoyo status                    # the twenty most recent runs
@@ -2199,17 +2261,24 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+  selected by the operator: the operator ran this item by name from the command line
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  selected: no reason recorded
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
 each reason is shown as one line; --json carries what the record holds in full
 ```
 
-Each reason is printed under the run it belongs to and named for what it is,
-because the records keep them apart deliberately. Only `reason` says the work
-itself failed. An `outstanding publication`, an `outstanding cleanup`, a
+The `selected` line is on every run, including — in those words — a run that
+recorded no reason at all. That is deliberate: work the harness chose and cannot
+account for is exactly what you most need to see, and a line left out would read
+as a reason you had already looked at rather than as one nobody wrote.
+
+Each of the other reasons is printed under the run it belongs to and named for
+what it is, because the records keep them apart deliberately. Only `reason` says
+the work itself failed. An `outstanding publication`, an `outstanding cleanup`, a
 `failing check`, and a `completion recorded late` are recorded around the work,
 and a run can carry one of them with its change already promoted. The last of
 those is the class whose work-item note is itself unreliable — recording that

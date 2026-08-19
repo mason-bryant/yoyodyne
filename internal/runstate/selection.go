@@ -26,12 +26,19 @@ import (
 	"time"
 )
 
-// The two things that choose work, named here rather than imported from the
-// role vocabulary because this is durable evidence: a record written today has
-// to keep meaning what it meant if the roles are ever renamed.
+// The things that choose work, named here rather than imported from the role
+// vocabulary because this is durable evidence: a record written today has to
+// keep meaning what it meant if the roles are ever renamed.
+//
+// The scheduler is not a role and is named apart from one deliberately. It pulls
+// from the backlog the way a development manager does, but it is the harness
+// choosing by the order and the readiness the tracker already holds rather than
+// an agent weighing anything, and a record attributing its choice to a role that
+// never ran would be evidence of something that did not happen.
 const (
 	SelectedByOperator           = "operator"
 	SelectedByDevelopmentManager = "development manager"
+	SelectedByScheduler          = "scheduler"
 )
 
 // MaxSelectionReasonBytes bounds the recorded reason. It is generous enough for

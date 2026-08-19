@@ -2446,7 +2446,7 @@ func newPipeline(t *testing.T, repository string, tracker *fakeTracker, provider
 // newSharedPipeline builds a pipeline over an explicit worktree root and run
 // state store, so two pipelines can be built over the same durable artifacts:
 // that is what a restarted or a concurrent process sees.
-func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store StateStore, tracker *fakeTracker, provider *fakeBackend, commands []string) Pipeline {
+func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store StateStore, tracker WorkTracker, provider *fakeBackend, commands []string) Pipeline {
 	t.Helper()
 	processRunner := execution.OSProcessRunner{}
 	worktrees, err := gitworktree.New(gitworktree.Options{

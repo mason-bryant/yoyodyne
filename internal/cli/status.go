@@ -257,7 +257,17 @@ func printRunHistory(writer io.Writer, history runstate.RunHistory, workItemID s
 // Each is folded and bounded by singleLine, so a reviewer's verdict is one row
 // of the listing rather than a page of it; --json carries the whole of it.
 func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
-	printed := false
+	// Why the harness was running this item at all comes first, because it is the
+	// only one of these that is about the choice rather than the outcome. It is
+	// printed for every run rather than only for the ones that recorded it: a run
+	// with no reason is exactly what an operator most needs to see, and omitting
+	// the line would make it look like a run whose reason they had already read.
+	if run.Selection != nil {
+		fmt.Fprintf(writer, "  selected by the %s: %s\n", run.Selection.By, singleLine(run.Selection.Reason))
+	} else {
+		fmt.Fprintln(writer, "  selected: no reason recorded")
+	}
+	printed := true
 	for _, reason := range []struct {
 		label string
 		text  string
