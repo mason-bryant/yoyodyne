@@ -71,6 +71,10 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		fmt.Fprintln(out)
 		return false, nil
 	case "/status":
+		// A paused harness leads, before anything about the work: every group
+		// below is describing a queue that is not moving, and why it is not moving
+		// is the first thing the operator has to be told.
+		fmt.Fprint(out, s.operatorHoldBanner())
 		survey, err := s.SurveyWork(ctx)
 		if err != nil {
 			return false, err

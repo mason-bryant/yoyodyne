@@ -75,6 +75,24 @@ state_root() {
 }
 
 root="$(state_root)"
+
+# Whether the operator has paused all harness activity, which is the first thing
+# to say about a machine that looks idle: a system somebody paused and forgot
+# looks exactly like a system that died, and only one of those needs anybody.
+# The hold sits at the state root rather than under a product because it is one
+# switch over the whole machine, and it is pretty-printed one key per line, so
+# reading it needs no jq.
+announce_operator_hold() {
+  local hold="$root/operator-hold.json" since
+  [ -f "$hold" ] || return 0
+  # Fractional seconds are dropped for the same reason a listed start time drops
+  # them: nobody reads a pause to the microsecond.
+  since="$(sed -n 's/^[[:space:]]*"held_at":[[:space:]]*"\([^"]*\)".*/\1/p' "$hold" | head -1 | sed 's/\.[0-9]*Z$/Z/')"
+  echo "PAUSED: all harness activity is paused${since:+ since $since}" >&2
+  echo "nothing reaches the provider until \`yoyo resume\` lifts it; parked runs keep their claim, branch, and worktree" >&2
+}
+announce_operator_hold
+
 products="$root/products"
 [ -d "$products" ] || { echo "no Yoyodyne state at $products" >&2; exit 1; }
 

@@ -231,7 +231,12 @@ type RunReport struct {
 	// is a matter of waiting. It is the one pause that can appear without a run
 	// behind it, on work a directive stopped before it was ever claimed.
 	DirectivePause string `json:"directive_pause,omitempty"`
-	Failure        string `json:"failure,omitempty"`
+	// OperatorHeldSince is set instead of any of the others when what stopped the
+	// work was the operator pausing all harness activity. Like a directive pause
+	// it is lifted by a decision rather than by a clock, and it can appear with no
+	// run behind it, on work a paused harness declined to start at all.
+	OperatorHeldSince *time.Time `json:"operator_held_since,omitempty"`
+	Failure           string     `json:"failure,omitempty"`
 	// Reported counts what this run's agents reported while their work carried
 	// on, and ReportProblem names one the run could not keep. The reports
 	// themselves are in the collected pile that /reports shows; the count is
@@ -694,6 +699,12 @@ func (r RunReport) Headline() string {
 		item = "the work item"
 	}
 	switch {
+	case r.Paused && r.OperatorHeldSince != nil:
+		// The operator paused everything rather than this, so this says what they
+		// did and what undoes it. It never claims a run is in flight: a paused
+		// harness declines to start work as readily as it parks work under way.
+		return fmt.Sprintf("%s is paused because you paused all harness activity at %s; nothing reaches the provider until `yoyo resume` lifts it, and /work %s carries on after that",
+			item, r.OperatorHeldSince.UTC().Format(time.RFC3339), item)
 	case r.Paused && r.DirectivePause != "":
 		// A directive pause is lifted by a decision rather than by time, so this
 		// says what to settle rather than what to wait for. It never claims a run

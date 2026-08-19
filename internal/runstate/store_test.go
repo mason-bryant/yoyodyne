@@ -1132,6 +1132,26 @@ func TestStateRejectsAPauseOnARunThatCannotResume(t *testing.T) {
 	if err := zeroed.Validate(); err == nil || !strings.Contains(err.Error(), "cannot be the zero time") {
 		t.Fatalf("Validate() error = %v, want the zero time refused", err)
 	}
+
+	// The operator's hold is the same kind of instruction and is held to the same
+	// rule: a run nothing can carry on must not carry a park that promises it.
+	parked := testState(t, StatusFailed)
+	parked.CompletedAt = &completedAt
+	heldSince := completedAt.Add(-time.Hour)
+	parked.OperatorHeldSince = &heldSince
+	if err := parked.Validate(); err == nil || !strings.Contains(err.Error(), "requires a run that is still in flight") {
+		t.Fatalf("Validate() error = %v, want a terminal run to refuse an operator hold", err)
+	}
+	// What a hold cost a run outlives the park itself: it is the ledger's account
+	// of why time passed, and a run that finished still spent it.
+	held := testState(t, StatusRunning)
+	held.OperatorHeldSeconds = int64((2 * time.Hour) / time.Second)
+	if err := held.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want recorded held time to be storable", err)
+	}
+	if held.OperatorHeld() != 2*time.Hour {
+		t.Fatalf("OperatorHeld() = %s, want the two hours recorded", held.OperatorHeld())
+	}
 }
 
 // The published pull request is durable evidence like the integration it

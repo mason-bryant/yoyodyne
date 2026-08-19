@@ -189,6 +189,17 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
 		return result, nil
 	}
+	// A run parked because the operator paused all harness activity is not an
+	// interrupted run either, and it is the one where settling it would be
+	// worst: the operator stopped it deliberately and expects to find it where
+	// they left it, so ending it here would turn their pause into the cancelled
+	// run that pausing exists to avoid.
+	if pausedForOperatorHold(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run is parked because the operator paused all harness activity at %s, and can continue once `yoyo resume` lifts it",
+			state.OperatorHeldSince.UTC().Format(time.RFC3339))
+		return result, nil
+	}
 	// A run whose provider the harness stopped on time is not an interrupted run
 	// either: it recorded what stopped it and is owed the rest of the attempt it
 	// was making, in the worktree and session that attempt already established.

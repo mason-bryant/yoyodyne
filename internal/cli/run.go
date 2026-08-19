@@ -83,7 +83,12 @@ type components struct {
 	// the run store rather than inside it because that is what makes a directive
 	// reach work regardless of which agent received it: every command here
 	// addresses the same product-scoped records.
-	directives   *runstate.DirectiveStore
+	directives *runstate.DirectiveStore
+	// holds is the operator's switch over everything the harness would spend on a
+	// provider. It is built on the state root itself rather than under the
+	// product, because one switch pauses the machine: what makes an operator pause
+	// is an account or an afternoon, neither of which belongs to a product.
+	holds        *runstate.OperatorHoldStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -138,6 +143,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	holds, err := runstate.NewOperatorHoldStore(stateRoot)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -158,6 +167,7 @@ func buildComponents(configPath string) (components, error) {
 		amendments:    amendments,
 		branchReviews: branchReviews,
 		directives:    directives,
+		holds:         holds,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
@@ -232,6 +242,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// something an agent weighs: it is a reason the work must not proceed, and
 		// the harness is what enforces it.
 		Directives: parts.directives,
+		// The operator's hold over provider spending, read at every boundary where
+		// this pipeline would spend. It is wired here rather than delivered into a
+		// prompt for the same reason a directive is: a paused harness is not
+		// something an agent weighs.
+		Holds: parts.holds,
 		// A change an agent proposes to a document it may not edit is recorded
 		// here, for the same reason and in the same way: the run that argued the
 		// design was wrong is over long before anybody decides what to do about it,
@@ -354,7 +369,12 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// it. So it is reported on its own terms: naming a run that was never
 		// started, or a preserved worktree that never existed, would send an
 		// operator looking for artifacts nothing made.
-		if outcome.PausedByDirective != nil {
+		// The operator's hold is the other pause that can have no run behind it,
+		// and it is reported on its own terms for the same reason: what lifts it is
+		// one command, and nothing about this work item has anything to do with it.
+		if outcome.PausedByOperator != nil {
+			reportOperatorHold(stdout, stderr, outcome, err)
+		} else if outcome.PausedByDirective != nil {
 			reportDirectivePause(stdout, outcome)
 			if err != nil {
 				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
@@ -527,6 +547,43 @@ func reportDirectivePause(stdout io.Writer, outcome orchestrator.Outcome) {
 	}
 	fmt.Fprintf(stdout, "`yoyo directive resolve %s` settles it, and running yoyodyne on %s after that carries on\n",
 		held.ID, outcome.WorkItemID)
+}
+
+// reportOperatorHold describes work the operator's own pause is holding. It
+// leads with the pause rather than with the item, because the operator paused
+// everything rather than this: whatever they were asking for here, what they
+// need to be told is that the harness is where they left it. It says when the
+// hold was placed for the same reason, since a system somebody paused and forgot
+// looks exactly like a system that died.
+//
+// What it will not do is say nothing was started when something was. A run this
+// item already has is named, whether it parked at a boundary or is still working
+// its way to one — both keep everything they hold, and both carry on when the
+// pause lifts. A lookup that failed says so instead of guessing either way: an
+// operator told nothing was started for a run that is sitting in a worktree with
+// hours of work in it would be misled about the one thing this verb exists to
+// make legible.
+func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, err error) {
+	fmt.Fprintf(stdout, "PAUSED: all harness activity is paused, since %s\n",
+		outcome.PausedByOperator.HeldAt.Format(time.RFC3339))
+	switch {
+	case outcome.RunID != "":
+		fmt.Fprintf(stdout, "%s has a run in flight; it parks at its next provider call\n", outcome.WorkItemID)
+		fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
+		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		fmt.Fprintln(stdout, "the item stays claimed and its artifacts are preserved; nothing was cancelled")
+	case err != nil:
+		fmt.Fprintf(stdout, "what is in flight for %s could not be read, so nothing here says whether anything was started for it\n", outcome.WorkItemID)
+	default:
+		fmt.Fprintf(stdout, "nothing is in flight for %s, so nothing was started and there is nothing to clean up\n", outcome.WorkItemID)
+	}
+	fmt.Fprintf(stdout, "`yoyo resume` lifts the pause, and running yoyodyne on %s after that carries on\n", outcome.WorkItemID)
+	if err != nil {
+		// The pause itself is not in doubt — it is a flag this command just read —
+		// so what failed is named beside it rather than in place of it.
+		fmt.Fprintf(stderr, "the pause is in force; this could not be fully reported: %v\n", err)
+	}
 }
 
 // reportCollectedReports names what this run's agents reported without it

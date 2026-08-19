@@ -115,6 +115,12 @@ type Options struct {
 	// process and in any other. It is optional like the rest, and a conversation
 	// without one says so rather than appearing to enforce something.
 	Directives Directives
+	// Holds is the operator's switch over everything the harness would spend on a
+	// provider, which a turn is. It is optional like the rest: a conversation
+	// without one is one nothing can pause, which is what every conversation was
+	// before the switch existed, rather than one that quietly ignores a pause it
+	// could have read.
+	Holds OperatorHolds
 	// Amendments is the durable log of changes other roles have proposed to
 	// documents they do not own. It is read here so the ones this role owns reach
 	// it: an owner that never hears the argument cannot answer it. It is optional
@@ -538,6 +544,16 @@ Carry on answering the operator using these results. Say what you did, including
 // the conversation. The record advances whether or not the turn succeeded,
 // because the events it emitted exist either way.
 func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
+	// The operator's pause is read before every turn, including the further rounds
+	// one message takes: each of them is its own invocation, and a pause placed
+	// while the product manager was working on tracker results has to reach the
+	// round after it rather than only the next message.
+	if hold, held, err := s.heldByOperator(); err != nil || held {
+		if err != nil {
+			return "", err
+		}
+		return "", &OperatorHoldError{Hold: hold}
+	}
 	systemPrompt := SystemPrompt(s.options.Persona)
 	// The repository documents, the tracker's own text, and the operator's words
 	// all go to the provider, so anything recognizably sensitive is redacted on
@@ -1108,6 +1124,15 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// the operator is told what was lost and the conversation continues.
 		// Anything else ends it, because anything else means the next turn
 		// cannot be trusted to follow this one.
+		// A turn the operator's own pause refused is not a broken conversation
+		// either, and it is the one of these that nothing went wrong in: the
+		// conversation stays open, they lift the pause when they mean to, and
+		// saying the same thing again takes the turn that was refused.
+		var held *OperatorHoldError
+		if errors.As(err, &held) {
+			fmt.Fprintf(out, "%v\n\n", held)
+			continue
+		}
 		var unreadable *ProposalError
 		if errors.As(err, &unreadable) {
 			fmt.Fprintf(out, "%v\nNothing was proposed as far as the harness is concerned; ask again if you want those items.\n\n", unreadable)

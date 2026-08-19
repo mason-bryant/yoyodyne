@@ -84,9 +84,11 @@ func TestResumeRefusesWhatIsNotWaitingOnAUsageLimit(t *testing.T) {
 	waitingRun(t, stateRoot, "yoyodyne-waiting", time.Time{})
 
 	for name, args := range map[string][]string{
+		// Naming no item is not in this table: it means the other resume, which
+		// lifts the operator's hold over everything, and is exercised beside the
+		// pause that places it.
 		"an item with no run in flight":    {"resume", "--config", configPath, "yoyodyne-elsewhere"},
 		"a run that is not waiting at all": {"resume", "--config", configPath, "yoyodyne-waiting"},
-		"no item at all":                   {"resume", "--config", configPath},
 		"more than one item":               {"resume", "--config", configPath, "yoyodyne-waiting", "yoyodyne-other"},
 	} {
 		_, stderr, code := runCLI(t, args...)

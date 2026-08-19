@@ -184,6 +184,56 @@ step "a product that has only ever chatted still works"
 chatty_listing="$("$status" --product chatty -l 2>&1)"
 contains "$chatty_listing" "$waiting_chat" "a product with no runs directory lists its conversations"
 
+step "a paused harness says so before anything it is holding up"
+# The hold is one file at the state root rather than one per product, so it is
+# announced whichever product is being followed.
+#
+# The one thing here that is not a fixture is the hold itself. The banner reads
+# it with sed, so a hold written by this file would only ever prove the parse
+# against a shape this file chose; the seam that can actually break is between
+# the encoder the harness writes with and the parse the banner reads with, and
+# only a hold `yoyo pause` wrote puts both ends of it under test. An environment
+# that cannot build the binary falls back to a fixture and says which claim it
+# therefore did not exercise.
+hold_file="$YOYODYNE_STATE_HOME/operator-hold.json"
+if command -v go >/dev/null 2>&1 \
+  && (cd "$repository" && go build -o "$scratch/yoyo" ./cmd/yoyo) >/dev/null 2>&1 \
+  && "$scratch/yoyo" pause --config "$repository/.yoyodyne/config.yaml" >/dev/null 2>&1; then
+  pass "the hold the banner reads was written by yoyo pause"
+else
+  skip "the encoder the harness writes the hold with: this environment could not build and run yoyo pause"
+  cat > "$hold_file" <<'JSON'
+{
+  "schema_version": 1,
+  "held_at": "2026-08-18T18:15:00Z"
+}
+JSON
+fi
+# What the banner should say is read back with jq rather than with the sed the
+# banner itself uses, so the two ends of the seam are never checked by one
+# parser. The banner drops fractional seconds, and so does this.
+if command -v jq >/dev/null 2>&1; then
+  held_at="$(jq -r '.held_at' "$hold_file" | sed 's/\.[0-9]*Z$/Z/')"
+else
+  held_at=""
+fi
+held="$("$status" --product demo -l 2>&1)"
+if [ -n "$held_at" ]; then
+  contains "$held" "PAUSED: all harness activity is paused since $held_at" \
+    "a paused harness leads with when it was paused"
+else
+  contains "$held" "PAUSED: all harness activity is paused since " \
+    "a paused harness leads with when it was paused"
+  skip "the moment in the banner: this environment has no jq to read it back independently"
+fi
+contains "$held" "yoyo resume" "the banner says what lifts the pause"
+contains "$held" "$one_run" "the listing itself is still reported while paused"
+held_other="$("$status" --product chatty -l 2>&1)"
+contains "$held_other" "PAUSED:" "one switch is announced for every product"
+rm "$hold_file"
+running="$("$status" --product demo -l 2>&1)"
+missing "$running" "PAUSED" "a running harness says nothing about a pause"
+
 step "cost reporting counts conversation turns in the total"
 if ! command -v jq >/dev/null 2>&1; then
   cost="$("$status" --product demo -c 2>&1 || true)"

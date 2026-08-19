@@ -118,6 +118,11 @@ type StateStore interface {
 	// holds the run's lease and the operator releasing it does not.
 	ReleasedWait(runID string) (runstate.Release, bool, error)
 	ClearRelease(runID string) error
+	// Incomplete lists the runs still in flight. It is how a step that declines to
+	// act on a run can still say what it is leaving alone, which is the whole of
+	// what it is for here: reading a record is not acting on it, so this takes no
+	// lease and the run it describes may well belong to another process.
+	Incomplete() ([]runstate.State, error)
 }
 
 type CheckRunner interface {
@@ -145,6 +150,23 @@ type Directives interface {
 	Pausing(workItemID string) ([]directive.Directive, error)
 }
 
+// OperatorHolds is the operator's switch over everything the harness would spend
+// on a provider, as a run reads it.
+//
+// It is consulted for the same reason and in the same way the directives are,
+// and it is read from durable records every time rather than cached: the hold
+// that matters is the one an operator placed while this run was developing. What
+// differs is its scope. A directive is about work; this is about spending, so it
+// is asked at every provider-call boundary rather than at the points where a run
+// commits to work, and it says nothing about the work being right or wrong.
+//
+// It is satisfied by runstate.OperatorHoldStore.
+type OperatorHolds interface {
+	// Held reports whether the operator is holding harness activity. Not held is
+	// the ordinary answer and means the run may spend.
+	Held() (runstate.OperatorHold, bool, error)
+}
+
 type Pipeline struct {
 	Tracker   WorkTracker
 	Worktrees WorktreeManager
@@ -163,6 +185,11 @@ type Pipeline struct {
 	// been withdrawn, and a directive nothing enforces is the state this was built
 	// to end.
 	Directives Directives
+	// Holds is the operator's switch over provider spending. It is required for
+	// the same reason the directives are: a run that cannot find out whether the
+	// operator has paused everything would spend against a hold that is in force,
+	// and a pause the harness can miss is not a pause.
+	Holds OperatorHolds
 	// Reports is where what this run's agents noticed is collected. It is
 	// optional: a pipeline wired without one still runs exactly as it would
 	// have, and a report it cannot keep is named on the outcome rather than
@@ -261,21 +288,28 @@ type Outcome struct {
 	// Paused reports a run that stopped short of finishing and is owed a
 	// continuation rather than having failed. The run is still in flight when it
 	// is set: its worktree, branch, claimed item, and developer session are all
-	// preserved. Three things pause a run, and they are told apart by which of the
+	// preserved. Four things pause a run, and they are told apart by which of the
 	// fields below is set: an exhausted provider usage limit, whose deadline says
 	// when the run becomes runnable again; a provider invocation the harness
-	// stopped on time, which is runnable immediately; and an unresolved user
-	// directive, which is runnable once somebody settles the directive.
+	// stopped on time, which is runnable immediately; an unresolved user
+	// directive, which is runnable once somebody settles the directive; and the
+	// operator's hold on all harness activity, which is runnable once they lift it.
 	//
-	// The directive is the one of the three that can pause work before there is a
+	// The directive and the hold are the two that can pause work before there is a
 	// run at all. Nothing is claimed and no worktree exists in that case, so the
-	// paused outcome names the work item and the directive and nothing else.
+	// paused outcome names the work item and what stopped it and nothing else.
 	Paused bool `json:"paused,omitempty"`
 	// PausedByDirective is the unresolved directive this run or this work item
 	// stopped short for. It carries the directive itself rather than only its
 	// identifier, because what an operator has to do about it — answer the
 	// question, or decide the artifact change — is in the directive's own words.
 	PausedByDirective *directive.Directive `json:"paused_by_directive,omitempty"`
+	// PausedByOperator is the operator's hold on all harness activity, present on
+	// a run parked at a provider-call boundary for it and on work this process
+	// declined to start while it was in force. It carries the hold itself rather
+	// than only saying there is one, because when it was placed is what tells an
+	// operator whether they are looking at a system they paused or one that died.
+	PausedByOperator *runstate.OperatorHold `json:"paused_by_operator,omitempty"`
 	// UsageLimitResetsAt is when the provider said the exhausted limit resets,
 	// and UsageLimitKind is the provider's own name for it. They are reported on
 	// a paused run and on a run that stopped because the reset was unusable.
@@ -357,6 +391,17 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 			return Outcome{}, err
 		}
 	}
+	// The operator's hold is read before anything else this command would do,
+	// because it is the cheapest question here and the broadest answer: a held
+	// harness starts nothing, claims nothing, and asks the provider nothing, not
+	// even whether it is installed. A run already in flight is left in flight, and
+	// it is left held rather than resumed into a boundary that would park it again.
+	if hold, held, err := p.operatorHold(); err != nil || held {
+		if err != nil {
+			return Outcome{}, err
+		}
+		return p.holdWorkItem(workItemID, hold)
+	}
 	// Whether this run publishes is settled before anything is claimed, so a
 	// project that asked for pull requests and cannot open one fails here rather
 	// than after a developer has already produced work.
@@ -407,12 +452,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	switch {
 	case err == nil:
 		defer lease.Release()
-		// A usage-limit pause, a provider the harness stopped on time, and a run
-		// held up by a directive are all resumable whatever the approval policy,
-		// because none of them depends on the repair loop: the first has not had
-		// its attempt served yet, the second is owed the rest of an attempt it was
-		// making, and the third is owed the rest of the gate it stopped short of.
-		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		// A usage-limit pause, a provider the harness stopped on time, a run held
+		// up by a directive, and one the operator parked are all resumable whatever
+		// the approval policy, because none of them depends on the repair loop: the
+		// first has not had its attempt served yet, the second is owed the rest of
+		// an attempt it was making, and the last two are owed the rest of the step
+		// they stopped short of. Nothing reaches here while the hold is still in
+		// force, so a run carrying one is a run whose hold has been lifted.
+		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -610,6 +657,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// running attempt from looking like a waiting one to the next process.
 	if state.DirectivePause != nil {
 		if err := run.clearDirectivePause(); err != nil {
+			return run.fail(err, runstate.StatusFailed)
+		}
+	}
+	// A recorded operator hold is lifted rather than served, for the same reason
+	// and on the same evidence: nothing reaches this point while the operator is
+	// still holding activity, because the hold was read before the run was
+	// adopted. What the run was held for is added to its account as it is cleared,
+	// so the time nobody spent is attributed to whoever decided it.
+	if state.OperatorHeldSince != nil {
+		if err := run.clearOperatorHold(); err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
 	}
@@ -1083,6 +1140,13 @@ func (a *activeRun) blockOnFailingCheck(ctx context.Context, limit int) error {
 // stops the run.
 func (a *activeRun) develop(ctx context.Context, prompt, sessionID string) error {
 	for {
+		// The operator's hold is asked before every attempt, including the reissue
+		// after a refusal: a developer invocation is the largest thing this harness
+		// spends, and a pause that only covered the first one would let a run keep
+		// spending for as long as the provider kept refusing it.
+		if err := a.holdForOperator(ctx); err != nil {
+			return err
+		}
 		providerResult, err := a.attemptDevelopment(ctx, prompt, sessionID)
 		limit, refusedForLimit := refusedForUsageLimit(providerResult, err)
 		overload, refusedForOverload := refusedForServerOverload(providerResult, err)
@@ -1763,6 +1827,192 @@ func pausedForDirective(state runstate.State) bool {
 	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
 }
 
+// operatorHoldProbe is how often a held run looks for the operator lifting the
+// hold. It bounds how long `yoyo resume` takes to be acted on by a process that
+// is already parked, so it is short enough to read as immediate to the person
+// who typed it; what it costs is reading one small file that usually is not
+// there, and never a request to the provider. It is the interval a released wait
+// is noticed on, for the same reason and at the same price.
+const operatorHoldProbe = releaseCheckInterval
+
+// operatorHold asks whether the operator has paused all harness activity. A
+// failure to read is a failure to proceed, for the reason a directive that
+// cannot be read is: a harness that cannot find out whether it has been paused
+// is indistinguishable from one that has not been, and spending on that reading
+// is the whole failure this exists to prevent.
+func (p Pipeline) operatorHold() (runstate.OperatorHold, bool, error) {
+	hold, held, err := p.Holds.Held()
+	if err != nil {
+		return runstate.OperatorHold{}, false, fmt.Errorf("read whether the operator has paused harness activity: %w", err)
+	}
+	return hold, held, nil
+}
+
+// holdWorkItem reports work the harness declined to start or resume because the
+// operator is holding all activity. It is a pause rather than a failure because
+// lifting the hold is all that stands between here and the work proceeding.
+//
+// It names the run this item already has, when it has one. That run was left
+// exactly as it was — nothing here claims, adopts, or touches it — but "left
+// alone" and "never started" are opposite facts about an operator's worktree and
+// their claimed item, and a report that could not tell them apart would say
+// nothing was started for a run that is parked with hours of work in it.
+//
+// The run is found by reading rather than by adopting, exactly as releasing a
+// wait finds one: a run another process is serving must keep serving it, and
+// taking its lease to describe it would be the harness stopping the very run the
+// pause exists to preserve. A lookup that fails travels back with the pause
+// rather than replacing it — the hold is in force either way and nothing will be
+// spent — so what is lost is the description and not the answer.
+func (p Pipeline) holdWorkItem(workItemID string, hold runstate.OperatorHold) (Outcome, error) {
+	outcome := Outcome{
+		WorkItemID:       workItemID,
+		Paused:           true,
+		PauseCause:       runstate.PauseOperatorHold,
+		PausedByOperator: &hold,
+	}
+	inFlight, err := p.Store.Incomplete()
+	if err != nil {
+		return outcome, fmt.Errorf("find what is in flight for %s while activity is paused: %w", workItemID, err)
+	}
+	for _, existing := range inFlight {
+		if existing.WorkItemID != workItemID {
+			continue
+		}
+		outcome.RunID = existing.RunID
+		outcome.Status = existing.Status
+		outcome.Phase = existing.Phase
+		outcome.Branch = existing.Branch
+		outcome.WorktreePath = existing.WorktreePath
+		outcome.BaseCommit = existing.BaseCommit
+		outcome.ProviderSessionID = existing.ProviderSessionID
+		break
+	}
+	return outcome, nil
+}
+
+// holdForOperator parks a run at a provider-call boundary for as long as the
+// operator holds harness activity, and does nothing at all when they do not,
+// which is the ordinary case. It is the whole of what "pause" means to a run:
+// every provider invocation a run makes passes through here first, so a hold
+// placed while a developer was working reaches that run at its next attempt
+// rather than only reaching the runs that had not started.
+//
+// What it deliberately does not do is interrupt an invocation already under way.
+// A generation that is streaming has already been paid for, and stopping it
+// mid-flight would throw that away and leave the run needing the same work
+// again — which is the cost that makes killing processes the wrong verb in the
+// first place.
+func (a *activeRun) holdForOperator(ctx context.Context) error {
+	p := a.pipeline
+	for {
+		hold, held, err := p.operatorHold()
+		if err != nil {
+			return err
+		}
+		if !held {
+			// Clearing is what keeps a run that is working again from looking parked
+			// to the next process that reads it, and it is where the hold's share of
+			// this run's elapsed time is accounted.
+			return a.clearOperatorHold()
+		}
+		if err := a.recordOperatorHold(hold); err != nil {
+			return err
+		}
+		// This process stays open for a held run exactly as long as it stays open
+		// for a refused one, and the bound counts every probe it has already slept
+		// rather than this one alone. The hold is durable, so what the bound costs
+		// is a later invocation picking the run up rather than anything being lost.
+		if a.inProcessWait+operatorHoldProbe > p.Config.Execution.UsageLimitInProcessPause.Duration() {
+			return operatorHoldPause{hold: hold}
+		}
+		if err := p.sleep(ctx, operatorHoldProbe); err != nil {
+			return err
+		}
+		a.inProcessWait += operatorHoldProbe
+	}
+}
+
+// recordOperatorHold makes the park durable, once, before any waiting happens.
+// The record comes first for the reason a usage-limit deadline is written before
+// its wait: a process that dies while the harness is held must leave a run that
+// says so and can be picked up, rather than one that looks interrupted.
+//
+// Only the first park of a stretch is written. When it began is what says how
+// long the harness has been quiet, and restamping it every probe would make a
+// hold that has been in force since yesterday describe itself as five seconds
+// old.
+func (a *activeRun) recordOperatorHold(hold runstate.OperatorHold) error {
+	a.outcome.PauseCause = runstate.PauseOperatorHold
+	a.outcome.PausedByOperator = &hold
+	if a.state.OperatorHeldSince != nil {
+		return nil
+	}
+	since := a.pipeline.clock().Now().UTC()
+	a.state.OperatorHeldSince = &since
+	a.state.PauseCause = runstate.PauseOperatorHold
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record the operator hold this run parked on: %w", err)
+	}
+	return nil
+}
+
+// clearOperatorHold records that the run is spending again, and adds what the
+// hold cost it to the run's account of held time. The span is measured from when
+// the park was recorded rather than summed probe by probe, because a hold that
+// outlived the process serving it held the run for the whole of it: the time a
+// run spent doing nothing is the ledger's question, and "no process was awake
+// for part of it" is not an answer to that question.
+func (a *activeRun) clearOperatorHold() error {
+	if a.state.OperatorHeldSince == nil {
+		return nil
+	}
+	if held := a.pipeline.clock().Now().Sub(*a.state.OperatorHeldSince); held > 0 {
+		a.state.OperatorHeldSeconds += int64(held / time.Second)
+	}
+	a.state.OperatorHeldSince = nil
+	// The cause goes with the park it described. Left behind, it would say a run
+	// that is working is waiting on somebody.
+	a.state.PauseCause = ""
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("clear the operator hold: %w", err)
+	}
+	// Only a cause this park set is cleared from the outcome. A provider refusal
+	// this run waited out earlier is kept there for the record, exactly as the
+	// limit it named is, and a hold arriving afterwards must not erase it.
+	if a.outcome.PauseCause == runstate.PauseOperatorHold {
+		a.outcome.PauseCause = ""
+	}
+	a.outcome.PausedByOperator = nil
+	return nil
+}
+
+// operatorHoldPause reports a run parked at a provider-call boundary because the
+// operator holds harness activity, for longer than this process will stay open.
+// Like the other pauses it is an error only so that it travels the path a
+// stopped step already travels; it is deliberately not a failure, and the run it
+// leaves behind is still in flight, still claimed, and still resumable.
+type operatorHoldPause struct {
+	hold runstate.OperatorHold
+}
+
+func (e operatorHoldPause) Error() string {
+	return "parked for an operator hold on all harness activity, placed at " + e.hold.HeldAt.Format(time.RFC3339)
+}
+
+// pausedForOperatorHold reports a run parked on the operator's hold. The
+// recorded park is what makes it a pause rather than an interruption, and the
+// worktree is what makes it resumable: the change every attempt shares is what
+// the run comes back to.
+func pausedForOperatorHold(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.OperatorHeldSince == nil {
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
+}
+
 // sleep waits out a pause, cut short by a cancelled context so a shutdown is
 // never held up by a deadline hours away.
 func (p Pipeline) sleep(ctx context.Context, duration time.Duration) error {
@@ -1925,9 +2175,10 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	// a lost run. A reconciler re-runs cleanup, which refuses anything that is
 	// not the recorded, registered, already-integrated worktree.
 	completedAt := p.clock().Now()
-	// A recorded stop is an instruction to continue later, and this run has
-	// finished. Leaving it would promise a continuation of a completed run.
+	// A recorded stop or park is an instruction to continue later, and this run
+	// has finished. Leaving either would promise a continuation of a completed run.
 	a.state.ProviderStop = ""
+	a.state.OperatorHeldSince = nil
 	a.state.Status = runstate.StatusSucceeded
 	a.state.Phase = runstate.PhaseCleaningUp
 	a.state.UpdatedAt = completedAt
@@ -1998,6 +2249,10 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	var directed directivePause
 	if errors.As(cause, &directed) {
 		return a.pauseForDirective(directed)
+	}
+	var operatorHeld operatorHoldPause
+	if errors.As(cause, &operatorHeld) {
+		return a.pauseForOperatorHold(operatorHeld)
 	}
 	return a.fail(cause, failureStatus(ctx, cause))
 }
@@ -2089,6 +2344,37 @@ func (a *activeRun) pauseForDirective(paused directivePause) (Outcome, error) {
 	return a.outcome, nil
 }
 
+// pauseForOperatorHold reports a run parked because the operator holds harness
+// activity. It is the fourth of the pauses and behaves exactly as the other
+// three: the park was made durable before this point, nothing is cleaned up, and
+// nothing is made terminal, so the change the run has already produced stays
+// where the next attempt continues it. What differs is only what lifts it, which
+// is the operator rather than a clock or a resolved directive.
+func (a *activeRun) pauseForOperatorHold(paused operatorHoldPause) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	held := paused.hold
+	a.outcome.PausedByOperator = &held
+	a.outcome.PauseCause = runstate.PauseOperatorHold
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderOperatorHoldNotes(a.outcome, held)); err != nil {
+		// The park is already durable, so a note that could not be written costs
+		// the run nothing. It is still reported, for the same reason the other
+		// pauses report it.
+		return a.outcome, fmt.Errorf("record the operator hold on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // fail records a terminal run failure everywhere it has to be visible: the
 // durable state, the reported outcome, and the work item when the run holds it.
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
@@ -2096,12 +2382,14 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	message := cause.Error()
 	completedAt := p.clock().Now()
 	// A recorded pause or stop is an instruction to resume later, and this run is
-	// ending now. Clearing all three keeps the terminal record coherent; what
-	// stopped the run is still named by the recorded limit kind and by the failure.
+	// ending now. Clearing all four keeps the terminal record coherent; what
+	// stopped the run is still named by the recorded limit kind and by the
+	// failure, and what it spent waiting stays on the record either way.
 	a.state.UsageLimitResetsAt = nil
 	a.state.PauseCause = ""
 	a.state.ProviderStop = ""
 	a.state.DirectivePause = nil
+	a.state.OperatorHeldSince = nil
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
 	a.state.CompletedAt = &completedAt
@@ -2247,6 +2535,12 @@ func (p Pipeline) reportOutstandingCleanup(state runstate.State, outcome Outcome
 func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 	reasked := false
 	for {
+		// A review is a provider invocation like the developer's, so it passes the
+		// same boundary: a run that reached the gate while the operator was holding
+		// activity waits there rather than buying one more invocation.
+		if err := a.holdForOperator(ctx); err != nil {
+			return "", err
+		}
 		decision, reported, err := a.attemptReview(ctx)
 		if limit, refused := refusedReviewForUsageLimit(reported.usageLimit, err); refused {
 			if pauseErr := a.pauseForUsageLimit(ctx, limit); pauseErr != nil {
@@ -2526,6 +2820,9 @@ func (p Pipeline) validate() error {
 	}
 	if p.Directives == nil {
 		problems = append(problems, errors.New("durable user directives are required"))
+	}
+	if p.Holds == nil {
+		problems = append(problems, errors.New("the operator's hold on harness activity is required"))
 	}
 	if p.NewRunID == nil {
 		problems = append(problems, errors.New("run id generator is required"))
@@ -2919,6 +3216,32 @@ func renderDirectivePauseNotes(outcome Outcome, held directive.Directive) string
 	lines = append(lines,
 		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
 		"Resolving the directive is what lifts the pause; running Yoyodyne on this item after that continues the same run.",
+	)
+	return strings.Join(lines, "\n")
+}
+
+// renderOperatorHoldNotes describes a run parked because the operator paused all
+// harness activity. It says who paused it and when, because the one thing an
+// operator reading a quiet item has to be able to tell is a system they paused
+// from a system that died.
+func renderOperatorHoldNotes(outcome Outcome, held runstate.OperatorHold) string {
+	lines := []string{
+		"Yoyodyne parked this run: the operator paused all harness activity, so the run is waiting rather than failing. Nothing about the work was judged.",
+		"Paused at: " + held.HeldAt.Format(time.RFC3339),
+		"Run: " + outcome.RunID,
+	}
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch: "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+outcome.WorktreePath)
+	}
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"`yoyo resume` lifts the hold; a process still parked on it carries on within seconds, and running Yoyodyne on this item after that continues the same run.",
 	)
 	return strings.Join(lines, "\n")
 }

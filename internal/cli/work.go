@@ -454,5 +454,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	if outcome.PausedByDirective != nil {
 		report.DirectivePause = outcome.PausedByDirective.Summary()
 	}
+	// The operator's own pause is carried as the moment they placed it, which is
+	// the whole of what a conversation has to say about it: what lifts it is one
+	// command rather than anything about this work item.
+	if outcome.PausedByOperator != nil {
+		heldAt := outcome.PausedByOperator.HeldAt
+		report.OperatorHeldSince = &heldAt
+	}
 	return report
 }
