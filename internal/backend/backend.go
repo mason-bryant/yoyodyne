@@ -2,7 +2,9 @@ package backend
 
 import (
 	"context"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -156,6 +158,64 @@ type RunResult struct {
 	// error — and it asks the same thing of the caller an exhausted limit does:
 	// wait and ask again rather than end the run.
 	ServerOverload *ServerOverload
+}
+
+// maxFailureDetailBytes bounds the provider's own words in a described failure.
+// What the bound cuts is the tail of a message; nothing that identifies the
+// failure is at the end of one, and the whole of it is in the invocation's event
+// log either way.
+const maxFailureDetailBytes = 512
+
+// DescribeFailure says why a provider ended an invocation badly, in its own name
+// for the ending and its own words about it. It lives on the result rather than
+// at any one caller because every role's invocation dies the same way and the
+// description of it outlives them all: a developer's death becomes the run's
+// durable failure, a reviewer's ends the run that asked for it, and a
+// conversation turn's is what an operator is shown.
+//
+// The name alone is a category -- `api_error` covers a transient 529 and a
+// refused request alike -- and it is what a run's durable failure keeps, so a
+// record carrying nothing else leaves whoever reads it afterwards with no idea
+// which of them happened. The message is added when it says something the
+// category does not, so a provider that only names the category still reads as
+// one reason rather than as the same words twice.
+func (r RunResult) DescribeFailure() string {
+	reason := strings.TrimSpace(r.StopReason)
+	detail := boundFailureDetail(r.FinalText)
+	switch {
+	case reason == "" && detail == "":
+		return "unknown provider failure"
+	case reason == "" || reason == detail:
+		return firstOf(reason, detail)
+	case detail == "" || strings.Contains(detail, reason):
+		return firstOf(detail, reason)
+	default:
+		return reason + ": " + detail
+	}
+}
+
+// boundFailureDetail folds the provider's message into one bounded line, so a
+// final reply that runs to pages becomes a reason somebody can read rather than
+// the body of a work item note.
+func boundFailureDetail(detail string) string {
+	folded := strings.Join(strings.Fields(detail), " ")
+	if len(folded) <= maxFailureDetailBytes {
+		return folded
+	}
+	cut := maxFailureDetailBytes
+	for cut > 0 && !utf8.RuneStart(folded[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(folded[:cut]) + "..."
+}
+
+func firstOf(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type Backend interface {

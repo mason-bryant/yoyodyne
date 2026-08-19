@@ -261,7 +261,10 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 		case execution.ProcessTimedOut:
 			return evidence(), errors.New("the harness stopped the reviewer: it was still working when its total budget ran out")
 		}
-		return evidence(), fmt.Errorf("reviewer reported failure: %s", firstNonEmpty(providerResult.StopReason, providerResult.FinalText, "unknown provider failure"))
+		// A reviewer's death ends the run that asked for it, so its reason becomes
+		// that run's durable failure and is described the same way a developer's
+		// is: the provider's category is not a diagnosis on its own.
+		return evidence(), fmt.Errorf("reviewer reported failure: %s", providerResult.DescribeFailure())
 	}
 	verdict, unknown, err := Decode([]byte(strings.TrimSpace(answer)))
 	// A field the schema does not name is recorded rather than refused. The
@@ -632,13 +635,4 @@ func emptyFallback(value, fallback string) string {
 		return fallback
 	}
 	return value
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
 }

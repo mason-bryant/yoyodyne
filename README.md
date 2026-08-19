@@ -1968,7 +1968,8 @@ run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:1
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
-2 further run(s) are not listed here; --limit reports more, and 0 reports all of them
+7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
+each reason is shown as one line; --json carries what the record holds in full
 ```
 
 Each reason is printed under the run it belongs to and named for what it is,
