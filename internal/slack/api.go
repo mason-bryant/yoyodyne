@@ -218,7 +218,11 @@ func (e Error) Permanent() bool {
 }
 
 // PermanentError reports whether an error is one Slack will keep giving. It is
-// the question the sink asks before it decides whether to keep trying.
+// the question both loops ask before deciding how loudly to keep trying: the
+// connection backs off to its longest wait, and the delivery loop says it once
+// and then waits it out quietly. Neither stops, because what clears one of
+// these is a person doing something in the workspace, and reporting has to
+// resume by itself when they do.
 func PermanentError(err error) bool {
 	var refusal Error
 	return errors.As(err, &refusal) && refusal.Permanent()

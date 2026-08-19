@@ -128,6 +128,37 @@ func TestAParkIsSaidAndSoIsTheRunCarryingOn(t *testing.T) {
 	if len(resumed.Deliveries) != 1 || resumed.Deliveries[0].Envelope.Kind != notify.KindRunContinued {
 		t.Fatalf("Poll() = %#v, want the run reported as running again", resumed.Deliveries)
 	}
+
+	// A second wait is a second thing happening. A run that parks again on the
+	// same kind of refusal must say so, or a thread would describe one wait and
+	// silently omit every one after it.
+	cursors.Streams[stream] = cursors.Streams[stream].With(resumed.Deliveries[0].Mark)
+	again := state.StartedAt.Add(4 * time.Hour)
+	state.UsageLimitResetsAt = &again
+	state.PauseCause = runstate.PauseUsageLimit
+	if err := runs.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	second, err := feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() for the second wait error = %v", err)
+	}
+	if len(second.Deliveries) != 1 || second.Deliveries[0].Envelope.Kind != notify.KindRunParked {
+		t.Fatalf("Poll() = %#v, want the second wait reported as well as the first", second.Deliveries)
+	}
+	if second.Deliveries[0].Mark == batch.Deliveries[0].Mark {
+		t.Fatalf("mark = %q, want a second wait marked apart from the first", second.Deliveries[0].Mark)
+	}
+
+	// And it is still said once: the same wait, read again, is not news.
+	cursors.Streams[stream] = cursors.Streams[stream].With(second.Deliveries[0].Mark)
+	repeated, err := feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(repeated.Deliveries) != 0 {
+		t.Fatalf("Poll() = %#v, want one wait said once", repeated.Deliveries)
+	}
 }
 
 // The milestones a run reaches are what the thread is made of, and the ones that

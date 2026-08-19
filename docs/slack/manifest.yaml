@@ -12,9 +12,14 @@
 # The scopes are the least the design needs, and each is here for one reason:
 #
 #   chat:write             post messages. Without it the sink reports nothing.
-#   chat:write.customize   post under a per-message name and icon, which is how
-#                          each persona speaks under its own name in one channel
-#                          rather than everything arriving from one bot.
+#   chat:write.customize   post under a per-message name and icon, so one
+#                          channel can carry more than one speaker rather than
+#                          everything arriving from one bot. Today that is the
+#                          harness for milestones and the authoring agent for
+#                          reports; giving each milestone the voice of its own
+#                          role is the notifier's work and needs this same
+#                          scope, so the app does not have to be reinstalled
+#                          when it lands.
 #   channels:history       read replies in the thread the sink opened, in public
 #                          channels. Nothing acts on a reply today: the sink
 #                          acknowledges what arrives so Slack stops redelivering
@@ -34,8 +39,9 @@ display_information:
     Yoyodyne runs development work on your own machine: it claims a work item,
     develops it, runs the checks, has it reviewed, and promotes it. This app is
     how that work is visible while it happens. One thread per work item, one
-    message per milestone, each in the voice of the role it belongs to, and
-    every report an agent files at the severity it was filed under.
+    message per milestone, and every report an agent files at the severity it
+    was filed under — reports under the name of the agent that wrote them, and
+    milestones under the harness that read the record and said so.
 
     It reports and does not act. Messages are read from the harness's own
     durable records by a process you start yourself, so nothing here can change

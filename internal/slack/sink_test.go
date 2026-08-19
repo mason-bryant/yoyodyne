@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -250,6 +251,94 @@ func TestASinglePassHoldsTheSameLeaseARunningSinkDoes(t *testing.T) {
 	}
 }
 
+// A refusal only a person can clear — an app nobody invited to the channel — is
+// said once and then waited out quietly. Saying it every pass would put the same
+// line in the log every few seconds for as long as the process runs, which is
+// how a log stops being read; and it must still be retried, because what clears
+// it happens in Slack rather than here.
+func TestARefusalOnlyAPersonCanClearIsSaidOnceAndThenWaitedOut(t *testing.T) {
+	t.Parallel()
+
+	posts := &refusingPosts{code: "not_in_channel"}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		milestone("run:run-a", "started", notify.KindRunStarted, "it started"),
+	}}, &recordedPosts{})
+	sink.api = newTestAPI(t, posts.handle)
+	// The waits are driven rather than spent: what is being tested is how often
+	// the sink speaks, not how long it sleeps between attempts.
+	sink.poll = time.Millisecond
+	sink.refusal = time.Millisecond
+
+	var mutex sync.Mutex
+	var refusals int
+	sink.log = func(format string, _ ...any) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if strings.Contains(format, "keep refusing") {
+			refusals++
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sink.deliver(ctx)
+	}()
+	// Wait until the workspace has refused several times over, so a sink that
+	// said it every pass would have said it several times.
+	waitFor(t, func() bool { return posts.attempts() >= 4 })
+	cancel()
+	<-done
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if refusals != 1 {
+		t.Fatalf("the refusal was reported %d time(s) over %d attempts, want it said once", refusals, posts.attempts())
+	}
+}
+
+// The other half of saying it once: reporting has to come back by itself when
+// the operator fixes it, and say so, or a channel that went quiet for a reason
+// nobody remembers looks like one that broke.
+func TestReportingSaysSoWhenItStartsWorkingAgain(t *testing.T) {
+	t.Parallel()
+
+	posts := &refusingPosts{code: "not_in_channel"}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		milestone("run:run-a", "started", notify.KindRunStarted, "it started"),
+	}}, &recordedPosts{})
+	sink.api = newTestAPI(t, posts.handle)
+	sink.poll = time.Millisecond
+	sink.refusal = time.Millisecond
+
+	var mutex sync.Mutex
+	var recovered int
+	sink.log = func(format string, _ ...any) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if strings.Contains(format, "accepting messages again") {
+			recovered++
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		sink.deliver(ctx)
+	}()
+	waitFor(t, func() bool { return posts.attempts() >= 2 })
+	posts.invite() // the operator invites the app to the channel
+	waitFor(t, func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return recovered == 1
+	})
+	cancel()
+	<-done
+}
+
 // The process an operator leaves running has to stop when they stop it. A sink
 // that kept its terminal until a read deadline passed would look hung at exactly
 // the moment somebody had decided to intervene.
@@ -329,6 +418,56 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 	ts := "1755.000" + strconv.Itoa(r.count)
 	r.timestamps = append(r.timestamps, ts)
 	writeJSON(writer, map[string]any{"ok": true, "ts": ts})
+}
+
+// refusingPosts is a workspace that refuses every post with one named Slack
+// error until somebody fixes what it is complaining about.
+type refusingPosts struct {
+	mutex sync.Mutex
+	code  string
+	count int
+}
+
+func (r *refusingPosts) handle(writer http.ResponseWriter, request *http.Request) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	if request.Body == nil {
+		writeJSON(writer, map[string]any{"ok": true, "team": "test", "user": "yoyodyne"})
+		return
+	}
+	r.count++
+	if r.code != "" {
+		writeJSON(writer, map[string]any{"ok": false, "error": r.code})
+		return
+	}
+	writeJSON(writer, map[string]any{"ok": true, "ts": "1755.0001"})
+}
+
+func (r *refusingPosts) attempts() int {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	return r.count
+}
+
+// invite is the operator doing the thing the refusal asked them to do.
+func (r *refusingPosts) invite() {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
+	r.code = ""
+}
+
+// waitFor spends real time rather than fake time, because what these tests are
+// about is a loop running repeatedly. The bound is generous and the condition is
+// reached in milliseconds when the code is right.
+func waitFor(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !condition() {
+		if time.Now().After(deadline) {
+			t.Fatal("the sink never reached the state this test is about")
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 func newTestSink(t *testing.T, root string, feed Feed, posts *recordedPosts) *Sink {

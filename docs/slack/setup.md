@@ -3,9 +3,17 @@
 Work the harness runs on its own is acceptable only while it is visible, and
 today "visible" means a terminal somebody is sitting at. This is the same
 account of the work, in a Slack workspace: **one thread per work item, one
-message per milestone**, each posted under the name of the role it belongs to,
-and every report an agent files carried through at the severity it was filed
-under.
+message per milestone**, and every report an agent files carried through, as the
+agent wrote it, at the severity it was filed under.
+
+Who each message is from is worth being precise about, because it is only half
+built. A report is posted under the name of the agent that wrote it. A
+milestone — a run starting, the checks passing, a verdict, a promotion — is
+posted by `harness`, because the harness is what read the record and said so.
+Giving each milestone the voice of the role it belongs to is the notifier's
+work, and it is not in this release; when it lands, these messages start
+arriving under the names of the roles that earned them, and nothing about your
+setup has to change for that.
 
 It reports and it does not act. A separate process you start reads the harness's
 own durable records and posts from them, so:
@@ -68,9 +76,12 @@ to it:
 /invite @yoyodyne
 ```
 
-An app that has not been invited is refused by Slack with `not_in_channel`,
-which the sink reports once and does not retry — it is a thing you fix rather
-than a thing that clears up.
+An app that has not been invited is refused by Slack with `not_in_channel`. The
+sink says that once and then waits it out quietly, retrying every few minutes
+without repeating itself: what clears it is you inviting the app, and a log line
+every fifteen seconds until you do would not make it clear any sooner. Nothing is
+lost while it stands — the cursors do not advance past a message that was never
+posted — and the sink says so again when the workspace starts accepting messages.
 
 Take the channel's id while you are there: **channel name → About → the id at
 the bottom**, which looks like `C0123456789`. A name works too, but an id
@@ -164,7 +175,10 @@ label on everything is a label that means nothing.
 
 Each transition is said once. A thread is a narrative rather than an event log
 scrolling sideways, so a restart does not repeat what it already said — the
-milestones it has posted are recorded per run and survive the process.
+milestones it has posted are recorded per run and survive the process. What can
+honestly happen twice is said twice: a check that fails again after a repair
+attempt, and a run that waits out a second usage limit, are each their own
+message.
 
 ## Limits worth knowing
 
@@ -189,6 +203,7 @@ milestones it has posted are recorded per run and survive the process.
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
+| `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | Nothing is posted at all | Nothing has happened since the sink started that it had not already reported. Run something; work that finished beforehand is deliberately not replayed. |

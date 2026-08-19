@@ -37,6 +37,14 @@ const (
 	// Nothing is lost by waiting: the cursors are on disk, so the next pass
 	// resumes exactly where this one stopped.
 	passBackoff = 30 * time.Second
+	// refusalBackoff is how long the sink waits after a refusal that will still
+	// be a refusal next time — an app nobody invited to the channel, a token
+	// somebody revoked. It is minutes rather than seconds because nothing about
+	// waiting less would help: what clears it is a person, and asking a
+	// workspace to refuse the same call every fifteen seconds until they get to
+	// it is noise in their audit log and ours. The wait is still finite, so an
+	// operator who fixes it gets reporting back without restarting anything.
+	refusalBackoff = 5 * time.Minute
 )
 
 // Options is everything the sink needs. Every field is required except the
@@ -68,11 +76,15 @@ type Options struct {
 
 // Sink is the long-running reporting process for one product.
 type Sink struct {
-	channel    string
-	store      *Store
-	api        *API
-	feed       Feed
-	poll       time.Duration
+	channel string
+	store   *Store
+	api     *API
+	feed    Feed
+	poll    time.Duration
+	// refusal is how long to wait after a refusal only a person can clear. It is
+	// a field only so a test can drive that path without spending the wait;
+	// every sink the harness builds gets refusalBackoff.
+	refusal    time.Duration
 	log        func(format string, args ...any)
 	connection *connection
 }
@@ -108,6 +120,7 @@ func New(options Options) (*Sink, error) {
 		api:     options.API,
 		feed:    options.Feed,
 		poll:    poll,
+		refusal: refusalBackoff,
 		log:     log,
 		connection: &connection{
 			api:    options.API,
@@ -182,13 +195,39 @@ func (s *Sink) hold() (func(), error) {
 }
 
 // deliver runs passes until the context ends.
+//
+// A refusal only a person can clear — an app nobody invited to the channel, a
+// revoked token, a missing scope — is said once and then not said again while it
+// stands. The alternative is the same line every pass for as long as the process
+// runs, which is how a log stops being read: the operator has to fix it, and
+// repeating the instruction every fifteen seconds does not make them fix it
+// sooner. It is still retried, because what clears it is somebody doing
+// something in Slack rather than anything here, and reporting has to come back
+// on its own when they do — which is the other half of why it is said again when
+// it does.
 func (s *Sink) deliver(ctx context.Context) error {
+	// standing is the refusal currently being waited out, empty when posting
+	// works. It is what makes the first refusal news and the tenth silence.
+	standing := ""
 	for {
 		wait := s.poll
-		if err := s.pass(ctx); err != nil {
-			if ctx.Err() != nil {
-				return nil
+		err := s.pass(ctx)
+		switch {
+		case ctx.Err() != nil:
+			return nil
+		case err == nil:
+			if standing != "" {
+				s.log("Slack is accepting messages again; reporting has caught up")
+				standing = ""
 			}
+		case PermanentError(err):
+			wait = s.refusal
+			if refusal := err.Error(); refusal != standing {
+				standing = refusal
+				s.log("Slack will keep refusing this until somebody changes something in the workspace; it is retried quietly every %s: %v", wait, err)
+			}
+		default:
+			standing = ""
 			s.log("this pass over the records could not finish; the cursors are unchanged and it will be retried: %v", err)
 			wait = passBackoff
 		}

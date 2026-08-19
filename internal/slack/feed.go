@@ -140,9 +140,11 @@ func reportDelivery(filed report.Report, position uint64) Delivery {
 //
 // Each milestone is named once and posted once, which is what keeps a thread a
 // narrative rather than an event log scrolling sideways. The ones that can
-// legitimately recur — a check that fails again after a repair attempt, a run
-// that parks a second time — carry the attempt or the cause in their name, so
-// saying a thing twice means it happened twice.
+// legitimately recur carry in their name the thing that makes one occurrence a
+// different occurrence — the repair attempt for a check or a verdict, and for a
+// wait the deadline, hold, or directive it is being waited out for — so saying a
+// thing twice means it happened twice, and a run that waits out two usage limits
+// says so both times.
 func runMilestones(state runstate.State, cursor Cursor) []Delivery {
 	topic := notify.WorkItemTopic(state.WorkItemID)
 	refs := notify.Refs{Run: state.RunID, WorkItem: state.WorkItemID}
@@ -214,11 +216,16 @@ func runMilestones(state runstate.State, cursor Cursor) []Delivery {
 // halves are said, because a park nobody saw lift reads as a run that died
 // quietly — and the lift is only knowable by having said the park, which is why
 // it is read out of the cursor rather than out of the state.
+//
+// Waiting twice is two things happening rather than one, so each wait is marked
+// by what it is waiting on rather than only by its kind: two exhausted usage
+// limits an hour apart are two deadlines, and a run announced as parked once and
+// running again once would have described the second wait as not happening.
 func postParks(state runstate.State, cursor Cursor, post func(string, notify.Kind, report.Severity, string)) {
-	cause, waiting := parkCause(state)
+	wait, waiting := parkWait(state)
 	if waiting {
-		post("parked:"+cause, notify.KindRunParked, report.SeverityWarning,
-			fmt.Sprintf("%s is waiting on %s.", state.WorkItemID, describeParkCause(state, cause)))
+		post("parked:"+wait.mark, notify.KindRunParked, report.SeverityWarning,
+			fmt.Sprintf("%s is waiting on %s.", state.WorkItemID, wait.description))
 		return
 	}
 	for _, delivered := range cursor.Delivered {
@@ -231,31 +238,45 @@ func postParks(state runstate.State, cursor Cursor, post func(string, notify.Kin
 	}
 }
 
-// parkCause names what a run is waiting on, if it is waiting. The order is the
+// parkedWait is one wait a run is taking: what to call it in a thread, and what
+// distinguishes it from the next wait of the same kind.
+type parkedWait struct {
+	description string
+	mark        string
+}
+
+// parkWait reports what a run is waiting on, if it is waiting. The order is the
 // order a reader would want them in: the operator's own decision first, because
 // a run held by the operator is not a run the provider refused.
-func parkCause(state runstate.State) (string, bool) {
+//
+// Each mark carries the record that made this wait a distinct wait — the moment
+// the hold was placed, the directive that is unresolved, the deadline being
+// waited out — because all three are written before the wait begins and cleared
+// as the run carries on, which is exactly the lifetime a mark needs.
+func parkWait(state runstate.State) (parkedWait, bool) {
 	switch {
 	case state.OperatorHeldSince != nil:
-		return runstate.PauseOperatorHold, true
+		return parkedWait{
+			description: runstate.DescribePause(runstate.PauseOperatorHold, ""),
+			mark:        runstate.PauseOperatorHold + ":" + state.OperatorHeldSince.UTC().Format(time.RFC3339Nano),
+		}, true
 	case state.DirectivePause != nil:
-		return "directive", true
+		return parkedWait{
+			description: "an unresolved user directive",
+			mark:        "directive:" + state.DirectivePause.DirectiveID,
+		}, true
 	case state.UsageLimitResetsAt != nil:
 		cause := strings.TrimSpace(state.PauseCause)
 		if cause == "" {
 			cause = runstate.PauseUsageLimit
 		}
-		return cause, true
+		return parkedWait{
+			description: runstate.DescribePause(cause, state.UsageLimitKind),
+			mark:        cause + ":" + state.UsageLimitResetsAt.UTC().Format(time.RFC3339Nano),
+		}, true
 	default:
-		return "", false
+		return parkedWait{}, false
 	}
-}
-
-func describeParkCause(state runstate.State, cause string) string {
-	if cause == "directive" {
-		return "an unresolved user directive"
-	}
-	return runstate.DescribePause(cause, state.UsageLimitKind)
 }
 
 // checksPassed reports a run that got past the deterministic gate. It is
