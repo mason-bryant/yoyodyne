@@ -30,7 +30,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 	case "version":
 		return runVersion(args[1:], stdout, stderr, version)
 	case "init":
-		return runInit(args[1:], stdout, stderr)
+		return runInit(ctx, args[1:], stdout, stderr)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
 	case "chat":

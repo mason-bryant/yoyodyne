@@ -28,6 +28,7 @@ half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bund
 yoyo init                              # configure the current directory
 yoyo init --directory path/to/project  # configure another one
 yoyo init --product example            # name the product explicitly
+yoyo init --tracker-remote <url>       # sync the tracker somewhere else
 yoyo init --force                      # overwrite what is already there
 ```
 
@@ -50,6 +51,33 @@ whatever `init` found; read what it proposed before running work.
 carries every proposal with the artifact it came from, in the three lists the
 generated file keeps apart — `checks` written, `candidates` found and not
 settled, `alternatives` read and deliberately left out.
+
+### Where the tracker syncs
+
+`init` also points the tracker at a remote, because a tracker that syncs
+nowhere is one backlog per machine, drifting apart with nothing to say so. The
+default is the project's own Git remote: Beads moves its data over an ordinary
+Git remote under refs of Dolt's own, so the tracker rides beside the code it
+tracks — one repository, one permission model, and nothing to stand up.
+
+- It reads `origin` and configures the tracker to sync there, printing what it
+  configured.
+- A tracker that already has a remote is left exactly as it is; pass
+  `--tracker-remote <url>` to point it somewhere else, which is what a tracker
+  kept in a repository of its own needs. Beads accepts any Git URL.
+- A project with no Git remote, or one whose `bd` is not initialized yet, is
+  told what to run rather than failing: the configuration is written and valid
+  either way, so `init` still exits 0 and `init --json` reports the outcome
+  under `tracker` — `configured`, `unchanged`, `skipped`, or `failed`.
+
+Two consequences of the tracker riding your repository are worth knowing before
+you adopt the default. Its history counts against the repository's size like any
+other history, and grows with the backlog rather than with the code. And a push
+writes `refs/dolt/data` and a `__dolt_remote_info__` branch: GitHub carries both
+without complaint, but a forge that restricts which refs it accepts, or a team
+that reads the branch list closely, is worth checking before you rely on it —
+that is the case `--tracker-remote` and a tracker repository of its own exist
+for.
 
 ## Layout
 

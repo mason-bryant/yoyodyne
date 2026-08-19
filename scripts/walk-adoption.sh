@@ -175,6 +175,12 @@ cd "$project"
 git init -q -b main .
 git config user.email walk@example.invalid
 git config user.name "Adoption Walk"
+# The README's init step configures the tracker from this project's own Git
+# remote, so the walk gives it one. It is a bare repository beside the scratch
+# project rather than a URL on a forge: what is being checked is what init reads
+# and what it configures, and nothing here should need the network to say.
+git init -q --bare "$scratch/origin.git"
+git remote add origin "$scratch/origin.git"
 printf 'def add(a, b):\n    return a + b\n' > calc.py
 : > tests/__init__.py
 # Step 4 asserts that init names this file as where it read the project's tests,
@@ -201,7 +207,8 @@ run bd ready >/dev/null
 pass "bd ready answers in the scratch project"
 
 step "3. write the configuration"
-run "$yoyo" init
+written="$("$yoyo" init 2>&1)"
+printf '%s\n' "$written"
 for persona in architect developer development-manager product-manager reviewer; do
   if [ -f "$project/.yoyodyne/personas/$persona.md" ]; then
     pass "wrote personas/$persona.md"
@@ -211,6 +218,17 @@ for persona in architect developer development-manager product-manager reviewer;
 done
 refusal="$("$yoyo" init 2>&1 || true)"
 contains "$refusal" "pass --force to overwrite it" "a second init refuses rather than overwriting"
+
+# The README claims init leaves the tracker syncing over this project's own Git
+# remote. That is checked where it matters -- in what bd holds afterwards --
+# rather than only in what init said about it. Either outcome satisfies the
+# claim: recent bd versions configure the remote themselves at `bd init` when
+# the project already has one, and init reports leaving that alone rather than
+# overwriting it.
+contains "$written" "syncs through origin" "init leaves the tracker syncing over the project's Git remote"
+tracker_remote="$(bd dolt remote list 2>&1 || true)"
+printf '%s\n' "$tracker_remote"
+contains "$tracker_remote" "$scratch/origin.git" "bd holds the sync remote init configured"
 
 step "4. init proposes checks from what this project already declares"
 # This project keeps its tests in tests/ and names no runner anywhere, so there

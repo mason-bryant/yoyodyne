@@ -235,6 +235,20 @@ unless you pass `--product`. Nothing already there is overwritten without
 never left half-configured. See [Configuring a project](#configuring-a-project)
 for what is in the file.
 
+**It also points the tracker at your Git remote**, so the backlog is shared
+rather than one per machine. Beads moves its data over an ordinary Git remote
+under refs of Dolt's own, so `init` reads `origin` and configures the tracker to
+sync there — one repository, one permission model, nothing to stand up — and
+prints what it configured. A tracker that already has a remote is left alone,
+`--tracker-remote <url>` points it somewhere else for the atypical case of a
+tracker kept in a repository of its own, and a project with no Git remote is
+told what to run once it has one rather than failing over it. Two consequences
+worth knowing: the tracker's history counts against your repository's size like
+any other history, and what it pushes — `refs/dolt/data` and a
+`__dolt_remote_info__` branch — is carried without complaint by GitHub but is
+worth checking on a forge that restricts which refs it accepts. See
+[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+
 **Then review the checks it proposed.** Your repository already announces what
 it is built with, so `init` reads that and writes the commands that follow from
 it into `checks`, each with a comment naming the file it came from — a
@@ -1520,6 +1534,7 @@ A project owns its configuration outright. `yoyo init` writes it:
 ```sh
 ./bin/yoyo init                 # configure the current directory
 ./bin/yoyo init --product example --directory path/to/project
+./bin/yoyo init --tracker-remote https://example.com/team/tracker.git
 ```
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
@@ -1531,7 +1546,10 @@ repository. Nothing is inherited when the file loads, so
 the one exception being `product.repository_id`, which is reported as
 `derived:product.id` because the file states the product id and lets the
 repository id follow from it. Editing a field is the whole of what changes the
-harness's behavior.
+harness's behavior. `init` also points the tracker at a remote so the backlog is
+shared rather than per-machine — this project's Git remote by default, or the
+URL `--tracker-remote` names; see
+[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated
