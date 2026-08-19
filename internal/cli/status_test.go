@@ -559,3 +559,19 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 		t.Fatalf("reported caps = %+v, want the configured %+v", *reported.TriageCaps, caps)
 	}
 }
+
+// The JSON keys are a machine commitment: this fails if either caps key
+// drifts from snake_case, independent of the Go type the payload decodes into.
+func TestTriageCapsSerializeWithSnakeCaseKeys(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	if err != nil {
+		t.Fatalf("marshal caps: %v", err)
+	}
+	for _, want := range []string{"\"review_rounds\":4", "\"merge_rearms\":2"} {
+		if !strings.Contains(string(payload), want) {
+			t.Fatalf("caps json = %s, want it to carry %s", payload, want)
+		}
+	}
+}

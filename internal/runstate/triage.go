@@ -222,11 +222,11 @@ type TriageCaps struct {
 	// truncated against and what refuses a re-run, and it is not an action
 	// anybody asks permission for — nothing asks to be reviewed, and the rounds
 	// an item has spent are a fact rather than a request.
-	ReviewRounds int
+	ReviewRounds int `json:"review_rounds"`
 	// MergeRearms bounds the one action that buys no round. An action that costs
 	// no provider invocation is the one that can be taken forever, and a merge
 	// the forge keeps dropping is a repository somebody has to look at.
-	MergeRearms int
+	MergeRearms int `json:"merge_rearms"`
 }
 
 // Validate refuses a cap set nothing could be spent against. A cap of zero is a

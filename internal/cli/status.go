@@ -46,7 +46,11 @@ type statusOutput struct {
 	// run, and this says what the item has been given across all of them.
 	Triage     *runstate.TriageCounters `json:"triage,omitempty"`
 	TriageCaps *runstate.TriageCaps     `json:"triage_caps,omitempty"`
-	Error      string                   `json:"error,omitempty"`
+	// Error may accompany a successful listing: a named item whose triage
+	// record could not be read reports that here while the runs it found are
+	// still returned, so error being set is not the same as the command having
+	// failed — the exit status is what says that.
+	Error string `json:"error,omitempty"`
 }
 
 // defaultStatusRuns is how many runs are reported when nobody says. It is a

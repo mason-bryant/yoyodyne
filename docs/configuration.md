@@ -1600,7 +1600,13 @@ item's runs, in text and in `--json`:
 
 ```text
 triage of yoyodyne-ifd.90: triaged 2 times
-  review rounds: 3 of 4 permitted across every run of this item
+  review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
+```
+
+Past the cap the same line reads: `review rounds: 6 spent across every run of
+this item — past the cap of 4, so triage may only escalate or re-scope`.
+
+```text
   repair grants: 1; re-runs: 0; both are refused once no round remains
   merge re-arms: 1 of 2 permitted
   1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
