@@ -130,6 +130,12 @@ type Reconciliation struct {
 	BranchRemoved   bool                  `json:"branch_removed"`
 	CleanupFailure  string                `json:"cleanup_failure,omitempty"`
 	Failure         string                `json:"failure,omitempty"`
+	// Catchup is the local target branch brought onto the merge commit the forge
+	// made, present only on a run whose queued merge this sweep settled. It is
+	// reported rather than made durable for the reason the run's own catch-up is:
+	// it is idempotent and owned by no run, so a held one is a fact to read
+	// rather than a debt to carry.
+	Catchup *gitworktree.Catchup `json:"catchup,omitempty"`
 }
 
 // Reconcile settles every run that still owes a step. One run that cannot be
@@ -355,8 +361,12 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 //
 //   - The forge merged. The publication finishes exactly as it would have
 //     inside the run: the remote target is confirmed to carry the promotion, the
-//     merge commit the forge made of it is recorded, and the branch the merge
-//     consumed is deleted.
+//     merge commit the forge made of it is recorded, the branch the merge
+//     consumed is deleted, and the local target branch is caught up onto the
+//     merge commit. That last step is done here rather than left to the
+//     convergence sweep so that settling a merge is complete on its own: a
+//     caller that settles runs without sweeping afterwards must not be the
+//     difference between a converged checkout and one silently left behind.
 //   - The forge is still holding the merge. Nothing is decided, the run stays
 //     outstanding, and a later sweep asks again.
 //   - The forge dropped it: the request is closed, or open with no merge queued
@@ -389,13 +399,22 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	state.PullRequest = &published
 
 	var detail string
+	var catchup *gitworktree.Catchup
 	switch {
 	case observed.Merged:
 		detail = fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
 		if failure := r.finishQueuedPublication(ctx, state, &published); failure != nil {
 			state.PublishFailure = failure.Error()
 			detail = failure.Error()
+			break
 		}
+		// The merge is confirmed on the remote, so the local branch is behind it
+		// by the commit the forge made of this run's own promotion. A publication
+		// that could not be confirmed deliberately does not reach here: that is
+		// the state a person has to look at, and moving the local branch on a
+		// merge nothing verified would be deciding it for them.
+		settled := r.catchUp(ctx, state.Integration.TargetBranch)
+		catchup = &settled
 	default:
 		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
 			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
@@ -406,11 +425,12 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	// written before the run is settled: a sweep that stopped in between leaves
 	// the merge still queued durably and takes it up again, which repeats a note
 	// rather than losing one.
-	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderQueuedMergeNotes(state, detail)); err != nil {
+	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderQueuedMergeNotes(state, detail, catchup)); err != nil {
 		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the settled merge for run %s: %w", state.RunID, err)
 	}
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
+	result.Catchup = catchup
 	return result, err
 }
 
@@ -735,7 +755,7 @@ func renderReconciledIntegrationNotes(state runstate.State, recovered bool) stri
 // change was integrated into the authoritative local branch, which is what
 // closed it — so this note is the only place an operator learns whether the
 // publication of it completed, and what is left if it did not.
-func renderQueuedMergeNotes(state runstate.State, detail string) string {
+func renderQueuedMergeNotes(state runstate.State, detail string, catchup *gitworktree.Catchup) string {
 	lines := []string{
 		"Yoyodyne settled the merge this run left queued with the forge.",
 		"Outcome: " + detail,
@@ -751,7 +771,7 @@ func renderQueuedMergeNotes(state runstate.State, detail string) string {
 			"Publication outstanding: "+state.PublishFailure,
 			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.")
 	}
-	return strings.Join(lines, "\n")
+	return strings.Join(append(lines, renderCatchupNotes(catchup)...), "\n")
 }
 
 func reconciledCompletionReason(state runstate.State) string {
