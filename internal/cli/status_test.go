@@ -2,14 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -369,13 +372,38 @@ func TestStatusReadsTheSameStoreRunsAreRecordedIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildComponents() error = %v", err)
 	}
-	store, err := recordedRunStore(configPath)
+	store, caps, err := recordedRunStore(configPath)
 	if err != nil {
 		t.Fatalf("recordedRunStore() error = %v", err)
 	}
 	if store.Root() != parts.store.Root() {
 		t.Fatalf("status reads %s, but runs are recorded in %s", store.Root(), parts.store.Root())
 	}
+	// And the triage counters it reports come out of the same product's records,
+	// so the budget an operator is shown is the budget a triage action would be
+	// refused against rather than a second one beside it.
+	if store.Triage().Root() != parts.store.Triage().Root() {
+		t.Fatalf("status reads triage at %s, but runs record it at %s", store.Triage().Root(), parts.store.Triage().Root())
+	}
+	// And the caps it measures them against are the configured ones rather than
+	// whatever a zero value would be, so a listing never reports every item as
+	// out of budget.
+	configured := mustLoadConfig(t, configPath)
+	if want := orchestrator.TriageCaps(configured.Execution, configured.Triage); caps != want {
+		t.Fatalf("status measures against %+v, want the configured %+v", caps, want)
+	}
+}
+
+// mustLoadConfig resolves the configuration a test wrote, for the assertions
+// that have to compare against what it actually says rather than against a
+// number repeated in the test.
+func mustLoadConfig(t *testing.T, configPath string) config.Config {
+	t.Helper()
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		t.Fatalf("loadConfiguration() error = %v", err)
+	}
+	return resolved.Config
 }
 
 // recordedRun creates one run record, so a test can then set what it is about
@@ -428,5 +456,139 @@ func saveRun(t *testing.T, store *runstate.Store, state runstate.State) {
 	t.Helper()
 	if err := store.Save(state); err != nil {
 		t.Fatalf("Save() error = %v", err)
+	}
+}
+
+// What a run cost is on the run; what the item cost is not on any of them, and
+// an operator deciding whether to keep spending on a piece of work is asking the
+// second question. So naming an item reports what triage has given it and what
+// it has cost in review rounds, against the caps those are measured by, from the
+// item's record alone.
+func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	failed := recordedRun(t, store, runstate.StatusFailed, "yoyodyne-ifd.2.7", started)
+	failed.Phase = runstate.PhaseReviewing
+	saveRun(t, store, failed)
+
+	// An item nobody has triaged says so, rather than printing zeroes that read
+	// as a budget somebody has been spending.
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.2.7")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "triage of yoyodyne-ifd.2.7: triage has not acted on it") {
+		t.Fatalf("stdout = %q, want an untriaged item to say so", stdout)
+	}
+
+	// The caps the harness defaults give this configuration: four rounds in
+	// total, and two merge re-arms following the integration retries a run has.
+	caps := runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2}
+	triage := store.Triage()
+	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
+		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, started); err != nil {
+			t.Fatalf("RecordReviewRound() error = %v", err)
+		}
+	}
+	// Two attempts asked for against the one round the cap has left, which is the
+	// truncation the listing then reports.
+	granted, err := triage.GrantRepair(context.Background(), "yoyodyne-ifd.2.7", 2, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 1 || !granted.Truncated {
+		t.Fatalf("GrantRepair() = %+v, want one round of the two asked for", granted)
+	}
+	if _, err := triage.RecordMergeRearm(context.Background(), "yoyodyne-ifd.2.7", time.Now(), caps); err != nil {
+		t.Fatalf("RecordMergeRearm() error = %v", err)
+	}
+
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.2.7")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		// The second pass is the fact somebody is looking for, and it is said
+		// first.
+		"triage of yoyodyne-ifd.2.7: triaged 2 times",
+		"review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4",
+		"repair grants: 1; re-runs: 0; both are refused once no round remains",
+		"merge re-arms: 1 of 2 permitted",
+		"1 grant(s) were cut down to the rounds the cap still had room for",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	// The listing over every run is about runs rather than about one item, so it
+	// carries no item's counters at all.
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if strings.Contains(stdout, "triage of") {
+		t.Fatalf("an unnamed listing reported one item's triage: %q", stdout)
+	}
+
+	// A script reads the counters and the caps together, because neither says
+	// anything on its own about how close the item is to being refused.
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "--json", "yoyodyne-ifd.2.7")
+	if code != 0 {
+		t.Fatalf("status --json code = %d, stderr = %q", code, stderr)
+	}
+	var reported statusOutput
+	if err := json.Unmarshal([]byte(stdout), &reported); err != nil {
+		t.Fatalf("Unmarshal() error = %v, stdout = %q", err, stdout)
+	}
+	if reported.Triage == nil || reported.TriageCaps == nil {
+		t.Fatalf("status --json = %q, want the item's counters and the caps", stdout)
+	}
+	if reported.Triage.ReviewRounds != 3 || reported.Triage.RepairGrants != 1 || reported.Triage.TruncatedGrants != 1 {
+		t.Fatalf("reported counters = %+v", reported.Triage)
+	}
+	if *reported.TriageCaps != caps {
+		t.Fatalf("reported caps = %+v, want the configured %+v", *reported.TriageCaps, caps)
+	}
+}
+
+// The JSON keys are a machine commitment: this fails if either caps key
+// drifts from snake_case, independent of the Go type the payload decodes into.
+func TestTriageCapsSerializeWithSnakeCaseKeys(t *testing.T) {
+	t.Parallel()
+
+	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	if err != nil {
+		t.Fatalf("marshal caps: %v", err)
+	}
+	for _, want := range []string{"\"review_rounds\":4", "\"merge_rearms\":2"} {
+		if !strings.Contains(string(payload), want) {
+			t.Fatalf("caps json = %s, want it to carry %s", payload, want)
+		}
+	}
+}
+
+// The boundary the gate refuses at is the boundary the line reports: an item
+// at exactly the cap is not under it, and this fails if the two predicates
+// ever drift apart again.
+func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	printItemTriage(&out, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 4}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	rendered := out.String()
+	if !strings.Contains(rendered, "at or past the cap of 4, so triage may only escalate or re-scope") {
+		t.Fatalf("rendered = %q, want the at-the-cap line", rendered)
+	}
+	if strings.Contains(rendered, "while under the cap") {
+		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
 }
