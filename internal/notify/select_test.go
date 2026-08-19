@@ -211,6 +211,128 @@ func TestTheVerdictIsTheReviewersOwnAccount(t *testing.T) {
 	}
 }
 
+// awaitingVerdict is the record as it stands with the checks behind it and the
+// review about to run: the evidence is cleared and no verdict is recorded.
+func awaitingVerdict() runstate.State {
+	state := running()
+	state.Phase = runstate.PhaseReviewing
+	return state
+}
+
+// reviewed is the record as it stands once a review has answered: the phase it
+// answered in, the session that answered, and the verdict itself.
+func reviewed(session, decision string, findings, attempts int) runstate.State {
+	state := running()
+	state.Phase = runstate.PhaseReviewing
+	state.ReviewSessionID = session
+	state.ReviewDecision = decision
+	state.ReviewFindings = findings
+	state.RepairAttempts = attempts
+	return state
+}
+
+// repairing is the record as it stands while the developer works on what the
+// reviewer asked for: the verdict is still standing, the count has moved, and no
+// new review has happened.
+func repairing(from runstate.State) runstate.State {
+	state := from
+	state.Phase = runstate.PhaseDeveloping
+	state.RepairAttempts = from.RepairAttempts + 1
+	return state
+}
+
+// verdicts reports only the verdicts one reading to the next produced. A repair
+// round re-runs the deterministic checks and crosses them again on its way back
+// to a review, which is a real crossing and not what these tests are about.
+func verdicts(t *testing.T, before, after runstate.State) []Kind {
+	t.Helper()
+	kinds, _ := crossed(t, before, after)
+	said := make([]Kind, 0, len(kinds))
+	for _, kind := range kinds {
+		if kind == KindReviewApproved || kind == KindReviewRepairs {
+			said = append(said, kind)
+		}
+	}
+	return said
+}
+
+func TestEveryRoundOfARepairLoopIsSaid(t *testing.T) {
+	// A repair loop produces several verdicts and most of them say the same word.
+	// Keyed on the word alone, a thread would read as one request for repairs
+	// followed by an approval, with every round between them missing.
+	first := reviewed("review-session-1", runstate.ReviewRepair, 3, 0)
+	if said := verdicts(t, awaitingVerdict(), first); len(said) != 1 || said[0] != KindReviewRepairs {
+		t.Fatalf("the first verdict crossed %v", said)
+	}
+	// The verdict stands over the whole repair round and is not said again.
+	working := repairing(first)
+	if said := verdicts(t, first, working); len(said) != 0 {
+		t.Fatalf("a verdict standing over a repair round was said again as %v", said)
+	}
+	// The next review clears the evidence before it runs, and a sink reading in
+	// that window sees no verdict rather than the previous one.
+	clearing := working
+	clearing.Phase = runstate.PhaseReviewing
+	clearing.ReviewSessionID = ""
+	clearing.ReviewDecision = ""
+	clearing.ReviewFindings = 0
+	if said := verdicts(t, working, clearing); len(said) != 0 {
+		t.Fatalf("clearing the evidence before a review crossed %v", said)
+	}
+	second := reviewed("review-session-2", runstate.ReviewRepair, 3, 1)
+	if said := verdicts(t, clearing, second); len(said) != 1 || said[0] != KindReviewRepairs {
+		t.Fatalf("the second verdict crossed %v", said)
+	}
+	// And a sink that missed the window between them still says both, because
+	// what identifies a verdict is the review that gave it rather than its word.
+	// This is the case the decision alone gets wrong: the word did not change and
+	// neither did the repair count, and it is still a second verdict.
+	if said := verdicts(t, working, second); len(said) != 1 || said[0] != KindReviewRepairs {
+		t.Fatalf("a second verdict read across the clearing window crossed %v", said)
+	}
+	// An identical verdict from an identical review is the same fact, said once.
+	if said := verdicts(t, second, second); len(said) != 0 {
+		t.Fatalf("re-reading one verdict said %v again", said)
+	}
+	approved := reviewed("review-session-3", runstate.ReviewApprove, 0, 2)
+	if said := verdicts(t, second, approved); len(said) != 1 || said[0] != KindReviewApproved {
+		t.Fatalf("the approval crossed %v", said)
+	}
+}
+
+func TestAVerdictIsSaidEvenWhenNoSessionWasRecorded(t *testing.T) {
+	// The session is what tells two verdicts apart; the decision is compared
+	// beside it so a record missing the session loses the rounds rather than the
+	// verdict.
+	before := reviewed("", runstate.ReviewRepair, 2, 0)
+	if said := verdicts(t, awaitingVerdict(), before); len(said) != 1 || said[0] != KindReviewRepairs {
+		t.Fatalf("a verdict with no recorded session crossed %v", said)
+	}
+	after := reviewed("", runstate.ReviewApprove, 0, 1)
+	if said := verdicts(t, before, after); len(said) != 1 || said[0] != KindReviewApproved {
+		t.Fatalf("an approval with no recorded session crossed %v", said)
+	}
+}
+
+func TestAReplayedChangeGetsItsOwnVerdict(t *testing.T) {
+	// An integration retry discards the verdict and obtains a fresh independent
+	// one, because the reviewed change is not the change that would now be
+	// promoted. That is a new verdict and is said as one.
+	approved := reviewed("review-session-1", runstate.ReviewApprove, 0, 0)
+	replayed := approved
+	replayed.ReviewSessionID = ""
+	replayed.ReviewDecision = ""
+	replayed.IntegrationRetries = 1
+	if said := verdicts(t, approved, replayed); len(said) != 0 {
+		t.Fatalf("discarding a verdict crossed %v", said)
+	}
+	again := reviewed("review-session-2", runstate.ReviewApprove, 0, 0)
+	again.IntegrationRetries = 1
+	if kinds, _ := crossed(t, replayed, again); len(kinds) != 1 || kinds[0] != KindReviewApproved {
+		t.Fatalf("the verdict on the replayed change crossed %v", kinds)
+	}
+}
+
 func TestAPromotionIsSaidByTheHarnessThatMadeIt(t *testing.T) {
 	// No agent performs a promotion, so no persona gets to give an account of one.
 	before := running()

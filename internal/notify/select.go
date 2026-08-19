@@ -95,7 +95,17 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 			ExitCode: after.CheckFailure.ExitCode,
 		})
 	}
-	if after.ReviewDecision != "" && after.ReviewDecision != before.ReviewDecision {
+	// A verdict is keyed on the invocation that gave it rather than on the words
+	// it used, because a repair loop produces several and most of them say the
+	// same word. The decision alone would report the first request for repairs
+	// and silently swallow every one after it, leaving a thread that reads as one
+	// repair followed by an approval with the rounds between them missing. The
+	// reviewer's session is cleared and re-recorded around every review, so two
+	// verdicts are always two sessions; the decision is compared beside it so a
+	// verdict recorded without a session is still not lost. Neither field moves
+	// while a run is repairing, so the verdict standing over a repair round is
+	// not said a second time.
+	if verdictGiven(after) && (after.ReviewSessionID != before.ReviewSessionID || after.ReviewDecision != before.ReviewDecision) {
 		verdict := KindReviewRepairs
 		if after.ReviewDecision == runstate.ReviewApprove {
 			verdict = KindReviewApproved
@@ -201,6 +211,15 @@ func HoldLifted(at time.Time) Notification {
 	return productNotification(KindHoldLifted, at, Detail{})
 }
 
+// Nothing here selects KindExchangeTurn or KindExchangeClosed, and so nothing
+// ever addresses a topic to an exchange. That is deliberate and it is not
+// finished work: ask exchanges are yoyodyne-ifd.99's, and they are the recorded
+// second consumer of this interface rather than a producer that exists now. The
+// envelope, the addressing, and every persona's line for both kinds are here so
+// that arriving later costs that work a selection function and nothing else —
+// but until it lands, an exchange thread is a path this package can describe and
+// cannot yet reach, and it should not be read as behaviour already delivered.
+
 func productNotification(kind Kind, at time.Time, detail Detail) Notification {
 	return Notification{
 		Topic:   Product(),
@@ -252,6 +271,15 @@ func checksBehind(state runstate.State) bool {
 	default:
 		return false
 	}
+}
+
+// verdictGiven reports a record that holds a reviewer's verdict at all. The
+// record passes through no verdict twice per round — it is cleared before each
+// review runs and written again when that review answers — so the absence is a
+// real state of a run rather than only the state of one that has never been
+// reviewed.
+func verdictGiven(state runstate.State) bool {
+	return state.ReviewDecision != ""
 }
 
 // parked reports a run stopped short of finishing with an instruction to resume:
