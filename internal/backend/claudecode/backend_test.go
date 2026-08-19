@@ -14,6 +14,7 @@ import (
 	"time"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -562,6 +563,130 @@ func TestRunKeepsTheProductManagerAdvisory(t *testing.T) {
 				t.Fatalf("a rejected product-manager run still started %d process(es)", len(blocked.commands))
 			}
 		})
+	}
+}
+
+// Every role the harness holds a conversation with has to be able to take a
+// turn through the default backend. The list is the one the conversation
+// machinery keeps rather than a copy of it, because a role added there and left
+// out here is the whole failure: the architect carried a contract for days
+// before its first message was refused by this backend for a role it did not
+// know.
+func TestRunServesEveryConversationalRole(t *testing.T) {
+	t.Parallel()
+
+	roles := chat.ConversationalRoles()
+	if len(roles) == 0 {
+		t.Fatal("ConversationalRoles() is empty; the coverage below asserts nothing")
+	}
+	for _, role := range roles {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"answered"}` + "\n"
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+			result, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             role,
+				WorkingDirectory: "/repository",
+				Prompt:           "what do you make of this?",
+				// The shape a conversation sends whichever role is answering: a
+				// read-only permission mode and no tools at all.
+				PermissionMode: "plan",
+				AllowedTools:   []string{},
+			})
+			if err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if result.IsError || result.FinalText != "answered" || result.SessionID != "session-1" {
+				t.Fatalf("Run() result = %#v", result)
+			}
+			if len(runner.commands) != 1 {
+				t.Fatalf("the turn started %d process(es), want 1", len(runner.commands))
+			}
+		})
+	}
+}
+
+// The two management roles ifd.4 delivered are toolless for the same reason the
+// product manager is. Each owns documents and decides what they say, and every
+// change either authorizes is recorded by the harness on its behalf, so the
+// authority never takes the form of a tool this process could be talked into
+// using.
+func TestRunKeepsTheManagementRolesToolless(t *testing.T) {
+	t.Parallel()
+
+	for _, role := range []domain.AgentRole{domain.RoleArchitect, domain.RoleDevelopmentManager} {
+		t.Run(string(role), func(t *testing.T) {
+			t.Parallel()
+
+			stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"the lease is the architect's"}` + "\n"
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream}}}
+			// No permission mode and no tool list, so the defaults this backend
+			// chooses for the role are what get asserted.
+			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID: testRunID, Role: role, WorkingDirectory: "/repository", Prompt: "where is the promotion lease recorded?",
+			}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "plan", "--name", "yoyodyne-01234567", "--safe-mode", "--tools", ""}
+			if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
+				t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+			}
+
+			for _, test := range []struct {
+				name    string
+				request backendapi.RunRequest
+				want    string
+			}{
+				{
+					name:    "repository writes",
+					request: backendapi.RunRequest{AllowedTools: []string{"Write(/**)"}},
+					want:    string(role) + " runs cannot be granted tools",
+				},
+				{
+					name:    "tracker and git commands",
+					request: backendapi.RunRequest{AllowedTools: []string{"Bash"}},
+					want:    string(role) + " runs cannot be granted tools",
+				},
+				{
+					name:    "editing permission mode",
+					request: backendapi.RunRequest{AllowedTools: []string{}, PermissionMode: "acceptEdits"},
+					want:    string(role) + " runs require the read-only",
+				},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					t.Parallel()
+
+					request := test.request
+					request.RunID, request.Role, request.WorkingDirectory, request.Prompt = testRunID, role, "/repository", "advise"
+					blocked := &fakeRunner{}
+					if _, err := (Backend{Runner: blocked}).Run(context.Background(), request); err == nil || !strings.Contains(err.Error(), test.want) {
+						t.Fatalf("Run() error = %v, want it to contain %q", err, test.want)
+					}
+					if len(blocked.commands) != 0 {
+						t.Fatalf("a rejected %s run still started %d process(es)", role, len(blocked.commands))
+					}
+				})
+			}
+		})
+	}
+}
+
+// A role this backend has decided nothing for is refused rather than served on
+// the developer's terms, which are the only terms it would otherwise have.
+func TestRunRefusesARoleItHasNoPostureFor(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{}
+	_, err := (Backend{Runner: runner}).Run(context.Background(), backendapi.RunRequest{
+		RunID: testRunID, Role: "security-reviewer", WorkingDirectory: "/repository", Prompt: "advise",
+	})
+	if err == nil || !strings.Contains(err.Error(), `does not support role "security-reviewer"`) {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("a refused role still started %d process(es)", len(runner.commands))
 	}
 }
 
