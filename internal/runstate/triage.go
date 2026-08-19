@@ -457,6 +457,14 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, caps T
 // separately: an action that costs nothing to take is the one that can be taken
 // forever, and a merge that keeps being dropped is a repository somebody has to
 // look at.
+//
+// The re-arm cap this spends is one precondition among several, exactly as the
+// re-run's is: a re-arm is an integration retry against the target branch, so
+// `one-promotion-per-target-branch` binds the caller — the promotion is the
+// harness's to take under the runstate lease, no agent performs one or touches
+// that lease, and the re-arm repeats only the identical, already-authorized
+// forge request against a head and target the original gate's checks still
+// pass. Those belong to the action; this store counts what it has been given.
 func (s *TriageStore) RecordMergeRearm(ctx context.Context, workItemID string, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err

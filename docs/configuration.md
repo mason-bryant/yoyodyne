@@ -1628,6 +1628,12 @@ than given one it did not record — an unspent attempt rather than a duplicated
 one. Concurrent updates are serialized per item, so no increment is lost, and a
 record that cannot be read is a refusal rather than an empty budget: an
 unreadable budget read as empty is every cap in it stopping to mean anything.
+Recovery from one is a decision, not a repair: the record is one JSON file per
+item under the state root's `triage/` directory, so read it and fix what is
+malformed if the history is worth keeping — or delete it, which resets every
+budget the item had spent, and is therefore a deliberate re-budgeting to record
+on the work item in the same breath, not a cleanup. Nothing automated deletes
+one, for exactly the reason nothing reads one as empty.
 
 Which threshold refuses which action:
 
@@ -1635,7 +1641,7 @@ Which threshold refuses which action:
 | --- | --- |
 | another repair grant | `triage.review_rounds_cap`, truncated to the rounds it still has room for |
 | another whole run of the item | `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state, which the action carries and this counter does not |
-| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` |
+| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the action, which repeats only the identical already-authorized forge request under the harness's own lease |
 
 The first two buy review rounds, so the round cap is what bounds them, and a
 grant is **truncated** rather than refused where some rounds remain: at the

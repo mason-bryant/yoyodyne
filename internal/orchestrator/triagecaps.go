@@ -30,7 +30,7 @@ func TriageCaps(execution config.Execution, triage config.Triage) runstate.Triag
 	}
 }
 
-// TriageRepairGrant is how many review rounds triage hands an item when it
+// TriageRepairGrantRounds is how many review rounds triage hands an item when it
 // decides the work is worth another go, before the round cap truncates it.
 //
 // `triage.repair_grant_attempts` states it in repair attempts, and that is the
