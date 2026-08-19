@@ -23,6 +23,20 @@ const (
 	// another machine. It is still bounded: a hung network must not hold a run
 	// open indefinitely.
 	pushTimeout = 5 * time.Minute
+	// worktreeListAttempts and worktreeListRetryWait bound re-reading the shared
+	// worktree bookkeeping when a listing crosses a creation. `git worktree add`
+	// registers the new entry under worktrees/ before it fills the entry in, and
+	// a listing that reads the entry in between fails the whole command rather
+	// than skipping the one entry, so a run can be lost to nothing but another
+	// run starting beside it.
+	//
+	// The creation lease is not what a reader can take here. A creation holds it
+	// while it verifies what it just made, which is itself a listing, so a
+	// listing that waited for the lease would wait for itself. What a reader can
+	// do is read again: the half-written instant is the time Git takes to write a
+	// handful of small files, and it never comes back for the same entry.
+	worktreeListAttempts  = 3
+	worktreeListRetryWait = 50 * time.Millisecond
 )
 
 // maintenanceOptions stop a Git command from handing this repository to Git's
@@ -1575,13 +1589,17 @@ type worktreeEntry struct {
 	branch string
 }
 
+// listWorktrees reads the shared worktree bookkeeping. A refusal is re-read
+// rather than believed the first time, because the one refusal this command has
+// on a repository with parallel development is a registration another run is
+// still writing — see worktreeListAttempts. A listing that keeps failing is
+// reported with what Git said, exactly as one failing once used to be: the
+// retry is for the instant that passes, and nothing else about a failure
+// changes.
 func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "list", "--porcelain")
+	result, err := m.readWorktreeListing(ctx)
 	if err != nil {
 		return nil, err
-	}
-	if result.Status != execution.ProcessSucceeded {
-		return nil, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	var entries []worktreeEntry
 	var current worktreeEntry
@@ -1602,6 +1620,32 @@ func (m *Manager) listWorktrees(ctx context.Context) ([]worktreeEntry, error) {
 	}
 	flush()
 	return entries, nil
+}
+
+// readWorktreeListing runs the listing until Git answers or the attempts are
+// spent. Only a Git that ran and refused is read again, because that is the one
+// failure the passing instant produces. A Git that could not be run at all is
+// the harness failing to execute a command; one that timed out or stalled has
+// already spent the command's whole budget, and spending it twice more would
+// turn a slow repository into a run three times slower to fail.
+func (m *Manager) readWorktreeListing(ctx context.Context) (execution.ProcessResult, error) {
+	for attempt := 1; ; attempt++ {
+		result, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "list", "--porcelain")
+		if err != nil {
+			return execution.ProcessResult{}, err
+		}
+		if result.Status == execution.ProcessSucceeded {
+			return result, nil
+		}
+		if result.Status != execution.ProcessFailed || attempt >= worktreeListAttempts {
+			return execution.ProcessResult{}, fmt.Errorf("list worktrees failed with exit code %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+		}
+		select {
+		case <-ctx.Done():
+			return execution.ProcessResult{}, ctx.Err()
+		case <-time.After(worktreeListRetryWait):
+		}
+	}
 }
 
 func (m *Manager) registeredWorktree(ctx context.Context, path string) (bool, string, error) {
