@@ -209,6 +209,12 @@ func TestARunParkedOnAHoldExitsResumableAndIsPickedUpWhenItLifts(t *testing.T) {
 	if !stillHeld.Paused || stillHeld.PausedByOperator == nil || len(duringHold.requests) != 0 {
 		t.Fatalf("an invocation during the hold did not leave the run alone: %#v %#v", stillHeld, duringHold.requests)
 	}
+	// Left alone is not the same fact as never started. The run this item already
+	// has is named, so nothing downstream can report a parked worktree full of
+	// work as an item nothing was started for.
+	if stillHeld.RunID != paused.RunID || stillHeld.WorktreePath != paused.WorktreePath || stillHeld.Branch != paused.Branch {
+		t.Fatalf("a held invocation did not name the run it left alone: %#v, want run %s in %s", stillHeld, paused.RunID, paused.WorktreePath)
+	}
 
 	// Once the operator resumes, the same run is picked up and finished.
 	if _, _, err := holds.Release(); err != nil {

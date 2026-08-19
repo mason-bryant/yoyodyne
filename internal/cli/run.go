@@ -373,10 +373,7 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 		// and it is reported on its own terms for the same reason: what lifts it is
 		// one command, and nothing about this work item has anything to do with it.
 		if outcome.PausedByOperator != nil {
-			reportOperatorHold(stdout, outcome)
-			if err != nil {
-				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
-			}
+			reportOperatorHold(stdout, stderr, outcome, err)
 		} else if outcome.PausedByDirective != nil {
 			reportDirectivePause(stdout, outcome)
 			if err != nil {
@@ -558,19 +555,35 @@ func reportDirectivePause(stdout io.Writer, outcome orchestrator.Outcome) {
 // need to be told is that the harness is where they left it. It says when the
 // hold was placed for the same reason, since a system somebody paused and forgot
 // looks exactly like a system that died.
-func reportOperatorHold(stdout io.Writer, outcome orchestrator.Outcome) {
+//
+// What it will not do is say nothing was started when something was. A run this
+// item already has is named, whether it parked at a boundary or is still working
+// its way to one — both keep everything they hold, and both carry on when the
+// pause lifts. A lookup that failed says so instead of guessing either way: an
+// operator told nothing was started for a run that is sitting in a worktree with
+// hours of work in it would be misled about the one thing this verb exists to
+// make legible.
+func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, err error) {
 	fmt.Fprintf(stdout, "PAUSED: all harness activity is paused, since %s\n",
 		outcome.PausedByOperator.HeldAt.Format(time.RFC3339))
-	if outcome.RunID != "" {
-		fmt.Fprintf(stdout, "%s parked at its next provider call\n", outcome.WorkItemID)
+	switch {
+	case outcome.RunID != "":
+		fmt.Fprintf(stdout, "%s has a run in flight; it parks at its next provider call\n", outcome.WorkItemID)
 		fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
 		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
 		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
 		fmt.Fprintln(stdout, "the item stays claimed and its artifacts are preserved; nothing was cancelled")
-	} else {
-		fmt.Fprintf(stdout, "nothing was started for %s, so there is nothing to clean up\n", outcome.WorkItemID)
+	case err != nil:
+		fmt.Fprintf(stdout, "what is in flight for %s could not be read, so nothing here says whether anything was started for it\n", outcome.WorkItemID)
+	default:
+		fmt.Fprintf(stdout, "nothing is in flight for %s, so nothing was started and there is nothing to clean up\n", outcome.WorkItemID)
 	}
 	fmt.Fprintf(stdout, "`yoyo resume` lifts the pause, and running yoyodyne on %s after that carries on\n", outcome.WorkItemID)
+	if err != nil {
+		// The pause itself is not in doubt — it is a flag this command just read —
+		// so what failed is named beside it rather than in place of it.
+		fmt.Fprintf(stderr, "the pause is in force; this could not be fully reported: %v\n", err)
+	}
 }
 
 // reportCollectedReports names what this run's agents reported without it

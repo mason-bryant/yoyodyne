@@ -118,6 +118,11 @@ type StateStore interface {
 	// holds the run's lease and the operator releasing it does not.
 	ReleasedWait(runID string) (runstate.Release, bool, error)
 	ClearRelease(runID string) error
+	// Incomplete lists the runs still in flight. It is how a step that declines to
+	// act on a run can still say what it is leaving alone, which is the whole of
+	// what it is for here: reading a record is not acting on it, so this takes no
+	// lease and the run it describes may well belong to another process.
+	Incomplete() ([]runstate.State, error)
 }
 
 type CheckRunner interface {
@@ -395,7 +400,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if err != nil {
 			return Outcome{}, err
 		}
-		return holdWorkItem(workItemID, hold), nil
+		return p.holdWorkItem(workItemID, hold)
 	}
 	// Whether this run publishes is settled before anything is claimed, so a
 	// project that asked for pull requests and cannot open one fails here rather
@@ -1844,18 +1849,46 @@ func (p Pipeline) operatorHold() (runstate.OperatorHold, bool, error) {
 }
 
 // holdWorkItem reports work the harness declined to start or resume because the
-// operator is holding all activity. Like the directive pause it has no run
-// behind it — nothing was claimed, no worktree exists, and a run already in
-// flight was left exactly as it was — and it is a pause rather than a failure
-// because lifting the hold is all that stands between here and the work
-// proceeding.
-func holdWorkItem(workItemID string, hold runstate.OperatorHold) Outcome {
-	return Outcome{
+// operator is holding all activity. It is a pause rather than a failure because
+// lifting the hold is all that stands between here and the work proceeding.
+//
+// It names the run this item already has, when it has one. That run was left
+// exactly as it was — nothing here claims, adopts, or touches it — but "left
+// alone" and "never started" are opposite facts about an operator's worktree and
+// their claimed item, and a report that could not tell them apart would say
+// nothing was started for a run that is parked with hours of work in it.
+//
+// The run is found by reading rather than by adopting, exactly as releasing a
+// wait finds one: a run another process is serving must keep serving it, and
+// taking its lease to describe it would be the harness stopping the very run the
+// pause exists to preserve. A lookup that fails travels back with the pause
+// rather than replacing it — the hold is in force either way and nothing will be
+// spent — so what is lost is the description and not the answer.
+func (p Pipeline) holdWorkItem(workItemID string, hold runstate.OperatorHold) (Outcome, error) {
+	outcome := Outcome{
 		WorkItemID:       workItemID,
 		Paused:           true,
 		PauseCause:       runstate.PauseOperatorHold,
 		PausedByOperator: &hold,
 	}
+	inFlight, err := p.Store.Incomplete()
+	if err != nil {
+		return outcome, fmt.Errorf("find what is in flight for %s while activity is paused: %w", workItemID, err)
+	}
+	for _, existing := range inFlight {
+		if existing.WorkItemID != workItemID {
+			continue
+		}
+		outcome.RunID = existing.RunID
+		outcome.Status = existing.Status
+		outcome.Phase = existing.Phase
+		outcome.Branch = existing.Branch
+		outcome.WorktreePath = existing.WorktreePath
+		outcome.BaseCommit = existing.BaseCommit
+		outcome.ProviderSessionID = existing.ProviderSessionID
+		break
+	}
+	return outcome, nil
 }
 
 // holdForOperator parks a run at a provider-call boundary for as long as the

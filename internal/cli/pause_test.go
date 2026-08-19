@@ -2,10 +2,12 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -109,6 +111,75 @@ func TestPauseAndResumeReportTheHoldAsJSON(t *testing.T) {
 	}
 	if resumed.Held || resumed.Hold == nil || !resumed.Hold.HeldAt.Equal(paused.Hold.HeldAt) {
 		t.Fatalf("resume --json = %q, want the lifted hold reported and activity running", stdout)
+	}
+}
+
+// "Left alone" and "never started" are opposite facts about an operator's
+// claimed item and their worktree, and the report of a paused harness has to
+// tell them apart: saying nothing was started for a run that is parked with
+// hours of work in it misleads them about the one thing this verb exists to make
+// legible. A lookup that failed is a third answer and says so.
+func TestTheHoldReportNeverSaysNothingWasStartedWhenSomethingWas(t *testing.T) {
+	t.Parallel()
+
+	held := runstate.OperatorHold{SchemaVersion: runstate.OperatorHoldSchemaVersion, HeldAt: time.Date(2026, 8, 18, 18, 15, 0, 0, time.UTC)}
+	for name, testCase := range map[string]struct {
+		outcome    orchestrator.Outcome
+		err        error
+		want       []string
+		wantAbsent []string
+	}{
+		"a run this item already has": {
+			outcome: orchestrator.Outcome{
+				WorkItemID: "yoyodyne-task", Paused: true, PausedByOperator: &held,
+				RunID: "run-0123456789abcdef0123456789abcdef", Branch: "yoyodyne/yoyodyne-task/abcd", WorktreePath: "/state/worktrees/task",
+			},
+			want: []string{
+				"PAUSED: all harness activity is paused, since 2026-08-18T18:15:00Z",
+				"run: run-0123456789abcdef0123456789abcdef",
+				"branch: yoyodyne/yoyodyne-task/abcd",
+				"worktree: /state/worktrees/task",
+				"stays claimed and its artifacts are preserved",
+				"yoyo resume",
+			},
+			wantAbsent: []string{"nothing was started"},
+		},
+		"nothing in flight for it": {
+			outcome:    orchestrator.Outcome{WorkItemID: "yoyodyne-task", Paused: true, PausedByOperator: &held},
+			want:       []string{"nothing is in flight for yoyodyne-task", "nothing was started"},
+			wantAbsent: []string{"run: "},
+		},
+		"a lookup that failed": {
+			outcome:    orchestrator.Outcome{WorkItemID: "yoyodyne-task", Paused: true, PausedByOperator: &held},
+			err:        errors.New("run state directory is unreadable"),
+			want:       []string{"could not be read", "PAUSED:"},
+			wantAbsent: []string{"nothing was started"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var stdout, stderr strings.Builder
+			reportOperatorHold(&stdout, &stderr, testCase.outcome, testCase.err)
+			for _, want := range testCase.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("report = %q, want it to say %q", stdout.String(), want)
+				}
+			}
+			for _, unwanted := range testCase.wantAbsent {
+				if strings.Contains(stdout.String(), unwanted) {
+					t.Fatalf("report = %q, want it not to say %q", stdout.String(), unwanted)
+				}
+			}
+			// A failure to look is named where failures are read, and never in place
+			// of the pause itself, which this command established by reading the flag.
+			if testCase.err != nil && !strings.Contains(stderr.String(), testCase.err.Error()) {
+				t.Fatalf("stderr = %q, want the failed lookup named", stderr.String())
+			}
+			if testCase.err == nil && strings.TrimSpace(stderr.String()) != "" {
+				t.Fatalf("stderr = %q, want nothing reported as a problem", stderr.String())
+			}
+		})
 	}
 }
 
