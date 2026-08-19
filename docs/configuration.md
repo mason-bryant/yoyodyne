@@ -60,11 +60,15 @@ default is the project's own Git remote: Beads moves its data over an ordinary
 Git remote under refs of Dolt's own, so the tracker rides beside the code it
 tracks — one repository, one permission model, and nothing to stand up.
 
-- It reads `origin` and configures the tracker to sync there, printing what it
-  configured.
-- A tracker that already has a remote is left exactly as it is; pass
-  `--tracker-remote <url>` to point it somewhere else, which is what a tracker
-  kept in a repository of its own needs. Beads accepts any Git URL.
+- It reads the Git remote `origin` and configures the tracker remote of the
+  same name to sync there, printing what it configured.
+- A tracker that already has an `origin` remote is left exactly as it is, even
+  when it points somewhere other than this project's Git remote: that is a
+  decision `init` must not undo. A tracker whose remotes are all named
+  something else is untouched too, and gets an `origin` beside them.
+- `--tracker-remote <url>` names the remote instead, and replaces whatever
+  `origin` currently holds — which is what a tracker kept in a repository of its
+  own needs. Beads accepts any Git URL.
 - A project with no Git remote, or one whose `bd` is not initialized yet, is
   told what to run rather than failing: the configuration is written and valid
   either way, so `init` still exits 0 and `init --json` reports the outcome

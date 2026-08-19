@@ -239,10 +239,10 @@ for what is in the file.
 rather than one per machine. Beads moves its data over an ordinary Git remote
 under refs of Dolt's own, so `init` reads `origin` and configures the tracker to
 sync there — one repository, one permission model, nothing to stand up — and
-prints what it configured. A tracker that already has a remote is left alone,
-`--tracker-remote <url>` points it somewhere else for the atypical case of a
-tracker kept in a repository of its own, and a project with no Git remote is
-told what to run once it has one rather than failing over it. Two consequences
+prints what it configured. A tracker that already has an `origin` remote is left
+alone, `--tracker-remote <url>` replaces it for the atypical case of a tracker
+kept in a repository of its own, and a project with no Git remote is told what
+to run once it has one rather than failing over it. Two consequences
 worth knowing: the tracker's history counts against your repository's size like
 any other history, and what it pushes — `refs/dolt/data` and a
 `__dolt_remote_info__` branch — is carried without complaint by GitHub but is

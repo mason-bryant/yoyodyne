@@ -128,10 +128,12 @@ type trackerRemote struct {
 
 // configureTrackerRemote points the tracker at the URL it should sync through.
 //
-// It never overwrites a remote the tracker already has unless one was named
-// explicitly: a project that deliberately syncs its tracker somewhere else --
-// a repository of its own, which bd supports with any Git URL -- must not have
-// that decision undone by a later `yoyo init`.
+// It never overwrites the remote the tracker already holds under this name
+// unless a URL was named explicitly: a project that deliberately syncs its
+// tracker somewhere else -- a repository of its own, which bd supports with any
+// Git URL -- must not have that decision undone by a later `yoyo init`. A named
+// URL does replace it, which is what the flag is for, and bd replaces a remote
+// it already holds rather than refusing the name it is given.
 //
 // Its failures are reported rather than raised. Everything init promises is
 // already on disk by the time this runs, and the tracker is a separate tool
@@ -205,7 +207,11 @@ func describeTrackerRemote(tracker trackerRemote) string {
 		return fmt.Sprintf("the tracker syncs nowhere -- %s; configure one with `bd dolt remote add %s <url>` so the backlog is not per-machine",
 			singleLine(tracker.Reason), trackerRemoteName)
 	default:
-		return fmt.Sprintf("the tracker syncs nowhere -- %s; the configuration was written, so run `bd init` and then `bd dolt remote add %s <url>`",
+		// bd's own words are carried above, hint and all, so the remedy here
+		// names the command to run rather than guessing at what went wrong: an
+		// uninitialized tracker and one that refused for another reason are not
+		// put right the same way.
+		return fmt.Sprintf("the tracker syncs nowhere -- %s; the configuration was written, so configure it with `bd dolt remote add %s <url>` once bd answers here",
 			singleLine(tracker.Reason), trackerRemoteName)
 	}
 }

@@ -263,13 +263,22 @@ func TestRunInitLeavesAConfiguredTrackerAloneUnlessOneIsNamed(t *testing.T) {
 		t.Errorf("report = %q, want it to name the flag that would change it", describeTrackerRemote(tracker))
 	}
 
+	// The case the flag exists for: a tracker that already syncs somewhere,
+	// pointed at a repository of its own. What is already there must not make
+	// the named URL a no-op, and bd replaces a remote it already holds rather
+	// than refusing the name -- which is checked against bd itself in
+	// TestSyncRemoteConformance, since a scripted runner can only restate it.
 	named := &trackerRunner{
-		beads:         map[string]string{"dolt remote add origin https://example.invalid/acme/tracker.git": "added"},
+		gitRemoteURL: "git@github.com:acme/thing.git",
+		beads: map[string]string{
+			"dolt remote list": configured,
+			"dolt remote add origin https://example.invalid/acme/tracker.git": "added",
+		},
 		beadsAfterAdd: `[{"name":"origin","url":"git+https://example.invalid/acme/tracker.git"}]`,
 	}
 	tracker = configureTrackerRemote(context.Background(), t.TempDir(), "https://example.invalid/acme/tracker.git", named)
 	if tracker.Status != trackerRemoteConfigured || tracker.URL != "git+https://example.invalid/acme/tracker.git" {
-		t.Fatalf("tracker = %#v, want the named URL configured", tracker)
+		t.Fatalf("tracker = %#v, want the named URL configured over the one already there", tracker)
 	}
 	// A named URL is the operator's decision, so nothing about the project's own
 	// Git remote is consulted before applying it.
