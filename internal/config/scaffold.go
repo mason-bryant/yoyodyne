@@ -184,6 +184,19 @@ execution:
   # failing the run. Nothing here is a fault in the change, so a relaunch spends
   # no repair attempt. A run that spends this budget stops and records a blocker.
   transient_relaunches_before_blocking: %d
+  # Every budget above resets when a run does, so none of them bounds what one
+  # item costs across the runs it takes. These four do: how many times triage may
+  # hand an item another go at its own change, run it again from the start, or
+  # re-arm a merge the forge dropped, and the ceiling on the reviewer verdicts
+  # the item's developer attempts may produce in total. The rounds are not asked
+  # for -- they are what a repair grant is truncated against, so a grant never
+  # promises a round the ceiling would not let it take. They are counted per item
+  # in this machine's durable triage record; a second harness on another machine
+  # holds its own.
+  triage_repair_grants_per_item: %d
+  triage_reruns_per_item: %d
+  triage_merge_rearms_per_item: %d
+  triage_review_rounds_per_item: %d
   worktree_root: %s
   # The remote publishing pushes to and opens pull requests against. It is only
   # consulted when approvals.publishing is automatic; a repository with no
@@ -240,6 +253,10 @@ approvals:
 		effective.Execution.RepairAttemptsBeforeReplan,
 		effective.Execution.IntegrationRetriesBeforeReconciliation,
 		effective.Execution.TransientRelaunchesBeforeBlocking,
+		effective.Execution.TriageRepairGrantsPerItem,
+		effective.Execution.TriageRerunsPerItem,
+		effective.Execution.TriageMergeRearmsPerItem,
+		effective.Execution.TriageReviewRoundsPerItem,
 		effective.Execution.WorktreeRoot,
 		effective.Execution.Remote,
 		renderScaffoldDuration(effective.Execution.UsageLimitMaxPause),

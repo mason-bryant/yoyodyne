@@ -41,6 +41,10 @@ type executionDocument struct {
 	RepairAttemptsBeforeReplan             *int      `yaml:"repair_attempts_before_replan"`
 	IntegrationRetriesBeforeReconciliation *int      `yaml:"integration_retries_before_reconciliation"`
 	TransientRelaunchesBeforeBlocking      *int      `yaml:"transient_relaunches_before_blocking"`
+	TriageRepairGrantsPerItem              *int      `yaml:"triage_repair_grants_per_item"`
+	TriageRerunsPerItem                    *int      `yaml:"triage_reruns_per_item"`
+	TriageMergeRearmsPerItem               *int      `yaml:"triage_merge_rearms_per_item"`
+	TriageReviewRoundsPerItem              *int      `yaml:"triage_review_rounds_per_item"`
 	WorktreeRoot                           *string   `yaml:"worktree_root"`
 	Remote                                 *string   `yaml:"remote"`
 	UsageLimitMaxPause                     *Duration `yaml:"usage_limit_max_pause"`

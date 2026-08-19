@@ -54,6 +54,26 @@ decides how a human is proven; this document decides what a proven human may do
 Team-wide pause is a design question, not a first-cut promise; the pause switch
 pauses the machine it is on.
 
+## A recorded gap: per-item budgets are per machine
+
+What triage has spent on one work item — the repair grants it has been given, the
+re-runs it has caused, the merge re-arms it has made, and the review rounds it
+has cost across every run of it — is counted in durable state on the machine that
+counted it. There is one such home per harness, and nothing moves it.
+
+So two collaborators running their own harnesses against one repository each hold
+a full set of budgets for the same item: an item that has spent its grants on one
+machine has spent none of them on the other, and a cap of one is a cap of two
+across the pair. Nothing is lost and nothing races — each machine's record is
+correct about its own machine — but the bound an operator configured is not the
+bound the item actually gets.
+
+This belongs to the same coordination design as the rest of this document: the
+counters are one more piece of state that has to travel for the tracker to be
+one tracker. It is recorded here rather than fixed there because fixing it
+without the identity and coordination design would mean inventing where a shared
+counter lives and who breaks a tie on it.
+
 ## What v1 supports meanwhile
 
 One harness plus ordinary committers is the supported team answer today, and

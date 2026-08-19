@@ -139,8 +139,29 @@ type Execution struct {
 	// reviewer, because what it bounds is how much of the provider's weather one
 	// run absorbs. Zero never relaunches, which is the behavior a run had before
 	// this bound existed: the first transient death ends it.
-	TransientRelaunchesBeforeBlocking int    `yaml:"transient_relaunches_before_blocking" json:"transient_relaunches_before_blocking"`
-	WorktreeRoot                      string `yaml:"worktree_root" json:"worktree_root"`
+	TransientRelaunchesBeforeBlocking int `yaml:"transient_relaunches_before_blocking" json:"transient_relaunches_before_blocking"`
+	// The four triage caps bound what one harness will spend on one work item
+	// across every run of it, which is the thing no budget above bounds: each of
+	// those resets when a run does, so an item triaged again and again is an item
+	// nothing was ever going to stop. They are counted per item and per machine
+	// in the product's durable triage record.
+	//
+	// TriageRepairGrantsPerItem is how many times triage may hand an item another
+	// go at its own change, TriageRerunsPerItem how many times it may cause the
+	// item to be run again from the start, and TriageMergeRearmsPerItem how many
+	// times it may re-arm a merge the forge accepted and then dropped. Zero is a
+	// deliberate choice for any of them — never do this, send it to a person
+	// instead — and a negative bound is not one.
+	TriageRepairGrantsPerItem int `yaml:"triage_repair_grants_per_item" json:"triage_repair_grants_per_item"`
+	TriageRerunsPerItem       int `yaml:"triage_reruns_per_item" json:"triage_reruns_per_item"`
+	TriageMergeRearmsPerItem  int `yaml:"triage_merge_rearms_per_item" json:"triage_merge_rearms_per_item"`
+	// TriageReviewRoundsPerItem is the ceiling on the reviewer verdicts one item's
+	// developer attempts may produce, across every run of it. It is not an action
+	// anybody asks permission for — nothing requests to be reviewed — it is what
+	// every repair grant is truncated against, so a grant is never larger than
+	// what the item has room left to spend.
+	TriageReviewRoundsPerItem int    `yaml:"triage_review_rounds_per_item" json:"triage_review_rounds_per_item"`
+	WorktreeRoot              string `yaml:"worktree_root" json:"worktree_root"`
 	// Remote names the Git remote publishing pushes to and opens pull requests
 	// against. It is only consulted when `approvals.publishing` is automatic, and
 	// a repository that has no remote by this name publishes nothing rather than
@@ -348,6 +369,22 @@ func (c Config) Validate() error {
 	// which is a choice, and a negative bound is not one.
 	if c.Execution.TransientRelaunchesBeforeBlocking < 0 {
 		problems = append(problems, "transient_relaunches_before_blocking cannot be negative")
+	}
+	// And once more for the triage caps: zero says triage never takes this action
+	// on an item and hands it to a person instead, which is a choice somebody
+	// might well make, and a negative cap is not one.
+	for _, triageCap := range []struct {
+		key   string
+		value int
+	}{
+		{"triage_repair_grants_per_item", c.Execution.TriageRepairGrantsPerItem},
+		{"triage_reruns_per_item", c.Execution.TriageRerunsPerItem},
+		{"triage_merge_rearms_per_item", c.Execution.TriageMergeRearmsPerItem},
+		{"triage_review_rounds_per_item", c.Execution.TriageReviewRoundsPerItem},
+	} {
+		if triageCap.value < 0 {
+			problems = append(problems, triageCap.key+" cannot be negative")
+		}
 	}
 	if strings.TrimSpace(c.Execution.WorktreeRoot) == "" {
 		problems = append(problems, "worktree_root is required")

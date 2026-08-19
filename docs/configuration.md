@@ -122,6 +122,10 @@ execution:
   repair_attempts_before_replan: 2
   integration_retries_before_reconciliation: 2
   transient_relaunches_before_blocking: 2
+  triage_repair_grants_per_item: 1
+  triage_reruns_per_item: 1
+  triage_merge_rearms_per_item: 2
+  triage_review_rounds_per_item: 4
   worktree_root: auto
   remote: origin
   usage_limit_max_pause: 6h
@@ -217,6 +221,10 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.repair_attempts_before_replan` (2),
    `execution.integration_retries_before_reconciliation` (2),
    `execution.transient_relaunches_before_blocking` (2),
+   `execution.triage_repair_grants_per_item` (1),
+   `execution.triage_reruns_per_item` (1),
+   `execution.triage_merge_rearms_per_item` (2),
+   `execution.triage_review_rounds_per_item` (4),
    `execution.worktree_root`
    (`auto`), `execution.remote` (`origin`),
    `execution.usage_limit_max_pause` and
@@ -1510,6 +1518,53 @@ carries the change that would actually be promoted. That is the same
 compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
+
+## What one work item may be given
+
+Every budget above is spent inside one run and starts again at zero in the next
+one. That is right for what each of them bounds — how much of the provider's
+weather a run absorbs, how long it chases a moving target — and it means none of
+them bounds what a single piece of work costs. An item handed back, run again,
+handed back again is an item nothing was ever going to stop.
+
+These four are per work item rather than per run, and they are what triage is
+refused past:
+
+```yaml
+execution:
+  triage_repair_grants_per_item: 1
+  triage_reruns_per_item: 1
+  triage_merge_rearms_per_item: 2
+  triage_review_rounds_per_item: 4
+```
+
+The first three bound the three things triage can decide: hand the item another
+go at its own change, run it again from the start, or re-arm a merge the forge
+accepted and then dropped. Each is counted before the action it counts takes
+effect, so a process that dies between the two has recorded a grant it did not
+give rather than given one it did not record. Setting any of them to `0` says
+triage never takes that action and hands the item to a person instead.
+
+The fourth is not an action anybody asks permission for. A **round** is a
+reviewer verdict a developer attempt produced, counted across every run of the
+item; a re-review that no developer attempt produced is not one, which is why a
+promotion that loses its race and gets a fresh verdict on the replayed change is
+not charged for it. What the round cap does is truncate a repair grant to what is
+left of it. At these defaults an item that has been through its repair budget
+once has spent three rounds of four — the first attempt and two repairs — so a
+grant of two is given as one, and the truncation is recorded. A grant that was
+not truncated would promise a round nothing would let it take, and one that
+overshot the cap would make the cap decorative. An item with no rounds left is
+refused a grant outright.
+
+`yoyo status <beads-id>` reports these counters against these caps, so how close
+an item is to the end of what it will be given is answerable from the item's
+record alone, along with whether triage has been round more than once.
+
+The counters are one home per machine. Two collaborators running their own
+harnesses against one shared repository each hold a full set of budgets for the
+same item, which `docs/team-mode-scope.md` records as a coordination gap for the
+team-mode design to close.
 
 ## Merge and removal semantics
 

@@ -189,13 +189,27 @@ func newResolution() *resolution {
 				// running is survived, and short of a run that keeps asking a provider
 				// that is not going to answer it.
 				TransientRelaunchesBeforeBlocking: 2,
-				WorktreeRoot:                      "auto",
-				Remote:                            defaultRemote,
-				UsageLimitMaxPause:                defaultUsageLimitMaxPause,
-				UsageLimitInProcessPause:          defaultUsageLimitInProcessPause,
-				UsageLimitUnknownResetPause:       defaultUsageLimitUnknownResetPause,
-				ServerOverloadPause:               defaultServerOverloadPause,
-				CheckTimeout:                      defaultCheckTimeout,
+				// One repair grant and one re-run apiece: triage gets a second look at
+				// a piece of work, and an item that needs a third is an item where
+				// something other than the change is wrong. Two merge re-arms, because
+				// that one is not about the change at all — a forge that drops a queued
+				// merge twice running is a repository somebody has to look at, and the
+				// re-arm before that costs nothing.
+				TriageRepairGrantsPerItem: 1,
+				TriageRerunsPerItem:       1,
+				TriageMergeRearmsPerItem:  2,
+				// Four rounds is one round past what a run spends on its own: the first
+				// attempt and two repairs are three, so the cap leaves room for exactly
+				// one more and no more than one. A grant is truncated to what is left
+				// of it, so the ceiling holds however large a grant asks to be.
+				TriageReviewRoundsPerItem:   4,
+				WorktreeRoot:                "auto",
+				Remote:                      defaultRemote,
+				UsageLimitMaxPause:          defaultUsageLimitMaxPause,
+				UsageLimitInProcessPause:    defaultUsageLimitInProcessPause,
+				UsageLimitUnknownResetPause: defaultUsageLimitUnknownResetPause,
+				ServerOverloadPause:         defaultServerOverloadPause,
+				CheckTimeout:                defaultCheckTimeout,
 			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
@@ -214,6 +228,10 @@ func newResolution() *resolution {
 			"execution.repair_attempts_before_replan":             OriginDefault,
 			"execution.integration_retries_before_reconciliation": OriginDefault,
 			"execution.transient_relaunches_before_blocking":      OriginDefault,
+			"execution.triage_repair_grants_per_item":             OriginDefault,
+			"execution.triage_reruns_per_item":                    OriginDefault,
+			"execution.triage_merge_rearms_per_item":              OriginDefault,
+			"execution.triage_review_rounds_per_item":             OriginDefault,
 			"execution.worktree_root":                             OriginDefault,
 			"execution.remote":                                    OriginDefault,
 			"execution.usage_limit_max_pause":                     OriginDefault,
@@ -243,6 +261,10 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.repair_attempts_before_replan", execution.RepairAttemptsBeforeReplan, &r.config.Execution.RepairAttemptsBeforeReplan, applied.origin)
 		setValue(r.origins, "execution.integration_retries_before_reconciliation", execution.IntegrationRetriesBeforeReconciliation, &r.config.Execution.IntegrationRetriesBeforeReconciliation, applied.origin)
 		setValue(r.origins, "execution.transient_relaunches_before_blocking", execution.TransientRelaunchesBeforeBlocking, &r.config.Execution.TransientRelaunchesBeforeBlocking, applied.origin)
+		setValue(r.origins, "execution.triage_repair_grants_per_item", execution.TriageRepairGrantsPerItem, &r.config.Execution.TriageRepairGrantsPerItem, applied.origin)
+		setValue(r.origins, "execution.triage_reruns_per_item", execution.TriageRerunsPerItem, &r.config.Execution.TriageRerunsPerItem, applied.origin)
+		setValue(r.origins, "execution.triage_merge_rearms_per_item", execution.TriageMergeRearmsPerItem, &r.config.Execution.TriageMergeRearmsPerItem, applied.origin)
+		setValue(r.origins, "execution.triage_review_rounds_per_item", execution.TriageReviewRoundsPerItem, &r.config.Execution.TriageReviewRoundsPerItem, applied.origin)
 		setValue(r.origins, "execution.worktree_root", execution.WorktreeRoot, &r.config.Execution.WorktreeRoot, applied.origin)
 		setValue(r.origins, "execution.remote", execution.Remote, &r.config.Execution.Remote, applied.origin)
 		setValue(r.origins, "execution.usage_limit_max_pause", execution.UsageLimitMaxPause, &r.config.Execution.UsageLimitMaxPause, applied.origin)
