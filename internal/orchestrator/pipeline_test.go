@@ -2477,6 +2477,14 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			ServerOverloadPause:                    config.Duration(90 * time.Second),
 			CheckTimeout:                           config.Duration(30 * time.Minute),
 		},
+		// The triage thresholds a loaded configuration would have filled in.
+		// Nothing here drives them; they are stated because a hand-built
+		// configuration is validated exactly like a loaded one.
+		Triage: config.Triage{
+			StuckMergeAge:       config.Duration(2 * time.Hour),
+			ReviewRoundsCap:     4,
+			RepairGrantAttempts: 2,
+		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
 			Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,

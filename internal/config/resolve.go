@@ -17,6 +17,10 @@ const (
 	OriginDefault = "harness-default"
 	// OriginDerived marks a value computed from another configured value.
 	OriginDerived = "derived:product.id"
+	// OriginDerivedRepairGrant marks a triage repair grant no layer stated,
+	// which takes the size of the effective repair budget rather than a number
+	// of its own.
+	OriginDerivedRepairGrant = "derived:execution.repair_attempts_before_replan"
 	// OriginInput marks a configuration decoded from a stream rather than read
 	// from a project file.
 	OriginInput = "configuration input"
@@ -197,6 +201,14 @@ func newResolution() *resolution {
 				ServerOverloadPause:               defaultServerOverloadPause,
 				CheckTimeout:                      defaultCheckTimeout,
 			},
+			// The repair grant is deliberately absent here. It is derived from
+			// the effective repair budget once every layer has been applied, so
+			// a default written now would be a number that stopped tracking the
+			// budget the moment a layer changed it.
+			Triage: Triage{
+				StuckMergeAge:   defaultStuckMergeAge,
+				ReviewRoundsCap: defaultReviewRoundsCap,
+			},
 			// Publishing is the one approval with a harness default, because it is
 			// the one that was added after configurations existed. A file written
 			// before it keeps the behavior it was written for — the harness
@@ -219,6 +231,8 @@ func newResolution() *resolution {
 			"execution.usage_limit_max_pause":                     OriginDefault,
 			"execution.usage_limit_in_process_pause":              OriginDefault,
 			"execution.check_timeout":                             OriginDefault,
+			"triage.stuck_merge_age":                              OriginDefault,
+			"triage.review_rounds_cap":                            OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -250,6 +264,11 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.usage_limit_unknown_reset_pause", execution.UsageLimitUnknownResetPause, &r.config.Execution.UsageLimitUnknownResetPause, applied.origin)
 		setValue(r.origins, "execution.server_overload_pause", execution.ServerOverloadPause, &r.config.Execution.ServerOverloadPause, applied.origin)
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
+	}
+	if triage := document.Triage; triage != nil {
+		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)
+		setValue(r.origins, "triage.review_rounds_cap", triage.ReviewRoundsCap, &r.config.Triage.ReviewRoundsCap, applied.origin)
+		setValue(r.origins, "triage.repair_grant_attempts", triage.RepairGrantAttempts, &r.config.Triage.RepairGrantAttempts, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
@@ -362,12 +381,32 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 	}
 	effective.Agents = agents
 
+	// A grant no layer stated is the effective repair budget, read after every
+	// layer has had its say so it follows the budget that will actually be spent
+	// rather than the one some layer underneath was written against.
+	if _, supplied := origins["triage.repair_grant_attempts"]; !supplied {
+		effective.Triage.RepairGrantAttempts = derivedRepairGrant(effective.Execution.RepairAttemptsBeforeReplan)
+		origins["triage.repair_grant_attempts"] = OriginDerivedRepairGrant
+	}
+
 	if effective.Product.RepositoryID == "" && effective.Product.ID != "" {
 		effective.Product.RepositoryID = domain.RepositoryID(effective.Product.ID)
 		origins["product.repository_id"] = OriginDerived
 	}
 
 	return Resolved{Config: effective, Sources: sources, Origins: origins}, nil
+}
+
+// derivedRepairGrant sizes an unstated triage grant from the repair budget a
+// run starts with. A project that configured no repair attempts at all still
+// gets a grant of one rather than a configuration that fails to load: the grant
+// is triage's deliberate exception to that budget, so a project saying runs
+// repair nothing routinely is not the same as saying triage may grant nothing.
+func derivedRepairGrant(repairAttempts int) int {
+	if repairAttempts < minimumRepairGrant {
+		return minimumRepairGrant
+	}
+	return repairAttempts
 }
 
 // setValue applies one supplied field and records where it came from. A field a

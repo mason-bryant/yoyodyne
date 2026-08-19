@@ -212,6 +212,24 @@ execution:
   # max_concurrent_developers or the checks are left to serialize themselves.
   check_timeout: %s
 
+# When work that has stopped moving is looked at, and what looking at it may
+# spend. An approved publication nobody has merged is docketed once it has sat
+# this long -- an age rather than a deadline, because what makes it stuck is
+# that nothing happened to it. The rounds cap is the total review rounds one
+# work item may accumulate before triage stops handing it back for repair;
+# past it triage may still escalate the item or re-scope it, and "0" means an
+# item that reaches triage is never repaired again.
+#
+# There is a third setting, "repair_grant_attempts": how many repair attempts
+# triage hands an item worth another go. It is left out deliberately, the way
+# the repository id above is, because unstated it follows
+# execution.repair_attempts_before_replan and keeps following it when you change
+# that. State it here to size a grant differently; it may not be zero, since a
+# grant of nothing leaves the item exactly where it was.
+triage:
+  stuck_merge_age: %s
+  review_rounds_cap: %d
+
 # What you approve, and what runs without asking. The brief and the goals are
 # "human" deliberately: they are what you state, and everything else traces back
 # to them. "yoyo artifact approve <id>" records your approval in the document's
@@ -247,6 +265,8 @@ approvals:
 		renderScaffoldDuration(effective.Execution.UsageLimitUnknownResetPause),
 		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
+		renderScaffoldDuration(effective.Triage.StuckMergeAge),
+		effective.Triage.ReviewRoundsCap,
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,
