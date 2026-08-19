@@ -1,12 +1,14 @@
 package goal
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 )
 
 const goalsHome = "docs/product"
@@ -775,18 +777,34 @@ func TestEveryGoalYoyodyneRecordsNamesABriefGoalTheBriefStates(t *testing.T) {
 	// their goals to the brief is exactly what identity was added for. Checking
 	// it here ties the two documents together rather than leaving the link to be
 	// believed.
+	//
+	// The homes come from the project's own configuration rather than from
+	// constants written beside this test, because the failure this exists to
+	// catch is a governed-looking document sitting outside every *configured*
+	// home — which is exactly what the design document was doing. A test naming
+	// the directories itself would keep passing through that drift, since it
+	// would be checking the set it chose rather than the set the harness reads.
 	root := repositoryRoot(t)
-	store := artifact.Store{
-		RepositoryRoot: root,
-		Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
-		Excluded:       []string{"docs/decisions/invariants"},
-	}
+	store := configuredStore(t, root)
 	artifacts, err := store.Load()
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if len(artifacts.Problems) != 0 || len(artifacts.ReferenceProblems) != 0 {
 		t.Fatalf("problems = %v, reference problems = %v", artifacts.Problems, artifacts.ReferenceProblems)
+	}
+
+	// The design this item brought under governance has to still be in the set.
+	// It is named rather than counted because a document outside every home is
+	// invisible to the store rather than reported by it: the load stays clean and
+	// every assertion here keeps passing while the design is governed by nothing,
+	// which is exactly the state this item found it in.
+	design, recorded := artifacts.Find("v1-harness-design")
+	if !recorded {
+		t.Fatalf("no artifact answers to %q; a design outside every configured home is governed by nothing", "v1-harness-design")
+	}
+	if design.Kind != artifact.KindDesign || !design.InForce() {
+		t.Fatalf("design = %#v", design)
 	}
 
 	set := Collect(root, artifacts)
@@ -798,6 +816,50 @@ func TestEveryGoalYoyodyneRecordsNamesABriefGoalTheBriefStates(t *testing.T) {
 	}
 	if len(set.BriefGoals) == 0 || len(set.Goals) == 0 {
 		t.Fatalf("brief goals = %d, goals = %d", len(set.BriefGoals), len(set.Goals))
+	}
+}
+
+func TestNoDocumentUnderDocsCarriesIdentityOutsideAConfiguredHome(t *testing.T) {
+	t.Parallel()
+
+	// Identity outside a configured home is identity nothing reads. The store
+	// never walks the file, so it is neither an artifact nor a reported problem,
+	// and a document can look governed to a reader while nothing downstream can
+	// refer to it — which is how the v1 harness design sat for as long as it did.
+	// The load being clean is therefore not evidence on its own, and this is the
+	// check that makes it so.
+	root := repositoryRoot(t)
+	store := configuredStore(t, root)
+	homes := append([]string(nil), store.Homes...)
+
+	documents := filepath.Join(root, "docs")
+	err := filepath.WalkDir(documents, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			return walkErr
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if !strings.HasPrefix(strings.TrimPrefix(string(content), "\ufeff"), "---") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		slashed := filepath.ToSlash(relative)
+		for _, home := range homes {
+			if strings.HasPrefix(slashed, home+"/") {
+				return nil
+			}
+		}
+		t.Errorf("%s carries artifact frontmatter but is inside none of the configured homes (%s), so nothing reads its identity",
+			slashed, strings.Join(homes, ", "))
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", documents, err)
 	}
 }
 
@@ -831,6 +893,36 @@ What the product is for.
   merged change back through the work, the design, and the goal to the brief.
 - **Nothing lands unreviewed by someone other than its author.**
 `
+}
+
+// configuredStore is the artifact store this project actually reads, built from
+// its own configuration: the three homes and the invariants directory excluded
+// from them, exactly as the commands assemble it.
+func configuredStore(t *testing.T, root string) artifact.Store {
+	t.Helper()
+	path, err := config.Discover(root)
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	product := loaded.Product
+	// A home the configuration names and nobody created is the drift this is
+	// looking for, so it is a failure here rather than the empty set the store
+	// tolerates: the design document was governed by nothing for exactly as long
+	// as docs/designs did not exist.
+	for _, home := range []string{product.Specifications, product.Designs, product.Decisions} {
+		if info, err := os.Stat(filepath.Join(root, filepath.FromSlash(home))); err != nil || !info.IsDir() {
+			t.Fatalf("configured artifact home %q is not a directory in this repository: %v", home, err)
+		}
+	}
+	return artifact.Store{
+		RepositoryRoot: root,
+		Homes:          []string{product.Specifications, product.Designs, product.Decisions},
+		Excluded:       []string{product.Invariants},
+	}
 }
 
 // repositoryRoot is the checkout these tests run in, so the seeded artifacts are
