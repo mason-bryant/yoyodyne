@@ -9,7 +9,16 @@ revisions:
     - action: created
       by: architect
       at: 2026-08-18T00:00:00Z
-      reason: identity added with the artifact metadata schema and the document moved into the configured designs home, where nothing could refer to it before. A design is the architect's; until yoyodyne-ifd.4 delivers that role, its authority is held by the operator, and this entry is that authority exercised by its current holder. The design's own prose is unchanged.
+      reason: identity added with the artifact metadata schema and the document moved into the configured designs home, where nothing could refer to it before. The schema records revisions by role; the architect role does not run until yoyodyne-ifd.4 delivers it, its authority is held by the operator in the interim, and the operator's exercise of it is what the approvals entry below records machine-readably. The design's own prose is unchanged except where a later revision says otherwise.
+    - action: amended
+      by: architect
+      at: 2026-08-19T03:42:06Z
+      reason: the layout section claimed docs/product is the only part of the layout the harness reads; this branch itself reads the design from the designs home through the shared store assembly, and the sentence now names the three homes actually read.
+approvals:
+    - revision: 1
+      by: operator
+      at: 2026-08-19T03:42:06Z
+      reason: 'Approved by the operator in conversation on 2026-08-18: governing this design and correcting its layout claim, recorded pending ratification by the architect yoyodyne-ifd.4 delivers.'
 ---
 
 # Yoyodyne V1 Harness Design
@@ -205,7 +214,7 @@ These files are reviewable with the code and are the source of truth for their c
 
 `decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them in `invariants/` beneath it, kept in their own directory because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work rather than Markdown.
 
-One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default, and it is the only part of this layout the harness reads today. [Configuration](../configuration.md#product-specifications) is the reference for it.
+One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default. The harness reads three of these homes today — specifications, designs, and decisions, with the invariants directory excluded and read by `yoyo invariant` instead — through one store assembly shared by the commands and the repository tests. [Configuration](../configuration.md#product-specifications) is the reference for it.
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
