@@ -35,7 +35,8 @@ ask questions and propose amendments; they do not revise a goal directly. See
 
 Artifact governance, delivered in milestone 2, made that machine-checkable:
 each goals document carries identity frontmatter, every goal's *Supports*
-trailer is resolved against the brief mechanically, reference validation and
+trailer — the emphasized line directly under its entry, indented with it and
+with no blank line between — is resolved against the brief mechanically, reference validation and
 orphan reporting run over the loaded set, and a test enforces that every goal
 in force names a claim the brief states. A reader can still trace the links by
 hand; the harness no longer depends on them to. Two different mechanisms read

@@ -15,10 +15,14 @@ revisions:
       at: 2026-08-19T03:42:06Z
       reason: the layout section claimed docs/product is the only part of the layout the harness reads; this branch itself reads the design from the designs home through the shared store assembly, and the sentence now names the three homes actually read.
 approvals:
+    - revision: 0
+      by: operator
+      at: 2026-08-19T03:48:10Z
+      reason: 'Approved by the operator in conversation on 2026-08-18: bringing this design under governance with identity frontmatter, recorded while the operator holds the architect''s authority pending yoyodyne-ifd.4.'
     - revision: 1
       by: operator
-      at: 2026-08-19T03:42:06Z
-      reason: 'Approved by the operator in conversation on 2026-08-18: governing this design and correcting its layout claim, recorded pending ratification by the architect yoyodyne-ifd.4 delivers.'
+      at: 2026-08-19T03:48:10Z
+      reason: 'Approved by the operator in conversation on 2026-08-18: the layout section now names the three homes the harness reads instead of claiming docs/product is the only one.'
 ---
 
 # Yoyodyne V1 Harness Design

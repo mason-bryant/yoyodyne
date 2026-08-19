@@ -1543,7 +1543,9 @@ unattributed.
 The link the other way is read too. A goals document's frontmatter says the
 document serves the brief; it says nothing about which of the brief's goals any
 one entry in it reaches, and that is the link a goal states in an emphasized
-`*Supports: ...*` line under it. `yoyo goals list` resolves each one against the
+`*Supports: ...*` line directly under it — indented with the entry and with no
+blank line between, or the trailer is not read as part of the goal. `yoyo
+goals list` resolves each one against the
 goals the brief itself states — named by the claim each opens with — and prints
 it beside the goal. A goal that names nothing upstream, and one naming a brief
 goal the brief does not state, are reported on stderr; a brief that states no
