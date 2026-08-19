@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -292,15 +293,30 @@ func (c *countingReader) Read(buffer []byte) (int, error) {
 	return read, err
 }
 
-// singleLine folds a command's own output into one line, so a Git failure stays
-// a clause inside the freshness line rather than becoming several lines of its
-// own.
+// maxSingleLineBytes bounds a folded line. It is what keeps a listing a listing:
+// a reviewer's verdict and a Git failure are both as long as whoever wrote them
+// made them, and neither is allowed to wrap across a terminal.
+const maxSingleLineBytes = 160
+
+// singleLine folds a command's own output into one line and bounds it, so a Git
+// failure stays a clause inside the freshness line rather than becoming several
+// lines of its own, and a recorded reason stays one row of a listing. The cut
+// falls on a rune boundary and is marked, because what is folded here is prose
+// somebody wrote — this repository's own em dashes among it — and half a rune is
+// not a shorter reason but a broken one.
+// singleLine and internal/backend's boundFailureDetail share the same
+// walk-back-to-a-rune-start fold with different bounds (160 bytes here, 512
+// there); a fix to either almost certainly belongs in both.
 func singleLine(value string) string {
 	folded := strings.Join(strings.Fields(value), " ")
-	if len(folded) <= 160 {
+	if len(folded) <= maxSingleLineBytes {
 		return folded
 	}
-	return strings.TrimSpace(folded[:160]) + "..."
+	cut := maxSingleLineBytes
+	for cut > 0 && !utf8.RuneStart(folded[cut]) {
+		cut--
+	}
+	return strings.TrimSpace(folded[:cut]) + "..."
 }
 
 func firstNonEmpty(values ...string) string {

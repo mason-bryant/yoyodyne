@@ -498,6 +498,14 @@ type State struct {
 	// confirms them could not run. A reconciler resumes cleanup in both cases,
 	// which is a safe no-op over artifacts that are already gone.
 	CleanupFailure string `json:"cleanup_failure,omitempty"`
+	// CompletionRecordingFailure explains why a completed run's final record
+	// took more than the normal write to land. The failure it names is the
+	// store refusing the terminal save, so the field reaches disk only when a
+	// later best-effort write succeeds — at which point the record is whole
+	// and this says it arrived late. It matters because it is the one failure
+	// class whose work-item note is itself unreliable: recording that note is
+	// part of what was failing, so the run record is its authoritative home.
+	CompletionRecordingFailure string `json:"completion_recording_failure,omitempty"`
 }
 
 var (

@@ -555,9 +555,13 @@ func TestReviewRejectsUnusableProviderOutput(t *testing.T) {
 			want:     "input is empty",
 		},
 		{
+			// A reviewer's death ends the run that asked for it, so its reason
+			// becomes that run's durable failure: the provider's category alone
+			// says nothing about which api_error this was, so its own words are
+			// kept beside it.
 			name:     "provider reported an error",
 			provider: &fakeBackend{finalText: "rate limited", isError: true, stopReason: "api_error"},
-			want:     "reviewer reported failure: api_error",
+			want:     "reviewer reported failure: api_error: rate limited",
 		},
 		{
 			name:     "provider invocation failed",

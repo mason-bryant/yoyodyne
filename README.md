@@ -53,9 +53,10 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume` sit beside that
-conversation as administrative and recovery entry points — one named item, one
-branch judged as a whole, settling what a killed process left behind, stopping
+`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume`
+sit beside that conversation as administrative and recovery entry points — one
+named item, one branch judged as a whole, what became of the runs already made
+and why one of them failed, settling what a killed process left behind, stopping
 everything the harness would spend until you say otherwise, and releasing a run
 waiting on a refusal the provider no longer makes — rather than as the way
 work normally happens.
@@ -2000,11 +2001,71 @@ directive](#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
 
+### What became of the runs, and why one failed
+
+`yoyo status` reads back what the runs themselves recorded — newest first, the
+work item, the status and the phase the run reached, what it cost, and the
+reasons its record kept:
+
+```sh
+./bin/yoyo status                    # the twenty most recent runs
+./bin/yoyo status --failed           # only the ones that did not succeed
+./bin/yoyo status yoyodyne-ifd.90    # one item's runs
+./bin/yoyo status --limit 0 --json   # every recorded run, for a script
+```
+
+The listing below is `./bin/yoyo status --failed --limit 2`:
+
+```text
+runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+  reason: developer reported failure: api_error: API Error: 529 Overloaded.
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  reason: verification failed: make test exited with 2
+  failing check: make test exited 2
+7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
+each reason is shown as one line; --json carries what the record holds in full
+```
+
+Each reason is printed under the run it belongs to and named for what it is,
+because the records keep them apart deliberately. Only `reason` says the work
+itself failed. An `outstanding publication`, an `outstanding cleanup`, a
+`failing check`, and a `completion recorded late` are recorded around the work,
+and a run can carry one of them with its change already promoted. The last of
+those is the class whose work-item note is itself unreliable — recording that
+note is part of what was failing — so the run record this verb reads is its
+authoritative home.
+
+`outstanding` in the brackets marks a finished run that still owes somebody a
+step, and the `outstanding:` line under it says which — cleanup that is not
+recorded as finished, or a merge the forge queued and nothing has settled — so
+the marker is never left for you to go and interpret out of the run's JSON.
+[`yoyo reconcile`](#recovering-interrupted-runs) is what settles either. The
+marker is said only of finished runs: one still in flight owes its own remaining
+steps by definition.
+
+The listing folds each reason onto one line and bounds it at 160 bytes with
+an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;
+`--json` carries what the record holds in full, along with the same figures.
+
+Cost comes from the same recorded evidence [`yoyo cost`](#what-the-work-cost)
+prices from, so a run still going reports what it has spent so far, and one
+whose event log no longer survives reads as `cost unknown` rather than as free.
+
+Reading a run decides nothing about it, so this holds nothing and settles
+nothing: a run another process is executing is listed exactly as a finished one
+is. Reporting a failure is not itself a failure either — the exit status says
+whether the records could be read, so a script can read this without guarding
+against the answer.
+
 ### Following a run, a conversation, or a branch review
 
 `bin/yoyo-status` follows the normalized event stream a run, a conversation, or
 a [branch review](#reviewing-what-a-branch-adds-up-to) records, which is the
-closest thing there is to watching an agent work. It is a shell script that
+closest thing there is to watching an agent work. It is a different thing from
+the `yoyo status` verb above despite the name: that reads back what the records
+hold now — a run still in flight as readily as one that finished — and this
+follows a run's events as they arrive. It is a shell script that
 lives in a checkout of this repository rather than part of the `yoyo` binary, so
 `go install` and a release download do not carry it; clone the repository, or
 copy the single file out of it, if you want it:

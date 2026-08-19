@@ -652,7 +652,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
-			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), firstNonEmpty(result.StopReason, result.FinalText, "unknown provider failure")),
+			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
 			s.record(),
 		)
 	}
@@ -1689,12 +1689,3 @@ To propose, end your reply with exactly one block, after the prose:
 ` + report.Contract + `
 
 You reach the operator by talking to them, so most of what you notice belongs in your prose rather than in a report. Report instead when what you noticed should outlive this conversation and reach whoever is reading later: it will still matter after this exchange is over, or after the record you are speaking from has been replaced. A report is also not a work item — work goes to the backlog through the actions above, or to the operator as a proposal.`
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
-		}
-	}
-	return ""
-}
