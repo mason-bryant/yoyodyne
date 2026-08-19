@@ -2113,6 +2113,39 @@ against a fabricated state directory holding runs, conversations, and branch
 reviews, without a provider or a repository and without reading your real
 state.
 
+### Reporting into Slack
+
+Everything above needs you at the terminal, which is the wrong requirement for
+work that runs while you are not. `yoyo slack` is the same account of the work in
+a Slack workspace: one thread per work item, one message per milestone, and every
+report an agent filed at the severity it was filed under. It is a process you
+start and leave running, and it needs your project to have opted in:
+
+```yaml
+# .yoyodyne/config.yaml
+slack:
+  enabled: true
+  channel: C0123456789
+```
+
+```sh
+export SLACK_BOT_TOKEN=xoxb-...   # this process's environment, and nowhere else
+export SLACK_APP_TOKEN=xapp-...
+./bin/yoyo slack                  # or --once to make a single pass and exit
+```
+
+[`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
+live reporting, and the app it asks you to create is the checked-in manifest
+beside it rather than a list of checkboxes to work through by hand.
+
+It is an observation and never a gate. Nothing waits on it: a workspace that is
+down delays messages rather than losing them, because the sink reads the same
+durable records the verbs above read and catches up from its own cursors when it
+returns. It is also the reason no run holds a Slack token — one separate process
+posts, so no agent's subprocess tree ever has a credential for your workspace in
+it. Replies are acknowledged and nothing acts on them yet; steering the harness
+from a thread is designed and not built.
+
 ## Further reading
 
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
@@ -2121,5 +2154,7 @@ state.
 - [The configuration guide](docs/configuration.md) — the full configuration
   reference: layout, discovery, precedence, checks, publishing, personas,
   inheritance, and inspection.
+- [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
+  reporting in threads, with the app manifest checked in beside it.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.
