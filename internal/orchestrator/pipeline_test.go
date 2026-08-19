@@ -4700,6 +4700,16 @@ func TestPipelineReplaysAndRetriesAPromotionWhoseTargetMoved(t *testing.T) {
 	if developers := provider.requestsForRole(domain.RoleDeveloper); len(developers) != 1 {
 		t.Fatalf("developer invocations = %d, want 1", len(developers))
 	}
+	// And so the second review is not a round the item spent. It judged the same
+	// developer attempt on moved ground, and charging the item for it would charge
+	// it for losing a race it did not cause.
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 1 {
+		t.Fatalf("review rounds = %d, want 1: the replay's re-review is not a round", counters.ReviewRounds)
+	}
 	if outcome.RepairAttempts != 0 {
 		t.Fatalf("repair attempts = %d, want the retry to spend none", outcome.RepairAttempts)
 	}

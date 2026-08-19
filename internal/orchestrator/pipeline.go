@@ -134,6 +134,12 @@ type StateStore interface {
 	// not hold the run's lease, so they state the fact in a file of their own and
 	// the run reads it at the boundaries where it would otherwise spend.
 	StopRequested(runID string) (runstate.StopRequest, bool, error)
+	// Triage is the product's durable per-work-item counters, where the review
+	// rounds an item has spent are recorded. They are reached through the run
+	// store because they are the same product's record, and they are not part of
+	// any run: what an item has cost spans every run of it, and a run that ends
+	// takes none of it with it.
+	Triage() *runstate.TriageStore
 	// Incomplete lists the runs still in flight. It is how a step that declines to
 	// act on a run can still say what it is leaving alone, which is the whole of
 	// what it is for here: reading a record is not acting on it, so this takes no
@@ -3047,8 +3053,39 @@ func (a *activeRun) reviewChange(ctx context.Context) (review.Decision, error) {
 			reasked = true
 			continue
 		}
+		// A verdict that was actually reached is one round of this work item's
+		// life, and it is counted before it is acted on. Everything above this
+		// point produced no verdict at all — declined, unserved, killed, or
+		// unreadable — and none of those is a round the item spent.
+		if err == nil {
+			if countErr := a.countReviewRound(ctx); countErr != nil {
+				return "", countErr
+			}
+		}
 		return decision, err
 	}
+}
+
+// countReviewRound records against the work item's durable triage counters that
+// one more reviewer verdict has been produced for it. The count spans every run
+// of the item, which is what makes it the figure a repair grant is truncated
+// against: a run's own repair budget starts again at zero each time, so nothing
+// inside a run says what the item has already cost.
+//
+// The round is recorded under the developer attempt that produced the change, so
+// the same attempt judged twice is counted once. That is what keeps two cases
+// off the item's bill. A review re-asked for after an interrupted process
+// re-judges the attempt that was already counted. And a promotion that loses its
+// race replays the same work onto where the target went and obtains a fresh
+// verdict on it, which is the reviewer judging the same developer attempt on
+// moved ground — charging the item for that would charge it for losing a race it
+// did not cause.
+func (a *activeRun) countReviewRound(ctx context.Context) error {
+	attempt := runstate.RoundKey(a.state.RunID, a.state.RepairAttempts)
+	if _, err := a.pipeline.Store.Triage().RecordReviewRound(ctx, a.state.WorkItemID, attempt, a.pipeline.clock().Now()); err != nil {
+		return fmt.Errorf("count the review round attempt %s produced: %w", attempt, err)
+	}
+	return nil
 }
 
 // providerEvidence is what an attempted invocation says about why it produced no
