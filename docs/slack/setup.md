@@ -51,6 +51,18 @@ set up a month apart the same app, with the same scopes.
 3. Paste the contents of `docs/slack/manifest.yaml`, review the summary Slack
    shows you, and create it.
 
+Slack will warn that Socket Mode needs additional setup in App Settings, and
+that you can create the app first. That is not a refusal. Socket Mode is how
+events reach a machine behind NAT, and it needs an app-level token; there is
+no app yet to hang one on. Create it. The token is the next step.
+
+If Create itself is blocked — some workspaces treat the warning as a hard
+stop — paste the manifest with `socket_mode_enabled` set to `false` and the
+`event_subscriptions` block removed, create the app, then continue from
+step 2 and turn Socket Mode on there. Events without a request URL require
+Socket Mode, so they cannot go in until it is actually on. Once it is, paste
+the original manifest back in under *App Manifest*.
+
 The manifest says what each scope is for. The two that read messages —
 `channels:history` and `groups:history` — are there so the thread replies the
 inbound half will read arrive on a connection that already exists rather than
@@ -60,13 +72,15 @@ rather not grant them yet can delete those two scopes and the two
 
 ## 2. Install it and take the two tokens
 
-1. **Install to workspace** on the app's *Basic Information* page, and approve
-   the scopes.
-2. *OAuth & Permissions* → copy the **Bot User OAuth Token**. It starts `xoxb-`.
-3. *Basic Information* → **App-Level Tokens** → **Generate Token and Scopes**.
+1. *Basic Information* → **App-Level Tokens** → **Generate Token and Scopes**.
    Give it any name, add the `connections:write` scope, and generate it. It
    starts `xapp-`. This is the token that opens the Socket Mode connection;
-   without it the app has no way to reach your machine.
+   without it the app has no way to reach your machine. If *Socket Mode* in
+   the left nav is still off after this, turn it on — that is the additional
+   setup Slack asked for when you created the app.
+2. **Install to workspace** on the app's *Basic Information* page, and approve
+   the scopes.
+3. *OAuth & Permissions* → copy the **Bot User OAuth Token**. It starts `xoxb-`.
 
 Keep both somewhere your shell can read them and nothing else can. They are
 credentials for posting into your workspace.
@@ -233,6 +247,7 @@ this channel and changes nothing about your setup.
 | `slack refused chat.postMessage: not_in_channel` | The app was never invited to the channel. `/invite @yoyodyne` in it. |
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
+| `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
