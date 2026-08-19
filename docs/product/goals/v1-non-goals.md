@@ -10,6 +10,15 @@ revisions:
       by: product-manager
       at: 2026-08-17T00:00:00Z
       reason: identity added with the artifact metadata schema; the prose is unchanged
+    - action: amended
+      by: product-manager
+      at: 2026-08-19T04:19:30Z
+      reason: the first non-goal narrowed to the hosted control plane alone - multiple humans against one shared repository became bounded scope under the team-mode epic, and permissions between users stay out of v1 unless its design requires them; drafted by the product manager, approved by the operator
+approvals:
+    - revision: 1
+      by: operator
+      at: 2026-08-19T04:19:30Z
+      reason: 'Approved by the operator in conversation on 2026-08-18, "Both Approved": the non-goals stop contradicting the team-mode epic the operator admitted (yoyodyne-ifd.82).'
 ---
 
 # V1 non-goals
@@ -23,9 +32,17 @@ design and stated in [the v1 harness design](../../designs/v1-harness-design.md)
 they were moved here alongside the goals they bound; the wording below is
 unchanged from that document.
 
+Amended 2026-08-18 by the operator. The first non-goal originally read "Multiple
+human users, permissions between users, or a hosted control plane." Multiple
+humans running Yoyodyne against one shared repository is now bounded scope under
+the team-mode epic rather than a non-goal; permissions between users stay out of
+v1 unless the team-mode design requires them; a hosted control plane remains
+out. This is the one exception to the statement above that the wording below is
+unchanged from the design document.
+
 ## Non-goals
 
-- Multiple human users, permissions between users, or a hosted control plane.
+- A hosted control plane.
 - Remote agent execution in v1.
 - Multiple active products or repositories in one v1 harness instance.
 - Complete behavioral parity between Claude Code and Codex.

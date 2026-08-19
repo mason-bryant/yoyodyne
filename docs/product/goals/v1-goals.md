@@ -22,6 +22,10 @@ revisions:
       by: product-manager
       at: 2026-08-18T00:00:00Z
       reason: the introduction claimed nothing checks the link to the brief; milestone 2 delivered that checking, and the introduction now says so
+    - action: amended
+      by: product-manager
+      at: 2026-08-19T04:19:30Z
+      reason: added the team goal, drafted by the product manager when the operator admitted the team-mode epic and approved by the operator verbatim; the non-goals were amended in the same decision
 approvals:
     - revision: 2
       by: operator
@@ -31,6 +35,10 @@ approvals:
       by: operator
       at: 2026-08-19T03:28:43Z
       reason: 'Approved by the operator in conversation on 2026-08-18: the introduction now states that milestone 2 delivered the goal-to-brief link checking, wording drafted by the product manager.'
+    - revision: 4
+      by: operator
+      at: 2026-08-19T04:19:30Z
+      reason: 'Approved by the operator in conversation on 2026-08-18, "Both Approved": the team goal, drafted by the product manager for the team-mode epic (yoyodyne-ifd.82).'
 ---
 
 # V1 goals
@@ -51,7 +59,7 @@ What v1 deliberately does not do is stated separately in
 Eight of these goals were agreed as part of the v1 design and stated in
 [the v1 harness design](../../designs/v1-harness-design.md) until they were moved here;
 their wording is unchanged from that document, and what has changed is that each
-now names its link upstream. Four are new. The goal on independent review was
+now names its link upstream. Five are new. The goal on independent review was
 added when the brief was written and the backlog was checked against it, because
 the brief requires that nothing lands unreviewed by someone other than its
 author, and no v1 goal reached that. The goal on cost was added at the same
@@ -59,7 +67,9 @@ time, because tracked work on reporting what the harness spends traced to no
 goal at all. The goal on legibility was added when the operator asked that clear
 reading be a stated outcome rather than a habit. The goal on adoption was added
 because tracked work on the install path traced to no goal that named a
-newcomer.
+newcomer. The goal on teams was added when the operator decided to invite
+collaborators to a shared repository, in the same decision that amended the
+non-goals to stop contradicting it.
 
 Four entries that were not outcomes have left this list. Beads as the durable
 workflow store, repository Markdown as the human-readable source of truth, and
@@ -94,4 +104,6 @@ milestone rather than an outcome, it was reached, and it is recorded as such.
 - Support development in any language. Yoyodyne is written in Go, but the projects it manages are not assumed to be: verification is whatever commands the project declares, and no language, build system, or test framework is built into the harness.
   *Supports: it works on other people's projects.*
 - A newcomer can go from the documented install to a working first run on their own repository using the readme alone.
+  *Supports: it works on other people's projects.*
+- A team can run Yoyodyne against one shared repository: collaborators each run their own harness without losing work, splitting the tracker, or weakening any safety invariant.
   *Supports: it works on other people's projects.*
