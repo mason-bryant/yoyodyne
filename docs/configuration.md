@@ -1194,10 +1194,11 @@ With both on, a run works like this:
    which is the authoritative one, and the run branch stays on the remote
    because that is what the forge still has to merge. `yoyo reconcile` settles
    it afterwards — it asks the forge, and either finishes the publication (merge
-   commit recorded, remote branch deleted) or, if the forge dropped the queued
-   merge because something it required went unmet, reports an outstanding
-   publication on the work item for you. It never merges anything itself: a
-   requirement that stopped the forge is yours to satisfy.
+   commit recorded, remote branch deleted, your local target branch caught up
+   onto the forge's merge commit) or, if the forge dropped the queued merge
+   because something it required went unmet, reports an outstanding publication
+   on the work item for you. It never merges anything itself: a requirement that
+   stopped the forge is yours to satisfy.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that
@@ -1242,12 +1243,32 @@ fast-forwards the local target exactly as it always has, and the forge merges
 the pull request carrying exactly that commit. One promotion, one reviewed
 commit, the same commit on both sides.
 
-The two branches do not end at the same commit, and no forge merge method would
-let them: **the remote target is your local target plus one merge commit per
-published run**, made by the forge and identical in content. The harness does
-not pull that merge commit back onto your local branch, and never rewrites or
-resets it. If you want the two to look the same locally, `git pull` — it is an
-ordinary fast-forward onto the merge commit.
+The merge itself does not leave the two at the same commit, and no forge merge
+method would: **the merge leaves the remote target at your local target plus one
+merge commit**, made by the forge and identical in content. The last step of the
+promotion is to catch your local branch up onto it, which is an ordinary
+fast-forward onto a commit that already contains the promotion and carries
+exactly its content. Nothing is rewritten, reset, or merged, and nothing is
+decided: that is the `git pull` you used to run yourself.
+
+A catch-up the harness cannot make cleanly is held rather than forced, and says
+why:
+
+- **Uncommitted work in your checkout that the incoming commits would
+  overwrite.** The branch is left where it is and the file is named. The
+  exception is the work tracker's own exports — `.beads/issues.jsonl` and
+  `.beads/interactions.jsonl`, the same two a run is allowed to rewrite in your
+  checkout while it works. They are derived from a store that is authoritative
+  elsewhere, so their churn is discarded and the catch-up goes through.
+- **A remote that has diverged from your local branch** — a history somebody
+  rewrote, or work that reached the remote another way. Which of the two is
+  right is your answer rather than the harness's, so it is reported and nothing
+  moves.
+
+A merge that landed after its run had finished, and any catch-up that was held,
+are swept by `yoyo reconcile`, which also removes the leftover local branches of
+settled runs whose work the target already carries. Catching a branch up takes
+that branch's promotion lease, so it never races a run promoting into it.
 
 Because the forge performs the merge, the harness checks that relationship
 rather than assuming it. Before the merge, the remote target must contain the

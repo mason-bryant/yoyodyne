@@ -1500,10 +1500,21 @@ says which half is which. The local target branch stays authoritative: the
 harness fast-forwards it as it always has, and the forge merges the pull request
 carrying exactly that commit under a merge commit — the one method that puts the
 reviewed commit itself on the base, where a squash or a rebase would substitute
-a rewritten copy. So the remote target is your local branch plus one forge merge
-commit per published run, identical in content; the harness checks that
-relationship on both sides of the merge and never rewrites the local branch to
-match. Your target branch itself is never pushed, so a branch protected against
+a rewritten copy. So the merge leaves the remote target at your local branch
+plus one forge merge commit, identical in content, and the harness checks that
+relationship on both sides of the merge. The last step of the promotion is to
+catch your local branch up onto that merge commit: a fast-forward onto a commit
+that already contains the promotion and carries exactly its content, so nothing
+is rewritten, nothing is merged, and nothing is decided. That is the `git pull`
+you used to have to remember after every merge, and it is why your checkout
+stays level with the forge on its own. A fast-forward blocked by uncommitted
+work in your checkout is held rather than forced, and says which file held it —
+except for the control-plane exports the harness declares (Beads' passive JSONL
+dumps), whose churn is discarded, because they are derived from a store that is
+authoritative elsewhere. A merge that landed after its run was over, and any
+catch-up that was held, are swept by
+[`yoyo reconcile`](#recovering-interrupted-runs).
+Your target branch itself is never pushed, so a branch protected against
 direct pushes is merged into normally; a forge that refuses reports which
 requirement was unmet, and a merge that did not carry the promotion is reported
 rather than reconciled. The merge is asked for as of when your branch protection
@@ -2058,7 +2069,8 @@ command whose duration is known.
 ### Recovering interrupted runs
 
 A process that is killed mid-run leaves durable state describing where it got
-to. `yoyo reconcile` settles what it left behind:
+to. `yoyo reconcile` settles what it left behind, and then converges your local
+state onto what the forge has:
 
 ```sh
 ./bin/yoyo reconcile --json
@@ -2075,8 +2087,21 @@ landed, and — if the forge dropped the queued merge because something it
 required went unmet — reports an outstanding publication on the work item
 instead of merging past the requirement. It never invokes a provider: a lost
 process handle is not a reason to start a second developer for an item.
-Repeating it is safe — a settled run is no longer outstanding, and cleanup over
-artifacts that are already gone does nothing. A run another process still holds
+
+Once the runs are settled it converges local state, which is the post-merge
+hygiene you would otherwise do by hand. Every target branch the harness knows
+about is caught up onto its remote counterpart — the same fast-forward the run's
+own settle path makes, for merges that landed after their run was over or whose
+catch-up was held at the time — and every settled run's leftover branch whose
+work the target already carries is deleted. Both refuse on evidence rather than
+on a record: a remote that has diverged from your local branch is reported for
+you to decide rather than reconciled, a branch carrying work nothing promoted is
+kept, and a branch a checkout still holds is left alone. Catching a branch up
+takes that branch's promotion lease, so it never races a run promoting into it.
+
+Repeating the whole thing is safe — a settled run is no longer outstanding, a
+branch already level with the remote has nothing to catch up to, and cleanup
+over artifacts that are already gone does nothing. A run another process still holds
 is left to that process, and a run `yoyo run` can continue on its own — one
 inside its repair loop, one paused for a provider usage limit, one whose
 provider the harness stopped on time, one paused for an [unresolved

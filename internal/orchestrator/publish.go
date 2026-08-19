@@ -279,6 +279,12 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 		return
 	}
 	published.MergeCommit = remoteTarget
+	// The merge left the remote one commit ahead of the local target, so the
+	// branch a person reads is now behind the forge by the commit the forge made
+	// of this very promotion. Catching it up is the last step of the promotion
+	// rather than a chore for afterwards, and it happens here because here is
+	// where this run still holds the branch's promotion lease.
+	a.catchUpTarget(ctx, integration.TargetBranch)
 	// The published branch is debris once its work is on the target, and it is
 	// removed on the same evidence the local branch is: the exact commit that was
 	// published and merged.
@@ -318,6 +324,23 @@ func (a *activeRun) awaitMerge(ctx context.Context) (publish.PullRequest, error)
 		merged, err = a.pipeline.Publisher.State(ctx, a.worktree.Branch)
 	}
 	return merged, err
+}
+
+// catchUpTarget brings the local target branch onto the commit the forge's
+// merge left on the remote, and records what happened either way.
+//
+// Nothing here can fail the run, and unlike an outstanding publication nothing
+// here is even recorded durably. A catch-up is idempotent, it belongs to no run
+// in particular, and `yoyo reconcile` sweeps every target branch the harness
+// knows about — so a catch-up that was held is a fact for whoever reads this run
+// rather than a debt the run has to carry.
+func (a *activeRun) catchUpTarget(ctx context.Context, targetBranch string) {
+	catchup, err := a.pipeline.Worktrees.CatchUpTarget(ctx, targetBranch)
+	if err != nil {
+		catchup.TargetBranch = targetBranch
+		catchup.Held = err.Error()
+	}
+	a.outcome.Catchup = &catchup
 }
 
 // recordPublishFailure records an outstanding publication everywhere it has to
@@ -412,5 +435,28 @@ func renderPublishNotes(outcome Outcome) []string {
 			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.",
 		)
 	}
-	return lines
+	return append(lines, renderCatchupNotes(outcome.Catchup)...)
+}
+
+// renderCatchupNotes says where the local target branch was left relative to
+// the forge. A branch that was already there is not reported at all: it is the
+// ordinary state and a note for it would say nothing.
+func renderCatchupNotes(catchup *gitworktree.Catchup) []string {
+	switch {
+	case catchup == nil:
+		return nil
+	case catchup.Held != "":
+		return []string{
+			fmt.Sprintf("Local %s was left at %s: %s", catchup.TargetBranch, nonEmpty(catchup.LocalCommit, "an unresolved commit"), catchup.Held),
+			"`yoyo reconcile` catches it up on its next sweep.",
+		}
+	case catchup.Advanced:
+		lines := []string{fmt.Sprintf("Local %s caught up to %s, the commit the forge's merge left on the remote", catchup.TargetBranch, catchup.RemoteCommit)}
+		if len(catchup.Discarded) > 0 {
+			lines = append(lines, "Discarded export churn to let it through: "+strings.Join(catchup.Discarded, ", "))
+		}
+		return lines
+	default:
+		return nil
+	}
 }

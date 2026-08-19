@@ -2323,6 +2323,10 @@ func (partialWorktreeManager) DeleteRemoteBranch(context.Context, gitworktree.Wo
 	return errors.New("partial worktree has no remote branch")
 }
 
+func (partialWorktreeManager) CatchUpTarget(context.Context, string) (gitworktree.Catchup, error) {
+	return gitworktree.Catchup{}, errors.New("partial worktree has no remote to catch up to")
+}
+
 func (f *fakeTracker) Show(context.Context, string) (beads.WorkItem, error) {
 	return f.item, nil
 }

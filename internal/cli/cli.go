@@ -290,7 +290,7 @@ Commands:
   resume            lift that pause, or release one run's wait on the provider
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
-  reconcile         settle runs an interrupted process left behind
+  reconcile         settle interrupted runs, then converge local state on the forge
   slack             report what the harness is doing into a Slack channel
   version           print version information
   help              show this help`)
