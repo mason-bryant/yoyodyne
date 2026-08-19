@@ -264,9 +264,23 @@ func NamedIn(notes string) (string, bool) {
 // malformed artifact is reported rather than refusing the whole set.
 func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 	var set Set
-	brief := ""
+	brief, briefInForce := "", false
 	for _, recorded := range artifacts.OfKind(artifact.KindBrief) {
-		brief = recorded.ID
+		// A brief in force is the one that names the root, so it wins the naming
+		// from one that is not; with no brief in force, the id of one that ended
+		// is still what a reader has to be sent to.
+		if brief == "" || recorded.InForce() {
+			brief = recorded.ID
+		}
+		// A superseded or retired brief states intent that was replaced, and its
+		// goals are not link targets. Both ends of the link are held to the same
+		// rule: linkProblems judges only goals in force, and a goal resolving
+		// against a brief goal the product no longer holds would be traceability
+		// that pointed at replaced intent.
+		if !recorded.InForce() {
+			continue
+		}
+		briefInForce = true
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
 		if err != nil {
 			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: err.Error()})
@@ -316,7 +330,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 			})
 		}
 	}
-	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief)
+	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce)
 	return set
 }
 
@@ -324,7 +338,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 // goals in force are judged: one stated by a document that was superseded or
 // retired is no longer intent anybody has to trace, and reporting it would
 // leave a permanent finding against a decision somebody already made.
-func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string) []LinkProblem {
+func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInForce bool) []LinkProblem {
 	current := make([]Goal, 0, len(goals))
 	for _, candidate := range goals {
 		if candidate.InForce {
@@ -338,8 +352,16 @@ func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string) []LinkProb
 		// Naming the missing root beats reporting every goal as separately
 		// unlinked, which is the same choice the artifact references make: what
 		// somebody has to fix is one document, and it is not any of the goals.
-		reason := `no artifact of kind "brief" is recorded, so there is no brief goal for a goal to name`
-		if brief != "" {
+		// The three cases are separated because they are three different things to
+		// do: write the brief, put the brief that was written back in force, or
+		// state its goals under a `Goals` heading.
+		var reason string
+		switch {
+		case brief == "":
+			reason = `no artifact of kind "brief" is recorded, so there is no brief goal for a goal to name`
+		case !briefInForce:
+			reason = fmt.Sprintf("%s is no longer in force, so the goals it states are not intent a goal can name", brief)
+		default:
 			reason = fmt.Sprintf("%s states no goals under a `Goals` heading, so there is no brief goal for a goal to name", brief)
 		}
 		return []LinkProblem{{Kind: LinkNoBriefGoals, Reason: reason}}

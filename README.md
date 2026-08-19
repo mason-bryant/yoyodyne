@@ -1540,6 +1540,18 @@ the set work may be attributed to, and a repository with no goals in force is
 told that nothing was checked rather than having its queue reported as
 unattributed.
 
+The link the other way is read too. A goals document's frontmatter says the
+document serves the brief; it says nothing about which of the brief's goals any
+one entry in it reaches, and that is the link a goal states in an emphasized
+`*Supports: ...*` line under it. `yoyo goals list` resolves each one against the
+goals the brief itself states — named by the claim each opens with — and prints
+it beside the goal. A goal that names nothing upstream, and one naming a brief
+goal the brief does not state, are reported on stderr; a brief that states no
+goals at all is reported once, naming the brief, rather than against every goal
+below it. Nothing is refused over a broken link: the goal is still what the
+document states and work naming it still resolves, because what is wrong is the
+chain above it rather than the goal.
+
 ## What a change upstream leaves stale
 
 Amend a goal and the documents that serve it, and the work admitted under its

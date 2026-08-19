@@ -734,6 +734,40 @@ An introduction.
 	}
 }
 
+func TestABriefNoLongerInForceStatesNoGoalAGoalCanName(t *testing.T) {
+	t.Parallel()
+
+	// Both ends of the link are held to the same rule. A goal resolving against a
+	// brief goal the product replaced would be traceability pointing at intent
+	// nobody holds any more, which is worse than reporting the link as unmet.
+	root := newRepository(t)
+	write(t, root, "docs/product/brief.md", briefDocument())
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the brief through to verification.
+  *Supports: every change traces to intent somebody approved.*
+`)
+	set := Collect(root, setOf(
+		recorded("brief", artifact.KindBrief, artifact.StatusSuperseded, "docs/product/brief.md"),
+		recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md"),
+	))
+	if len(set.BriefGoals) != 0 {
+		t.Fatalf("a brief no longer in force offered link targets: %#v", set.BriefGoals)
+	}
+	if len(set.LinkProblems) != 1 || set.LinkProblems[0].Kind != LinkNoBriefGoals {
+		t.Fatalf("link problems = %#v", set.LinkProblems)
+	}
+	// What is reported has to say which of the three things to do about it, so it
+	// names the brief that ended rather than reading as a brief that states none.
+	if !strings.Contains(set.LinkProblems[0].Reason, "no longer in force") {
+		t.Fatalf("reason = %q", set.LinkProblems[0].Reason)
+	}
+}
+
 func TestEveryGoalYoyodyneRecordsNamesABriefGoalTheBriefStates(t *testing.T) {
 	t.Parallel()
 
