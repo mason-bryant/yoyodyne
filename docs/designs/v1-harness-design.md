@@ -14,6 +14,10 @@ revisions:
       by: architect
       at: 2026-08-19T03:42:06Z
       reason: the layout section claimed docs/product is the only part of the layout the harness reads; this branch itself reads the design from the designs home through the shared store assembly, and the sentence now names the three homes actually read.
+    - action: amended
+      by: architect
+      at: 2026-08-19T11:20:17Z
+      reason: the architect's first working session (conversation chat-11558d32) ratified this document's identity and both prior revisions as its own, and applied its four approved amendments - amendment-5c856a72 (staleness is derived rather than marked, with the directive-versus-edit boundary stated), amendment-e89cbe51 (the count is of artifact homes, and the layout reads more than the store), amendment-a3eb5ba4 (the operator's three controls over harness-chosen work, cooperative stops, durable selection reasons), and amendment-e43b8198 (the set of roles is fixed in the harness; authority is not configurable).
 approvals:
     - revision: 0
       by: operator
@@ -172,7 +176,7 @@ The local Claude Code or Codex process is not the agent's durable identity. Each
 - Returns a structured approve-or-repair verdict with actionable findings.
 - Does not integrate the change directly.
 
-The role list is configurable. The harness depends on declared capabilities and authority boundaries rather than hard-coded role names, although the defaults above define the supported v1 product workflow.
+The set of roles is fixed in the harness. What a project configures is which agents fill those roles, how many, and each one's backend, model selector, and persona. Role authority and per-role tool posture — including the reviewer running with no tools — are derived from the role in code and are not configurable: authority a project could declare is authority a project could widen, and the ownership model rests on it. Adding or redefining a role is a change to the harness, not to a configuration file. Role and backend combinations are validated against the effective configuration before work is claimed, and an unknown role name must be refused at load. The `Capabilities` negotiation in the backend boundary is untouched by this: what a backend can do is a genuinely varying fact.
 
 ## User Interaction, Directives, and Approval
 
@@ -186,7 +190,13 @@ A directive record contains at least:
 - whether it changes canonical artifacts;
 - reconciliation status and links to superseding directives.
 
-Operational directives take effect immediately. A directive that changes the brief, a goal, or a design pauses affected downstream work, routes reconciliation to the owning role, marks derived items stale, and resumes only after the canonical chain is consistent. If the directive is ambiguous, the product manager asks the user and work remains paused.
+Operational directives take effect immediately. A directive that changes the brief, a goal, or a design pauses affected downstream work, routes reconciliation to the owning role, and resumes only after the canonical chain is consistent. If the directive is ambiguous, the product manager asks the user and work remains paused.
+
+Staleness is derived rather than marked. What a change upstream leaves unanswered downstream is computed from the artifacts' own revision logs and the tracker's admission times and reported by `yoyo stale`; it stops, closes, blocks and reorders nothing, and it reads a hand edit exactly as it reads an amendment made through the harness. There is no stored flag: an artifact stops being reported when its owner records a later revision, and a work item stops when it closes. Anything that would clear staleness by other means is building a second account of it that can disagree with the documents.
+
+The boundary is deliberate: a directive pauses work, and an artifact edited directly pauses nothing. A harness that paused the queue on every edit to a goal's wording would teach an operator not to edit, and the derived staleness report is what covers the gap.
+
+The operator's control over work the harness chose for itself is three separate actions, deliberately not one: stop a single run; hold intake, so nothing more is selected while work already running finishes; and stop everything, which holds intake first and then stops each run in flight — the order is load-bearing, because holding first is what stops it becoming a race against the next selection. An operator-named item is not subject to the hold; naming it is the operator deciding it is the exception. A stop that crosses a process boundary is a cooperative request, written beside the run and honored at the stopping process's next provider-call boundary, not a kill: a generation already streaming is paid for, killing it costs the work again, and a run that has not given up within the grace is reported as still in flight rather than described as stopped. The harness stops a provider invocation itself only for a stall or an exhausted budget — the one asymmetry with operator stops. Every run records why its item was selected, in durable run state, and the absence of a reason is reported as such rather than rendered as a missing line: a run nothing accounts for is indistinguishable from work happening behind the operator's back.
 
 By default, the human explicitly approves the initial brief and goals after discussing them with the product manager. Lower-level approval gates are configurable but disabled by default. This approval policy does not add a routine human merge gate: once a project enables automatic integration, verified and independently approved code is integrated without further human action, which is what makes near-autonomous operation possible.
 
@@ -218,7 +228,7 @@ These files are reviewable with the code and are the source of truth for their c
 
 `decisions/` is the architect's decision home: one file per decision record, with the invariants extracted from them in `invariants/` beneath it, kept in their own directory because [the two have different lifecycles](#decision-records-and-invariants). It sits next to `designs/` rather than replacing it, and the development manager has no counterpart directory because its output is Beads work rather than Markdown.
 
-One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default. The harness reads three directories today — `docs/product` (this `product.specifications` setting), `docs/designs`, and `docs/decisions`, with the invariants directory excluded and read by `yoyo invariant` instead — through one store assembly shared by the commands and the repository tests. The architect's `specifications/` directory in the layout above is not among them. [Configuration](../configuration.md#product-specifications) is the reference for it.
+One word does double duty across this layout, and the two senses are worth separating. The `specifications/` directory above holds the architect's specifications — the detailed form of a design, which [artifact ownership](#artifact-ownership) assigns to the architect in the same row as designs. The `product.specifications` *setting* is a different thing that happens to share the word: it names the single directory the product manager reads product intent from, which is `docs/product` by default. The shared store assembly reads three artifact homes — `docs/product` (this `product.specifications` setting), `docs/designs`, and `docs/decisions`, with the invariants directory excluded and read by `yoyo invariant` instead — one assembly shared by the commands and the repository tests. The architect's `specifications/` directory in the layout above is not among them. The layout block shows more than the store reads: `.yoyodyne/config.yaml` and `.yoyodyne/personas/` are read by configuration discovery and persona loading, which is why the count here is of artifact homes rather than of directories. [Configuration](../configuration.md#product-specifications) is the reference for it.
 
 Everything under `.yoyodyne/` is machine-independent and belongs in version control. A single `.yoyodyne.yaml` file at the repository root is still accepted so an existing project keeps working without being migrated; when both exist in one directory, the directory form wins.
 
@@ -276,7 +286,7 @@ Codex authentication is delegated to the locally installed CLI. It may use ChatG
 
 ## Configuration
 
-Agent definitions and behavior are configurable, while invariants remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
+Agent definitions and behavior are configurable, while invariants — and role authority, which no configuration can grant or widen — remain enforced in code. The executable ships a versioned, read-only bundle of agent definitions and personas, so a project records only what is genuinely its own and never needs access to the Yoyodyne source checkout. A project inherits the bundle by name and overlays what it changes:
 
 ```yaml
 version: 1
@@ -422,6 +432,8 @@ yoyo chat                 talk with the product manager
 yoyo run <beads-id>       execute or resume a specific ready item
 yoyo work                 schedule ready development work
 yoyo status               show agents, runs, blockers, and stale artifacts
+yoyo pause / resume       hold intake and stop or release the harness's spending
+yoyo work /stop           stop one run, or everything, cooperatively
 yoyo directive ...        record and inspect durable user directives
 yoyo agent ...            inspect or address a specific logical agent
 yoyo doctor               diagnose configuration and recovery state
