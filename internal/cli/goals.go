@@ -108,13 +108,15 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 }
 
 // reportAttribution says what the admitted work is for: which items name a goal
-// the goals state, which name none, and which name something they do not state.
+// the goals state, which name none, which name something they do not state, and
+// which recorded one and lost it.
 //
-// The exit status separates the two ways an item is not attributed, because
+// The exit status separates the three ways an item is not attributed, because
 // they are not the same finding. Work admitted before goals were checked names
 // none, is grandfathered, and reporting it as a failure would fail a backlog
-// nobody has had the chance to attribute yet. An item naming a goal the goals
-// do not state is a claim that is wrong, and that is what this exits non-zero
+// nobody has had the chance to attribute yet. An item naming a goal the goals do
+// not state is a claim that is wrong, and an item whose recorded goal was written
+// over is a record that was destroyed; those two are what this exits non-zero
 // for.
 func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := newGoalsFlags("goals attribution", stderr)
@@ -137,16 +139,7 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 
-	attributions := make([]itemAttribution, 0, len(admitted))
-	for _, item := range admitted {
-		attributions = append(attributions, itemAttribution{
-			WorkItemID:  item.ID,
-			Title:       item.Title,
-			Status:      item.Status,
-			Priority:    item.Priority,
-			Attribution: goals.AttributionOf(item.Notes),
-		})
-	}
+	attributions := attributionsOf(admitted, goals)
 	if *flags.jsonOutput {
 		if code := writeJSON(stdout, stderr, goalsOutput{
 			Attributions: attributions,
@@ -163,14 +156,37 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 	return attributionExitCode(attributions)
 }
 
+// attributionsOf judges every admitted item against the goals: what the item
+// records, and what the tracker witnesses was once recorded on it. It is one
+// function rather than a loop inside the command so that what the audit reports
+// is exactly what anything else asking the same question gets.
+func attributionsOf(admitted []beads.WorkItem, goals goal.Set) []itemAttribution {
+	attributions := make([]itemAttribution, 0, len(admitted))
+	for _, item := range admitted {
+		attributions = append(attributions, itemAttribution{
+			WorkItemID:  item.ID,
+			Title:       item.Title,
+			Status:      item.Status,
+			Priority:    item.Priority,
+			Attribution: goals.AttributionOf(item.Notes, item.GoalWitnessed),
+		})
+	}
+	return attributions
+}
+
 // attributionExitCode is the status the audit exits with: non-zero for an item
-// whose attribution is wrong, and zero for one that has none. The rule is here
-// rather than inline because it is the grandfathering decision itself, and a
-// rule that quietly started failing legacy items would stop a backlog nobody
-// has had the chance to attribute.
+// whose attribution is wrong or was destroyed, and zero for one that never had
+// one. The rule is here rather than inline because it is the grandfathering
+// decision itself, and a rule that quietly started failing legacy items would
+// stop a backlog nobody has had the chance to attribute.
+//
+// A lost attribution fails for the opposite reason to the one grandfathering
+// exists for: the item passed the check, and what is wrong is that the record of
+// it was overwritten. Reporting that without failing is how six items stayed
+// orphaned for as long as it took somebody to read the report by eye.
 func attributionExitCode(attributions []itemAttribution) int {
 	for _, entry := range attributions {
-		if entry.Attribution.State == goal.StateUnresolved {
+		if entry.Attribution.State == goal.StateUnresolved || entry.Attribution.State == goal.StateLost {
 			return 1
 		}
 	}
@@ -204,18 +220,34 @@ func printAttributions(stdout io.Writer, attributions []itemAttribution, goals g
 		// nobody could read would say the queue traces to intent that was never
 		// consulted.
 		fmt.Fprintf(stdout, "%d admitted item(s), none of them checked: %s\n", len(attributions), reason)
+		// An attribution that was destroyed is still said, because saying it needs
+		// no goals document: what it rests on is that the tracker witnesses a goal
+		// was written and the item no longer carries one. It is also what this
+		// exits non-zero for, and an unexplained failure is worse than none.
+		for _, entry := range attributions {
+			if entry.Attribution.State == goal.StateLost {
+				fmt.Fprintf(stdout, "  %s [p%d, %s] %s\n    %s\n",
+					entry.WorkItemID, entry.Priority, entry.Status, entry.Title, entry.Attribution.Reason)
+			}
+		}
 		return
 	}
 	grouped := map[goal.State][]itemAttribution{}
 	for _, entry := range attributions {
 		grouped[entry.Attribution.State] = append(grouped[entry.Attribution.State], entry)
 	}
-	fmt.Fprintf(stdout, "%d admitted item(s): %d serve a recorded goal, %d name none, %d name a goal the goals do not state\n",
-		len(attributions), len(grouped[goal.StateAttributed]), len(grouped[goal.StateUnattributed]), len(grouped[goal.StateUnresolved]))
+	fmt.Fprintf(stdout, "%d admitted item(s): %d serve a recorded goal, %d name none, %d name a goal the goals do not state, %d lost the goal they recorded\n",
+		len(attributions), len(grouped[goal.StateAttributed]), len(grouped[goal.StateUnattributed]),
+		len(grouped[goal.StateUnresolved]), len(grouped[goal.StateLost]))
 	for _, group := range []struct {
 		state  goal.State
 		saying string
 	}{
+		// The destroyed attributions are listed first, above the wrong ones. They
+		// are the only group where what to do is known exactly — put back what was
+		// written — and the only one that got there without anybody deciding
+		// anything.
+		{goal.StateLost, "having recorded a goal and lost it, which is a record to restore rather than a judgement to make"},
 		{goal.StateUnresolved, "naming a goal no goals document states, which is a claim to correct"},
 		{goal.StateUnattributed, "naming no goal, which is what work admitted before goals were checked looks like"},
 		{goal.StateAttributed, "serving a recorded goal"},
@@ -341,8 +373,10 @@ what the harness owns is resolving what an item names and saying what it found.
 
 An item admitted before goals were checked names none. That is reported and is
 not a failure: it is somebody's to attribute, and nothing refuses to run it.
-"attribution" exits non-zero only for an item naming a goal no goals document
-states, which is a claim that is wrong rather than one nobody has made.
+"attribution" exits non-zero for an item naming a goal no goals document states,
+which is a claim that is wrong rather than one nobody has made, and for an item
+the tracker witnesses recorded a goal and no longer carries one, which is a
+record something wrote over rather than a judgement nobody made.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)

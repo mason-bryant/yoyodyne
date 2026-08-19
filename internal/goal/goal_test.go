@@ -134,7 +134,7 @@ func TestAnItemThatRecordsNoGoalIsUnattributedRatherThanWrong(t *testing.T) {
 	t.Parallel()
 
 	set := setWithGoals(t, "Maintain a traceable chain from the brief through to verification.")
-	attribution := set.AttributionOf("Admitted to the backlog by the product manager.\n\nReason: the operator asked for it.")
+	attribution := set.AttributionOf("Admitted to the backlog by the product manager.\n\nReason: the operator asked for it.", false)
 	// Work admitted before attributions were checked says nothing, and nothing is
 	// not a false claim. Telling the two apart is what lets legacy work be
 	// grandfathered without also excusing an attribution that is wrong.
@@ -143,6 +143,36 @@ func TestAnItemThatRecordsNoGoalIsUnattributedRatherThanWrong(t *testing.T) {
 	}
 	if attribution.Named != "" {
 		t.Fatalf("attribution names something the item did not: %#v", attribution)
+	}
+}
+
+func TestAnItemWitnessedToHaveHadAGoalHasLostItRatherThanNeverHadOne(t *testing.T) {
+	t.Parallel()
+
+	set := setWithGoals(t, "Maintain a traceable chain from the brief through to verification.")
+	// The same notes an item has after something replaced them: the provenance
+	// and the goal that were written at creation are gone, and what is left says
+	// nothing about either. Read against the tracker's witness that a goal was
+	// written here, that is a record destroyed rather than a record never made —
+	// and it must not land in the one state that is deliberately not failed.
+	replaced := "Constraints from the architect, recorded 2026-08-19."
+	lost := set.AttributionOf(replaced, true)
+	if lost.State != StateLost {
+		t.Fatalf("attribution = %#v", lost)
+	}
+	if !strings.Contains(lost.Reason, "written over") {
+		t.Fatalf("the reason does not say what happened: %#v", lost)
+	}
+	// The same notes with no witness are the legacy item they look like, which is
+	// what keeps the check from failing a backlog nobody has attributed yet.
+	if unwitnessed := set.AttributionOf(replaced, false); unwitnessed.State != StateUnattributed {
+		t.Fatalf("attribution = %#v", unwitnessed)
+	}
+	// A witness on an item that still carries its goal changes nothing: the goal
+	// in the notes is the attribution, and the witness only ever says one was
+	// written.
+	if kept := set.AttributionOf(replaced+"\n\n"+Note("Maintain a traceable chain from the brief through to verification."), true); !kept.Resolved() {
+		t.Fatalf("attribution = %#v", kept)
 	}
 }
 
@@ -161,7 +191,7 @@ func TestTheNewestAttributionOnAnItemIsTheOneThatCounts(t *testing.T) {
 		"",
 		Note("Maintain a traceable chain from the brief through to verification."),
 	}, "\n")
-	attribution := set.AttributionOf(notes)
+	attribution := set.AttributionOf(notes, true)
 	if !attribution.Resolved() {
 		t.Fatalf("attribution = %#v", attribution)
 	}

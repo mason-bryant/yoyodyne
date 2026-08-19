@@ -2,13 +2,38 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
+
+// listingRunner answers each bd listing with the slice it asked for, so a test
+// can exercise a read path that consults more than one of them. What it answers
+// with is bd's own listing shape, metadata included, because the metadata is
+// where the audit reads the witness that a goal was written.
+type listingRunner struct {
+	items map[string][]map[string]any
+}
+
+func (r *listingRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	listed := []map[string]any{}
+	for _, argument := range command.Args {
+		if status, asked := strings.CutPrefix(argument, "--status="); asked {
+			listed = r.items[status]
+		}
+	}
+	encoded, err := json.Marshal(listed)
+	if err != nil {
+		return execution.ProcessResult{}, err
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: string(encoded)}, nil
+}
 
 func TestTheGoalsWorkCanBeAttributedToAreListedWithWhereTheyAreStated(t *testing.T) {
 	t.Parallel()
@@ -83,6 +108,137 @@ func TestAGoalsDocumentStatingNoGoalsIsNamedRatherThanReadAsFewerGoals(t *testin
 	}
 }
 
+// The audit's own read path, end to end from the bd command line: a
+// decomposition child carrying the note a creation wrote is found by the lookup
+// the command actually performs and reported as serving its goal.
+//
+// It exists because the symptom that started this was phrased in this command's
+// words — six children of yoyodyne-ifd.102 reading "it records no goal" — and a
+// test that resolved the goal by calling the parse directly would leave open
+// whether the loss was in how the audit locates an item and pulls its notes. So
+// this runs admittedWorkItems, which is the whole of that lookup, against a bd
+// that answers with the item's notes, and then reportAttribution's own judging
+// and rendering over what came back.
+func TestTheAuditFindsADecompositionChildsGoalThroughItsOwnLookup(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	// The note a decomposition writes, in the shape internal/chat builds it:
+	// provenance, the reason, and the goal on its own line at the end.
+	child := "Created under yoyodyne-ifd.102, decomposing it by the development manager " +
+		"in conversation chat-419cedb4, after turn 3.\n\nReason: nothing routes stopped work today.\n\n" +
+		goal.Note(autonomy)
+	bd := &listingRunner{items: map[string][]map[string]any{
+		"open": {{
+			"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
+			"priority": 1, "issue_type": "task", "notes": child,
+		}},
+		"blocked": {{
+			// A blocked sibling too: the audit reads two slices of the tracker, and
+			// an item found in only one of them would be reported on by only one.
+			"id": "yoyodyne-ifd.102.7", "title": "Re-arm a dropped queued merge", "status": "blocked",
+			"priority": 3, "issue_type": "task", "notes": child,
+		}},
+	}}
+
+	admitted, err := admittedWorkItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
+	if err != nil {
+		t.Fatalf("admittedWorkItems() error = %v", err)
+	}
+	if len(admitted) != 2 {
+		t.Fatalf("the audit's lookup found %d item(s): %#v", len(admitted), admitted)
+	}
+
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}},
+	}
+	attributions := attributionsOf(admitted, goals)
+	if code := attributionExitCode(attributions); code != 0 {
+		t.Fatalf("the audit failed a decomposition child: %#v", attributions)
+	}
+
+	var rendered bytes.Buffer
+	printAttributions(&rendered, attributions, goals)
+	report := rendered.String()
+	// The words the symptom was reported in. If a decomposition child ever reads
+	// as naming no goal again, it fails here in the same language the operator saw.
+	if strings.Contains(report, "it records no goal") {
+		t.Fatalf("a decomposition child reads as naming no goal:\n%s", report)
+	}
+	if !strings.Contains(report, "2 admitted item(s): 2 serve a recorded goal, 0 name none") {
+		t.Fatalf("report = %q", report)
+	}
+}
+
+// An item whose notes were replaced rather than appended to: the goal it was
+// created under is gone from them, and the witness the tracker carries beside
+// them is not. That is what actually happened to the six children of
+// yoyodyne-ifd.102, and what made it cost a week is that the audit reported it
+// as the one state it does not fail on.
+func TestTheAuditFailsAnItemWhoseRecordedGoalWasWrittenOver(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	bd := &listingRunner{items: map[string][]map[string]any{
+		"open": {{
+			"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
+			"priority": 1, "issue_type": "task",
+			// Everything a careless writer left behind, and nothing of what it
+			// replaced.
+			"notes":    "Constraints from the architect, recorded 2026-08-19.",
+			"metadata": map[string]any{"yoyodyne_goal_recorded": 1},
+		}},
+		"blocked": {{
+			// Beside it, an item that genuinely predates the check: no goal, and no
+			// witness that one was ever written. It must stay grandfathered, or the
+			// audit fails a backlog nobody has had the chance to attribute.
+			"id": "yoyodyne-ifd.45", "title": "Admitted long ago", "status": "blocked",
+			"priority": 2, "issue_type": "task", "notes": "Admitted by hand.",
+		}},
+	}}
+
+	admitted, err := admittedWorkItems(context.Background(), beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"})
+	if err != nil {
+		t.Fatalf("admittedWorkItems() error = %v", err)
+	}
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}},
+	}
+	attributions := attributionsOf(admitted, goals)
+
+	states := map[string]goal.State{}
+	for _, entry := range attributions {
+		states[entry.WorkItemID] = entry.Attribution.State
+	}
+	if states["yoyodyne-ifd.102.2"] != goal.StateLost {
+		t.Fatalf("the overwritten item reads as %q: %#v", states["yoyodyne-ifd.102.2"], attributions)
+	}
+	if states["yoyodyne-ifd.45"] != goal.StateUnattributed {
+		t.Fatalf("the legacy item reads as %q: %#v", states["yoyodyne-ifd.45"], attributions)
+	}
+	// Loudly: the audit fails, rather than listing it among the items somebody
+	// has yet to attribute.
+	if code := attributionExitCode(attributions); code != 1 {
+		t.Fatalf("exit code over a destroyed attribution = %d", code)
+	}
+
+	var rendered bytes.Buffer
+	printAttributions(&rendered, attributions, goals)
+	report := rendered.String()
+	for _, want := range []string{
+		"1 lost the goal they recorded",
+		"having recorded a goal and lost it",
+		"yoyodyne-ifd.102.2",
+		"written over rather than never made",
+	} {
+		if !strings.Contains(report, want) {
+			t.Fatalf("report = %q, want it to contain %q", report, want)
+		}
+	}
+}
+
 func TestTheAuditFailsAWrongAttributionAndNotAMissingOne(t *testing.T) {
 	t.Parallel()
 
@@ -112,14 +268,14 @@ func TestTheAuditSeparatesWorkWithNoGoalFromWorkWhoseGoalIsWrong(t *testing.T) {
 	}
 	attributions := []itemAttribution{
 		{WorkItemID: "ifd.1", Title: "Attributed work", Attribution: goals.Attribute("Maintain a traceable chain.")},
-		{WorkItemID: "ifd.2", Title: "Legacy work", Attribution: goals.AttributionOf("Admitted long ago.")},
+		{WorkItemID: "ifd.2", Title: "Legacy work", Attribution: goals.AttributionOf("Admitted long ago.", false)},
 		{WorkItemID: "ifd.3", Title: "Misattributed work", Attribution: goals.Attribute("Ship the prototype.")},
 	}
 
 	var rendered bytes.Buffer
 	printAttributions(&rendered, attributions, goals)
 	report := rendered.String()
-	if !strings.Contains(report, "3 admitted item(s): 1 serve a recorded goal, 1 name none, 1 name a goal the goals do not state") {
+	if !strings.Contains(report, "3 admitted item(s): 1 serve a recorded goal, 1 name none, 1 name a goal the goals do not state, 0 lost the goal they recorded") {
 		t.Fatalf("report = %q", report)
 	}
 	// Each item is under the heading that says what to do about it, so the two
@@ -148,6 +304,25 @@ func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 	printAttributions(&rendered, []itemAttribution{{WorkItemID: "ifd.1"}}, goal.Unreadable("the artifact homes are outside the repository"))
 	if !strings.Contains(rendered.String(), "none of them checked: the goals could not be read") {
 		t.Fatalf("report = %q", rendered.String())
+	}
+
+	// A destroyed attribution is the exception, because saying it needs no goals
+	// document: the tracker witnesses a goal was written and the item no longer
+	// carries one. It is also what the audit exits non-zero for here, and a
+	// failure with nothing said about it is worse than none.
+	unreadable := goal.Unreadable("the artifact homes are outside the repository")
+	lost := []itemAttribution{
+		{WorkItemID: "ifd.1"},
+		{WorkItemID: "ifd.102.2", Title: "Triage docket", Status: "open", Priority: 1,
+			Attribution: unreadable.AttributionOf("Constraints from the architect.", true)},
+	}
+	var withLoss bytes.Buffer
+	printAttributions(&withLoss, lost, unreadable)
+	if !strings.Contains(withLoss.String(), "ifd.102.2") || !strings.Contains(withLoss.String(), "written over rather than never made") {
+		t.Fatalf("report = %q", withLoss.String())
+	}
+	if code := attributionExitCode(lost); code != 1 {
+		t.Fatalf("exit code over a destroyed attribution nothing could be checked against = %d", code)
 	}
 }
 

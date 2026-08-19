@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 const defaultTimeout = 30 * time.Second
@@ -45,6 +46,12 @@ type WorkItem struct {
 	// it. It is absent from an item nothing has ever priced, which is a different
 	// fact from an item that cost nothing.
 	Cost *Cost
+	// GoalWitnessed says the tracker records that the harness once wrote a goal
+	// onto this item. It is kept in the tracker's metadata rather than in the
+	// notes the goal itself is written in, because notes are what a careless
+	// writer replaces: an item whose notes lost their goal still carries this,
+	// which is what tells a destroyed attribution from one nobody ever made.
+	GoalWitnessed bool
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -68,6 +75,18 @@ const (
 	costRunsKey    = "yoyodyne_cost_runs"
 	costUnknownKey = "yoyodyne_cost_unknown_runs"
 )
+
+// goalWitnessKey is where the tracker records that a goal was written onto an
+// item. It holds no goal — the goal is in the notes, which is where the product
+// manager's judgement is read from and the only place it is written — and says
+// only that one was written, which is the fact the notes cannot keep about
+// themselves once something replaces them.
+const goalWitnessKey = "yoyodyne_goal_recorded"
+
+// goalWitness is the witness as a creation writes it. bd takes whole metadata
+// as JSON when an item is created and one key at a time when it is updated, so
+// the same fact is written two ways; it is read back leniently for that reason.
+var goalWitness = fmt.Sprintf(`{%q:1}`, goalWitnessKey)
 
 // costPrecision is how many decimal places a recorded price keeps. A single
 // invocation can cost fractions of a cent, and a ledger that rounded each item
@@ -216,6 +235,13 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	}
 	if notes := strings.TrimSpace(item.Notes); notes != "" {
 		args = append(args, "--notes="+notes)
+		if _, records := goal.NamedIn(notes); records {
+			// The witness is derived from what is about to be written rather than
+			// asked of the caller. A caller that had to remember it would eventually
+			// not, and an attribution written without one is exactly an attribution
+			// whose loss goes unnoticed.
+			args = append(args, "--metadata="+goalWitness)
+		}
 	}
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
 		args = append(args, "--parent="+parent)
@@ -269,6 +295,9 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	}
 	if notes := strings.TrimSpace(change.AppendNotes); notes != "" {
 		args = append(args, "--append-notes="+notes)
+		if _, records := goal.NamedIn(notes); records {
+			args = append(args, "--set-metadata="+goalWitnessKey+"=1")
+		}
 	}
 	if change.Priority != nil {
 		args = append(args, "--priority="+strconv.Itoa(*change.Priority))
@@ -570,7 +599,38 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 		}
 	}
 	item.Cost = costFromMetadata(raw.Metadata)
+	item.GoalWitnessed = goalWitnessedIn(raw.Metadata)
 	return item, nil
+}
+
+// goalWitnessedIn reads whether the tracker records that a goal was written onto
+// an item. Anything the key holds but a false or empty value counts, because the
+// two ways the harness writes it are stored differently — a creation's JSON and
+// an update's key=value do not come back as the same type — and because what is
+// being asked is whether the key is there at all. Reading it strictly would turn
+// a stricter tracker's coercion into a destroyed attribution reported as a gap,
+// which is the failure this exists to catch.
+func goalWitnessedIn(metadata map[string]json.RawMessage) bool {
+	raw, present := metadata[goalWitnessKey]
+	if !present {
+		return false
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return false
+	}
+	switch witnessed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return witnessed
+	case string:
+		return strings.TrimSpace(witnessed) != "" && witnessed != "0" && !strings.EqualFold(witnessed, "false")
+	case float64:
+		return witnessed != 0
+	default:
+		return true
+	}
 }
 
 // admittedAt reads when the tracker says an item was recorded, and returns the

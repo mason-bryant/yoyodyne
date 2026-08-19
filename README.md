@@ -1833,6 +1833,17 @@ they are not the same thing to do: the first predates the check, is somebody's
 to attribute, and never stops the work running; the second is a claim that is
 wrong, and it is what `yoyo goals attribution` exits non-zero for.
 
+There is a third way to record no goal, and it is reported apart from both.
+`yoyo` only ever appends to an item's notes, but anything else with the tracker's
+command line can replace them, and a replacement that does not carry the goal
+forward destroys it — which has happened, to six items at once, and read
+afterwards exactly like work admitted before the check existed. So every write
+that puts a goal into an item's notes also records in the tracker's metadata
+that a goal was written there, where replacing the notes cannot reach it. An item
+carrying that witness and no goal has lost one rather than never had one: it is
+reported as `lost`, it exits non-zero, and what it needs is the record put back
+rather than a fresh judgement about what the work is for.
+
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking
 the set work may be attributed to, and a repository with no goals in force is

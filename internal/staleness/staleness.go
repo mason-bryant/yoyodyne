@@ -177,11 +177,12 @@ func Survey(artifacts artifact.Set, goals goal.Set, items []beads.WorkItem) Repo
 	}
 
 	for _, item := range items {
-		attribution := goals.AttributionOf(item.Notes)
+		attribution := goals.AttributionOf(item.Notes, item.GoalWitnessed)
 		if !attribution.Resolved() {
-			// An item that names no goal, or names one the goals do not state, has
-			// no reference to follow upstream at all. That is a gap in the chain
-			// rather than a staleness, and it is reported where attributions are.
+			// An item that names no goal, names one the goals do not state, or lost
+			// the one it had, has no reference to follow upstream at all. That is a
+			// gap in the chain rather than a staleness, and it is reported where
+			// attributions are.
 			continue
 		}
 		serving, exists := recorded[attribution.Goal.ArtifactID]
