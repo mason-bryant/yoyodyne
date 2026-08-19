@@ -90,13 +90,19 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// read whatever the listing found: an item whose runs were all cleaned up
 	// still has a record of what triage gave it, and that is exactly the reader
 	// this answers.
+	// An unreadable triage record does not replace the listing: the
+	// never-spend-an-unreadable-budget rule is about spending, and this is a
+	// read-only answer that still holds the runs it found. The failure is
+	// reported beside them instead.
 	var counters *runstate.TriageCounters
+	var triageFailure string
 	if workItemID := flags.Arg(0); workItemID != "" {
 		read, err := store.Triage().Counters(workItemID)
 		if err != nil {
-			return reportStatusFailure(stdout, stderr, *jsonOutput, err)
+			triageFailure = fmt.Sprintf("the item's triage record could not be read: %v", err)
+		} else {
+			counters = &read
 		}
-		counters = &read
 	}
 
 	if *jsonOutput {
@@ -110,11 +116,15 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 			recorded := caps
 			output.TriageCaps = &recorded
 		}
+		output.Error = triageFailure
 		return writeJSON(stdout, stderr, output)
 	}
 	printRunHistory(stdout, history, flags.Arg(0), *failedOnly)
 	if counters != nil {
 		printItemTriage(stdout, *counters, caps)
+	}
+	if triageFailure != "" {
+		fmt.Fprintln(stderr, triageFailure)
 	}
 	// A failed run is what this exists to report, so reporting one is this
 	// command working. An exit status that treated the answer as a failure would
@@ -165,8 +175,13 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 // where something other than the change may be wrong.
 func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps runstate.TriageCaps) {
 	fmt.Fprintf(writer, "triage of %s: %s\n", counters.WorkItemID, describeTriagePasses(counters))
-	fmt.Fprintf(writer, "  review rounds: %d of %d permitted across every run of this item\n",
-		counters.ReviewRounds, caps.ReviewRounds)
+	if counters.ReviewRounds > caps.ReviewRounds {
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — past the cap of %d, so triage may only escalate or re-scope\n",
+			counters.ReviewRounds, caps.ReviewRounds)
+	} else {
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item; triage may hand back repairs while under the cap of %d\n",
+			counters.ReviewRounds, caps.ReviewRounds)
+	}
 	fmt.Fprintf(writer, "  repair grants: %d; re-runs: %d; both are refused once no round remains\n",
 		counters.RepairGrants, counters.Reruns)
 	fmt.Fprintf(writer, "  merge re-arms: %d of %d permitted\n", counters.MergeRearms, caps.MergeRearms)

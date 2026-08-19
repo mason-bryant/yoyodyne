@@ -424,6 +424,14 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 // Like a grant it is written before the run it causes is started, so a crash
 // between the two costs a re-run nobody took rather than a re-run nobody
 // counted.
+//
+// The round cap this spends is one precondition among several, not the gate
+// entire: the action that calls this claims a work item the operator did not
+// name, so `selected-work-passes-intake-and-records-why` also requires the
+// product's intake hold read and found clear before the claim, and the triage
+// reason recorded as the run's selection reason. Both belong to the caller —
+// this store counts budgets, it does not start runs — and an action that
+// reached here without them has gone around the invariant, not through it.
 func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, caps TriageCaps) (TriageCounters, error) {
 	if err := caps.Validate(); err != nil {
 		return TriageCounters{}, err

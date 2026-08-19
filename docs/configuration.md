@@ -1553,15 +1553,14 @@ development manager conversation opens. There is no scheduled process behind it,
 so `stuck_merge_age` is a floor rather than a promise — a publication becomes
 docketable at that age and is docketed the next time one of those happens.
 
-**The triage workflow these belong to is not built**, so no decision the harness
-makes today grants a repair, causes a re-run, or re-arms a dropped merge. What
-exists is the budget those actions will be refused past, and it is a durable
-record rather than a number waiting to be read: `review_rounds_cap` bounds the
+**Two of these are already read, and the three triage actions are not built.**
+The docket above consumes `stuck_merge_age` — an approved publication older than
+it is docketed at the next scan — and `review_rounds_cap` bounds the
 [per-item counters](#what-one-work-item-has-been-given) below, which every run
-writes to and `yoyo status <id>` reports. `stuck_merge_age` still reads nothing —
-it is here for the reason a threshold usually is not built with its workflow: a
-number that starts life as a constant in the code stays one, and every project
-inherits whatever the first project needed.
+writes to and `yoyo status <id>` reports. What no decision the harness makes
+today does is spend the budget: nothing yet grants a repair, causes a re-run, or
+re-arms a dropped merge, so `repair_grant_attempts` has no caller and the caps
+are a recorded budget awaiting the actions that will be refused past it.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -1628,7 +1627,7 @@ Which threshold refuses which action:
 | Action | Refused by |
 | --- | --- |
 | another repair grant | `triage.review_rounds_cap`, truncated to the rounds it still has room for |
-| another whole run of the item | `triage.review_rounds_cap`, refused outright once none remain |
+| another whole run of the item | `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state, which the action carries and this counter does not |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` |
 
 The first two buy review rounds, so the round cap is what bounds them, and a
