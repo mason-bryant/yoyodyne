@@ -1527,8 +1527,7 @@ weather a run absorbs, how long it chases a moving target — and it means none 
 them bounds what a single piece of work costs. An item handed back, run again,
 handed back again is an item nothing was ever going to stop.
 
-These four are per work item rather than per run, and they are what triage is
-refused past:
+These four are per work item rather than per run:
 
 ```yaml
 execution:
@@ -1538,28 +1537,38 @@ execution:
   triage_review_rounds_per_item: 4
 ```
 
-The first three bound the three things triage can decide: hand the item another
-go at its own change, run it again from the start, or re-arm a merge the forge
-accepted and then dropped. Each is counted before the action it counts takes
-effect, so a process that dies between the two has recorded a grant it did not
-give rather than given one it did not record. Setting any of them to `0` says
-triage never takes that action and hands the item to a person instead.
+**What the harness does with them today.** One of the four is counted by the
+running harness, and it is the fourth. A **round** is a reviewer verdict a
+developer attempt produced, counted across every run of the item; a re-review
+that no developer attempt produced is not one, which is why a promotion that
+loses its race and gets a fresh verdict on the replayed change is not charged for
+it. Every run records its rounds against the item, before it acts on the verdict,
+and `yoyo status <beads-id>` reports the total.
 
-The fourth is not an action anybody asks permission for. A **round** is a
-reviewer verdict a developer attempt produced, counted across every run of the
-item; a re-review that no developer attempt produced is not one, which is why a
-promotion that loses its race and gets a fresh verdict on the replayed change is
-not charged for it. What the round cap does is truncate a repair grant to what is
-left of it. At these defaults an item that has been through its repair budget
-once has spent three rounds of four — the first attempt and two repairs — so a
-grant of two is given as one, and the truncation is recorded. A grant that was
-not truncated would promise a round nothing would let it take, and one that
-overshot the cap would make the cap decorative. An item with no rounds left is
-refused a grant outright.
+The first three bound the three things triage can decide about work that did not
+land: hand the item another go at its own change, run it again from the start, or
+re-arm a merge the forge accepted and then dropped. **No triage decision in this
+release takes any of those actions**, so these three caps refuse nothing yet.
+What exists is the budget and the gate on it: the durable per-item counters, and
+the store operations that record a grant, a re-run, or a re-arm *before* it takes
+effect and refuse it once its cap is spent. A triage action added later goes
+through those operations rather than around them, and inherits the bound without
+having to re-implement it. Setting any of the three to `0` will mean triage never
+takes that action and hands the item to a person instead.
+
+The round cap is what a repair grant is truncated against, and that arithmetic is
+enforced now even though nothing asks for a grant yet. At these defaults an item
+that has been through its repair budget once has spent three rounds of four — the
+first attempt and two repairs — so a grant of two is given as one, and the
+truncation is recorded. A grant that was not truncated would promise a round
+nothing would let it take, and one that overshot the cap would make the cap
+decorative. An item with no rounds left is refused a grant outright.
 
 `yoyo status <beads-id>` reports these counters against these caps, so how close
 an item is to the end of what it will be given is answerable from the item's
-record alone, along with whether triage has been round more than once.
+record alone, along with whether triage has been round more than once. Until the
+triage actions land, the three action counters on an item read as zero, because
+nothing has spent them.
 
 The counters are one home per machine. Two collaborators running their own
 harnesses against one shared repository each hold a full set of budgets for the

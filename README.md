@@ -2177,24 +2177,29 @@ back, run again, and handed back again is an item nothing bounds. The per-item
 counters are what bound it:
 
 ```text
-triage of yoyodyne-ifd.90: triaged 2 times
-  repair grants: 1 of 1 permitted; re-runs: 1 of 1; merge re-arms: 0 of 2
+triage of yoyodyne-ifd.90: triage has not acted on it
+  repair grants: 0 of 1 permitted; re-runs: 0 of 1; merge re-arms: 0 of 2
   review rounds: 3 of 4 permitted across every run of this item
-  1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
 ```
 
 A **round** is a reviewer verdict a developer attempt produced, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
 promotion that [loses its race](#losing-a-race-for-the-target-branch) and gets a
-fresh verdict on the replayed change is not charged for it. Each counter is
-recorded before the action it counts takes effect, so a crash cannot double-grant,
-and each triage action is refused once its cap is spent — the caps are the
+fresh verdict on the replayed change is not charged for it. Rounds are what runs
+actually spend, and every run records them.
+
+The three lines above them are the budget for what triage can decide about work
+that did not land — another go at the change, a re-run, a re-armed merge. **No
+triage decision in this release takes any of those actions**, so those three read
+as zero on every item today. What is in place is the durable budget and the gate
+on it: each is recorded before the action it counts takes effect, so a crash
+cannot double-grant, and each is refused once its cap is spent. The caps are the
 `execution.triage_*_per_item` keys in [the configuration
-guide](docs/configuration.md#what-one-work-item-may-be-given). An item nobody has
-triaged says so rather than showing a budget it has not been spending, and one
-triaged more than once says that in the first line, which is the fact worth
-looking for: work that keeps coming back is usually work where something other
-than the change is wrong.
+guide](docs/configuration.md#what-one-work-item-may-be-given), and a triage action
+added later goes through that gate rather than around it. An item triaged more
+than once will say so in the first line, which is the fact worth looking for:
+work that keeps coming back is usually work where something other than the change
+is wrong.
 
 The listing folds each reason onto one line and bounds it at 160 bytes with
 an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;

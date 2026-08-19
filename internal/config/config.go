@@ -152,6 +152,12 @@ type Execution struct {
 	// times it may re-arm a merge the forge accepted and then dropped. Zero is a
 	// deliberate choice for any of them — never do this, send it to a person
 	// instead — and a negative bound is not one.
+	//
+	// No triage decision in this release takes any of the three actions, so these
+	// three bounds refuse nothing yet. They are what the durable counters refuse a
+	// triage action past once one exists, which is why they are configured now
+	// rather than alongside it: the budget an action is bounded by should not be
+	// invented by the action.
 	TriageRepairGrantsPerItem int `yaml:"triage_repair_grants_per_item" json:"triage_repair_grants_per_item"`
 	TriageRerunsPerItem       int `yaml:"triage_reruns_per_item" json:"triage_reruns_per_item"`
 	TriageMergeRearmsPerItem  int `yaml:"triage_merge_rearms_per_item" json:"triage_merge_rearms_per_item"`

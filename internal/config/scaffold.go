@@ -185,14 +185,19 @@ execution:
   # no repair attempt. A run that spends this budget stops and records a blocker.
   transient_relaunches_before_blocking: %d
   # Every budget above resets when a run does, so none of them bounds what one
-  # item costs across the runs it takes. These four do: how many times triage may
-  # hand an item another go at its own change, run it again from the start, or
-  # re-arm a merge the forge dropped, and the ceiling on the reviewer verdicts
-  # the item's developer attempts may produce in total. The rounds are not asked
-  # for -- they are what a repair grant is truncated against, so a grant never
-  # promises a round the ceiling would not let it take. They are counted per item
+  # item costs across the runs it takes. These four are per item instead, counted
   # in this machine's durable triage record; a second harness on another machine
   # holds its own.
+  #
+  # The rounds are the one the harness counts today: a reviewer verdict a
+  # developer attempt produced, totalled across every run of the item. Nothing
+  # asks permission for one -- the ceiling is what a repair grant is truncated
+  # against, so a grant never promises a round it would not be let take.
+  #
+  # The three above it bound what triage may decide about work that did not land:
+  # another go at the change, a re-run, a re-armed merge. No triage decision in
+  # this release takes any of those, so they refuse nothing yet; they are the
+  # bound a triage action added later is recorded against and refused by.
   triage_repair_grants_per_item: %d
   triage_reruns_per_item: %d
   triage_merge_rearms_per_item: %d

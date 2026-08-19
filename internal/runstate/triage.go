@@ -24,6 +24,18 @@ package runstate
 // which is a limit rather than a design: the coordination that would make them
 // one is the team-mode epic's, and `docs/team-mode-scope.md` states it where
 // that epic's designer will find it.
+//
+// Of the four counters, one has a caller in the harness today. Every run records
+// its review rounds here, because a round is something the run itself produces.
+// The three action counters have none, because no triage decision in this
+// release grants a repair, causes a re-run, or re-arms a dropped merge — the
+// harness blocks the item and hands it to a person instead, and reconciliation
+// deliberately does not ask a forge again about a merge it dropped. So the three
+// operations below are the gate rather than the decision: an action added later
+// records itself through one of them and is refused by the cap it finds, instead
+// of arriving with a budget of its own invention. Building the budget first is
+// what stops the second half of that pair being written by whoever is in a hurry
+// to ship the first.
 
 import (
 	"context"
@@ -91,11 +103,22 @@ type TriageCounters struct {
 	// same work onto where the target went and asks for a fresh verdict on it,
 	// and counting that would charge the item for losing a race it did not cause.
 	ReviewRounds int `json:"review_rounds,omitempty"`
-	// LastRound identifies the developer attempt whose verdict was counted last.
-	// It is what makes recording a round idempotent: a review re-asked for the
-	// same attempt — resumed after an interrupted process, or re-obtained on a
-	// replayed change — names the attempt that has already been counted, and is
-	// recorded once.
+	// LastRound identifies the developer attempt whose verdict was counted last,
+	// and only that one: it is the most recent round rather than a set of every
+	// round counted. Recording a round names the attempt that produced it, and an
+	// attempt that names the round already at the head is recorded once — which is
+	// what keeps a review re-asked for the same attempt off the bill, whether it
+	// was resumed after an interrupted process or re-obtained on a replayed
+	// change.
+	//
+	// Consecutive is the whole of what has to be deduplicated, because it is the
+	// whole of what can happen. A repeat is always a re-review of the attempt the
+	// run has most recently been judged on, and nothing else can slip a round for
+	// this item in between: a run reserves the item exclusively, so a second run
+	// of the same item is refused while the first is in flight. An attempt
+	// repeated after some other round of the same item had been counted would be a
+	// second run judging an attempt of the first, which is not a thing the harness
+	// can produce.
 	LastRound string    `json:"last_round,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -297,11 +320,14 @@ func (s *TriageStore) Counters(workItemID string) (TriageCounters, error) {
 // being written down would only make the record disagree with the world.
 //
 // attemptID identifies the developer attempt whose change was judged, and
-// recording the same one twice counts once. That is what excludes the
-// integration replay: the replayed change is re-reviewed under the attempt that
-// produced it, so the second verdict names a round already counted. It is also
-// what makes an interrupted review safe to resume — the review is re-asked for,
-// and the round is not counted again.
+// recording the attempt that is already at the head of the record counts once.
+// That is what excludes the integration replay: the replayed change is
+// re-reviewed under the attempt that produced it, so the second verdict names
+// the round just counted. It is also what makes an interrupted review safe to
+// resume — the review is re-asked for, and the round is not counted again.
+//
+// Only the most recent round is compared against, which is sufficient rather
+// than approximate; LastRound says why.
 func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, error) {
 	if strings.TrimSpace(attemptID) == "" {
 		return TriageCounters{}, errors.New("a developer attempt is required to count the round its review produced")

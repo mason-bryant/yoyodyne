@@ -77,11 +77,16 @@ func TestTriageCountersSurviveTheProcessThatWroteThem(t *testing.T) {
 }
 
 // A round is a verdict a developer attempt produced. The same attempt judged
-// twice -- a review resumed after an interrupted process, or re-obtained on a
+// again -- a review resumed after an interrupted process, or re-obtained on a
 // change replayed onto a moved target -- is one round, because charging the item
 // for the second would charge it for a race it did not cause and for a process
 // that died under it.
-func TestAReviewRoundIsCountedOncePerDeveloperAttempt(t *testing.T) {
+//
+// The repeat is always of the attempt most recently counted, which is what the
+// record compares against. Nothing can put another round of the same item in
+// between: a run reserves its item exclusively, so no second run of it is in
+// flight to produce one.
+func TestAReviewRoundIsCountedOncePerConsecutiveDeveloperAttempt(t *testing.T) {
 	t.Parallel()
 
 	store := newTriageStore(t)
