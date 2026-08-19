@@ -235,3 +235,30 @@ func gitAt(t *testing.T, directory string, arguments ...string) {
 		t.Fatalf("git %v in %s: %v: %s", arguments, directory, err, output)
 	}
 }
+
+// The third settle outcome: the forge performed the merge and the finishing
+// steps failed. The break on that path is the only thing keeping the local
+// branch off a publication nothing confirmed, and this is what fails if it is
+// removed.
+func TestASettleThatCannotFinishThePublicationLeavesTheLocalBranchAlone(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.forge.replayMerge = true
+	outcome := fixture.run(t)
+	// The forge merges as a replay: the remote's new tip carries the change's
+	// content without carrying the promoted commit, so confirming the
+	// publication honestly fails even though a merge really happened.
+	fixture.forge.performQueuedMerge(t)
+
+	results := fixture.reconcile(t)
+	if len(results) != 1 {
+		t.Fatalf("reconciliation = %#v, want the one queued merge examined", results)
+	}
+	if results[0].Catchup != nil {
+		t.Fatalf("catch-up = %#v, want none on a publication that could not be confirmed", results[0].Catchup)
+	}
+	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
+		t.Errorf("local main = %q, want it still at the promoted commit %q", local, outcome.Integration.TargetCommit)
+	}
+}
