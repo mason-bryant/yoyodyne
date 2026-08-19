@@ -177,7 +177,7 @@ func Survey(artifacts artifact.Set, goals goal.Set, items []beads.WorkItem) Repo
 	}
 
 	for _, item := range items {
-		attribution := goals.AttributionOf(item.Notes, item.GoalWitnessed)
+		attribution := goals.AttributionOf(item.Notes, item.GoalWitness)
 		if !attribution.Resolved() {
 			// An item that names no goal, names one the goals do not state, or lost
 			// the one it had, has no reference to follow upstream at all. That is a

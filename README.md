@@ -1822,6 +1822,7 @@ of them in the words that document states it in.
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
 ./bin/yoyo goals attribution   # what each admitted work item says it is for
+./bin/yoyo goals witness       # witness the goals already recorded on admitted work
 ```
 
 Nothing there writes an attribution, for the same reason nothing writes an
@@ -1838,11 +1839,21 @@ There is a third way to record no goal, and it is reported apart from both.
 command line can replace them, and a replacement that does not carry the goal
 forward destroys it — which has happened, to six items at once, and read
 afterwards exactly like work admitted before the check existed. So every write
-that puts a goal into an item's notes also records in the tracker's metadata
-that a goal was written there, where replacing the notes cannot reach it. An item
-carrying that witness and no goal has lost one rather than never had one: it is
-reported as `lost`, it exits non-zero, and what it needs is the record put back
-rather than a fresh judgement about what the work is for.
+that puts a goal into an item's notes also records that goal in the tracker's
+metadata, where replacing the notes cannot reach it. An item carrying that
+witness and no goal has lost one rather than never had one: it is reported as
+`lost`, it exits non-zero, and the words it lost are quoted so putting them back
+is a restoration rather than a fresh judgement about what the work is for. The
+notes stay the record — what an item serves is resolved from them and never from
+the copy, because a loss the report answered out of metadata would read as intact
+while the item stayed empty.
+
+The witness covers a goal from the moment it is written and no earlier, so an
+attribution made before it existed is protected by nothing. `yoyo goals witness`
+sweeps that up: it records, on every admitted item whose notes already state a
+goal and which carries no witness, the goal those notes state. It decides
+nothing — the statement is the item's own — and it is worth running once over an
+existing backlog.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking

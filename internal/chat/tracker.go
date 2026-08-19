@@ -1032,19 +1032,19 @@ func renderQueueAttribution(items []beads.WorkItem, goals goal.Set) string {
 		// witnessing that a goal was written and the item no longer carrying one.
 		var lost []string
 		for _, item := range items {
-			if goals.AttributionOf(item.Notes, item.GoalWitnessed).State == goal.StateLost {
+			if goals.AttributionOf(item.Notes, item.GoalWitness).State == goal.StateLost {
 				lost = append(lost, item.ID)
 			}
 		}
 		if len(lost) > 0 {
-			unchecked += fmt.Sprintf("Even so, these recorded a goal and no longer carry it, which is a record to put back: %s.\n", namedItems(lost))
+			unchecked += fmt.Sprintf("Even so, these recorded a goal and no longer carry it: %s. Read one to see whether the tracker kept the words.\n", namedItems(lost))
 		}
 		return unchecked
 	}
 	attributed := 0
 	var unattributed, unresolved, lost []string
 	for _, item := range items {
-		switch attribution := goals.AttributionOf(item.Notes, item.GoalWitnessed); attribution.State {
+		switch attribution := goals.AttributionOf(item.Notes, item.GoalWitness); attribution.State {
 		case goal.StateAttributed:
 			attributed++
 		case goal.StateUnresolved:
@@ -1062,7 +1062,10 @@ func renderQueueAttribution(items []beads.WorkItem, goals goal.Set) string {
 		// Named to the product manager rather than only counted, because this is
 		// the one group where the queue is wrong about itself: the work was
 		// attributed and the tracker says so, and only the words were destroyed.
-		fmt.Fprintf(&rendered, "Having recorded a goal and lost it, which is a record to put back rather than work to attribute afresh: %s. \"attribute\" restores the goal it was created under.\n",
+		// Where to get those words back is said per item rather than here, because
+		// it differs per item: "read" says whether the tracker kept them, and where
+		// it did not they are outside the tracker altogether.
+		fmt.Fprintf(&rendered, "Having recorded a goal and lost it, which is a record destroyed rather than work to attribute afresh: %s. \"read\" one to see whether the tracker kept the words; \"attribute\" then puts them back.\n",
 			namedItems(lost))
 	}
 	if len(unattributed) > 0 {
@@ -1099,7 +1102,7 @@ func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 	// words it recorded; this is whether any goal in force is stated in them, and
 	// it is the difference between an item that traces to intent somebody
 	// approved and one that says it does.
-	fmt.Fprintf(&rendered, "attribution: %s\n", describeAttribution(goals.AttributionOf(item.Notes, item.GoalWitnessed)))
+	fmt.Fprintf(&rendered, "attribution: %s\n", describeAttribution(goals.AttributionOf(item.Notes, item.GoalWitness)))
 	if item.Assignee != "" {
 		fmt.Fprintf(&rendered, "assignee: %s\n", singleLine(item.Assignee, maxSurveyTitleBytes))
 	}
@@ -1142,7 +1145,13 @@ func describeAttribution(attribution goal.Attribution) string {
 	case goal.StateUncheckable:
 		return fmt.Sprintf("it names %q, unchecked: %s", singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason)
 	case goal.StateLost:
-		return "recorded and lost: " + attribution.Reason
+		// The words the tracker kept are quoted where it kept them, because this is
+		// the one line the product manager acts on: restoring an attribution is
+		// naming that goal again, and a line that only said one was lost would send
+		// them looking for what it was. The bound carries the statement as well as
+		// the sentence around it, because a goal cut in half is not the goal to put
+		// back.
+		return "recorded and lost: " + singleLine(attribution.Reason, goal.MaxStatementBytes+maxTrackerFailureBytes)
 	default:
 		return "none recorded: " + attribution.Reason
 	}

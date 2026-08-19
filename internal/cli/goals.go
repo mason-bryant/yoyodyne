@@ -8,6 +8,12 @@ package cli
 // the conversation where the operator can see it. What the harness owns is
 // reading the goals, resolving what an item names against them, and saying
 // which items are attributed to what — which is what this reports.
+//
+// One command here does write, and it is the same boundary rather than an
+// exception to it: witnessing copies the goal an item's own notes already state
+// into the tracker's metadata, where replacing those notes cannot reach it. It
+// decides nothing about any work, which is precisely why it can run over a
+// backlog somebody else attributed.
 
 import (
 	"context"
@@ -36,7 +42,10 @@ type goalsOutput struct {
 	LinkProblems []goal.LinkProblem `json:"link_problems,omitempty"`
 	// Attributions are the admitted work items and what each says it is for.
 	Attributions []itemAttribution `json:"attributions,omitempty"`
-	Error        string            `json:"error,omitempty"`
+	// Witnessed are the items a sweep recorded a witness on, and the goal each
+	// one's own notes stated.
+	Witnessed []itemWitness `json:"witnessed,omitempty"`
+	Error     string        `json:"error,omitempty"`
 }
 
 // itemAttribution is one admitted work item and the goal it serves, as the
@@ -49,6 +58,15 @@ type itemAttribution struct {
 	Attribution goal.Attribution `json:"attribution"`
 }
 
+// itemWitness is one item a sweep witnessed, and what it witnessed. Failure is
+// carried per item rather than stopping the sweep: a tracker that refused one
+// write has not made the other items less worth protecting.
+type itemWitness struct {
+	WorkItemID string `json:"work_item_id"`
+	Goal       string `json:"goal"`
+	Failure    string `json:"failure,omitempty"`
+}
+
 func runGoals(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printGoalsUsage(stdout)
@@ -59,6 +77,8 @@ func runGoals(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return listGoals(args[1:], stdout, stderr)
 	case "attribution":
 		return reportAttribution(ctx, args[1:], stdout, stderr)
+	case "witness":
+		return witnessRecordedGoals(ctx, args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown goals command %q\n\n", args[0])
 		printGoalsUsage(stderr)
@@ -156,6 +176,89 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 	return attributionExitCode(attributions)
 }
 
+// witnessRecordedGoals records, on every admitted item whose notes state a goal
+// and which the tracker holds no witness for, the goal those notes state. It is
+// what closes the gap the witness would otherwise leave: an attribution written
+// before the witness existed is protected by nothing, and replacing its notes
+// tomorrow would leave it reading as work nobody ever attributed.
+//
+// It writes no attribution, which is why it is here at all. What it stores is
+// what the item already says about itself, copied to where a careless writer
+// cannot reach it — no judgement about what any work is for, and nothing the
+// product manager did not already record in the conversation.
+//
+// One item's failure does not end the sweep. A tracker that refused one write
+// has not made the rest less worth protecting, and every failure is named.
+func witnessRecordedGoals(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	flags := newGoalsFlags("goals witness", stderr)
+	if code, ok := flags.parse(args); !ok {
+		return code
+	}
+	parts, err := buildComponents(*flags.configPath)
+	if err != nil {
+		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
+	}
+	tracker := parts.tracker()
+	admitted, err := admittedWorkItems(ctx, tracker)
+	if err != nil {
+		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
+	}
+
+	witnessed, failures := recordGoalWitnesses(ctx, tracker, admitted)
+	if *flags.jsonOutput {
+		if code := writeJSON(stdout, stderr, goalsOutput{Witnessed: witnessed}); code != 0 {
+			return code
+		}
+	} else {
+		printWitnessed(stdout, len(admitted), witnessed)
+	}
+	if failures > 0 {
+		return 1
+	}
+	return 0
+}
+
+// recordGoalWitnesses is the sweep itself: it writes a witness for every item
+// whose notes state a goal and which carries none, and reports what it wrote
+// and how many writes the tracker refused.
+func recordGoalWitnesses(ctx context.Context, tracker beads.Client, admitted []beads.WorkItem) ([]itemWitness, int) {
+	var witnessed []itemWitness
+	failures := 0
+	for _, item := range admitted {
+		statement, records := goal.NamedIn(item.Notes)
+		// An item stating no goal is left alone: there is nothing to witness, and a
+		// witness written over one would turn work nobody has attributed yet into
+		// work that reads as having lost an attribution it never had. One already
+		// witnessed is left alone too — the witness records what was written, and
+		// rewriting it every sweep would be a write per item for no fact gained.
+		if !records || item.GoalWitness.Recorded {
+			continue
+		}
+		recorded := itemWitness{WorkItemID: item.ID, Goal: statement}
+		writeCtx, cancel := context.WithTimeout(ctx, goalsTrackerTimeout)
+		_, err := tracker.RecordGoalWitness(writeCtx, item.ID, statement)
+		cancel()
+		if err != nil {
+			recorded.Failure = err.Error()
+			failures++
+		}
+		witnessed = append(witnessed, recorded)
+	}
+	return witnessed, failures
+}
+
+func printWitnessed(stdout io.Writer, admitted int, witnessed []itemWitness) {
+	fmt.Fprintf(stdout, "%d admitted item(s): %d newly witnessed, %d already witnessed or recording no goal\n",
+		admitted, len(witnessed), admitted-len(witnessed))
+	for _, entry := range witnessed {
+		if entry.Failure != "" {
+			fmt.Fprintf(stdout, "  %s could not be witnessed: %s\n", entry.WorkItemID, entry.Failure)
+			continue
+		}
+		fmt.Fprintf(stdout, "  %s witnessed: %s\n", entry.WorkItemID, entry.Goal)
+	}
+}
+
 // attributionsOf judges every admitted item against the goals: what the item
 // records, and what the tracker witnesses was once recorded on it. It is one
 // function rather than a loop inside the command so that what the audit reports
@@ -168,7 +271,7 @@ func attributionsOf(admitted []beads.WorkItem, goals goal.Set) []itemAttribution
 			Title:       item.Title,
 			Status:      item.Status,
 			Priority:    item.Priority,
-			Attribution: goals.AttributionOf(item.Notes, item.GoalWitnessed),
+			Attribution: goals.AttributionOf(item.Notes, item.GoalWitness),
 		})
 	}
 	return attributions
@@ -244,10 +347,10 @@ func printAttributions(stdout io.Writer, attributions []itemAttribution, goals g
 		saying string
 	}{
 		// The destroyed attributions are listed first, above the wrong ones. They
-		// are the only group where what to do is known exactly — put back what was
-		// written — and the only one that got there without anybody deciding
-		// anything.
-		{goal.StateLost, "having recorded a goal and lost it, which is a record to restore rather than a judgement to make"},
+		// are the only group that got there without anybody deciding anything, and
+		// the only one where the answer may already be known: each item's own line
+		// says whether the tracker kept the words to put back.
+		{goal.StateLost, "having recorded a goal and lost it, which is a record destroyed rather than a judgement nobody made"},
 		{goal.StateUnresolved, "naming a goal no goals document states, which is a claim to correct"},
 		{goal.StateUnattributed, "naming no goal, which is what work admitted before goals were checked looks like"},
 		{goal.StateAttributed, "serving a recorded goal"},
@@ -357,7 +460,7 @@ func reportGoalsError(stdout, stderr io.Writer, jsonOutput bool, err error) int 
 }
 
 func printGoalsUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo goals <list|attribution> [options]
+	fmt.Fprintln(writer, `Usage: yoyo goals <list|attribution|witness> [options]
 
 The goals the repository records, read from the goals artifacts themselves: each
 statement under a goals document's `+"`Goals`"+` heading is a goal that work can be
@@ -370,6 +473,8 @@ what the harness owns is resolving what an item names and saying what it found.
 
   list          the goals work may be attributed to, and where each is stated
   attribution   what each admitted work item says it is for
+  witness       record, where a careless writer cannot reach it, the goal each
+                admitted item's notes already state
 
 An item admitted before goals were checked names none. That is reported and is
 not a failure: it is somebody's to attribute, and nothing refuses to run it.
@@ -377,6 +482,12 @@ not a failure: it is somebody's to attribute, and nothing refuses to run it.
 which is a claim that is wrong rather than one nobody has made, and for an item
 the tracker witnesses recorded a goal and no longer carries one, which is a
 record something wrote over rather than a judgement nobody made.
+
+"witness" is the one command here that writes, and it writes no attribution: the
+goal it stores is the one the item's own notes state, copied into the tracker's
+metadata so that replacing those notes is a loss "attribution" can report rather
+than one it cannot see. An attribution made before this existed carries no
+witness until it is swept, which is why it is worth running once over a backlog.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)

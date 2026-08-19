@@ -185,9 +185,10 @@ func TestTheAuditFailsAnItemWhoseRecordedGoalWasWrittenOver(t *testing.T) {
 			"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
 			"priority": 1, "issue_type": "task",
 			// Everything a careless writer left behind, and nothing of what it
-			// replaced.
+			// replaced — except in the metadata it could not reach, which is where
+			// the goal that was written survives it.
 			"notes":    "Constraints from the architect, recorded 2026-08-19.",
-			"metadata": map[string]any{"yoyodyne_goal_recorded": 1},
+			"metadata": map[string]any{"yoyodyne_goal_recorded": autonomy},
 		}},
 		"blocked": {{
 			// Beside it, an item that genuinely predates the check: no goal, and no
@@ -232,11 +233,145 @@ func TestTheAuditFailsAnItemWhoseRecordedGoalWasWrittenOver(t *testing.T) {
 		"having recorded a goal and lost it",
 		"yoyodyne-ifd.102.2",
 		"written over rather than never made",
+		// The words to put back, quoted where the tracker kept them. A report that
+		// only said an attribution was destroyed would leave whoever reads it to
+		// re-derive a judgement somebody already made.
+		autonomy,
 	} {
 		if !strings.Contains(report, want) {
 			t.Fatalf("report = %q, want it to contain %q", report, want)
 		}
 	}
+}
+
+// The sweep that closes the gap the witness leaves behind it: work attributed
+// before any of this existed carries no witness, so replacing its notes would
+// still read as work nobody ever attributed. It copies each item's own recorded
+// goal to where a careless writer cannot reach it, and judges nothing.
+func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	bd := &sweepRunner{listed: map[string][]map[string]any{
+		"open": {
+			// Attributed long before the witness existed: the goal is in the notes
+			// and nothing outside them says so.
+			{"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open",
+				"priority": 1, "issue_type": "task", "notes": "Admitted long ago.\n\n" + goal.Note(autonomy)},
+			// Already witnessed: nothing to do, and writing again would be a second
+			// write per item on every sweep.
+			{"id": "yoyodyne-ifd.68", "title": "Slack reporting", "status": "open",
+				"priority": 2, "issue_type": "task", "notes": goal.Note(autonomy),
+				"metadata": map[string]any{"yoyodyne_goal_recorded": autonomy}},
+			// Records no goal: there is nothing to witness, and a witness written
+			// here would turn work nobody has attributed yet into work that reads as
+			// having lost an attribution it never had. This is the one the sweep must
+			// not touch.
+			{"id": "yoyodyne-ifd.45", "title": "Admitted long ago", "status": "open",
+				"priority": 3, "issue_type": "task", "notes": "Admitted by hand."},
+		},
+	}}
+
+	tracker := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
+	admitted, err := admittedWorkItems(context.Background(), tracker)
+	if err != nil {
+		t.Fatalf("admittedWorkItems() error = %v", err)
+	}
+	witnessed, failures := recordGoalWitnesses(context.Background(), tracker, admitted)
+	if failures != 0 {
+		t.Fatalf("witnessed = %#v", witnessed)
+	}
+	if len(bd.written) != 1 || bd.written["yoyodyne-ifd.102.2"] != autonomy {
+		t.Fatalf("the sweep wrote %#v, want the one unwitnessed attributed item", bd.written)
+	}
+
+	var rendered bytes.Buffer
+	printWitnessed(&rendered, len(admitted), witnessed)
+	for _, want := range []string{"1 newly witnessed", "yoyodyne-ifd.102.2 witnessed: " + autonomy} {
+		if !strings.Contains(rendered.String(), want) {
+			t.Fatalf("witness stdout = %q, want it to contain %q", rendered.String(), want)
+		}
+	}
+
+	// The item it just witnessed now reads as protected: replacing its notes
+	// tomorrow is a loss the audit reports and fails, which is the whole point of
+	// having swept it. Before the sweep the same replacement read as work nobody
+	// had attributed.
+	goals := goal.Set{Sources: []string{"v1-goals"}, Goals: []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}}}
+	swept := beads.WorkItem{ID: "yoyodyne-ifd.102.2", Notes: "Constraints from the architect.",
+		GoalWitness: goal.Witness{Recorded: true, Statement: bd.written["yoyodyne-ifd.102.2"]}}
+	if lost := goals.AttributionOf(swept.Notes, swept.GoalWitness); lost.State != goal.StateLost || lost.Recorded != autonomy {
+		t.Fatalf("a swept item is not protected: %#v", lost)
+	}
+
+	// An item the tracker refused is named and does not stop the sweep, and the
+	// sweep reports the failure: a sweep reported as done while an item stayed
+	// uncovered is how a gap gets believed closed.
+	refusing := &sweepRunner{
+		listed:  map[string][]map[string]any{"open": {{"id": "yoyodyne-ifd.102.2", "title": "Triage docket", "status": "open", "priority": 1, "issue_type": "task", "notes": goal.Note(autonomy)}}},
+		refuse:  true,
+		refusal: "bd: the tracker is read-only",
+	}
+	refused := beads.Client{Runner: refusing, Binary: "bd-test", Dir: "/repo"}
+	unwitnessed, err := admittedWorkItems(context.Background(), refused)
+	if err != nil {
+		t.Fatalf("admittedWorkItems() error = %v", err)
+	}
+	attempted, refusals := recordGoalWitnesses(context.Background(), refused, unwitnessed)
+	if refusals != 1 || len(attempted) != 1 || attempted[0].Failure == "" {
+		t.Fatalf("a refused write was not reported: %#v", attempted)
+	}
+	var refusedReport bytes.Buffer
+	printWitnessed(&refusedReport, len(unwitnessed), attempted)
+	if !strings.Contains(refusedReport.String(), "yoyodyne-ifd.102.2 could not be witnessed") {
+		t.Fatalf("witness stdout = %q", refusedReport.String())
+	}
+}
+
+// sweepRunner is a bd that answers listings and keeps what a witness wrote, so
+// a sweep can be checked for what it did and did not touch.
+type sweepRunner struct {
+	listed  map[string][]map[string]any
+	written map[string]string
+	refuse  bool
+	refusal string
+}
+
+func (r *sweepRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	if len(command.Args) > 0 && command.Args[0] == "update" {
+		if r.refuse {
+			return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: r.refusal}, nil
+		}
+		id := command.Args[1]
+		for _, argument := range command.Args {
+			statement, carried := strings.CutPrefix(argument, "--set-metadata=yoyodyne_goal_recorded=")
+			if !carried {
+				continue
+			}
+			if r.written == nil {
+				r.written = map[string]string{}
+			}
+			r.written[id] = statement
+			item := map[string]any{"id": id, "title": "t", "status": "open", "priority": 1, "issue_type": "task",
+				"metadata": map[string]any{"yoyodyne_goal_recorded": statement}}
+			encoded, err := json.Marshal([]map[string]any{item})
+			if err != nil {
+				return execution.ProcessResult{}, err
+			}
+			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: string(encoded)}, nil
+		}
+	}
+	listed := []map[string]any{}
+	for _, argument := range command.Args {
+		if status, asked := strings.CutPrefix(argument, "--status="); asked {
+			listed = r.listed[status]
+		}
+	}
+	encoded, err := json.Marshal(listed)
+	if err != nil {
+		return execution.ProcessResult{}, err
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: string(encoded)}, nil
 }
 
 func TestTheAuditFailsAWrongAttributionAndNotAMissingOne(t *testing.T) {
@@ -268,7 +403,7 @@ func TestTheAuditSeparatesWorkWithNoGoalFromWorkWhoseGoalIsWrong(t *testing.T) {
 	}
 	attributions := []itemAttribution{
 		{WorkItemID: "ifd.1", Title: "Attributed work", Attribution: goals.Attribute("Maintain a traceable chain.")},
-		{WorkItemID: "ifd.2", Title: "Legacy work", Attribution: goals.AttributionOf("Admitted long ago.", false)},
+		{WorkItemID: "ifd.2", Title: "Legacy work", Attribution: goals.AttributionOf("Admitted long ago.", goal.Witness{})},
 		{WorkItemID: "ifd.3", Title: "Misattributed work", Attribution: goals.Attribute("Ship the prototype.")},
 	}
 
@@ -314,7 +449,7 @@ func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 	lost := []itemAttribution{
 		{WorkItemID: "ifd.1"},
 		{WorkItemID: "ifd.102.2", Title: "Triage docket", Status: "open", Priority: 1,
-			Attribution: unreadable.AttributionOf("Constraints from the architect.", true)},
+			Attribution: unreadable.AttributionOf("Constraints from the architect.", goal.Witness{Recorded: true, Statement: "Run development nearly autonomously."})},
 	}
 	var withLoss bytes.Buffer
 	printAttributions(&withLoss, lost, unreadable)

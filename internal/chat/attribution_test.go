@@ -80,7 +80,7 @@ func TestAdmittedWorkRecordsTheGoalItResolvedTo(t *testing.T) {
 	}
 	// What the harness writes is what it reads back: the item it just created
 	// resolves to the goal it was admitted under.
-	if !options.Goals.AttributionOf(tracker.created[0].Notes, false).Resolved() {
+	if !options.Goals.AttributionOf(tracker.created[0].Notes, goal.Witness{}).Resolved() {
 		t.Fatalf("the admitted item does not resolve to a goal: %q", tracker.created[0].Notes)
 	}
 }
@@ -147,7 +147,7 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	if len(listed) != 1 {
 		t.Fatalf("listed = %#v", listed)
 	}
-	attribution := options.Goals.AttributionOf(listed[0].Notes, listed[0].GoalWitnessed)
+	attribution := options.Goals.AttributionOf(listed[0].Notes, listed[0].GoalWitness)
 	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
 		t.Fatalf("the decomposition child does not resolve to a goal: %#v\nnotes:\n%s", attribution, listed[0].Notes)
 	}
@@ -157,15 +157,22 @@ func TestADecompositionChildKeepsTheGoalItWasCreatedUnder(t *testing.T) {
 	if !strings.Contains(listed[0].Notes, "Created under yoyodyne-ifd.102, decomposing it") {
 		t.Fatalf("the child lost its provenance:\n%s", listed[0].Notes)
 	}
-	// And the tracker was told, outside those notes, that a goal was written here.
+	// And the tracker was told, outside those notes, which goal was written here.
 	// That is what survives somebody replacing them, and it is why the loss would
 	// be reported next time rather than read as work nobody has attributed yet.
-	if !listed[0].GoalWitnessed {
-		t.Fatalf("the creation left no witness that a goal was recorded: %#v", listed[0])
+	if listed[0].GoalWitness.Statement != recordedGoal {
+		t.Fatalf("the creation left no witness of the goal it recorded: %#v", listed[0].GoalWitness)
 	}
-	wiped := beads.WorkItem{Notes: "Constraints from the architect.", GoalWitnessed: listed[0].GoalWitnessed}
-	if state := options.Goals.AttributionOf(wiped.Notes, wiped.GoalWitnessed).State; state != goal.StateLost {
-		t.Fatalf("replacing the child's notes reads as %q rather than a lost attribution", state)
+	wiped := beads.WorkItem{Notes: "Constraints from the architect.", GoalWitness: listed[0].GoalWitness}
+	lost := options.Goals.AttributionOf(wiped.Notes, wiped.GoalWitness)
+	if lost.State != goal.StateLost {
+		t.Fatalf("replacing the child's notes reads as %q rather than a lost attribution", lost.State)
+	}
+	// And what it takes to put it back travels with the loss, so the child is
+	// recoverable from the tracker rather than from somebody's memory of the
+	// decomposition that made it.
+	if lost.Recorded != recordedGoal {
+		t.Fatalf("the loss does not say which goal to put back: %#v", lost)
 	}
 }
 
@@ -270,7 +277,7 @@ func TestWorkAdmittedBeforeGoalsWereCheckedCanAcquireOne(t *testing.T) {
 		t.Fatalf("appended notes carry no provenance: %q", change.AppendNotes)
 	}
 	// The item, with what was appended, now resolves.
-	attribution := options.Goals.AttributionOf(legacy+"\n\n"+change.AppendNotes, false)
+	attribution := options.Goals.AttributionOf(legacy+"\n\n"+change.AppendNotes, goal.Witness{})
 	if !attribution.Resolved() || attribution.Goal.ArtifactID != "v1-goals" {
 		t.Fatalf("attribution = %#v", attribution)
 	}
@@ -342,7 +349,7 @@ func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 		// goal forward. It is not legacy work, and the survey must not offer it as
 		// something to attribute afresh: the goal it served is in the record of
 		// what was written on it.
-		{ID: "yoyodyne-ifd.4", Title: "Overwritten work", Status: "open", Notes: "Constraints from the architect.", GoalWitnessed: true},
+		{ID: "yoyodyne-ifd.4", Title: "Overwritten work", Status: "open", Notes: "Constraints from the architect.", GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal}},
 	}, goals)
 
 	// The survey is where the product manager would go to attribute the backlog,
@@ -353,7 +360,7 @@ func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 		"1 of 4 name a goal the goals state, 1 name none, 1 name a goal the goals do not state, and 1 recorded a goal and lost it",
 		"yoyodyne-ifd.2",
 		"yoyodyne-ifd.3",
-		"a record to put back rather than work to attribute afresh: yoyodyne-ifd.4",
+		"a record destroyed rather than work to attribute afresh: yoyodyne-ifd.4",
 		`"attribute" records a goal`,
 	} {
 		if !strings.Contains(rendered, want) {
@@ -390,9 +397,9 @@ func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 	// tracker's own record of what was written rather than on any goals document.
 	lost := renderOpenQueueEvidence([]beads.WorkItem{
 		{ID: "yoyodyne-ifd.1", Status: "open"},
-		{ID: "yoyodyne-ifd.4", Status: "open", Notes: "Constraints from the architect.", GoalWitnessed: true},
+		{ID: "yoyodyne-ifd.4", Status: "open", Notes: "Constraints from the architect.", GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal}},
 	}, goal.Set{})
-	if !strings.Contains(lost, "a record to put back: yoyodyne-ifd.4") {
+	if !strings.Contains(lost, "recorded a goal and no longer carry it: yoyodyne-ifd.4") {
 		t.Fatalf("survey = %q", lost)
 	}
 }
@@ -414,6 +421,26 @@ func TestReadingAnItemSaysWhatItIsFor(t *testing.T) {
 	// work to attribute and the other is a claim to correct.
 	if !strings.Contains(wrong, "Grow the ecosystem.") || strings.Contains(wrong, "none recorded") {
 		t.Fatalf("rendered item = %q", wrong)
+	}
+	// An item whose notes lost their goal is read as having lost it, and the words
+	// the tracker kept are quoted: restoring an attribution is naming that goal
+	// again, and this is the line the product manager acts on. Reading the item is
+	// what the survey sends them to for exactly this.
+	destroyed := renderWorkItemEvidence(beads.WorkItem{
+		ID: "yoyodyne-ifd.4", Notes: "Constraints from the architect.",
+		GoalWitness: goal.Witness{Recorded: true, Statement: recordedGoal},
+	}, goals)
+	if !strings.Contains(destroyed, "attribution: recorded and lost") || !strings.Contains(destroyed, recordedGoal) {
+		t.Fatalf("rendered item = %q", destroyed)
+	}
+	// And where the tracker kept no words, it says so rather than implying a
+	// record somebody could go and read.
+	bare := renderWorkItemEvidence(beads.WorkItem{
+		ID: "yoyodyne-ifd.5", Notes: "Constraints from the architect.",
+		GoalWitness: goal.Witness{Recorded: true},
+	}, goals)
+	if !strings.Contains(bare, "recovered from outside the tracker") {
+		t.Fatalf("rendered item = %q", bare)
 	}
 }
 

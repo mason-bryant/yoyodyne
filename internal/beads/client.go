@@ -46,12 +46,12 @@ type WorkItem struct {
 	// it. It is absent from an item nothing has ever priced, which is a different
 	// fact from an item that cost nothing.
 	Cost *Cost
-	// GoalWitnessed says the tracker records that the harness once wrote a goal
-	// onto this item. It is kept in the tracker's metadata rather than in the
-	// notes the goal itself is written in, because notes are what a careless
-	// writer replaces: an item whose notes lost their goal still carries this,
-	// which is what tells a destroyed attribution from one nobody ever made.
-	GoalWitnessed bool
+	// GoalWitness is what the tracker records, outside this item's notes, about a
+	// goal having been written into them. It is kept there because notes are what
+	// a careless writer replaces: an item whose notes lost their goal still
+	// carries this, which is what tells a destroyed attribution from one nobody
+	// ever made and what says which goal to put back.
+	GoalWitness goal.Witness
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -76,17 +76,39 @@ const (
 	costUnknownKey = "yoyodyne_cost_unknown_runs"
 )
 
-// goalWitnessKey is where the tracker records that a goal was written onto an
-// item. It holds no goal — the goal is in the notes, which is where the product
-// manager's judgement is read from and the only place it is written — and says
-// only that one was written, which is the fact the notes cannot keep about
-// themselves once something replaces them.
+// goalWitnessKey is where the tracker records the goal that was written onto an
+// item. The notes remain where an attribution is made and read from; this is a
+// copy kept where replacing those notes cannot reach it, so a destroyed
+// attribution can be told from one nobody made and put back from the words
+// rather than judged again.
 const goalWitnessKey = "yoyodyne_goal_recorded"
 
-// goalWitness is the witness as a creation writes it. bd takes whole metadata
-// as JSON when an item is created and one key at a time when it is updated, so
-// the same fact is written two ways; it is read back leniently for that reason.
-var goalWitness = fmt.Sprintf(`{%q:1}`, goalWitnessKey)
+// witnessValue is what the witness holds for one goal: the statement itself
+// where it fits, and a bare "1" where it does not. The bound is the one a goals
+// document is already held to, so anything a goal can actually be stated in is
+// carried whole; something longer is witnessed without its words rather than
+// stored truncated, because a statement cut in half is not the goal and would
+// be put back as if it were.
+func witnessValue(statement string) string {
+	trimmed := strings.TrimSpace(statement)
+	if trimmed == "" || len(trimmed) > goal.MaxStatementBytes {
+		return "1"
+	}
+	return trimmed
+}
+
+// creationMetadata renders the metadata a creation carries. bd takes an item's
+// whole metadata as one JSON object at creation — unlike an update, which sets
+// one key — so this flag owns every key the created item will have, and any
+// future key has to be added to the map here rather than as a second
+// --metadata that would replace this one.
+func creationMetadata(entries map[string]string) (string, error) {
+	encoded, err := json.Marshal(entries)
+	if err != nil {
+		return "", fmt.Errorf("encode bd metadata: %w", err)
+	}
+	return string(encoded), nil
+}
 
 // costPrecision is how many decimal places a recorded price keeps. A single
 // invocation can cost fractions of a cent, and a ledger that rounded each item
@@ -235,12 +257,16 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	}
 	if notes := strings.TrimSpace(item.Notes); notes != "" {
 		args = append(args, "--notes="+notes)
-		if _, records := goal.NamedIn(notes); records {
+		if statement, records := goal.NamedIn(notes); records {
 			// The witness is derived from what is about to be written rather than
 			// asked of the caller. A caller that had to remember it would eventually
 			// not, and an attribution written without one is exactly an attribution
 			// whose loss goes unnoticed.
-			args = append(args, "--metadata="+goalWitness)
+			metadata, err := creationMetadata(map[string]string{goalWitnessKey: witnessValue(statement)})
+			if err != nil {
+				return WorkItem{}, err
+			}
+			args = append(args, "--metadata="+metadata)
 		}
 	}
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
@@ -295,8 +321,8 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	}
 	if notes := strings.TrimSpace(change.AppendNotes); notes != "" {
 		args = append(args, "--append-notes="+notes)
-		if _, records := goal.NamedIn(notes); records {
-			args = append(args, "--set-metadata="+goalWitnessKey+"=1")
+		if statement, records := goal.NamedIn(notes); records {
+			args = append(args, "--set-metadata="+goalWitnessKey+"="+witnessValue(statement))
 		}
 	}
 	if change.Priority != nil {
@@ -408,6 +434,41 @@ func (c Client) changeBlocker(ctx context.Context, command, applied, id, blocker
 		return fmt.Errorf("unexpected bd dependency response: status=%q issue=%q blocker=%q", response.Status, response.IssueID, response.DependsOnID)
 	}
 	return nil
+}
+
+// RecordGoalWitness records, outside an item's notes, the goal those notes
+// already state. It writes no attribution and makes no judgement: the statement
+// it stores is one the caller read off the item itself, which is why this can
+// run over work the product manager attributed long ago without deciding
+// anything on their behalf.
+//
+// It exists because an attribution written before the witness did is protected
+// by nothing: the notes can be replaced tomorrow and the item afterwards reads
+// as work nobody ever attributed. Nothing here reaches an item whose notes state
+// no goal — there is nothing to witness, and writing one would turn an
+// unattributed item into a permanently lost one.
+//
+// What bd echoes back is verified, for the reason a price is: a witness that was
+// not actually stored would leave the caller believing an item was covered.
+func (c Client) RecordGoalWitness(ctx context.Context, id, statement string) (WorkItem, error) {
+	if err := validateIssueID(id); err != nil {
+		return WorkItem{}, err
+	}
+	if strings.TrimSpace(statement) == "" {
+		return WorkItem{}, errors.New("the goal to witness is required")
+	}
+	data, err := c.run(ctx, "update", id, "--set-metadata="+goalWitnessKey+"="+witnessValue(statement), "--json")
+	if err != nil {
+		return WorkItem{}, err
+	}
+	item, err := decodeSingleWorkItem(data)
+	if err != nil {
+		return WorkItem{}, err
+	}
+	if !item.GoalWitness.Recorded {
+		return WorkItem{}, fmt.Errorf("work item %s carries no goal witness after being witnessed", item.ID)
+	}
+	return item, nil
 }
 
 // RecordCost stores what the runs made for one work item have cost, so the
@@ -599,37 +660,47 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 		}
 	}
 	item.Cost = costFromMetadata(raw.Metadata)
-	item.GoalWitnessed = goalWitnessedIn(raw.Metadata)
+	item.GoalWitness = goalWitnessIn(raw.Metadata)
 	return item, nil
 }
 
-// goalWitnessedIn reads whether the tracker records that a goal was written onto
-// an item. Anything the key holds but a false or empty value counts, because the
-// two ways the harness writes it are stored differently — a creation's JSON and
-// an update's key=value do not come back as the same type — and because what is
-// being asked is whether the key is there at all. Reading it strictly would turn
-// a stricter tracker's coercion into a destroyed attribution reported as a gap,
-// which is the failure this exists to catch.
-func goalWitnessedIn(metadata map[string]json.RawMessage) bool {
+// goalWitnessIn reads what the tracker records about a goal written onto an
+// item: that one was, and the words where it kept them. Anything the key holds
+// but a false or empty value counts as a witness, because the harness writes it
+// two ways — a creation's JSON object and an update's key=value, which bd does
+// not store as the same type — and because what is being asked first is whether
+// the key is there at all. Reading it strictly would turn the tracker's own
+// coercion into a destroyed attribution reported as a gap, which is the failure
+// this exists to catch. A value that is a bare marker rather than a statement
+// witnesses the loss without its words, which is what an item witnessed before
+// the words were kept carries.
+func goalWitnessIn(metadata map[string]json.RawMessage) goal.Witness {
 	raw, present := metadata[goalWitnessKey]
 	if !present {
-		return false
+		return goal.Witness{}
 	}
 	var value any
 	if err := json.Unmarshal(raw, &value); err != nil {
-		return false
+		return goal.Witness{}
 	}
 	switch witnessed := value.(type) {
 	case nil:
-		return false
+		return goal.Witness{}
 	case bool:
-		return witnessed
+		return goal.Witness{Recorded: witnessed}
 	case string:
-		return strings.TrimSpace(witnessed) != "" && witnessed != "0" && !strings.EqualFold(witnessed, "false")
+		trimmed := strings.TrimSpace(witnessed)
+		if trimmed == "" || trimmed == "0" || strings.EqualFold(trimmed, "false") {
+			return goal.Witness{}
+		}
+		if trimmed == "1" || strings.EqualFold(trimmed, "true") {
+			return goal.Witness{Recorded: true}
+		}
+		return goal.Witness{Recorded: true, Statement: trimmed}
 	case float64:
-		return witnessed != 0
+		return goal.Witness{Recorded: witnessed != 0}
 	default:
-		return true
+		return goal.Witness{Recorded: true}
 	}
 }
 

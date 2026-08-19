@@ -540,49 +540,69 @@ func TestClientReadsOnlyACompleteRecordedPrice(t *testing.T) {
 
 // The attribution lives in an item's notes, and notes are what a careless
 // writer replaces wholesale. So a write that puts a goal into them also tells
-// the tracker, in metadata the same write cannot reach, that a goal was written
+// the tracker, in metadata the same write cannot reach, which goal was written
 // here — and a read gives that back. Without it an item whose goal was destroyed
 // is indistinguishable from one that never had a goal, which is the one state
-// the audit deliberately does not fail.
+// the audit deliberately does not fail; without the words, it is distinguishable
+// and still unrecoverable.
 //
 // The two spellings are bd's, not a choice: it takes an item's whole metadata as
 // JSON when the item is created and one key at a time when it is updated. Both
-// were run against a real bd, and a replace-style `bd update --notes=` was
-// confirmed to leave the metadata standing.
+// were run against a real bd, which stores a `--set-metadata=key=value` split at
+// the first `=` and returns the rest verbatim; a replace-style
+// `bd update --notes=` was confirmed to leave the metadata standing.
 func TestAWrittenGoalIsWitnessedWhereReplacingTheNotesCannotReachIt(t *testing.T) {
 	t.Parallel()
 
+	autonomy := "Run development nearly autonomously."
 	created := `{"id":"yoyodyne-9","title":"Triage docket","description":"Stopped work reaches the development manager.",
-	             "status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":1}}`
+	             "status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":"` + autonomy + `"}}`
 	runner := &fakeRunner{responses: []string{created}}
 	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).Create(context.Background(), NewWorkItem{
 		Title:       "Triage docket",
 		Description: "Stopped work reaches the development manager.",
 		Type:        "task",
-		Notes:       "Created under yoyodyne-ifd.102, decomposing it.\n\n" + goal.Note("Run development nearly autonomously."),
+		Notes:       "Created under yoyodyne-ifd.102, decomposing it.\n\n" + goal.Note(autonomy),
 		Parent:      "yoyodyne-ifd.102",
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if !strings.Contains(strings.Join(runner.args[0], " "), `--metadata={"yoyodyne_goal_recorded":1}`) {
+	if !slices.Contains(runner.args[0], `--metadata={"yoyodyne_goal_recorded":"`+autonomy+`"}`) {
 		t.Fatalf("the creation carried no witness: %#v", runner.args[0])
 	}
-	if !item.GoalWitnessed {
-		t.Fatalf("Create() = %#v, want the witness read back", item)
+	// The words, not a flag: what a destroyed attribution is put back from.
+	if item.GoalWitness != (goal.Witness{Recorded: true, Statement: autonomy}) {
+		t.Fatalf("Create() = %#v, want the goal witnessed", item.GoalWitness)
 	}
 
 	// An item that acquires its goal later is witnessed by the same write that
 	// appends it, so an attribution made after the fact is no less protected than
 	// one made at creation.
-	attributed := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":1}}]`}}
+	attributed := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":"` + autonomy + `"}}]`}}
 	if _, err := (Client{Runner: attributed}).Update(context.Background(), "yoyodyne-4", WorkItemChange{
-		AppendNotes: "Attributed to a goal.\n\n" + goal.Note("Run development nearly autonomously."),
+		AppendNotes: "Attributed to a goal.\n\n" + goal.Note(autonomy),
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if !slices.Contains(attributed.args[0], "--set-metadata=yoyodyne_goal_recorded=1") {
+	if !slices.Contains(attributed.args[0], "--set-metadata=yoyodyne_goal_recorded="+autonomy) {
 		t.Fatalf("the attribution carried no witness: %#v", attributed.args[0])
+	}
+
+	// A statement longer than a goals document may state is witnessed without its
+	// words rather than stored cut in half: half a goal is not the goal, and it
+	// would be put back as though it were.
+	long := strings.Repeat("a", goal.MaxStatementBytes+1)
+	oversized := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_goal_recorded":1}}]`}}
+	witnessed, err := (Client{Runner: oversized}).Update(context.Background(), "yoyodyne-4", WorkItemChange{AppendNotes: goal.Note(long)})
+	if err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !slices.Contains(oversized.args[0], "--set-metadata=yoyodyne_goal_recorded=1") {
+		t.Fatalf("an oversized goal was stored rather than witnessed bare: %#v", oversized.args[0])
+	}
+	if witnessed.GoalWitness != (goal.Witness{Recorded: true}) {
+		t.Fatalf("Update() = %#v, want a witness carrying no words", witnessed.GoalWitness)
 	}
 
 	// A write that records no goal witnesses none. The witness says a goal was
@@ -593,11 +613,52 @@ func TestAWrittenGoalIsWitnessedWhereReplacingTheNotesCannotReachIt(t *testing.T
 	if err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if slices.Contains(plain.args[0], "--set-metadata=yoyodyne_goal_recorded=1") {
-		t.Fatalf("a note carrying no goal witnessed one: %#v", plain.args[0])
+	for _, argument := range plain.args[0] {
+		if strings.HasPrefix(argument, "--set-metadata=yoyodyne_goal_recorded=") {
+			t.Fatalf("a note carrying no goal witnessed one: %#v", plain.args[0])
+		}
 	}
-	if updated.GoalWitnessed {
-		t.Fatalf("Update() = %#v, want no witness", updated)
+	if updated.GoalWitness.Recorded {
+		t.Fatalf("Update() = %#v, want no witness", updated.GoalWitness)
+	}
+}
+
+// A goal already recorded in an item's own notes can be witnessed after the
+// fact. It is what covers work attributed before the witness existed, which is
+// otherwise protected by nothing at all, and it decides nothing: the statement
+// is the item's own, read off it and copied where replacing the notes cannot
+// reach it.
+func TestAGoalAlreadyRecordedOnAnItemCanBeWitnessedAfterTheFact(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	runner := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.102.2","title":"Triage docket","status":"open","priority":1,"issue_type":"task",` +
+			`"notes":"Goal served: ` + autonomy + `","metadata":{"yoyodyne_goal_recorded":"` + autonomy + `"}}]`,
+	}}
+	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).RecordGoalWitness(context.Background(), "yoyodyne-ifd.102.2", autonomy)
+	if err != nil {
+		t.Fatalf("RecordGoalWitness() error = %v", err)
+	}
+	want := []string{"update", "yoyodyne-ifd.102.2", "--set-metadata=yoyodyne_goal_recorded=" + autonomy, "--json"}
+	if !reflect.DeepEqual(runner.args[0], want) {
+		t.Fatalf("bd args = %#v, want %#v", runner.args[0], want)
+	}
+	if item.GoalWitness.Statement != autonomy {
+		t.Fatalf("RecordGoalWitness() = %#v", item.GoalWitness)
+	}
+
+	// A witness bd did not actually store is a failure rather than a reported
+	// success: an item believed covered and not covered is worse than one known
+	// to be uncovered.
+	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-4","title":"t","status":"open","priority":1,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unstored}).RecordGoalWitness(context.Background(), "yoyodyne-4", autonomy); err == nil {
+		t.Fatal("RecordGoalWitness() accepted a witness the tracker did not store")
+	}
+	// And there is no goal to witness on an item recording none, so asking is a
+	// mistake rather than a bare marker written over work nobody has attributed.
+	if _, err := (Client{Runner: &fakeRunner{}}).RecordGoalWitness(context.Background(), "yoyodyne-4", "  "); err == nil {
+		t.Fatal("RecordGoalWitness() accepted an empty goal")
 	}
 }
 
@@ -609,17 +670,18 @@ func TestTheGoalWitnessIsReadHoweverTheTrackerStoredIt(t *testing.T) {
 	t.Parallel()
 
 	for _, test := range []struct {
-		stored    string
-		witnessed bool
+		stored string
+		want   goal.Witness
 	}{
-		{`{"yoyodyne_goal_recorded":1}`, true},
-		{`{"yoyodyne_goal_recorded":"1"}`, true},
-		{`{"yoyodyne_goal_recorded":true}`, true},
-		{`{"yoyodyne_goal_recorded":0}`, false},
-		{`{"yoyodyne_goal_recorded":""}`, false},
-		{`{"yoyodyne_goal_recorded":null}`, false},
-		{`{"team":"platform"}`, false},
-		{`{}`, false},
+		{`{"yoyodyne_goal_recorded":"Run development nearly autonomously."}`, goal.Witness{Recorded: true, Statement: "Run development nearly autonomously."}},
+		{`{"yoyodyne_goal_recorded":1}`, goal.Witness{Recorded: true}},
+		{`{"yoyodyne_goal_recorded":"1"}`, goal.Witness{Recorded: true}},
+		{`{"yoyodyne_goal_recorded":true}`, goal.Witness{Recorded: true}},
+		{`{"yoyodyne_goal_recorded":0}`, goal.Witness{}},
+		{`{"yoyodyne_goal_recorded":""}`, goal.Witness{}},
+		{`{"yoyodyne_goal_recorded":null}`, goal.Witness{}},
+		{`{"team":"platform"}`, goal.Witness{}},
+		{`{}`, goal.Witness{}},
 	} {
 		t.Run(test.stored, func(t *testing.T) {
 			t.Parallel()
@@ -631,8 +693,8 @@ func TestTheGoalWitnessIsReadHoweverTheTrackerStoredIt(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Show() error = %v", err)
 			}
-			if item.GoalWitnessed != test.witnessed {
-				t.Fatalf("Show() witnessed = %v, want %v", item.GoalWitnessed, test.witnessed)
+			if item.GoalWitness != test.want {
+				t.Fatalf("Show() witness = %#v, want %#v", item.GoalWitness, test.want)
 			}
 		})
 	}

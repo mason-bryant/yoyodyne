@@ -51,10 +51,17 @@
 // decayed into is the one state deliberately reported without failing.
 //
 // So an attribution the harness writes is witnessed outside the notes, and this
-// package is told whether that witness exists. Notes recording no goal on an
-// item the tracker witnesses one was written on is not a gap somebody has yet to
+// package is told what that witness holds. Notes recording no goal on an item
+// the tracker witnesses one was written on is not a gap somebody has yet to
 // fill; it is a record that was destroyed, and it is reported as its own state
 // and failed rather than grandfathered.
+//
+// The witness carries the goal it saw written, so putting a destroyed
+// attribution back is reading the record rather than judging the work again.
+// What it must never do is answer for the item: the state above is decided from
+// the notes alone, because an attribution the notes lost and the metadata
+// answered for would report as intact while the item stayed empty — the silence
+// this exists to end, arrived at from the other side.
 package goal
 
 import (
@@ -230,6 +237,26 @@ const (
 	StateUncheckable State = "uncheckable"
 )
 
+// Witness is what the tracker records, outside an item's notes, about a goal
+// having been written into them. It exists because the notes are what gets
+// destroyed: a writer that replaces them takes the goal with it, and without
+// something kept elsewhere the item afterwards is indistinguishable from one
+// nobody ever attributed.
+//
+// Statement is the goal as it was written, kept so a destroyed attribution can
+// be put back from the record rather than judged again. It is a copy for
+// recovery and never an answer: what an item serves is resolved from its notes
+// and only from its notes, because an attribution the notes lost but the
+// metadata still answered for would be a loss that healed itself in the report
+// while the item stayed wrong. It is empty on a witness that records only that
+// a goal was written — an item witnessed before the statement was kept, or one
+// whose statement was too long to carry — and then the goal has to be recovered
+// from outside the tracker.
+type Witness struct {
+	Recorded  bool   `json:"recorded"`
+	Statement string `json:"statement,omitempty"`
+}
+
 // Attribution is what one work item says about the goal it serves, judged
 // against what the repository records.
 type Attribution struct {
@@ -239,6 +266,11 @@ type Attribution struct {
 	Named string `json:"named,omitempty"`
 	// Goal is what the attribution resolved to, and is set only when it did.
 	Goal Goal `json:"goal"`
+	// Recorded is the goal the tracker witnesses was written onto the item, set
+	// only on one that lost it and only where the tracker kept the words. It is
+	// what a restoration puts back, and it is not a judgement that the item
+	// currently serves it.
+	Recorded string `json:"recorded,omitempty"`
 	// Reason says what is wrong, and is set on everything but an attribution
 	// that resolved.
 	Reason string `json:"reason,omitempty"`
@@ -498,27 +530,42 @@ func (s Set) Attribute(named string) Attribution {
 	}
 }
 
-// AttributionOf judges what a work item's notes claim, given whether the
-// tracker witnesses that the harness ever wrote a goal onto the item. An item
-// whose notes record no goal and that carries no witness is unattributed rather
-// than wrong: it says nothing, and nothing is not a false claim. One that
-// carries the witness has lost what it said.
+// AttributionOf judges what a work item's notes claim, given what the tracker
+// witnesses about a goal having been written onto the item. An item whose notes
+// record no goal and that carries no witness is unattributed rather than wrong:
+// it says nothing, and nothing is not a false claim. One that carries the
+// witness has lost what it said.
+//
+// The judgement is made from the notes even where the witness carries the goal.
+// The witness says what to put back; it never answers for the item, because a
+// loss the report resolved out of the metadata would be a loss that healed
+// itself in the reading while the item stayed wrong.
 //
 // The witness is a parameter rather than something read out of the notes
 // because the notes are what gets destroyed. Every caller is made to supply it
 // for the same reason: a read path that judged an item without asking would
 // report a destroyed attribution as the one state nothing fails on.
-func (s Set) AttributionOf(notes string, witnessed bool) Attribution {
+func (s Set) AttributionOf(notes string, witness Witness) Attribution {
 	named, recorded := NamedIn(notes)
 	if recorded {
 		return s.Attribute(named)
 	}
-	if witnessed {
-		return Attribution{
-			State: StateLost,
-			Reason: "the tracker witnesses that a goal was recorded on it and its notes no longer carry one, " +
-				"so the attribution was written over rather than never made; it is put back from the record of what was written, not decided again",
+	if witness.Recorded {
+		lost := Attribution{State: StateLost, Recorded: strings.TrimSpace(witness.Statement)}
+		if lost.Recorded != "" {
+			lost.Reason = fmt.Sprintf("the tracker witnesses that it recorded the goal %q and its notes no longer carry one, "+
+				"so the attribution was written over rather than never made; those are the words to put back", lost.Recorded)
+			return lost
 		}
+		// A witness from before the words were kept, or of a statement too long to
+		// carry. That an attribution was destroyed is still known; which goal it
+		// was is not, and saying where it can be found is the whole of what is
+		// honest — inventing one here would be the harness deciding what the work
+		// is for.
+		lost.Reason = "the tracker witnesses that a goal was recorded on it and its notes no longer carry one, " +
+			"so the attribution was written over rather than never made; the tracker does not hold which goal, " +
+			"so it has to be recovered from outside the tracker — the run, the conversation, or the review that recorded it"
+		return lost
 	}
 	return Attribution{State: StateUnattributed, Reason: "it records no goal; nothing on the item says what the work is for"}
 }
