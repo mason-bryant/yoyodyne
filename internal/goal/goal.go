@@ -264,7 +264,7 @@ func NamedIn(notes string) (string, bool) {
 // malformed artifact is reported rather than refusing the whole set.
 func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 	var set Set
-	brief, briefInForce := "", false
+	brief, briefInForce, briefUnreadable := "", false, false
 	for _, recorded := range artifacts.OfKind(artifact.KindBrief) {
 		// A brief in force is the one that names the root, so it wins the naming
 		// from one that is not; with no brief in force, the id of one that ended
@@ -284,6 +284,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
 		if err != nil {
 			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: err.Error()})
+			briefUnreadable = true
 			continue
 		}
 		// A brief stating no goals is not reported here. It is the root of the
@@ -305,6 +306,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		content, err := readGoalsDocument(filepath.Join(repositoryRoot, filepath.FromSlash(recorded.Path)))
 		if err != nil {
 			set.Problems = append(set.Problems, Problem{Path: recorded.Path, Reason: err.Error()})
+			briefUnreadable = true
 			continue
 		}
 		stated, problem := statements(content)
@@ -330,7 +332,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 			})
 		}
 	}
-	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce)
+	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce, briefUnreadable)
 	return set
 }
 
@@ -338,7 +340,7 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 // goals in force are judged: one stated by a document that was superseded or
 // retired is no longer intent anybody has to trace, and reporting it would
 // leave a permanent finding against a decision somebody already made.
-func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInForce bool) []LinkProblem {
+func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInForce, briefUnreadable bool) []LinkProblem {
 	current := make([]Goal, 0, len(goals))
 	for _, candidate := range goals {
 		if candidate.InForce {
@@ -361,6 +363,12 @@ func linkProblems(goals []Goal, briefGoals []BriefGoal, brief string, briefInFor
 			reason = `no artifact of kind "brief" is recorded, so there is no brief goal for a goal to name`
 		case !briefInForce:
 			reason = fmt.Sprintf("%s is no longer in force, so the goals it states are not intent a goal can name", brief)
+		// An unreadable brief is a fourth case, not the third: telling the
+		// operator to add a `Goals` heading to a document that could not be
+		// read would send them to fix the wrong thing. The read failure
+		// itself is already reported with the goals problems.
+		case briefUnreadable:
+			reason = fmt.Sprintf("%s could not be read — the failure is reported with the goals problems — so whether it states goals is unknown and no goal can resolve against it", brief)
 		default:
 			reason = fmt.Sprintf("%s states no goals under a `Goals` heading, so there is no brief goal for a goal to name", brief)
 		}
@@ -655,7 +663,7 @@ func statements(content string) ([]entry, string) {
 	// Anything that is not more of what is being read closes both, which is why
 	// every branch below says so. They are never both set: the trailer is what
 	// ends the statement.
-	open, trailing := false, false
+	open, trailing, adopted := false, false, false
 	var stated []entry
 	for _, raw := range lines {
 		line := strings.TrimSpace(raw)
@@ -715,12 +723,27 @@ func statements(content string) ([]entry, string) {
 		// rather than skipped because it is where the goal names what it supports
 		// in the brief, and it wraps exactly as a statement does.
 		if open && trailer(line) {
-			open, trailing = false, true
+			open, trailing, adopted = false, true, true
 			stated[len(stated)-1].trailer = line
 			continue
 		}
 		if trailing {
-			stated[len(stated)-1].trailer += " " + line
+			// A second emphasized run begins a new trailer rather than
+			// continuing the recorded one. The link reads the Supports
+			// trailer, so the first one matching that prefix wins and an
+			// annotation passes by unread — in either order.
+			if trailer(line) {
+				if supported(stated[len(stated)-1].trailer) == "" && supported(line) != "" {
+					stated[len(stated)-1].trailer = line
+					adopted = true
+				} else {
+					adopted = false
+				}
+				continue
+			}
+			if adopted {
+				stated[len(stated)-1].trailer += " " + line
+			}
 			continue
 		}
 		stated[len(stated)-1].statement += " " + line

@@ -1012,3 +1012,43 @@ func write(t *testing.T, root, relative, content string) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 }
+
+func TestTheSupportsTrailerIsReadWhicheverSideOfAnAnnotationItSits(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// Two trailers under one goal, in both orders. The link reads the Supports
+	// trailer; the annotation is prose beside it, not part of the link and not
+	// something that may swallow it.
+	write(t, root, "docs/product/goals/v1-goals.md", `---
+id: v1-goals
+---
+
+# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from intent to verification.
+  *Supports: every change traces to intent somebody approved.*
+  *Added when the backlog was checked against the brief.*
+- Isolate implementation tasks in harness-managed worktrees.
+  *Added when the backlog was checked against the brief.*
+  *Supports: intent goes in and merged software comes out.*
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+	want := []string{
+		"every change traces to intent somebody approved.",
+		"intent goes in and merged software comes out.",
+	}
+	for i, goal := range set.Goals {
+		if goal.Supports != want[i] {
+			t.Fatalf("goal %d supports = %q, want %q (annotation must not swallow or precede away the link)", i, goal.Supports, want[i])
+		}
+	}
+}

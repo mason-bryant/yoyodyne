@@ -9,7 +9,7 @@ revisions:
     - action: created
       by: architect
       at: 2026-08-18T00:00:00Z
-      reason: identity added with the artifact metadata schema and the document moved into the configured designs home, where nothing could refer to it before; recorded under the architect's authority because a design is the architect's, pending ratification when the role runs. The design's own prose is unchanged.
+      reason: identity added with the artifact metadata schema and the document moved into the configured designs home, where nothing could refer to it before. A design is the architect's; until yoyodyne-ifd.4 delivers that role, its authority is held by the operator, and this entry is that authority exercised by its current holder. The design's own prose is unchanged.
 ---
 
 # Yoyodyne V1 Harness Design
