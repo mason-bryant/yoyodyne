@@ -408,6 +408,68 @@ Not indented, so not part of the entry above it.
 	}
 }
 
+func TestATrailerWrappedAcrossLinesIsNotJoinedIntoTheGoal(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// A trailer long enough to wrap is as ordinary as a goal long enough to wrap,
+	// and joining one into the statement corrupts the recorded goal exactly as
+	// truncating the statement does: the words the document states as the goal
+	// then resolve to nothing.
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Publish that work as pull requests the harness opens, and has the forge
+  merge, on the roles' behalf.
+  *Supports: safety invariants hold whatever the configuration says, and no
+  agent pushes or merges.*
+- Maintain a traceable chain.
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+	statements := stated(set.Goals)
+	whole := "Publish that work as pull requests the harness opens, and has the forge merge, on the roles' behalf."
+	if len(statements) != 2 || statements[0] != whole || statements[1] != "Maintain a traceable chain." {
+		t.Fatalf("goals = %q", statements)
+	}
+	if !set.Attribute(whole).Resolved() {
+		t.Fatalf("the whole statement the document makes does not resolve: %#v", set.Attribute(whole))
+	}
+}
+
+func TestAWrappedLineThatOpensWithEmphasisStillContinuesTheStatement(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The trailer is told from prose by whether the emphasis closes and the
+	// sentence carries on. A continuation that opens with an emphasized phrase —
+	// and closes with one, so that the line begins and ends in a marker — is the
+	// rest of the statement, not an annotation of it.
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Run development nearly autonomously. The human's routine interface is the
+  *product manager*: they state intent and answer *questions*
+  the product manager escalates.
+  *Supports: the human's attention goes only where it is needed.*
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	whole := "Run development nearly autonomously. The human's routine interface is the *product manager*: they state intent and answer *questions* the product manager escalates."
+	if statements := stated(set.Goals); len(statements) != 1 || statements[0] != whole {
+		t.Fatalf("goals = %q", stated(set.Goals))
+	}
+}
+
 func TestAGoalTooLongToNameOnAWorkItemIsReportedRatherThanOffered(t *testing.T) {
 	t.Parallel()
 

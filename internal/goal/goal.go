@@ -362,15 +362,33 @@ var listItemPattern = regexp.MustCompile(`^[-*+]\s+(.*)$`)
 // sentence into a bullet.
 var nestedListItemPattern = regexp.MustCompile(`^\s+(?:[-*+]|\d+[.)])\s`)
 
-// emphasisTrailerPattern matches a line that is wholly emphasized, which is the
-// shape of the `*Supports: ...*` trailer naming what a goal serves upstream. It
-// ends the statement too: the trailer says what the goal is for, and reading it
-// as part of the goal would make the words the document states resolve to
-// nothing. Either spelling of emphasis is a trailer, because a document that
-// bolded the line meant the same thing by it. The whole line has to be the
-// emphasis, so a wrapped sentence that merely *contains* an emphasized phrase
-// still continues the statement.
-var emphasisTrailerPattern = regexp.MustCompile(`^(?:\*{1,2}[^*\s](?:.*[^*\s])?\*{1,2}|_{1,2}[^_\s](?:.*[^_\s])?_{1,2})$`)
+// emphasisOpeningPattern matches a line that opens Markdown emphasis at its
+// very start, in either spelling, with content rather than a space after the
+// marker — which is what tells `*Supports: ...*` from a nested `* bullet`.
+var emphasisOpeningPattern = regexp.MustCompile(`^(\*{1,2}|_{1,2})[^\s]`)
+
+// trailer reports a line under a goal that annotates the goal rather than
+// continuing it: the emphasized `*Supports: ...*` line naming what the goal
+// serves upstream. It is recognised by the emphasis it opens with rather than
+// by where that emphasis closes, because Markdown is hard-wrapped and a trailer
+// long enough to wrap is as ordinary as a goal long enough to wrap. Demanding
+// the closing marker on the same physical line would join a wrapped trailer
+// into the statement, which is the same silent corruption of the recorded goal
+// arrived at from the other side.
+//
+// A line that opens with an emphasized phrase and then carries on in plain text
+// is prose rather than a trailer: the emphasis closed and the sentence went on,
+// so it is the rest of a wrapped statement.
+func trailer(line string) bool {
+	opening := emphasisOpeningPattern.FindStringSubmatch(line)
+	if opening == nil {
+		return false
+	}
+	marker := opening[1]
+	rest := line[len(marker):]
+	closing := strings.Index(rest, marker)
+	return closing < 0 || strings.TrimSpace(rest[closing+len(marker):]) == ""
+}
 
 // statements reads the goals one document states, or says why it states none.
 // A goal is one top-level entry under the `Goals` heading, and its statement is
@@ -382,8 +400,9 @@ var emphasisTrailerPattern = regexp.MustCompile(`^(?:\*{1,2}[^*\s](?:.*[^*\s])?\
 //
 // A statement runs to the first thing that is not more of the same sentence: a
 // blank line, an unindented line, a nested entry, or the emphasized trailer
-// naming what the goal supports. What follows any of those describes the goal
-// rather than being part of it, and none of it is a second goal.
+// naming what the goal supports, wrapped or not. What follows any of those
+// describes the goal rather than being part of it, and none of it is a second
+// goal.
 //
 // The section runs to the next heading at the same level or above, or to any
 // heading stating what the product will not do. Both bounds exist because
@@ -450,7 +469,7 @@ func statements(content string) ([]string, string) {
 		if !open {
 			continue
 		}
-		if !indented(raw) || nestedListItemPattern.MatchString(raw) || emphasisTrailerPattern.MatchString(line) {
+		if !indented(raw) || nestedListItemPattern.MatchString(raw) || trailer(line) {
 			open = false
 			continue
 		}

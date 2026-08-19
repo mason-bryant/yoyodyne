@@ -677,9 +677,14 @@ hard-wrapped, so a goal written across several lines is the ordinary case: the
 lines that continue it are joined with a single space, and the goal is recorded
 whole rather than as its first line. The statement ends at the first thing that
 is not more of the same sentence — a blank line, an unindented line, a nested
-list entry, or a wholly emphasized line such as the `*Supports: ...*` trailer
-naming what the goal serves upstream. Everything after that describes the goal
-rather than being part of it or being another, and a heading below the
+list entry, or the emphasized `*Supports: ...*` trailer naming what the goal
+serves upstream. A trailer is recognised by the emphasis it **opens** with
+rather than by where that emphasis closes, so a trailer hard-wrapped across
+lines ends the statement exactly as a one-line trailer does; a line that opens
+with an emphasized phrase and then carries on in plain text is the rest of a
+wrapped sentence, and continues the statement. Everything after the statement
+ends describes the goal rather than being part of it or being another, and a
+heading below the
 `Goals` heading divides the goals rather than ending them. The section ends at
 the next heading at the same level or above, **or at any heading stating what
 the product will not do** — a `Non-goals` heading ends it wherever it is
