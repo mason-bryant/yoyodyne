@@ -545,6 +545,6 @@ once it is open.
 
 A --message that begins with a slash is carried out as one of those commands
 rather than said to the product manager. The commands that only mean something
-inside a conversation — /work, /wait, /stop, and /exit — are refused there and
+inside a conversation — /work, /wait, /stop, and /exit (alias /quit) — are refused there and
 say what to reach for instead.`)
 }

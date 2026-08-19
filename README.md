@@ -674,7 +674,7 @@ everything else is said to the product manager:
 A slash means the same thing in `yoyo chat --message`: the harness carries the
 command out and the product manager is never asked, because she cannot carry out
 a command and a turn spent trying is a turn you paid for. The four that only
-mean something inside a conversation — `/work`, `/wait`, `/stop`, and `/exit`,
+mean something inside a conversation — `/work`, `/wait`, `/stop`, and `/exit` with its alias `/quit`,
 each of which starts or acts on a run the conversation's own process owns — are
 refused there and say what to reach for instead, rather than being half carried
 out by a process that is about to exit. With `--json` what the command printed
