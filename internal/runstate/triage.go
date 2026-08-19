@@ -72,12 +72,19 @@ const (
 )
 
 // The budgets an action is refused against, which are not the same vocabulary as
-// the actions and must not be printed as though they were. Two of the three
-// actions buy review rounds and are refused by the round budget; the third buys
-// none and has a budget of its own. A refusal that named only the action would
-// leave an operator raising the wrong number.
+// the actions and must not be printed as though they were. A refusal that named
+// only the action would leave an operator raising the wrong number.
+//
+// Two of the three actions buy review rounds and are refused by the round budget
+// as well as by their own. Each also has a budget of its own, and it is not the
+// same question: the round budget bounds what an item may cost, and an action's
+// own budget bounds how many times triage may take that action on one item. An
+// item whose runs stopped before any reviewer verdict has spent no round at all,
+// so the round budget alone would bound nothing.
 const (
 	TriageReviewRoundBudget = "review round"
+	TriageRepairGrantBudget = "repair grant"
+	TriageRerunBudget       = "re-run"
 	TriageMergeRearmBudget  = "merge re-arm"
 )
 
@@ -209,13 +216,14 @@ func (c TriageCounters) RoundsRemaining(limit int) int {
 // per machine, so they bound what one harness will spend on one piece of work
 // however many runs it takes.
 //
-// There are two of them rather than one per action, because that is what the
-// configuration states and this is deliberately not the place that invents
-// another number. `triage.review_rounds_cap` is the ceiling on what an item may
-// cost, and both of the actions that buy rounds — another repair, another whole
-// run — are refused against it. A merge re-arm buys no round at all, so it is
-// the one action that needs a bound of its own, and it takes the size of the
-// integration retries a single run is already permitted.
+// Every one of them is supplied rather than decided here: this is deliberately
+// not the place that invents a number, and a caller assembling them is where
+// each one's size is argued for. `triage.review_rounds_cap` is the ceiling on
+// what an item may cost, and both of the actions that buy rounds — another
+// repair, another whole run — are refused against it as well as against their
+// own. Each action also has a bound of its own, because the rounds bound what an
+// item costs rather than how often triage may decide the same thing about it,
+// and an item whose runs never reach a reviewer costs no rounds at all.
 type TriageCaps struct {
 	// ReviewRounds is the ceiling on the rounds one item may accumulate across
 	// every run of it: `triage.review_rounds_cap`. It is what a repair grant is
@@ -223,6 +231,19 @@ type TriageCaps struct {
 	// anybody asks permission for — nothing asks to be reviewed, and the rounds
 	// an item has spent are a fact rather than a request.
 	ReviewRounds int `json:"review_rounds"`
+	// RepairGrants and Reruns bound how many times triage may take each of those
+	// actions on one item, whatever the rounds say. They are not the same bound
+	// as the rounds and neither replaces it: the rounds bound what an item may
+	// cost, and these bound how often triage may decide the same thing about it.
+	//
+	// Without them the round budget is the only bound, and it bounds nothing at
+	// all for the work that most needs bounding: a run that stopped before any
+	// reviewer verdict — a provider that kept refusing, a replay that conflicts,
+	// integration retries spent — has produced no round, so an item whose runs
+	// all stop that way could be handed back and re-run for ever with every
+	// counter reading zero.
+	RepairGrants int `json:"repair_grants"`
+	Reruns       int `json:"reruns"`
 	// MergeRearms bounds the one action that buys no round. An action that costs
 	// no provider invocation is the one that can be taken forever, and a merge
 	// the forge keeps dropping is a repository somebody has to look at.
@@ -239,6 +260,8 @@ func (c TriageCaps) Validate() error {
 		value int
 	}{
 		{"review round cap", c.ReviewRounds},
+		{"repair grant cap", c.RepairGrants},
+		{"re-run cap", c.Reruns},
 		{"merge re-arm cap", c.MergeRearms},
 	} {
 		if limit.value < 0 {
@@ -388,6 +411,19 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 	}
 	granted := RepairGrant{Requested: rounds}
 	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		// The grant's own budget is asked first, because it is the bound that
+		// answers on an item the rounds say nothing about: a run that stopped
+		// before it was ever reviewed spent no round, and the round budget would
+		// hand that item back for ever.
+		if counters.RepairGrants >= caps.RepairGrants {
+			return TriageCapError{
+				Action:     TriageRepairGrant,
+				Budget:     TriageRepairGrantBudget,
+				WorkItemID: counters.WorkItemID,
+				Spent:      counters.RepairGrants,
+				Cap:        caps.RepairGrants,
+			}
+		}
 		remaining := counters.RoundsRemaining(caps.ReviewRounds)
 		if remaining == 0 {
 			return TriageCapError{
@@ -437,6 +473,18 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 		return TriageCounters{}, err
 	}
 	return s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		// Its own budget first, and for the same reason a grant's is: a re-run
+		// buys a whole fresh run and spends no round itself, so on an item whose
+		// runs keep stopping before review the round budget refuses nothing.
+		if counters.Reruns >= caps.Reruns {
+			return TriageCapError{
+				Action:     TriageRerun,
+				Budget:     TriageRerunBudget,
+				WorkItemID: counters.WorkItemID,
+				Spent:      counters.Reruns,
+				Cap:        caps.Reruns,
+			}
+		}
 		if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
 			return TriageCapError{
 				Action:     TriageRerun,

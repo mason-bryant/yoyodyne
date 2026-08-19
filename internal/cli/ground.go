@@ -20,6 +20,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
@@ -87,6 +88,46 @@ func conversationDocket(parts components, role domain.AgentRole) *orchestrator.D
 		return nil
 	}
 	return docketerFrom(parts)
+}
+
+// conversationTriage wires the durable per-item triage budget for the role that
+// spends it, and for no other. It is the same record `yoyo status` reports and
+// the same caps the docket reports against, so a decision the development
+// manager records and the figure an operator reads afterwards can never be
+// working from different numbers.
+func conversationTriage(parts components, role domain.AgentRole) chat.TriageBudgets {
+	if role != domain.RoleDevelopmentManager {
+		return nil
+	}
+	return conversationTriageBudgets{
+		store:  parts.store.Triage(),
+		caps:   orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
+		rounds: orchestrator.TriageRepairGrantRounds(parts.config.Triage),
+		clock:  execution.RealClock{},
+	}
+}
+
+// conversationTriageBudgets is what a conversation supplies that the role does
+// not get to assert: what the project configured an item may be given, and when
+// the giving happened. The role decides; the sizes and the clock are the
+// harness's.
+type conversationTriageBudgets struct {
+	store  *runstate.TriageStore
+	caps   runstate.TriageCaps
+	rounds int
+	clock  execution.Clock
+}
+
+func (b conversationTriageBudgets) GrantRepair(ctx context.Context, workItemID string) (runstate.RepairGrant, error) {
+	return b.store.GrantRepair(ctx, workItemID, b.rounds, b.clock.Now(), b.caps)
+}
+
+func (b conversationTriageBudgets) RecordRerun(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
+	return b.store.RecordRerun(ctx, workItemID, b.clock.Now(), b.caps)
+}
+
+func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error) {
+	return b.store.RecordMergeRearm(ctx, workItemID, b.clock.Now(), b.caps)
 }
 
 // roleDocumentSets names the documents a role reads beyond the specifications.

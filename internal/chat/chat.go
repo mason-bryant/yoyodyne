@@ -82,6 +82,11 @@ type Tracker interface {
 	List(ctx context.Context, status string) ([]beads.WorkItem, error)
 	Create(ctx context.Context, item beads.NewWorkItem) (beads.WorkItem, error)
 	Update(ctx context.Context, id string, change beads.WorkItemChange) (beads.WorkItem, error)
+	// Block records a durable blocker on an item, which is how an escalation
+	// says on the item itself that it is waiting on a person. It is the one
+	// operation here that a conversation reaches for on behalf of a role rather
+	// than of the operator, and only the development manager's triage does.
+	Block(ctx context.Context, id, reason string) (beads.WorkItem, error)
 	AddBlocker(ctx context.Context, id, blockerID string) error
 	RemoveBlocker(ctx context.Context, id, blockerID string) error
 	Complete(ctx context.Context, id, reason string) (beads.WorkItem, error)
@@ -131,6 +136,14 @@ type Options struct {
 	// names. It is optional like the rest, and a conversation without one says it
 	// cannot hold intake rather than appearing to have held it.
 	Intake IntakeHolds
+	// Triage is what one work item has already been given by triage and what it
+	// may still be given. It is here because the development manager's decisions
+	// about stopped work spend it: a repair grant, a re-run, and a re-arm each go
+	// through the same durable gate wherever they are decided from. It is
+	// optional like the rest, and a conversation without one may decide anything
+	// that spends nothing and is refused the three that do — a budget that cannot
+	// be read is never spent through as though it were empty.
+	Triage TriageBudgets
 	// Amendments is the durable log of changes other roles have proposed to
 	// documents they do not own. It is read here so the ones this role owns reach
 	// it: an owner that never hears the argument cannot answer it. It is optional
@@ -1178,6 +1191,15 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		var unreadableActions *TrackerError
 		if errors.As(err, &unreadableActions) {
 			fmt.Fprintf(out, "%v\nNothing in that block was carried out, so the tracker is unchanged by it; ask again if you want those changes.\n\n", unreadableActions)
+			continue
+		}
+		// An escalation with nothing to reach the operator by is refused rather
+		// than carried out, and the conversation is fine: the item is not blocked,
+		// and the development manager can escalate again with the report that
+		// makes it one.
+		var unreported *EscalationError
+		if errors.As(err, &unreported) {
+			fmt.Fprintf(out, "%v\nThe item was not blocked and nothing in that block was carried out; ask it to escalate again with the report.\n\n", unreported)
 			continue
 		}
 		if err != nil {

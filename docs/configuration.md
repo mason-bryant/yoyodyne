@@ -1652,23 +1652,32 @@ triage:
 moving is collected and delivered to the development manager: `stuck_merge_age`
 decides when an unmerged publication is docketed, and the two budgets are
 carried on every entry so a decision about one is made against what the item is
-allowed to spend rather than against the evidence alone. Nothing enforces the
-cap automatically — deciding what becomes of a docketed item is the development
-manager's, and the counters are what that decision is measured against.
+allowed to spend rather than against the evidence alone. Deciding what becomes
+of a docketed item is the development manager's; the caps are what refuse a
+decision that would spend more than the item is allowed.
 
 The docket is built when something scans: `yoyo reconcile`, and the moment a
 development manager conversation opens. There is no scheduled process behind it,
 so `stuck_merge_age` is a floor rather than a promise — a publication becomes
 docketable at that age and is docketed the next time one of those happens.
 
-**Two of these are already read, and the three triage actions are not built.**
-The docket above consumes `stuck_merge_age` — an approved publication older than
-it is docketed at the next scan — and `review_rounds_cap` bounds the
-[per-item counters](#what-one-work-item-has-been-given) below, which every run
-writes to and `yoyo status <id>` reports. What no decision the harness makes
-today does is spend the budget: nothing yet grants a repair, causes a re-run, or
-re-arms a dropped merge, so `repair_grant_attempts` has no caller and the caps
-are a recorded budget awaiting the actions that will be refused past it.
+**All three are read.** The docket above consumes `stuck_merge_age` — an approved
+publication older than it is docketed at the next scan — and `review_rounds_cap`
+bounds the [per-item counters](#what-one-work-item-has-been-given) below, which
+every run writes to and `yoyo status <id>` reports. The development manager's
+triage decisions spend them: a decision of `repair` takes a grant of
+`repair_grant_attempts` rounds truncated to what the cap has room for, and
+`rerun` and `rearm` each spend a budget of their own. Every one of the three is
+refused once the budget it spends is gone, and the three do not share one — the
+[table below](#what-one-work-item-has-been-given) says which bound refuses
+which.
+
+What a recorded decision does not do is carry itself out. Nothing starts a run,
+hands a developer a grant, or asks a forge for anything on the strength of one:
+the decision and the budget are recorded, and starting the run is still
+`yoyo run <id>`. The budget is spent when the decision is recorded, which is the
+same order every counter here is written in — an attempt nobody took rather than
+one nobody counted.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -1707,7 +1716,7 @@ again is an item nothing was bounding. `yoyo status <id>` reports it under that
 item's runs, in text and in `--json`:
 
 ```text
-triage of yoyodyne-ifd.90: triaged 2 times
+triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
 ```
 
@@ -1716,10 +1725,18 @@ none remains — the same line reads: `review rounds: 6 spent across every run o
 this item — at or past the cap of 4, so triage may only escalate or re-scope`.
 
 ```text
-  repair grants: 1; re-runs: 0; both are refused once no round remains
+  repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
   1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
+  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
 ```
+
+**The first line counts what has been spent, not how many times triage looked.**
+Three of the development manager's six decisions spend a budget here — a repair
+grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
+nothing and reach no counter, so an item that was escalated reads `triage has
+spent nothing on it`. Whether stopped work has been decided, and what was
+decided, is recorded on the work item itself.
 
 **A round is a reviewer verdict a developer attempt produced**, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
@@ -1750,20 +1767,31 @@ Which threshold refuses which action:
 
 | Action | Refused by |
 | --- | --- |
-| another repair grant | `triage.review_rounds_cap`, truncated to the rounds it still has room for |
-| another whole run of the item | `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state, which the action carries and this counter does not |
+| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
+| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state, which the action carries and this counter does not |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the action, which repeats only the identical already-authorized forge request under the harness's own lease |
 
-The first two buy review rounds, so the round cap is what bounds them, and a
-grant is **truncated** rather than refused where some rounds remain: at the
-defaults an item that has been through its repair budget once has spent three
-rounds of four, so the configured grant of two attempts is cut to the one round
-that is left, and the truncation is recorded. An untruncated grant would promise
-a round nothing would let it take, and one that overshot the cap would make the
-cap decorative. A merge re-arm buys no round at all, which is exactly why it
-needs a bound of its own: an action that costs nothing to take is the one that
-can be taken forever. It follows the integration retries a single run is already
-permitted, which is the same judgement about the same thing one level up.
+The first two buy review rounds, so the round cap bounds them, and a grant is
+**truncated** rather than refused where some rounds remain: at the defaults an
+item that has been through its repair budget once has spent three rounds of
+four, so the configured grant of two attempts is cut to the one round that is
+left, and the truncation is recorded. An untruncated grant would promise a round
+nothing would let it take, and one that overshot the cap would make the cap
+decorative.
+
+**The round cap is not their only bound, and could not be.** Each of those two
+is also once per item, which is not configured because it is the workflow rather
+than a judgement about pace: triage takes its own decisions about one item once,
+and a second is an escalation rather than a bigger budget. The rounds cannot
+stand in for it — they bound what an item costs, and an item whose runs stop
+before any reviewer verdict, on a provider that kept refusing or a replay that
+conflicts, costs no rounds at all. With only the round cap, that item could be
+handed back and re-run without bound while every counter read zero.
+
+A merge re-arm buys no round at all, which is exactly why it needs a bound of
+its own: an action that costs nothing to take is the one that can be taken
+forever. It follows the integration retries a single run is already permitted,
+which is the same judgement about the same thing one level up.
 
 **These budgets are per machine.** Two collaborators running their own harnesses
 against one repository each hold a full set for the same item, so a cap of one is
