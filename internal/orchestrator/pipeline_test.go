@@ -3159,6 +3159,13 @@ func TestRunBlocksWhenTheRelaunchBudgetIsSpent(t *testing.T) {
 			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
 		}
 	}
+	// Nothing judged this run before the provider killed it, so the note claims
+	// no repair evidence either.
+	for _, unwanted := range []string{"Repair attempts already spent", "Last failing check"} {
+		if strings.Contains(tracker.blockReason, unwanted) {
+			t.Fatalf("blocker reported %q on a run that never reached the gate:\n%s", unwanted, tracker.blockReason)
+		}
+	}
 	stopped, err := store.Load(outcome.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -3296,6 +3303,17 @@ func TestARestartCannotBuyAFreshRelaunchBudget(t *testing.T) {
 	}
 	if !strings.Contains(tracker.blockReason, "Relaunches: 1 of 1 permitted") {
 		t.Fatalf("blocker did not name the inherited budget:\n%s", tracker.blockReason)
+	}
+	// The provider killed this run inside its repair loop, so the run holds a
+	// spent attempt and a check that was failing. A blocker that told the reader
+	// nothing was wrong with the change would be denying evidence it prints.
+	for _, want := range []string{"Repair attempts already spent: 1", "Last failing check: " + command + " (exit 3)", "unresolved rather than dismissed"} {
+		if !strings.Contains(tracker.blockReason, want) {
+			t.Fatalf("blocker is missing %q:\n%s", want, tracker.blockReason)
+		}
+	}
+	if strings.Contains(tracker.blockReason, "nothing here says the change is wrong") {
+		t.Fatalf("blocker denied the repair evidence the run was carrying:\n%s", tracker.blockReason)
 	}
 }
 

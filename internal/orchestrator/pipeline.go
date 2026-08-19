@@ -1366,7 +1366,7 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 	cause := error(phaseError{status: failureStatus(ctx, recorded), cause: blocked})
 	blockCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, limit)); err != nil {
+	if _, err := a.pipeline.Tracker.Block(blockCtx, a.state.WorkItemID, renderRelaunchBlockerNotes(a.outcome, failure, a.state.CheckFailure, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record the spent relaunch budget as a blocker: %w", err))
 	}
 	a.outcome.Blocked = true
@@ -3412,12 +3412,19 @@ func renderIntegrationBlockerNotes(outcome Outcome, failure string, limit int) s
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
-// renderRelaunchBlockerNotes describes a run the provider kept killing. Like the
-// integration blocker it says plainly that nothing was found wrong with the
-// change, because what it preserves is worth picking up rather than replanning:
-// the developer's session is still resumable and the worktree holds whatever the
-// last attempt reached. What needs looking at is the provider.
-func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, limit int) string {
+// renderRelaunchBlockerNotes describes a run the provider kept killing. What
+// stopped it is never a verdict on the change, so like the integration blocker it
+// preserves work that is worth picking up rather than replanning: the developer's
+// session is still resumable and the worktree holds whatever the last attempt
+// reached.
+//
+// What the run was already carrying when the provider killed it is a separate
+// question, and the note answers it rather than assuming. A provider can die
+// during a repair attempt as easily as during the first one, so the run may hold
+// a spent repair attempt, a failing check, and a reviewer's findings — all of
+// which are named here, because a reader told only about the provider would go
+// looking for a clean change and find a dirty one.
+func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailure, checkFailure *runstate.CheckFailure, limit int) string {
 	lines := []string{
 		"Yoyodyne stopped this item: the provider kept ending its invocations without judging the work, and the relaunch budget is spent.",
 		fmt.Sprintf("Relaunches: %d of %d permitted", outcome.TransientRelaunches, limit),
@@ -3425,9 +3432,28 @@ func renderRelaunchBlockerNotes(outcome Outcome, failure backend.TransientFailur
 		"Run: " + outcome.RunID,
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
-		"No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider.",
 	}
+	if outcome.RepairAttempts > 0 {
+		lines = append(lines, "Repair attempts already spent: "+strconv.Itoa(outcome.RepairAttempts))
+	}
+	if checkFailure != nil {
+		lines = append(lines, fmt.Sprintf("Last failing check: %s (exit %d)", checkFailure.Command, checkFailure.ExitCode))
+	}
+	lines = append(lines, relaunchBlockerVerdict(outcome, checkFailure))
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// relaunchBlockerVerdict says what the run's own evidence supports about the
+// change, which is not the same sentence on every run the provider killed. A run
+// killed before anything judged it carries no verdict at all, and saying so is
+// what tells the reader to pick the work up rather than replan it. A run killed
+// inside its repair loop carries a failing check or a reviewer's findings, and
+// that same sentence would deny evidence recorded in the note around it.
+func relaunchBlockerVerdict(outcome Outcome, checkFailure *runstate.CheckFailure) string {
+	if outcome.RepairAttempts > 0 || checkFailure != nil || len(outcome.ReviewFindings) > 0 {
+		return "What stopped this run is the provider rather than a verdict on the change. The repair evidence recorded with this note is what the run was already carrying, and it is unresolved rather than dismissed. The branch, worktree, and developer session are preserved."
+	}
+	return "No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider."
 }
 
 // renderRebaseConflictNotes describes a change that cannot be replayed onto what

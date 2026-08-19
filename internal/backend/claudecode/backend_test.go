@@ -1015,9 +1015,10 @@ func TestRunTreatsAnUnrecognizedTerminalErrorAsAFailure(t *testing.T) {
 }
 
 // connectionClosedMessage is what the provider CLI wrote, byte for byte, on the
-// run that died developing yoyodyne-ifd.68.2 on 2026-08-19 — the third time that
-// week a person reconciled, reopened, and relaunched a run by hand. It quotes no
-// HTTP status because nothing answered: the transport went away mid-reply.
+// run that died developing yoyodyne-ifd.68.2 on 2026-08-19 — the second time that
+// week a person reconciled, reopened, and relaunched a run by hand, and the
+// latest of the two. It quotes no HTTP status because nothing answered: the
+// transport went away mid-reply.
 const connectionClosedMessage = "API Error: Connection closed mid-response. The response above may be incomplete."
 
 // A provider that dies without judging the work is a relaunch rather than the

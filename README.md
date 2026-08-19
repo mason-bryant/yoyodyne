@@ -1984,9 +1984,17 @@ what went wrong.
 Relaunches are counted in durable run state before each one begins, so a process
 that dies mid-relaunch resumes against the budget it had rather than a fresh one.
 A run that spends the budget stops and records a blocker on the work item naming
-the provider's own last message, and saying plainly that no check failed and no
-reviewer asked for repair. That is the only case a person sees. Setting the bound
-to `0` restores the earlier behavior: the first provider death ends the run.
+the provider's own last message. That is the only case a person sees. Setting the
+bound to `0` restores the earlier behavior: the first provider death ends the run.
+
+What else that blocker says depends on what the run was carrying, because a
+provider dies during a repair attempt as readily as during the first one. A run
+nothing had judged yet says so plainly — no check failed, no reviewer asked for
+repair, nothing here says the change is wrong — which is what tells you to pick
+the work up rather than replan it. A run killed inside its repair loop names the
+repair attempts it had spent, the check that was failing, and the findings it was
+answering, and says the provider is what stopped it rather than that verdict:
+the evidence is unresolved rather than dismissed.
 
 A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
 4xx status — a malformed request, a key that is not permitted, a limit the

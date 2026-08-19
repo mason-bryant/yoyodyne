@@ -1331,9 +1331,16 @@ developer, so a relaunch spends no repair attempt.
 Relaunches are counted in durable run state before each one begins, so a process
 that dies mid-relaunch resumes against the budget it had rather than a fresh one.
 A run that spends the budget stops and records a blocker on the work item naming
-the provider's own last message and saying plainly that no check failed and no
-reviewer asked for repair. Setting the bound to `0` restores the earlier
+the provider's own last message. Setting the bound to `0` restores the earlier
 behavior: the first provider death ends the run.
+
+What else that blocker says depends on what the run was carrying, because a
+provider dies during a repair attempt as readily as during the first one. A run
+nothing had judged yet says plainly that no check failed and no reviewer asked
+for repair. A run killed inside its repair loop names the repair attempts it had
+spent, the failing check, and the findings it was answering, and says the
+provider stopped it rather than that verdict — the evidence is unresolved rather
+than dismissed.
 
 A refusal that would stand is never relaunched. A terminal `api_error` quoting a
 4xx status — a malformed request, a key that is not permitted, a limit the
