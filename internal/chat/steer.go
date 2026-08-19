@@ -46,7 +46,7 @@ const commandHelp = `Commands the harness carries out for you:
   /help                       this list
   /exit                       end the conversation, stopping anything it is running
 
-Anything that does not begin with a slash is said to the product manager.
+Anything that does not begin with a slash is said to the agent you are talking to.
 `
 
 // IsCommand reports whether what the operator said is a command the harness

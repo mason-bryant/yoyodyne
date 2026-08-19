@@ -32,6 +32,13 @@ const ConversationSchemaVersion = 1
 // caller starts one instead of resuming.
 var ErrNoConversation = errors.New("role has no recorded conversation")
 
+// ErrConversationHeld reports that another process holds the conversation. It
+// is a sentinel because "somebody else is talking to this agent" and "the state
+// directory could not be read" lead to opposite conclusions, and a caller that
+// cannot tell them apart reports a broken state root as a conversation in
+// progress.
+var ErrConversationHeld = errors.New("already held by another process")
+
 // Conversation is the durable record of one operator conversation with an
 // agent. It exists so a conversation survives the process that held it: the
 // provider session identifier is what a later process resumes from, and the
@@ -42,8 +49,21 @@ type Conversation struct {
 	ConversationID string           `json:"conversation_id"`
 	ProductID      domain.ProductID `json:"product_id"`
 	RepositoryID   string           `json:"repository_id"`
-	Role           domain.AgentRole `json:"role"`
-	Backend        domain.Backend   `json:"backend"`
+	// Agent is the configured agent this conversation is with, and Role is the
+	// authority it carries. They are usually the same word, because an agent is
+	// conventionally named for its role, and they are recorded separately
+	// because a project may configure two agents for one role: those are two
+	// identities with two personas, two model selectors, and two provider
+	// sessions, and a record that named only the role would have each of them
+	// resuming the other's session.
+	//
+	// It is empty on a record written before the agent was part of the identity.
+	// Such a record was necessarily written for the agent named after its role —
+	// nothing else could have addressed it — so it keeps loading under that name
+	// and acquires the agent the next time it is saved.
+	Agent   string           `json:"agent,omitempty"`
+	Role    domain.AgentRole `json:"role"`
+	Backend domain.Backend   `json:"backend"`
 	// ProviderSessionID is the session a later process resumes. It is empty
 	// until a turn completes, and a conversation without one can only be
 	// started again rather than continued.
@@ -129,6 +149,13 @@ func (c Conversation) Validate() error {
 	if err := domain.ValidateIdentifier("role", string(c.Role)); err != nil {
 		problems = append(problems, err)
 	}
+	// The agent is optional only because records predate it; one that names an
+	// agent must name a usable one, because the name is also a path.
+	if c.Agent != "" {
+		if err := domain.ValidateIdentifier("agent", c.Agent); err != nil {
+			problems = append(problems, err)
+		}
+	}
 	if !c.Backend.Valid() {
 		problems = append(problems, errors.New("backend is invalid"))
 	}
@@ -167,10 +194,38 @@ func (c Conversation) Validate() error {
 	return nil
 }
 
+// ConversationIdentity names one durable conversation: the agent that holds it
+// and the role whose authority it carries. Both are needed and neither is
+// enough. The agent decides which record this is, because two agents filling one
+// role are two identities with two provider sessions; the role decides what the
+// conversation may do, and is checked against the record so an agent whose
+// configured role changed cannot silently carry on under its old authority.
+type ConversationIdentity struct {
+	Agent string
+	Role  domain.AgentRole
+}
+
+func (i ConversationIdentity) String() string {
+	if i.Agent == "" || i.Agent == string(i.Role) {
+		return string(i.Role)
+	}
+	return i.Agent + " (" + string(i.Role) + ")"
+}
+
+// validate keeps an identity usable as a path before it is one.
+func (i ConversationIdentity) validate() error {
+	if err := domain.ValidateIdentifier("agent", i.Agent); err != nil {
+		return err
+	}
+	return domain.ValidateIdentifier("role", string(i.Role))
+}
+
 // ConversationStore keeps conversations in the same operating-system state root
 // as runs, beside them rather than among them. A conversation is stored under
-// the role it belongs to, so a restarted process finds the one conversation it
-// should resume without searching for it.
+// the agent it belongs to, so a restarted process finds the one conversation it
+// should resume without searching for it. An agent named for its role — which is
+// what every generated configuration produces — stores it exactly where the
+// role-keyed layout this replaced put it, so no existing conversation moves.
 type ConversationStore struct {
 	root      string
 	productID domain.ProductID
@@ -193,16 +248,18 @@ func (s *ConversationStore) Root() string {
 	return s.root
 }
 
-// Hold takes exclusive ownership of a role's conversation for as long as this
+// Hold takes exclusive ownership of an agent's conversation for as long as this
 // process is talking to it. Two processes resuming one provider session would
 // interleave their turns and overwrite each other's record of them. It is an
 // advisory file lock, so a conversation whose holder exited unexpectedly is
-// immediately available again.
-func (s *ConversationStore) Hold(role domain.AgentRole) (*Lease, error) {
+// immediately available again. It is per agent rather than per role because two
+// agents on one role hold two conversations, and a lease that stopped one of
+// them while the other talked would be serializing sessions that never meet.
+func (s *ConversationStore) Hold(identity ConversationIdentity) (*Lease, error) {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return nil, fmt.Errorf("create conversation directory: %w", err)
 	}
-	path, err := s.leaseFile(role)
+	path, err := s.leaseFile(identity)
 	if err != nil {
 		return nil, err
 	}
@@ -213,19 +270,20 @@ func (s *ConversationStore) Hold(role domain.AgentRole) (*Lease, error) {
 	held, err := tryLockStateFile(file)
 	if err != nil {
 		file.Close()
-		return nil, fmt.Errorf("lock %s conversation: %w", role, err)
+		return nil, fmt.Errorf("lock %s conversation: %w", identity, err)
 	}
 	if !held {
 		file.Close()
-		return nil, fmt.Errorf("the %s conversation is already held by another process", role)
+		return nil, fmt.Errorf("the %s conversation is %w", identity, ErrConversationHeld)
 	}
 	return &Lease{file: file}, nil
 }
 
-// Load returns the conversation recorded for a role, reporting
+// Load returns the conversation recorded for an agent, reporting
 // ErrNoConversation when there is none to resume.
-func (s *ConversationStore) Load(role domain.AgentRole) (Conversation, error) {
-	path, err := s.statePathForRole(role)
+func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, error) {
+	role := identity.Role
+	path, err := s.statePathFor(identity)
 	if err != nil {
 		return Conversation{}, err
 	}
@@ -254,7 +312,15 @@ func (s *ConversationStore) Load(role domain.AgentRole) (Conversation, error) {
 		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", role, err)
 	}
 	if conversation.Role != role {
-		return Conversation{}, fmt.Errorf("conversation state for %s belongs to role %s", role, conversation.Role)
+		return Conversation{}, fmt.Errorf("conversation state for %s belongs to role %s", identity, conversation.Role)
+	}
+	// A record that names its agent must be the agent that was asked for. It
+	// cannot be another one under the default layout, where the file is named for
+	// the agent, and it is checked anyway: a record whose agent and file disagree
+	// is a record somebody moved, and resuming it would put one agent's session
+	// behind another's persona.
+	if conversation.Agent != "" && conversation.Agent != identity.Agent {
+		return Conversation{}, fmt.Errorf("conversation state for %s belongs to agent %s", identity, conversation.Agent)
 	}
 	if err := s.validateConversation(conversation); err != nil {
 		return Conversation{}, err
@@ -272,7 +338,7 @@ func (s *ConversationStore) Save(conversation Conversation) error {
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return fmt.Errorf("create conversation directory: %w", err)
 	}
-	path, err := s.statePathForRole(conversation.Role)
+	path, err := s.statePathFor(conversation.identity())
 	if err != nil {
 		return err
 	}
@@ -378,6 +444,17 @@ func (s *ConversationStore) LoadEvents(conversationID string) ([]execution.Event
 	return events, nil
 }
 
+// identity is where a record belongs. A record written before the agent was part
+// of the identity has none, and it belongs where it has always been: under the
+// agent named for its role, which is the only agent that could have written it.
+func (c Conversation) identity() ConversationIdentity {
+	agent := c.Agent
+	if agent == "" {
+		agent = string(c.Role)
+	}
+	return ConversationIdentity{Agent: agent, Role: c.Role}
+}
+
 func (s *ConversationStore) validateConversation(conversation Conversation) error {
 	if conversation.ProductID != s.productID {
 		return fmt.Errorf("conversation product %q does not match store product %q", conversation.ProductID, s.productID)
@@ -385,14 +462,14 @@ func (s *ConversationStore) validateConversation(conversation Conversation) erro
 	return conversation.Validate()
 }
 
-// statePathForRole names the one file a role's conversation lives in. The role
-// is validated as an identifier before it reaches a path, so a configured role
+// statePathFor names the one file an agent's conversation lives in. The agent is
+// validated as an identifier before it reaches a path, so a configured agent
 // name can never escape the conversation directory.
-func (s *ConversationStore) statePathForRole(role domain.AgentRole) (string, error) {
-	if err := domain.ValidateIdentifier("role", string(role)); err != nil {
+func (s *ConversationStore) statePathFor(identity ConversationIdentity) (string, error) {
+	if err := identity.validate(); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.root, string(role)+".json"), nil
+	return filepath.Join(s.root, identity.Agent+".json"), nil
 }
 
 func (s *ConversationStore) eventPathForConversation(conversationID string) (string, error) {
@@ -402,9 +479,9 @@ func (s *ConversationStore) eventPathForConversation(conversationID string) (str
 	return filepath.Join(s.root, conversationID+".events.jsonl"), nil
 }
 
-func (s *ConversationStore) leaseFile(role domain.AgentRole) (string, error) {
-	if err := domain.ValidateIdentifier("role", string(role)); err != nil {
+func (s *ConversationStore) leaseFile(identity ConversationIdentity) (string, error) {
+	if err := identity.validate(); err != nil {
 		return "", err
 	}
-	return filepath.Join(s.root, string(role)+".lease"), nil
+	return filepath.Join(s.root, identity.Agent+".lease"), nil
 }

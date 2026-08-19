@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
@@ -239,7 +240,7 @@ func TestTheContractTellsTheProductManagerHowAndWhenToReport(t *testing.T) {
 
 	// Guidance on what merits a report belongs in the contract, where a persona
 	// cannot weaken it.
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		report.Fence,
 		"A report is not a blocker",

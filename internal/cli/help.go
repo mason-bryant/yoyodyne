@@ -18,6 +18,7 @@ func commandHelp() string {
 	printers := []func(io.Writer){
 		printUsage,
 		printChatUsage,
+		printAgentUsage,
 		printConfigUsage,
 		printArtifactUsage,
 		printAmendmentUsage,

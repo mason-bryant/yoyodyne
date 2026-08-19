@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
@@ -144,15 +145,15 @@ func renderCollectedReports(reports []report.Report) string {
 	return rendered.String()
 }
 
-// reportFiled tells the operator what the product manager reported while it was
-// answering, and what happened to a report that could not be kept. It prints
-// nothing when there was nothing to report, which is the ordinary case.
-func reportFiled(out io.Writer, reply Reply) {
+// reportFiled tells the operator what the role reported while it was answering,
+// and what happened to a report that could not be kept. It prints nothing when
+// there was nothing to report, which is the ordinary case.
+func reportFiled(out io.Writer, role domain.AgentRole, reply Reply) {
 	if len(reply.Reports) == 0 && reply.ReportProblem == "" {
 		return
 	}
 	if len(reply.Reports) > 0 {
-		fmt.Fprintf(out, "The product manager reported %d thing(s) for you:\n", len(reply.Reports))
+		fmt.Fprintf(out, "The %s reported %d thing(s) for you:\n", RoleTitle(role), len(reply.Reports))
 		for _, reported := range reply.Reports {
 			fmt.Fprint(out, reported.Render())
 		}

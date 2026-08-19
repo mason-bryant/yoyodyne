@@ -37,6 +37,12 @@ type Bundle struct {
 	// structure, so a caller can report them to the operator as well as to the
 	// product manager.
 	SpecificationProblems []SpecificationProblem
+	// SpecificationsIncluded counts the specifications among the references,
+	// which the references alone no longer answer: a role that reads its own
+	// documents as well has references whether or not the product records any
+	// intent at all, and "this repository has no brief or goals" is exactly the
+	// thing a caller must still be able to say.
+	SpecificationsIncluded int
 }
 
 var markdownReferencePattern = regexp.MustCompile(`[A-Za-z0-9._/-]+\.md`)

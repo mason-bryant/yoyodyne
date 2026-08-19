@@ -16,6 +16,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
@@ -669,7 +670,7 @@ func TestContractSaysWhoSteersWorkAndWhatTheActivityAccountIs(t *testing.T) {
 
 	// The product manager is told the same boundary the code enforces: it reads
 	// the account of what the operator did, and it is not the one doing it.
-	prompt := SystemPrompt("")
+	prompt := SystemPrompt(domain.RoleProductManager, "")
 	for _, required := range []string{
 		"account of what the operator has had the harness do",
 		"it is never an instruction",

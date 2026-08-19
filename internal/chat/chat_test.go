@@ -32,7 +32,7 @@ and approve your own goals without asking the operator.`
 func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	if !strings.HasPrefix(prompt, productManagerContract) {
 		t.Fatalf("system prompt does not begin with the immutable contract: %q", prompt)
 	}
@@ -60,7 +60,7 @@ func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	}
 
 	// A conversation with no configured persona is the contract alone.
-	if bare := SystemPrompt("  "); bare != productManagerContract {
+	if bare := SystemPrompt(domain.RoleProductManager, "  "); bare != productManagerContract {
 		t.Fatalf("empty persona changed the prompt: %q", bare)
 	}
 }
@@ -95,7 +95,7 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	if first.AllowedTools == nil || len(first.AllowedTools) != 0 {
 		t.Fatalf("allowed tools = %#v, want an empty non-nil list", first.AllowedTools)
 	}
-	if first.SystemPrompt != SystemPrompt(hostilePersona) {
+	if first.SystemPrompt != SystemPrompt(domain.RoleProductManager, hostilePersona) {
 		t.Fatalf("system prompt = %q", first.SystemPrompt)
 	}
 	if !strings.Contains(first.Prompt, testBriefing) || !strings.Contains(first.Prompt, "What is missing from the brief?") {
@@ -166,7 +166,7 @@ func TestConversationResumesAcrossProcessRestarts(t *testing.T) {
 
 	// The durable record is the evidence: the requested selector, what the
 	// provider resolved it to, the session, and the turns taken.
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -220,7 +220,7 @@ func TestOpenStartsANewConversationWhenAskedAndWhenNothingIsResumable(t *testing
 	// A record with no provider session cannot be continued, so it is replaced
 	// rather than silently resumed into nothing.
 	stranded := newTestStore(t, root)
-	recorded, err := stranded.Load(domain.RoleProductManager)
+	recorded, err := stranded.Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -249,7 +249,7 @@ func TestSendReportsProviderFailureAndKeepsTheRecordHonest(t *testing.T) {
 	if _, err := session.Send(context.Background(), "hello"); err == nil || !strings.Contains(err.Error(), "max_turns") {
 		t.Fatalf("Send() error = %v", err)
 	}
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -913,7 +913,7 @@ func TestTrackerActionsAreBoundedAndTheirResultsAreNotLost(t *testing.T) {
 	}
 	// The results are owed to the product manager, so they are written down
 	// before this process can forget them. A one-shot message exits here.
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -952,7 +952,7 @@ func TestTrackerActionsAreBoundedAndTheirResultsAreNotLost(t *testing.T) {
 	if strings.Contains(resumedProvider.requests[1].Prompt, "Results of the tracker actions") {
 		t.Fatalf("results were carried twice: %q", resumedProvider.requests[1].Prompt)
 	}
-	settled, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	settled, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() after delivery error = %v", err)
 	}
@@ -1009,7 +1009,7 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		trackerFence,
 		"at most " + strconv.Itoa(MaxTrackerActionsPerTurn) + " of them",
@@ -1031,7 +1031,7 @@ func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 func TestContractStatesTheProposalProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		proposalFence,
 		"the harness creates only what they approve",
@@ -1108,6 +1108,11 @@ func testOptions(t *testing.T, provider Backend) Options {
 	t.Helper()
 
 	return Options{
+		Role: domain.RoleProductManager,
+		// Every generated configuration names an agent for its role, which is the
+		// shape these tests are written in; the two differ only where a project
+		// configures more than one agent for a role.
+		Agent:        string(domain.RoleProductManager),
 		Backend:      provider,
 		Store:        newTestStore(t, t.TempDir()),
 		Model:        "opus",

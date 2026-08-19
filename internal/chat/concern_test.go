@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -337,7 +338,7 @@ func TestConverseSurvivesAConcernItCannotRead(t *testing.T) {
 func TestContractStatesTheConcernProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
 	for _, required := range []string{
 		concernFence,
 		"Raise at most " + strconv.Itoa(MaxConcernsPerTurn) + " concerns",

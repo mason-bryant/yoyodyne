@@ -37,6 +37,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		// A conversation is the one command that reads from the operator, so
 		// this is where the process's own input is bound to it.
 		return runChat(ctx, args[1:], os.Stdin, stdout, stderr)
+	case "agent":
+		// `agent chat` is a conversation like any other, so it is bound to the
+		// same input for the same reason.
+		return runAgentCommand(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "artifact":
 		return runArtifact(args[1:], stdout, stderr)
 	case "amendment":
@@ -266,6 +270,7 @@ func printUsage(writer io.Writer) {
 Commands:
   init              write a project its own configuration, personas, and checks
   chat              talk with the product manager and steer the work from there
+  agent             read the configured agents and their state, and address one
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
   artifact          read the canonical artifacts, and record your approval of one

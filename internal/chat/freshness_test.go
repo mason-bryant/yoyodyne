@@ -37,7 +37,7 @@ func TestResumingStatesHowOldItsPictureIsAndWhatHasMovedSince(t *testing.T) {
 
 	// The picture is recorded because it was delivered, so the process that
 	// resumes can say how old it is without having been there.
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -201,7 +201,7 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 	// Nothing has reached the product manager yet, so the record still says the
 	// conversation is working from the old picture. A refresh nobody was told
 	// about must never read as one that landed.
-	recorded, err := newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -229,7 +229,7 @@ func TestRefreshBringsTheRunningConversationCurrentWithoutDiscardingIt(t *testin
 	if second.SessionID != "session-6" {
 		t.Fatalf("the turn after a refresh resumed session %q, want session-6", second.SessionID)
 	}
-	recorded, err = newTestStore(t, root).Load(domain.RoleProductManager)
+	recorded, err = newTestStore(t, root).Load(runstate.ConversationIdentity{Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager})
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -401,7 +401,7 @@ func TestTheTranscriptSaysARefreshHappened(t *testing.T) {
 	transcript := out.String()
 	for _, required := range []string{
 		"re-read the repository and the tracker",
-		"the product manager is told what moved when you next say something to it",
+		"the agent is told what moved when you next say something to it",
 	} {
 		if !strings.Contains(transcript, required) {
 			t.Fatalf("transcript = %q, want it to say %q", transcript, required)

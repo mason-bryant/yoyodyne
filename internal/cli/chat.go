@@ -86,14 +86,43 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 		return 2
 	}
 
-	session, lease, err := openChat(ctx, *configPath, *fresh, stderr)
+	return converse(ctx, domain.RoleProductManager, conversationRequest{
+		configPath: *configPath,
+		message:    *message,
+		fresh:      *fresh,
+		jsonOutput: *jsonOutput,
+	}, stdin, stdout, stderr)
+}
+
+// conversationRequest is what an operator asked of one conversation, whichever
+// command they reached it through. `yoyo chat` and `yoyo agent chat` differ in
+// which role they address and in nothing else, so they share this rather than
+// growing two conversations that drift apart.
+type conversationRequest struct {
+	// agentName is the configured agent the operator named, and is empty when
+	// they named none. It is carried rather than resolved back from the role
+	// because a role two agents fill has no single answer: an operator who named
+	// one of them must reach that one, with its persona and its model, and a
+	// command that resolved the role again would silently reach whichever sorted
+	// first.
+	agentName  string
+	configPath string
+	message    string
+	fresh      bool
+	jsonOutput bool
+}
+
+// converse holds one conversation with one role: a single message and its reply,
+// or the interactive conversation the operator stays inside.
+func converse(ctx context.Context, role domain.AgentRole, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
+	session, lease, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, stderr)
 	if err != nil {
-		return reportChatFailure(stdout, stderr, *jsonOutput, nil, err)
+		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
 	defer lease.Release()
 
-	if *message != "" {
-		return runChatMessage(ctx, session, *message, *jsonOutput, stdout, stderr)
+	if request.message != "" {
+		return runChatMessage(ctx, session, role, request.message, request.jsonOutput, stdout, stderr)
 	}
 
 	// The conversation is held over a console rather than the raw streams: on a
@@ -102,7 +131,7 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 	// of text. Either way what is recorded is identical.
 	screen := console.Open(console.Options{In: stdin, Out: stdout})
 	defer screen.Close()
-	printChatHeader(screen, session.Evidence(), session.Freshness(ctx))
+	printChatHeader(screen, role, session.Evidence(), session.Freshness(ctx))
 	converseErr := session.Converse(ctx, screen)
 	// What was decided about is the console's to dress, and it is asked before
 	// the console is closed: restoring the terminal changes how it reads input,
@@ -124,14 +153,14 @@ func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr
 }
 
 // runChatMessage answers one thing the operator said from a command line. It is
-// either a command the harness carries out or a message the product manager
-// answers, and which of the two it is is the conversation's own rule rather than
-// a second one written here: a slash means the same thing in a single message as
-// it does at the prompt.
-func runChatMessage(ctx context.Context, session *chat.Session, message string, jsonOutput bool, stdout, stderr io.Writer) int {
-	// Without this the command would be said to the product manager, who has no
-	// way to carry one out and every reason to be confused by one — and the
-	// operator would pay for the turn.
+// either a command the harness carries out or a message the role answers, and
+// which of the two it is is the conversation's own rule rather than a second one
+// written here: a slash means the same thing in a single message as it does at
+// the prompt.
+func runChatMessage(ctx context.Context, session *chat.Session, role domain.AgentRole, message string, jsonOutput bool, stdout, stderr io.Writer) int {
+	// Without this the command would be said to the agent, which has no way to
+	// carry one out and every reason to be confused by one — and the operator
+	// would pay for the turn.
 	if chat.IsCommand(message) {
 		return runChatCommand(ctx, session, message, jsonOutput, stdout, stderr)
 	}
@@ -144,7 +173,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, message string, 
 	if err != nil {
 		// The answer travels with the failure. A turn that produced one is worth
 		// reading even when what it proposed could not be read.
-		return reportChatFailure(stdout, stderr, jsonOutput, &reply, err)
+		return reportChatFailure(stdout, stderr, jsonOutput, role, &reply, err)
 	}
 	if jsonOutput {
 		evidence := reply.Evidence
@@ -160,10 +189,10 @@ func runChatMessage(ctx context.Context, session *chat.Session, message string, 
 		})
 	}
 	fmt.Fprintln(stdout, reply.Text)
-	printChatActions(stdout, reply.Actions, reply.ResultsCarriedOver)
-	printChatReports(stdout, reply.Reports, reply.ReportProblem)
-	printChatConcerns(stdout, reply.Concerns)
-	printChatProposals(stdout, reply.Proposals)
+	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
+	printChatReports(stdout, role, reply.Reports, reply.ReportProblem)
+	printChatConcerns(stdout, role, reply.Concerns)
+	printChatProposals(stdout, role, reply.Proposals)
 	printChatEvidence(stdout, reply.Evidence)
 	return 0
 }
@@ -206,12 +235,18 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 	return 0
 }
 
-// openChat builds the product manager's conversation from configuration: the
-// configured agent, the repository's own Markdown, the tracker state as it
-// stands, the harness the operator steers work with, and the durable record a
+// openChat builds a role's conversation from configuration: the configured
+// agent filling that role, the repository's own Markdown, the tracker state as
+// it stands, the harness the operator steers work with, and the durable record a
 // previous process left behind. The returned lease is this process's exclusive
 // hold on that conversation.
-func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
+//
+// Everything the operator's own commands need is wired for every role, because
+// those commands are the operator's authority rather than the agent's and they
+// mean the same thing in every conversation. What differs between roles is what
+// the role itself may ask for, and that is the contract and the authority table
+// in the chat package rather than anything decided here.
+func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
@@ -222,15 +257,15 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 	cfg := parts.config
 	repository := parts.repository
 
-	agent := agentForRole(cfg, domain.RoleProductManager)
-	if agent.Role != domain.RoleProductManager {
-		return nil, nil, errors.New("no product-manager agent is configured; chat has nobody to talk to")
+	name, agent, err := conversationAgent(cfg, role, agentName)
+	if err != nil {
+		return nil, nil, err
 	}
 	if agent.Backend != domain.BackendClaudeCode {
-		return nil, nil, fmt.Errorf("chat requires a claude-code product manager, configured backend is %q", agent.Backend)
+		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
-		return nil, nil, fmt.Errorf("product-manager agent %s", err)
+		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)
 	}
 
 	processRunner := parts.runner
@@ -250,7 +285,10 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 	if err != nil {
 		return nil, nil, err
 	}
-	lease, err := store.Hold(domain.RoleProductManager)
+	// The conversation is held, recorded, and resumed under the agent that holds
+	// it, so two agents configured for one role are two conversations rather than
+	// one they would take turns overwriting.
+	lease, err := store.Hold(runstate.ConversationIdentity{Agent: name, Role: role})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -267,7 +305,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		fmt.Fprintf(stderr, "warning: goals not read: %s\n", problem)
 	}
 
-	ground := newConversationGround(parts)
+	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
 		return nil, nil, errors.Join(err, lease.Release())
@@ -276,6 +314,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
 	}
 	session, err := chat.Open(chat.Options{
+		Role:    role,
 		Backend: provider,
 		Store:   store,
 		// The tracker and the harness behind the operator's commands are the
@@ -305,7 +344,7 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 		Goals:        goals,
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
-		Agent:        agentNameForRole(cfg, domain.RoleProductManager),
+		Agent:        name,
 		Provider:     domain.BackendClaudeCode,
 		Repository:   repository,
 		ProductID:    cfg.Product.ID,
@@ -325,6 +364,32 @@ func openChat(ctx context.Context, configPath string, fresh bool, stderr io.Writ
 	return session, lease, nil
 }
 
+// conversationAgent picks the agent a conversation is actually held with, and
+// is the one place that decision is made. A named agent is used as named, so an
+// operator who picked one of two architects gets that one's persona and model
+// rather than whichever the role happens to resolve to; a conversation that
+// names none takes the agent filling the role, which is what `yoyo chat` has
+// always done. An agent named for one role and configured for another is
+// refused rather than quietly answered by the wrong contract, because the role
+// decides the authority and the name decides the persona and they must agree.
+func conversationAgent(cfg config.Config, role domain.AgentRole, name string) (string, config.AgentConfig, error) {
+	if strings.TrimSpace(name) == "" {
+		resolved := agentNameForRole(cfg, role)
+		if resolved == "" {
+			return "", config.AgentConfig{}, fmt.Errorf("no %s agent is configured; there is nobody to talk to", role)
+		}
+		return resolved, cfg.Agents[resolved], nil
+	}
+	agent, configured := cfg.Agents[name]
+	if !configured {
+		return "", config.AgentConfig{}, fmt.Errorf("no agent named %q is configured; `yoyo agent list` names them", name)
+	}
+	if agent.Role != role {
+		return "", config.AgentConfig{}, fmt.Errorf("agent %s fills the %s role, not %s", name, agent.Role, role)
+	}
+	return name, agent, nil
+}
+
 // chatTracker is the work-item client a conversation acts through: it reads the
 // tracker state the product context is built from, and it is what an approved
 // proposal is created with. Both are bounded the same way, so no tracker call a
@@ -335,7 +400,7 @@ func chatTracker(runner execution.ProcessRunner, repository string) beads.Client
 
 // reportChatFailure reports a failed conversation, carrying whatever the turn
 // still produced. A reply is nil when the conversation never opened.
-func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Reply, err error) int {
+func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.AgentRole, reply *chat.Reply, err error) int {
 	output := chatOutput{Error: err.Error()}
 	if reply != nil {
 		evidence := reply.Evidence
@@ -364,10 +429,10 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 	if output.Reply != "" {
 		fmt.Fprintln(stdout, output.Reply)
 	}
-	printChatActions(stdout, output.Actions, output.ResultsCarriedOver)
-	printChatReports(stdout, output.Reports, output.ReportProblem)
-	printChatConcerns(stdout, output.Concerns)
-	printChatProposals(stdout, output.Proposals)
+	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
+	printChatReports(stdout, role, output.Reports, output.ReportProblem)
+	printChatConcerns(stdout, role, output.Concerns)
+	printChatProposals(stdout, role, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
 		fmt.Fprintf(stderr, "conversation: %s\n", output.Evidence.ConversationID)
@@ -375,16 +440,20 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, reply *chat.Re
 	return 1
 }
 
-func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string) {
+func printChatHeader(writer io.Writer, role domain.AgentRole, evidence chat.Evidence, freshness string) {
 	state := "new conversation"
 	if evidence.Resumed {
 		state = fmt.Sprintf("resumed conversation after %d turn(s)", evidence.Turns)
 	}
-	fmt.Fprintf(writer, "product manager: %s (%s, model %s)\n", evidence.ConversationID, state, evidence.RequestedModel)
+	fmt.Fprintf(writer, "%s: %s (%s, model %s)\n", chat.RoleTitle(role), evidence.ConversationID, state, evidence.RequestedModel)
 	// How old its picture of the product is goes at the top, where an operator
 	// cannot miss it, because everything below is what it will say about a
 	// repository it may have read hours ago.
 	fmt.Fprintln(writer, freshness)
+	if role != domain.RoleProductManager {
+		printOtherRoleHeader(writer, role)
+		return
+	}
 	fmt.Fprintln(writer, "It owns the backlog: what is admitted to it, and the order work is pulled in.")
 	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, attribute to a goal,")
 	fmt.Fprintln(writer, "update, reparent, reprioritize, link, unlink, close, and retire items, and every")
@@ -411,15 +480,54 @@ func printChatHeader(writer io.Writer, evidence chat.Evidence, freshness string)
 	fmt.Fprintln(writer)
 }
 
-// printChatActions reports what the product manager changed in the tracker while
-// it answered. It is printed for a one-shot message as well as a conversation:
-// the changes are already made, and a caller who is not told about them is
-// reading a queue that moved without them.
-func printChatActions(writer io.Writer, actions []chat.TrackerOutcome, resultsCarriedOver bool) {
+// printOtherRoleHeader opens a conversation with a role that is not the product
+// manager. It says three things an operator needs before they spend a turn: what
+// this role decides, what it may do from here, and where the thing they probably
+// want next actually happens — because a conversation that lets somebody talk to
+// the architect for ten minutes before they discover it cannot write the design
+// has wasted their afternoon.
+func printOtherRoleHeader(writer io.Writer, role domain.AgentRole) {
+	authority, known := chat.AuthorityFor(role)
+	if !known {
+		fmt.Fprintf(writer, "The harness holds no conversation contract for %s.\n\n", role)
+		return
+	}
+	fmt.Fprintf(writer, "It owns %s.\n", authority.Owns)
+	fmt.Fprintln(writer, "It has no files, commands, or network, and it can read the work tracker but")
+	switch {
+	case len(authority.TrackerActions) > 2:
+		fmt.Fprintln(writer, "may only build structure underneath work the product manager has admitted:")
+		fmt.Fprintln(writer, "it decomposes, links, and reparents, and it cannot admit work, reorder the")
+		fmt.Fprintln(writer, "backlog, close an item, or retire one. Every change it makes is reported here.")
+	default:
+		fmt.Fprintln(writer, "changes nothing in it: it reads items and surveys the queue, and that is all.")
+	}
+	switch role {
+	case domain.RoleArchitect:
+		fmt.Fprintln(writer, "It cannot edit the documents it owns from here. Decide the change with it, then")
+		fmt.Fprintln(writer, "record it yourself: `yoyo invariant` for an invariant, and a revision to the")
+		fmt.Fprintln(writer, "design for the rest. Changes other roles proposed to its documents are carried")
+		fmt.Fprintln(writer, "into this conversation for it to argue; you decide them with `yoyo amendment`.")
+	case domain.RoleDeveloper, domain.RoleReviewer:
+		fmt.Fprintln(writer, "Its real work happens inside runs, with a worktree, checks, and a verdict, and")
+		fmt.Fprintln(writer, "none of that is happening here. What you get here is its judgement.")
+	}
+	fmt.Fprintln(writer, "Anything it reports reaches `yoyo reports`, and `/reports` shows the same pile.")
+	fmt.Fprintln(writer, "Its picture of the repository is the one gathered above; /refresh takes a new one.")
+	fmt.Fprintln(writer, "The operator commands are the same ones `yoyo chat` has: /help lists them.")
+	fmt.Fprintln(writer, "End with /exit.")
+	fmt.Fprintln(writer)
+}
+
+// printChatActions reports what the role changed in the tracker while it
+// answered. It is printed for a one-shot message as well as a conversation: the
+// changes are already made, and a caller who is not told about them is reading a
+// queue that moved without them.
+func printChatActions(writer io.Writer, role domain.AgentRole, actions []chat.TrackerOutcome, resultsCarriedOver bool) {
 	if len(actions) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "\nThe product manager acted on the tracker (%d action(s)):\n", len(actions))
+	fmt.Fprintf(writer, "\nThe %s acted on the tracker (%d action(s)):\n", chat.RoleTitle(role), len(actions))
 	for _, action := range actions {
 		fmt.Fprint(writer, action.Render())
 	}
@@ -435,12 +543,12 @@ func printChatActions(writer io.Writer, actions []chat.TrackerOutcome, resultsCa
 // while it answered. It is printed for a one-shot message as well as a
 // conversation: the report is already collected, and one that is only in the
 // pile is one nobody has been told about yet.
-func printChatReports(writer io.Writer, reports []report.Report, problem string) {
+func printChatReports(writer io.Writer, role domain.AgentRole, reports []report.Report, problem string) {
 	if len(reports) == 0 && problem == "" {
 		return
 	}
 	if len(reports) > 0 {
-		fmt.Fprintf(writer, "\nThe product manager reported %d thing(s) for you:\n", len(reports))
+		fmt.Fprintf(writer, "\nThe %s reported %d thing(s) for you:\n", chat.RoleTitle(role), len(reports))
 		for _, reported := range reports {
 			fmt.Fprint(writer, reported.Render())
 		}
@@ -453,11 +561,11 @@ func printChatReports(writer io.Writer, reports []report.Report, problem string)
 // printChatProposals reports what a one-shot message proposed. There is nobody
 // to approve it here, so the proposals are printed with what they are: recorded,
 // and not created.
-func printChatProposals(writer io.Writer, proposals []chat.PendingProposal) {
+func printChatProposals(writer io.Writer, role domain.AgentRole, proposals []chat.PendingProposal) {
 	if len(proposals) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "\nThe product manager proposes %d work item(s). Nothing was created: approve them in `yoyodyne chat`.\n\n", len(proposals))
+	fmt.Fprintf(writer, "\nThe %s proposes %d work item(s). Nothing was created: approve them in `yoyodyne chat`.\n\n", chat.RoleTitle(role), len(proposals))
 	for _, proposal := range proposals {
 		fmt.Fprint(writer, proposal.Render())
 	}
@@ -466,11 +574,11 @@ func printChatProposals(writer io.Writer, proposals []chat.PendingProposal) {
 // printChatConcerns reports what a one-shot message would not propose. There is
 // nobody to answer it here, so the questions are printed with what they are:
 // raised, unanswered, and holding work that was never proposed.
-func printChatConcerns(writer io.Writer, concerns []chat.PendingConcern) {
+func printChatConcerns(writer io.Writer, role domain.AgentRole, concerns []chat.PendingConcern) {
 	if len(concerns) == 0 {
 		return
 	}
-	fmt.Fprintf(writer, "\nThe product manager will not propose %d thing(s) until it is answered. Nothing was proposed or created: answer it in `yoyodyne chat`.\n\n", len(concerns))
+	fmt.Fprintf(writer, "\nThe %s will not propose %d thing(s) until it is answered. Nothing was proposed or created: answer it in `yoyodyne chat`.\n\n", chat.RoleTitle(role), len(concerns))
 	for _, concern := range concerns {
 		fmt.Fprint(writer, concern.Render())
 	}
@@ -546,5 +654,10 @@ once it is open.
 A --message that begins with a slash is carried out as one of those commands
 rather than said to the product manager. The commands that only mean something
 inside a conversation — /work, /wait, /stop, and /exit (alias /quit) — are refused there and
-say what to reach for instead.`)
+say what to reach for instead.
+
+This is the product manager's conversation. Every other configured agent is
+reached the same way through "yoyo agent chat <name>", which takes the same
+options; "yoyo agent list" says who there is and what each one is in the middle
+of.`)
 }

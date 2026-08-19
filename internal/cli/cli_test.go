@@ -209,7 +209,7 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	}
 	// The persona is guidance underneath the contract, never a replacement for
 	// it: the contract is what the conversation actually sends first.
-	prompt := chat.SystemPrompt(agent.Persona.Text)
+	prompt := chat.SystemPrompt(agent.Role, agent.Persona.Text)
 	if !strings.HasPrefix(prompt, "You are the product manager for this product") {
 		t.Fatal("the conversation prompt does not begin with the immutable contract")
 	}
@@ -350,7 +350,7 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 		},
 	}}
 	var oneShot bytes.Buffer
-	printChatProposals(&oneShot, proposals)
+	printChatProposals(&oneShot, domain.RoleProductManager, proposals)
 	for _, required := range []string{"Nothing was created", "yoyodyne chat", "[1.1] Pause on a usage limit"} {
 		if !strings.Contains(oneShot.String(), required) {
 			t.Fatalf("one-shot output = %q, want it to contain %q", oneShot.String(), required)
@@ -368,7 +368,7 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	}
 
 	var quiet bytes.Buffer
-	printChatProposals(&quiet, nil)
+	printChatProposals(&quiet, domain.RoleProductManager, nil)
 	printUndecidedProposals(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no proposals printed %q", quiet.String())
@@ -395,7 +395,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 		},
 	}}
 	var oneShot bytes.Buffer
-	printChatConcerns(&oneShot, concerns)
+	printChatConcerns(&oneShot, domain.RoleProductManager, concerns)
 	for _, required := range []string{
 		"Nothing was proposed or created",
 		"yoyodyne chat",
@@ -418,7 +418,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	}
 
 	var quiet bytes.Buffer
-	printChatConcerns(&quiet, nil)
+	printChatConcerns(&quiet, domain.RoleProductManager, nil)
 	printOpenConcerns(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no concerns printed %q", quiet.String())
