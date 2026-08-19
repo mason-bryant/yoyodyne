@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // TestAnOperatorTakesIntentThroughToIntegratedWorkInOneConversation is the
@@ -1492,5 +1493,94 @@ func TestABareDiffSurvivesTheProcessThatStartedTheRun(t *testing.T) {
 	}
 	if !strings.Contains(resumedOut.String(), "M internal/chat/chat.go") {
 		t.Fatalf("transcript = %q", resumedOut.String())
+	}
+}
+
+// A single message that is a command is carried out by the harness, exactly as
+// it would be inside a conversation. Before this it was said to the product
+// manager, who cannot carry out a command and had a confusing turn charged for
+// trying — and `/reports`, the one channel that exists to reach an operator who
+// is not in a conversation, was reachable only from inside one.
+func TestASingleMessageCarriesOutCommandsInsteadOfSayingThemToTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	// The provider has no turns to replay, so a command that reached the product
+	// manager fails here rather than passing quietly.
+	provider := &fakeBackend{}
+	reports := &fakeReports{}
+	if err := reports.Append(report.Report{
+		SchemaVersion: report.SchemaVersion,
+		ID:            "report-0123456789abcdef0123456789abcdef",
+		Role:          "developer",
+		Agent:         "developer",
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:    "yoyodyne-ifd.70",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Severity:      report.SeverityCritical,
+		Message:       "bd lint could not run in its sandbox, so nothing linted the item",
+		RecordedAt:    fixedClock{}.Now(),
+	}); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	work := &fakeWork{}
+	options := testOptions(t, provider)
+	options.Reports = reports
+	options.Work = work
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Command(context.Background(), "/reports", &out); err != nil {
+		t.Fatalf("Command() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "bd lint could not run") {
+		t.Fatalf("output = %q, want the collected pile", out.String())
+	}
+
+	// A command that records something durable is carried out too: it means the
+	// same thing outside a conversation as inside one.
+	var redirected strings.Builder
+	if err := session.Command(context.Background(), "/redirect yoyodyne-ifd.70 read the pile from a command line", &redirected); err != nil {
+		t.Fatalf("Command() error = %v", err)
+	}
+	if noted := work.takenNotes(); len(noted) != 1 || noted[0][0] != "yoyodyne-ifd.70" {
+		t.Fatalf("directions = %#v, want the redirection to have been recorded", noted)
+	}
+
+	// The commands that only mean something inside a conversation are refused
+	// with what to reach for instead, rather than half-carried-out by a process
+	// that is about to exit.
+	for _, refusal := range []struct {
+		line string
+		want string
+	}{
+		{line: "/work yoyodyne-ifd.70", want: "yoyo run <beads-id>"},
+		{line: "/wait", want: "never started one"},
+		{line: "/stop enough", want: "never started one"},
+		{line: "/exit", want: "a single message is not one"},
+	} {
+		var refused strings.Builder
+		err := session.Command(context.Background(), refusal.line, &refused)
+		if err == nil {
+			t.Fatalf("%s was accepted outside a conversation", refusal.line)
+		}
+		if !strings.Contains(err.Error(), refusal.want) {
+			t.Fatalf("%s refused with %q, want it to mention %q", refusal.line, err, refusal.want)
+		}
+		if refused.Len() != 0 {
+			t.Fatalf("%s printed %q, want nothing to have been carried out", refusal.line, refused.String())
+		}
+	}
+	if started := work.startedRuns(); len(started) != 0 {
+		t.Fatalf("started = %#v, want a single message to have run nothing", started)
+	}
+	if len(provider.requests) != 0 {
+		t.Fatalf("a command was said to the product manager: %#v", provider.requests)
+	}
+
+	// The rule that separates the two is the conversation's own, so both entry
+	// points read a line the same way.
+	if !IsCommand("  /reports") || IsCommand("what have the agents reported?") {
+		t.Fatal("a command is not told from a message the way the conversation tells them apart")
 	}
 }

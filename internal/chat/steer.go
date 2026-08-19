@@ -49,6 +49,50 @@ const commandHelp = `Commands the harness carries out for you:
 Anything that does not begin with a slash is said to the product manager.
 `
 
+// IsCommand reports whether what the operator said is a command the harness
+// carries out rather than something said to the product manager. It is one rule
+// in one place because a single message follows it too: `/reports` typed at
+// `yoyo chat --message` is the operator asking the harness for something, and
+// passing it to the product manager would spend a turn asking her to carry out
+// a command she has no way to reach.
+func IsCommand(line string) bool {
+	return strings.HasPrefix(strings.TrimSpace(line), "/")
+}
+
+// Command carries out one operator command outside the interactive loop, which
+// is what a single message that turns out to be a command needs. It is the same
+// table the conversation dispatches, minus the commands that only mean anything
+// inside one: a message is answered and the process exits, so a command that
+// starts or acts on a run this process owns is refused with what to reach for
+// instead rather than half-carried-out.
+func (s *Session) Command(ctx context.Context, line string, out io.Writer) error {
+	trimmed := strings.TrimSpace(line)
+	name, _, _ := strings.Cut(trimmed, " ")
+	if why := needsConversation(strings.ToLower(name)); why != "" {
+		return fmt.Errorf("%s %s", strings.ToLower(name), why)
+	}
+	// Only /exit and /quit end the loop, and both are refused above, so there is
+	// nothing here for the exit to mean.
+	_, err := s.command(ctx, trimmed, out)
+	return err
+}
+
+// needsConversation says why a command means nothing in a single message, and
+// what does the same job from a command line. Everything it does not name is
+// either read-only or durable, and answers a single message exactly as it
+// answers a conversation.
+func needsConversation(name string) string {
+	switch name {
+	case "/exit", "/quit":
+		return "ends a conversation, and a single message is not one"
+	case "/work":
+		return "runs a work item in the background of the conversation that started it, and this process exits before such a run could finish; `yoyo run <beads-id>` runs one from a command line"
+	case "/wait", "/stop":
+		return "acts on the run the conversation started, and a single message never started one"
+	}
+	return ""
+}
+
 // command runs one operator command. Commands are executed here rather than
 // sent to the product manager: what the harness does is the operator's
 // decision, and the product manager is told about it afterwards like any other

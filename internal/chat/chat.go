@@ -1079,7 +1079,7 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// separates what they said from the answer while the answer is still
 		// being worked on rather than arriving with it.
 		fmt.Fprint(out, s.theme.Rule())
-		if strings.HasPrefix(message, "/") {
+		if IsCommand(message) {
 			exit, err := s.command(ctx, message, harness)
 			// A command that failed is reported and the conversation carries
 			// on: an operator who mistyped an identifier or reached an

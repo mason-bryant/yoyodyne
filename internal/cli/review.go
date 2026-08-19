@@ -154,7 +154,7 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 			fmt.Fprintf(stderr, "the verdict above was not recorded: %s\n", outcome.RecordFailure)
 		}
 		if len(outcome.Reports) > 0 {
-			fmt.Fprintf(stdout, "reported %d thing(s) beside the verdict; `yoyo chat` shows them with /reports\n", len(outcome.Reports))
+			fmt.Fprintf(stdout, "reported %d thing(s) beside the verdict; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
 		}
 		if outcome.ReportProblem != "" {
 			fmt.Fprintln(stdout, outcome.ReportProblem)

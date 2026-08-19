@@ -49,6 +49,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
 		return runDirective(args[1:], stdout, stderr)
+	case "reports":
+		return readReports(args[1:], stdout, stderr)
 	case "run":
 		return runWorkItem(ctx, args[1:], stdout, stderr)
 	case "pause":
@@ -272,6 +274,7 @@ Commands:
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
+  reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider
