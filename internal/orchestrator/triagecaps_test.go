@@ -120,7 +120,7 @@ func TestTriageCapsComeFromTheConfiguration(t *testing.T) {
 func TestTheRepairGrantIsTheConfiguredAttempts(t *testing.T) {
 	t.Parallel()
 
-	if rounds := TriageRepairGrant(config.Triage{RepairGrantAttempts: 2}); rounds != 2 {
-		t.Fatalf("TriageRepairGrant() = %d, want the configured 2", rounds)
+	if rounds := TriageRepairGrantRounds(config.Triage{RepairGrantAttempts: 2}); rounds != 2 {
+		t.Fatalf("TriageRepairGrantRounds() = %d, want the configured 2", rounds)
 	}
 }

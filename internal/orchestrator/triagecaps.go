@@ -37,6 +37,6 @@ func TriageCaps(execution config.Execution, triage config.Triage) runstate.Triag
 // same count: every repair attempt is judged, so each attempt an item is granted
 // is one more verdict it will produce. The conversion is here rather than at the
 // call site so nothing has to rediscover that the two units are one.
-func TriageRepairGrant(triage config.Triage) int {
+func TriageRepairGrantRounds(triage config.Triage) int {
 	return triage.RepairGrantAttempts
 }

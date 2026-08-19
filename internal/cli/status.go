@@ -179,8 +179,11 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 // where something other than the change may be wrong.
 func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps runstate.TriageCaps) {
 	fmt.Fprintf(writer, "triage of %s: %s\n", counters.WorkItemID, describeTriagePasses(counters))
-	if counters.ReviewRounds > caps.ReviewRounds {
-		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — past the cap of %d, so triage may only escalate or re-scope\n",
+	// The branch is the gate's own predicate, so the line and the refusal
+	// cannot drift: at the cap exactly, nothing may be handed back, and the
+	// line says so.
+	if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so triage may only escalate or re-scope\n",
 			counters.ReviewRounds, caps.ReviewRounds)
 	} else {
 		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item; triage may hand back repairs while under the cap of %d\n",

@@ -575,3 +575,20 @@ func TestTriageCapsSerializeWithSnakeCaseKeys(t *testing.T) {
 		}
 	}
 }
+
+// The boundary the gate refuses at is the boundary the line reports: an item
+// at exactly the cap is not under it, and this fails if the two predicates
+// ever drift apart again.
+func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	printItemTriage(&out, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 4}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	rendered := out.String()
+	if !strings.Contains(rendered, "at or past the cap of 4, so triage may only escalate or re-scope") {
+		t.Fatalf("rendered = %q, want the at-the-cap line", rendered)
+	}
+	if strings.Contains(rendered, "while under the cap") {
+		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
+	}
+}

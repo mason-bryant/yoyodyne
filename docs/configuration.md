@@ -1603,8 +1603,9 @@ triage of yoyodyne-ifd.90: triaged 2 times
   review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
 ```
 
-Past the cap the same line reads: `review rounds: 6 spent across every run of
-this item — past the cap of 4, so triage may only escalate or re-scope`.
+At or past the cap — 4 of 4 exactly included, because a grant needs a round and
+none remains — the same line reads: `review rounds: 6 spent across every run of
+this item — at or past the cap of 4, so triage may only escalate or re-scope`.
 
 ```text
   repair grants: 1; re-runs: 0; both are refused once no round remains
