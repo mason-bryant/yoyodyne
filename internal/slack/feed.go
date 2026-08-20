@@ -32,10 +32,11 @@ import (
 // the run or the conversation, because they are separate subjects rather than
 // one log; the rest are one apiece.
 const (
-	reportStream   = "reports"
-	proposalStream = "proposals"
-	productStream  = "product"
-	watchStream    = "watch"
+	reportStream     = "reports"
+	proposalStream   = "proposals"
+	productStream    = "product"
+	watchStream      = "watch"
+	usageLimitStream = "usage-limits"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -103,6 +104,12 @@ type HarnessFeed struct {
 	// record says — that the session choosing work is alive and idle rather than
 	// dead.
 	Watch *runstate.WatchStore
+	// UsageLimits is where a provider refusing the harness outside a run is read
+	// from: a conversation turn, an independent review. It is optional in the
+	// same sense the two above are, and what a feed assembled without one loses
+	// is the only account there is of those refusals — a run says its own by
+	// parking, and nothing else says anything at all.
+	UsageLimits *runstate.UsageLimitStore
 	// Now is read for the moment a hold was seen to have lifted, which is the one
 	// thing here no record holds: what lifts a hold is its absence. It is
 	// injected so a test can say when that was.
@@ -188,6 +195,12 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, watched...)
 
+	refused, err := f.usageLimitDeliveries(cursors, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, refused...)
+
 	switches, err := f.holdDeliveries(cursors.Streams[productStream])
 	if err != nil {
 		return Batch{}, err
@@ -214,6 +227,27 @@ func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromWatch(transitions[index])
 			return transitions[index].At, notification, err
+		})
+}
+
+// usageLimitDeliveries says where a provider refused the harness outside a run.
+// It is an append-only log like the watch transitions and advances by position,
+// and it is a stream of its own rather than part of any run's: the processes
+// that meet a refusal have no run between them, which is the whole reason the
+// log exists.
+func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+	if f.UsageLimits == nil {
+		return nil, nil
+	}
+	streams[usageLimitStream] = struct{}{}
+	exhaustions, err := f.UsageLimits.List()
+	if err != nil {
+		return nil, fmt.Errorf("read what the provider refused: %w", err)
+	}
+	return f.logDeliveries(usageLimitStream, cursors.Streams[usageLimitStream], len(exhaustions), cursors.Since,
+		func(index int) (time.Time, notify.Notification, error) {
+			notification, err := notify.FromUsageLimit(exhaustions[index])
+			return exhaustions[index].At, notification, err
 		})
 }
 

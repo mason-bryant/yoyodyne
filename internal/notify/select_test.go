@@ -463,27 +463,50 @@ func TestPublicationQueuedMergeAndMergeAreThreeSeparateFacts(t *testing.T) {
 func TestAParkedRunSaysWhatItIsWaitingOn(t *testing.T) {
 	reset := moment.Add(2 * time.Hour)
 	held := moment.Add(-time.Hour)
-	for name, park := range map[string]func(*runstate.State){
-		"an exhausted provider usage limit": func(s *runstate.State) {
-			s.UsageLimitResetsAt = &reset
-			s.PauseCause = runstate.PauseUsageLimit
-			s.UsageLimitKind = "provider"
+	// An exhausted limit is the one park an operator did not cause and cannot
+	// shorten, so it is the one said as a warning. The rest are notes: a hold and
+	// a directive are waiting on the person reading the channel, and an overload
+	// lifts in seconds.
+	for name, park := range map[string]struct {
+		apply    func(*runstate.State)
+		severity report.Severity
+	}{
+		"an exhausted provider usage limit": {
+			apply: func(s *runstate.State) {
+				s.UsageLimitResetsAt = &reset
+				s.PauseCause = runstate.PauseUsageLimit
+				s.UsageLimitKind = "provider"
+			},
+			severity: report.SeverityWarning,
 		},
-		"an operator hold on all harness activity": func(s *runstate.State) {
-			s.OperatorHeldSince = &held
-			s.PauseCause = runstate.PauseOperatorHold
+		"a transient provider server overload": {
+			apply: func(s *runstate.State) {
+				s.UsageLimitResetsAt = &reset
+				s.PauseCause = runstate.PauseServerOverload
+			},
+			severity: report.SeverityNote,
 		},
-		"an unresolved directive (ambiguous)": func(s *runstate.State) {
-			s.DirectivePause = &runstate.DirectivePause{
-				DirectiveID: "directive-7f3a",
-				Kind:        "ambiguous",
-				Unresolved:  "which branch the change belongs on",
-			}
+		"an operator hold on all harness activity": {
+			apply: func(s *runstate.State) {
+				s.OperatorHeldSince = &held
+				s.PauseCause = runstate.PauseOperatorHold
+			},
+			severity: report.SeverityNote,
+		},
+		"an unresolved directive (ambiguous)": {
+			apply: func(s *runstate.State) {
+				s.DirectivePause = &runstate.DirectivePause{
+					DirectiveID: "directive-7f3a",
+					Kind:        "ambiguous",
+					Unresolved:  "which branch the change belongs on",
+				}
+			},
+			severity: report.SeverityNote,
 		},
 	} {
 		before := running()
 		after := before
-		park(&after)
+		park.apply(&after)
 		kinds, notifications := crossed(t, before, after)
 		if len(kinds) != 1 || kinds[0] != KindRunParked {
 			t.Fatalf("%s crossed %v", name, kinds)
@@ -496,6 +519,14 @@ func TestAParkedRunSaysWhatItIsWaitingOn(t *testing.T) {
 		if !strings.Contains(message.Body, name) {
 			t.Fatalf("a run waiting on %s reads as %q", name, message.Body)
 		}
+		if parkedRun.Event.Severity != park.severity {
+			t.Fatalf("a run waiting on %s is said at %q, want %q", name, parkedRun.Event.Severity, park.severity)
+		}
+		// The weight is said in words before it is said in decoration, so the
+		// distinction survives a reader whose client renders neither.
+		if park.severity == report.SeverityWarning && !strings.Contains(message.Body, "Warning") {
+			t.Fatalf("a run waiting on %s reads as %q, which does not say its weight in words", name, message.Body)
+		}
 		// A run held on a directive leads back to the directive itself, because a
 		// pause nobody can name is a pause nobody can lift.
 		if after.DirectivePause != nil && parkedRun.Event.Refs.DirectiveID != "directive-7f3a" {
@@ -504,6 +535,86 @@ func TestAParkedRunSaysWhatItIsWaitingOn(t *testing.T) {
 		// And it says so when it carries on.
 		if kinds, _ := crossed(t, after, before); len(kinds) != 1 || kinds[0] != KindRunContinued {
 			t.Fatalf("resuming from %s crossed %v", name, kinds)
+		}
+	}
+}
+
+func TestARefusalOutsideARunIsSaidAtWarningAndNamesWhatIsWaiting(t *testing.T) {
+	reset := moment.Add(3 * time.Hour)
+	refused := runstate.UsageLimitExhaustion{
+		SchemaVersion:  runstate.UsageLimitSchemaVersion,
+		ProductID:      "yoyodyne",
+		At:             moment,
+		Waiting:        "the product manager conversation chat-91253e0e",
+		Kind:           "five-hour",
+		ResetsAt:       &reset,
+		ConversationID: "chat-91253e0e",
+	}
+	notification, err := FromUsageLimit(refused)
+	if err != nil {
+		t.Fatalf("select from a refusal: %v", err)
+	}
+	if notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a refusal is said at %q, want %q", notification.Event.Severity, report.SeverityWarning)
+	}
+	// A refusal that stopped no work item belongs to the whole line rather than
+	// to somebody's thread, and the harness says it because no persona did it.
+	if notification.Topic != Product() {
+		t.Fatalf("a refusal with no work item is addressed to %v", notification.Topic)
+	}
+	if !notification.Speaker.IsHarness() {
+		t.Fatalf("a refusal is spoken by %v", notification.Speaker)
+	}
+	message, err := Render(notification.Topic, notification.Speaker, notification.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{
+		"Warning",
+		refused.Waiting,
+		"an exhausted five-hour usage limit",
+		reset.UTC().Format(time.RFC3339),
+	} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("a refusal reads as %q, which does not say %q", message.Body, want)
+		}
+	}
+	// A provider that named no reset time says so rather than reading as one that
+	// lifts at some moment nobody recorded.
+	refused.ResetsAt = nil
+	unknown, err := FromUsageLimit(refused)
+	if err != nil {
+		t.Fatalf("select from a refusal with no reset: %v", err)
+	}
+	silent, err := Render(unknown.Topic, unknown.Speaker, unknown.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if strings.Contains(silent.Body, "until") {
+		t.Fatalf("a refusal that named no reset reads as %q", silent.Body)
+	}
+	// A refusal that did stop one item's work is addressed to that item's thread,
+	// which is where somebody following the item is already reading.
+	refused.WorkItemID = "yoyodyne-ifd.68.10"
+	addressed, err := FromUsageLimit(refused)
+	if err != nil {
+		t.Fatalf("select from a refusal on an item: %v", err)
+	}
+	if addressed.Topic.Kind != TopicWorkItem || addressed.Topic.ID != refused.WorkItemID {
+		t.Fatalf("a refusal on an item is addressed to %v", addressed.Topic)
+	}
+	// Every persona has a line for it, so a producer that is not the harness
+	// still says it in a voice somebody wrote.
+	for _, speaker := range []Speaker{
+		Harness(),
+		Persona(domain.RoleDeveloper, ""),
+		Persona(domain.RoleReviewer, ""),
+		Persona(domain.RoleDevelopmentManager, ""),
+		Persona(domain.RoleProductManager, ""),
+		Persona(domain.RoleArchitect, ""),
+	} {
+		if _, err := Render(addressed.Topic, speaker, addressed.Event); err != nil {
+			t.Fatalf("the %s cannot say a refusal: %v", speaker.Key(), err)
 		}
 	}
 }

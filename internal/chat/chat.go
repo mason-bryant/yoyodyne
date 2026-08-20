@@ -134,6 +134,14 @@ type Options struct {
 	// before the switch existed, rather than one that quietly ignores a pause it
 	// could have read.
 	Holds OperatorHolds
+	// UsageLimits is where a provider refusing this conversation for want of
+	// capacity is written down. A turn is a provider invocation with no run
+	// record to cross, so without this a limit that stops one is said to whoever
+	// typed the message and to nobody else — and an exhausted limit is hours in
+	// which nothing will happen anywhere, which is exactly what somebody who is
+	// not at this terminal needs to be told. It is optional like the rest, and a
+	// conversation without one fails a refused turn exactly as it always did.
+	UsageLimits UsageLimits
 	// Intake is the operator's switch over the work the harness chooses for
 	// itself: what a development manager may pull, as opposed to what the operator
 	// names. It is optional like the rest, and a conversation without one says it
@@ -687,6 +695,11 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// charged for exactly as one that succeeded was.
 	s.turnCostUSD += result.CostUSD
 	s.sessionCostUSD += result.CostUSD
+	// A provider that declined this turn for want of capacity is recorded before
+	// the turn is failed, because the refusal is a fact about the whole product
+	// rather than about this conversation, and nothing else in the record would
+	// ever say it happened.
+	refusal := s.noteUsageLimit(result, err)
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -695,12 +708,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// wherever the error is eventually reported.
 	if err != nil {
 		s.stream.cutOff()
-		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), s.record())
+		return "", errors.Join(fmt.Errorf("%s backend failed: %w", RoleTitle(s.state.Role), err), refusal, s.record())
 	}
 	if result.IsError {
 		s.stream.cutOff()
 		return "", errors.Join(
 			fmt.Errorf("%s reported failure: %s", RoleTitle(s.state.Role), result.DescribeFailure()),
+			refusal,
 			s.record(),
 		)
 	}

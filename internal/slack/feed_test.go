@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,6 +296,59 @@ func TestAWatchSessionFromBeforeTheWatermarkIsReadPast(t *testing.T) {
 	harness.poll(t, cursors, notify.KindWatchStarted)
 }
 
+// A provider refusing something that is not a run reaches the channel from the
+// log the process that met it wrote, at the weight an exhausted limit deserves.
+// Nothing else in the record says it happened: the conversation failed at
+// somebody's terminal and there is no run to have parked.
+func TestAProviderRefusalOutsideARunReachesTheChannelAtWarning(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment)
+	reset := moment.Add(3 * time.Hour)
+	harness.refused(t, "the product manager conversation chat-91253e0e", &reset, moment.Add(time.Minute))
+	cursors := harness.poll(t, harness.start(), notify.KindUsageLimitExhausted)
+	// Read again with nothing new: one refusal is one thing to say, however
+	// often the log is read.
+	cursors = harness.poll(t, cursors)
+
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	said := batch.Deliveries[0].Notification
+	if said.Event.Severity != report.SeverityWarning {
+		t.Fatalf("a refusal is said at %q, want %q", said.Event.Severity, report.SeverityWarning)
+	}
+	message, err := notify.Render(said.Topic, said.Speaker, said.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	for _, want := range []string{"the product manager conversation chat-91253e0e", reset.UTC().Format(time.RFC3339)} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("a refusal reads as %q, which does not say %q", message.Body, want)
+		}
+	}
+	// A second refusal is a second thing to say: an operator who released
+	// capacity and ran into it again has learned something.
+	harness.refused(t, "the independent review review-4d1f of main", nil, moment.Add(2*time.Minute))
+	harness.poll(t, cursors, notify.KindUsageLimitExhausted)
+}
+
+// A refusal from before anybody pointed a channel at this product is history,
+// and is read past in one silent advance like every other log's.
+func TestARefusalFromBeforeTheWatermarkIsReadPast(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment)
+	harness.refused(t, "the product manager conversation chat-91253e0e", nil, moment.Add(-time.Hour))
+	cursors := harness.poll(t, harness.start())
+	if cursors.Streams[usageLimitStream].Position != 1 {
+		t.Fatalf("cursor = %#v, want what was read past advanced rather than re-read every pass", cursors.Streams[usageLimitStream])
+	}
+	harness.refused(t, "the product manager conversation chat-91253e0e", nil, moment.Add(time.Hour))
+	harness.poll(t, cursors, notify.KindUsageLimitExhausted)
+}
+
 func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	t.Parallel()
 
@@ -351,6 +405,7 @@ type testHarness struct {
 	intake  *runstate.IntakeHoldStore
 	holds   *runstate.OperatorHoldStore
 	watch   *runstate.WatchStore
+	limits  *runstate.UsageLimitStore
 }
 
 func newTestHarness(t *testing.T, since time.Time) *testHarness {
@@ -384,6 +439,10 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	if err != nil {
 		t.Fatalf("NewWatchStore() error = %v", err)
 	}
+	limits, err := runstate.NewUsageLimitStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewUsageLimitStore() error = %v", err)
+	}
 	return &testHarness{
 		since: since,
 		feed: &HarnessFeed{
@@ -394,6 +453,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 			Intake:        intake,
 			Holds:         holds,
 			Watch:         watch,
+			UsageLimits:   limits,
 			Now:           func() time.Time { return moment.Add(time.Hour) },
 		},
 		runs:    runs,
@@ -403,6 +463,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		intake:  intake,
 		holds:   holds,
 		watch:   watch,
+		limits:  limits,
 	}
 }
 
@@ -532,6 +593,20 @@ func (h *testHarness) watched(t *testing.T, state runstate.WatchState, reason st
 		State:         state,
 		At:            at,
 		Reason:        reason,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+}
+
+func (h *testHarness) refused(t *testing.T, waiting string, resetsAt *time.Time, at time.Time) {
+	t.Helper()
+	if err := h.limits.Record(runstate.UsageLimitExhaustion{
+		SchemaVersion: runstate.UsageLimitSchemaVersion,
+		ProductID:     "yoyodyne",
+		At:            at,
+		Waiting:       waiting,
+		Kind:          "five-hour",
+		ResetsAt:      resetsAt,
 	}); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}

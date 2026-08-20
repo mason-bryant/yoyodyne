@@ -2260,6 +2260,17 @@ guessing a wait. An exhausted limit is not the only thing a run waits out:
 [an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
 same machinery on a much shorter clock.
 
+An exhausted limit is not only a run's problem, either. A conversation turn and
+an independent `yoyo review` are provider invocations with no run to park, so
+each of them records the refusal instead: what was stopped, the limit the
+provider named, and when it said it lifts. Nothing waits on it — the turn or the
+review fails at your terminal exactly as it did before — but the refusal is
+durable, so [reporting into Slack](#reporting-into-slack) says it as a `warning`
+from wherever it happened, and a run that parks on the same limit is said at that
+weight too. Hours in which nothing will happen is the one message a channel
+nobody is watching most needs to carry, and it must not weigh the same as checks
+passing.
+
 ### Waiting out an overloaded provider
 
 A provider whose own servers are transiently overloaded refuses the same way an

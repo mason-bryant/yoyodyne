@@ -237,7 +237,11 @@ Into the work item's thread, as they happen:
 - the promotion onto the target branch
 - the pull request, a merge the forge queued, and the merge itself
 - the run waiting — an exhausted usage limit, an overloaded provider, an
-  operator hold, an unresolved directive — and the run carrying on afterwards
+  operator hold, an unresolved directive — and the run carrying on afterwards. A
+  run waiting out an exhausted usage limit is said as a `warning`, because it
+  means hours in which nothing will happen for a reason nobody chose; the other
+  three are ordinary facts, since an overload lifts in seconds and a hold or a
+  directive is waiting on the person reading the channel
 - the blocker that stopped a run, if one did, said as `critical`
 - every report an agent filed against that item, as the agent wrote it
 - every change an agent proposed to a document it does not own, with the
@@ -249,6 +253,15 @@ operator holding and lifting all harness activity, proposed work you turned
 down — there is no item, because nothing was created — and anything an agent
 filed with no work item attached. Burying those in one item's thread would
 misfile them.
+
+A provider refusing the harness for want of capacity goes there too, wherever it
+happened. A run says its own by parking, in that item's thread; everything else
+the harness points at a provider — a conversation turn with any role, an
+independent `yoyo review` — has no run to park, so the refusal is recorded on its
+own and posted as a `warning` naming what was stopped and, when the provider
+quotes one, when the limit lifts. Without it an exhausted limit reaches only
+whoever typed the command, and hours of silence with a known cause look exactly
+like a quiet queue.
 
 What a watching `yoyo work` session is doing goes there too, and it is the one
 thing here that is news precisely because nothing is happening: a session that
