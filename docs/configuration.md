@@ -1343,10 +1343,16 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Four things keep an item out of a pass, reported at two different grains. An
-unresolved directive is named against the item it paused, with the directive's
-own words: it needs a person, and nothing else would report that this item was
-passed over for it. The tracker not reporting an item as ready, a run for it
+Five things keep an item out of a pass, reported at two different grains. Two are
+named against the item, because nothing else would report that this item was
+passed over. An unresolved directive is named with the directive's own words: it
+needs a person. An item whose unfinished children already carry its execution is
+named with those children: a decomposed epic and the child doing its work are
+both reported as ready, and starting both buys the same change twice — two
+developers over one file, the second of them guaranteed a conflict at
+integration. A child covers whether it is queued, blocked, or already claimed,
+and the container is ordinary work again once its last unfinished child leaves
+the backlog. The tracker not reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
 stop reason names which of them ended the choosing, and a pass that got as far as
@@ -1357,7 +1363,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A fifth thing deliberately keeps nothing out: an item whose goal was amended
+A sixth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
