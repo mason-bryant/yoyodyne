@@ -52,6 +52,10 @@ type Store struct {
 	// only so a test can drive the bound without spending it; every store the
 	// harness builds gets promotionQueueWait.
 	promotionWait time.Duration
+	// reading is how strictly records are decoded. Every store the harness builds
+	// reads strictly; a reader of other processes' output takes a tolerant view
+	// of it through Tolerant.
+	reading
 }
 
 type ExistingWorkItemError struct {
@@ -394,8 +398,7 @@ func (s *Store) Load(runID string) (State, error) {
 	if info.Size() > maxEncodedStateBytes {
 		return State{}, fmt.Errorf("run state %s is %d bytes, limit is %d", runID, info.Size(), maxEncodedStateBytes)
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	decoder := s.decoder(file, maxEncodedStateBytes)
 	var state State
 	if err := decoder.Decode(&state); err != nil {
 		return State{}, fmt.Errorf("decode run state %s: %w", runID, err)
@@ -509,6 +512,12 @@ func (s *Store) scan(label string, keep func(State) bool) ([]State, error) {
 		}
 		state, err := s.Load(runID)
 		if err != nil {
+			// A reader rather than an actor carries on past a record it cannot
+			// read: one run recorded by a build newer than this one must not stop
+			// every other run being listed, for as long as the two builds differ.
+			if s.readPast(runID, err) {
+				continue
+			}
 			return nil, fmt.Errorf("discover %s runs: %w", label, err)
 		}
 		if keep(state) {

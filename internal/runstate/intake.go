@@ -22,10 +22,8 @@ package runstate
 // be started for a reason other than the operator naming it, and starts nothing.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +74,9 @@ func (h IntakeHold) Validate() error {
 type IntakeHoldStore struct {
 	root      string
 	productID domain.ProductID
+	// reading is how strictly the record is decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewIntakeHoldStore(root string, productID domain.ProductID) (*IntakeHoldStore, error) {
@@ -156,8 +157,7 @@ func (s *IntakeHoldStore) Held() (IntakeHold, bool, error) {
 		return IntakeHold{}, false, fmt.Errorf("open intake hold: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	decoder := s.decoder(file, maxEncodedStateBytes)
 	var held IntakeHold
 	if err := decoder.Decode(&held); err != nil {
 		return IntakeHold{}, false, fmt.Errorf("decode intake hold: %w", err)

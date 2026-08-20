@@ -61,12 +61,24 @@ type Backlog interface {
 // switches is the operator's two holds as one reading. They are read once per
 // pass and shared, because the same two files answer both what has to be posted
 // about the switches themselves and whether the line is stopped by one.
+//
+// Each switch has three readings rather than two. Held and not held are the
+// ordinary pair; unreadable is the third, and it is kept apart from not-held
+// because collapsing them would have the sink report a hold the operator never
+// lifted as lifted, and derive a moving line from a switch it never read.
 type switches struct {
-	intake       runstate.IntakeHold
-	intakeHeld   bool
-	operator     runstate.OperatorHold
-	operatorHeld bool
+	intake           runstate.IntakeHold
+	intakeHeld       bool
+	intakeUnreadable bool
+	operator         runstate.OperatorHold
+	operatorHeld     bool
+	// operatorUnreadable is the operator hold's third reading.
+	operatorUnreadable bool
 }
+
+// unreadable reports a reading that is missing one of the two switches, and so
+// cannot say what has stopped the line.
+func (s switches) unreadable() bool { return s.intakeUnreadable || s.operatorUnreadable }
 
 // waiting is a line with nothing being chosen from it, as the sink derived it.
 type waiting struct {
@@ -99,6 +111,15 @@ func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, he
 		return nil, nil
 	}
 	streams[heartbeatStream] = struct{}{}
+
+	if held.unreadable() {
+		// One of the operator's switches could not be read, so what has stopped the
+		// line cannot be derived from it — and guessing in either direction is the
+		// one thing this must not do. Nothing is said and nothing is forgotten: a
+		// state already standing keeps its clock and is picked up again on the pass
+		// the record reads, exactly as an unreadable tracker is handled below.
+		return nil, nil
+	}
 
 	state, stalled := waitingLine(held, sessions, inFlight)
 	if !stalled {
