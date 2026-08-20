@@ -32,11 +32,14 @@ which is admitted at that default until the product manager places it.
 `/backlog` shows it to you in order, with what is holding each unready item back
 and what would be pulled next.
 
-Nothing pulls from that order on its own yet, and the difference is worth
-stating plainly: the harness runs a work item when you ask it to with `/work`,
-and the development manager that would take from the top of the backlog without
-being told is not built. What exists today is the ordered queue it will take
-from, an owner for that order, and your view of both.
+The harness also pulls from that order on its own, and the difference is worth
+stating plainly: `/work` is you naming an item, while `yoyo work` reads the same
+order, takes what the tracker calls ready, and starts as much of it at once as
+your configured capacity leaves free. `/hold` is what stops it choosing while
+what is already running finishes, and every run it chooses records why that item
+was the one — so work that started without you asking still says what it was
+doing there. [Letting the harness choose the
+work](work.md#letting-the-harness-choose-the-work) is the whole of it.
 
 Work leaves the backlog in one of two ways, and both are recorded on the item.
 `close` says the work is done. `retire` says it will not be done, and is the
