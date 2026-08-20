@@ -18,12 +18,16 @@ package orchestrator
 // adds is the choosing: which items, in what order, how many at a time, and, for
 // every one of them, the recorded reason it was chosen.
 //
-// The one thing it decides about an item itself is whether the item is work at
-// all. A container whose unfinished children carry its execution is a heading
-// over the queue rather than an entry in it, and nothing downstream can tell:
-// the tracker reports it as pullable, the reservation sees a different item from
-// its child, and both runs then make the same change twice. Deciding that is
-// choosing rather than enforcing, which is why it is here.
+// Two things it does decide about an item itself, and both are choosing rather
+// than enforcing, which is why they are here. The first is whether the item is
+// work at all: a container whose unfinished children carry its execution is a
+// heading over the queue rather than an entry in it, and nothing downstream can
+// tell — the tracker reports it as pullable, the reservation sees a different
+// item from its child, and both runs then make the same change twice. The second
+// is whether it is work to start now: two items over the same epic or the same
+// files still integrate correctly when they are raced, and what that costs is a
+// replay, a fresh set of checks, and a fresh review on whichever loses. So they
+// are sequenced instead. See conflict.go.
 //
 // # A pull re-reads the configuration
 //
@@ -339,11 +343,15 @@ type Started struct {
 
 // Deferred is one pullable item this pass declined to start, and why.
 //
-// Two things land here: an unresolved directive, and an item whose unfinished
-// children already carry its execution. Each is named against the item rather
-// than counted, because each is a fact about that item that nothing else in the
-// harness would report — the first needs a person, and the second is the
-// scheduler passing over something the tracker called ready. The other reasons an
+// Three things land here: an unresolved directive, an item whose unfinished
+// children already carry its execution, and an item that would have raced work
+// already in flight over the same epic or the same files. Each is named against
+// the item rather than counted, because each is a fact about that item that
+// nothing else in the harness would report — the first needs a person, and the
+// other two are the scheduler passing over something the tracker called ready.
+// The last of them is a wait rather than a refusal: the item is pulled at the
+// first pull where what it would have raced has ended, and the run that pulls it
+// records having waited. The other reasons an
 // item is not started — the tracker not calling it ready, a run for it already
 // being in flight, no free developer slot — are facts about the pass rather than
 // about any one item, and the counts on the schedule report them at that grain.
@@ -474,6 +482,13 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// item stops being deferred the moment somebody resolves what paused it or
 	// closes what covered it.
 	deferred := make(map[string]bool)
+	// sequencedEarlier is the items this pass passed over because starting them
+	// would have raced work already in flight, against the conflict that held
+	// each one. It
+	// decides nothing — every pull re-reads what is actually in flight — and is
+	// remembered so that the selection which eventually pulls one can say it
+	// waited, which is the only place that fact survives the pass.
+	sequencedEarlier := make(map[string]conflict)
 	// blockedInARow counts the runs that ended blocked with nothing landing
 	// between them. It is the storm the brake watches for, and it is reset by any
 	// run that finishes: one item failing is not a systemic failure, and the
@@ -660,6 +675,19 @@ pulling:
 			schedule.StalenessProblem = stalenessProblem
 		}
 
+		// What the runs already going have taken, so nothing that would race one
+		// is started beside it. It is seeded from every item in flight anywhere —
+		// this pass's own runs and another process's alike — and grows as this
+		// pull starts things.
+		flight := newInFlight()
+		for id := range occupied {
+			flight.take(read.items[id])
+		}
+		// sequenced names the items this pull has held back for a conflict so
+		// far, in the order the product manager set. An item started after one of
+		// them was pulled ahead of it, and its recorded reason says so.
+		var sequenced []string
+
 		started := 0
 		for _, entry := range queue.Entries {
 			if started == free {
@@ -721,15 +749,40 @@ pulling:
 				}
 				continue
 			}
+			// Work that would race something already going is sequenced behind it
+			// rather than started beside it. This enforces nothing — the promotion
+			// lease and the replay still do all of that — and buys the difference
+			// between a wait and a replayed, re-checked, re-reviewed run. It is
+			// re-read at every pull like everything else here, so an item held back
+			// now is pulled at the first pull where the run it would have raced has
+			// ended.
+			if racing, races := flight.against(read.items[entry.ID]); races {
+				if !deferred[entry.ID] {
+					deferred[entry.ID] = true
+					schedule.Deferred = append(schedule.Deferred, Deferred{
+						WorkItemID: entry.ID,
+						Reason:     racing.reason(),
+					})
+				}
+				sequencedEarlier[entry.ID] = racing
+				sequenced = append(sequenced, entry.ID)
+				continue
+			}
 			delete(deferred, entry.ID)
 			tried[entry.ID] = fingerprint(read.items[entry.ID])
+
+			// Only an item that was actually held back carries the first half of
+			// this; the second is whatever this pull passed over ahead of it.
+			ordering := sequencing{after: sequencedEarlier[entry.ID], ahead: append([]string(nil), sequenced...)}
+			delete(sequencedEarlier, entry.ID)
 
 			index := len(schedule.Started)
 			selection := runstate.Selection{
 				By:     runstate.SelectedByScheduler,
-				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID]),
+				Reason: scheduleReason(entry, queue, free, pull.Capacity, stale[entry.ID], ordering),
 			}
 			schedule.Started = append(schedule.Started, Started{WorkItemID: entry.ID, Reason: selection.Reason})
+			flight.take(read.items[entry.ID])
 			mine[entry.ID] = index
 			running++
 			started++
@@ -1087,6 +1140,11 @@ func occupiedItems(runs ScheduleRuns) (map[string]struct{}, error) {
 // not.
 type pulled struct {
 	queue backlog.Queue
+	// items is every work item this pull read, by identifier: the admitted ones
+	// the queue was assembled from, and the claimed ones that have left it. The
+	// claimed half is there because what a run in flight is going to change is
+	// what says whether something else may be started beside it, and an item
+	// somebody has already pulled is not in the queue to be read from.
 	items map[string]beads.WorkItem
 	// children names the unfinished children of each item in this reading — the
 	// ones still queued, and the ones somebody has already pulled — in the
@@ -1127,6 +1185,9 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	claimed, err := p.Tracker.List(ctx, claimedStatus)
 	if err != nil {
 		return pulled{}, fmt.Errorf("list %s work items: %w", claimedStatus, err)
+	}
+	for _, item := range claimed {
+		items[item.ID] = item
 	}
 	children := make(map[string][]string)
 	cover := func(item beads.WorkItem) {
@@ -1174,18 +1235,23 @@ func (p Pull) stale(ctx context.Context) (map[string][]staleness.Change, string)
 // anything, because that is exactly what would otherwise be misread: an item
 // pulled with a change named beside it looks like an item pulled in spite of a
 // warning, and it is neither.
-func scheduleReason(entry backlog.Entry, queue backlog.Queue, free, capacity int, stale []staleness.Change) string {
+//
+// Sequencing goes in the same reason for the opposite purpose: it did decide
+// something. Where conflict-avoidance moved what was started, the run that was
+// started says so, because an order departed from silently is one nobody can
+// account for afterwards.
+func scheduleReason(entry backlog.Entry, queue backlog.Queue, free, capacity int, stale []staleness.Change, ordering sequencing) string {
 	reason := fmt.Sprintf(
 		"the scheduler pulled %s from the backlog: position %d of %d admitted item(s) at priority %d, one of the %d the tracker reports as ready, with %d of %d developer slot(s) free",
 		entry.ID, entry.Position, len(queue.Entries), entry.Priority, queue.Ready(), free, capacity)
-	if len(stale) == 0 {
-		return reason + "."
+	if len(stale) > 0 {
+		change := stale[0]
+		reason += fmt.Sprintf(
+			". %s was %s by the %s after this item was admitted (%s), and %d further change(s) upstream of it; staleness is reported rather than acted on, so it held nothing back",
+			change.ArtifactID, change.Action, change.By,
+			singleLine(change.Reason, maxScheduleReasonBytes), len(stale)-1)
 	}
-	change := stale[0]
-	return reason + fmt.Sprintf(
-		". %s was %s by the %s after this item was admitted (%s), and %d further change(s) upstream of it; staleness is reported rather than acted on, so it held nothing back",
-		change.ArtifactID, change.Action, change.By,
-		singleLine(change.Reason, maxScheduleReasonBytes), len(stale)-1)
+	return reason + "." + ordering.reason()
 }
 
 // Render describes a pass for an operator: what it started, what became of each
