@@ -54,6 +54,9 @@ func fullyRecorded(kind Kind) Event {
 			Parent:          "yoyodyne-ifd.68",
 			Priority:        1,
 			Reason:          "reordering the backlog first",
+			Since:           moment.Add(-3 * time.Hour),
+			Ready:           4,
+			Accumulated:     37,
 		},
 		Text: "the developer's own words, carried through",
 	}

@@ -196,6 +196,12 @@ type apiResponse struct {
 	// Warning is Slack's advice about a call that worked. It is carried so a
 	// caller can report it and deliberately never treated as a failure.
 	Warning string `json:"warning,omitempty"`
+	// RetryAfter is how many seconds Slack says to wait, where it answers a rate
+	// limit in the body rather than in the status line. It is read for the same
+	// reason the header is: a wait Slack asked for is the only wait that is not a
+	// guess, and guessing short is how an application that is already being
+	// limited gets suppressed.
+	RetryAfter int `json:"retry_after,omitempty"`
 }
 
 // Error is a refusal Slack named. It is a type rather than a string because the
@@ -317,6 +323,9 @@ func (a *API) attempt(ctx context.Context, method, token string, encoded []byte,
 		if refusal.Permanent() {
 			return 0, refusal
 		}
+		if code == "rate_limited" && envelope.RetryAfter > 0 {
+			return boundedWait(envelope.RetryAfter), refusal
+		}
 		return time.Second, refusal
 	}
 	return 0, nil
@@ -327,7 +336,16 @@ func (a *API) attempt(ctx context.Context, method, token string, encoded []byte,
 // short enough that the sink is not parked on a guess.
 func retryAfter(header string) time.Duration {
 	seconds, err := strconv.Atoi(strings.TrimSpace(header))
-	if err != nil || seconds <= 0 {
+	if err != nil {
+		return time.Second
+	}
+	return boundedWait(seconds)
+}
+
+// boundedWait is a wait Slack asked for, in seconds, held inside what one call
+// may be parked for. A wait it did not ask for at all is a second.
+func boundedWait(seconds int) time.Duration {
+	if seconds <= 0 {
 		return time.Second
 	}
 	wait := time.Duration(seconds) * time.Second

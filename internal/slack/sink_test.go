@@ -694,6 +694,10 @@ func newTestSinkAt(t *testing.T, root string, feed Feed, posts *recordedPosts, n
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
+	// The pace is real time in a running sink and none at all here, so a test
+	// about what is posted does not spend a second per message proving it. The
+	// pace itself is what TestPostingIsHeldToWhatSlackKeepsAccepting is for.
+	sink.pace.sleep = func(context.Context, time.Duration) error { return nil }
 	return sink
 }
 

@@ -131,6 +131,41 @@ func TestARateLimitIsWaitedOutRatherThanFailed(t *testing.T) {
 	}
 }
 
+// Slack answers some rate limits in the body rather than in the status line,
+// with `ok` false and the wait beside it. It is the same instruction and it is
+// honored the same way: a wait Slack asked for is the only one that is not a
+// guess, and guessing short is how an application already being limited has its
+// messages suppressed.
+func TestARateLimitAnsweredInTheBodyIsWaitedOutForAsLongAsSlackAsked(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			writeJSON(writer, map[string]any{"ok": false, "error": "rate_limited", "retry_after": 7})
+			return
+		}
+		writeJSON(writer, map[string]any{"ok": true, "ts": "1755.0004"})
+	})
+	var waited time.Duration
+	api.sleep = func(_ context.Context, d time.Duration) error {
+		waited += d
+		return nil
+	}
+
+	if _, err := api.Post(context.Background(), Message{Channel: "C1", Text: "said"}); err != nil {
+		t.Fatalf("Post() error = %v", err)
+	}
+	if waited != 7*time.Second {
+		t.Fatalf("waited = %s, want the wait Slack asked for in the body", waited)
+	}
+	// A body asking for an hour is bounded exactly as a header asking for one is.
+	if bounded := boundedWait(100000); bounded != maxRetryAfter {
+		t.Fatalf("boundedWait() = %s, want it bounded at %s", bounded, maxRetryAfter)
+	}
+}
+
 // An empty message says nothing, and a message with nowhere to go cannot be
 // posted. Both are refused before a request is made rather than by Slack.
 func TestNothingIsPostedWithoutAChannelAndSomethingToSay(t *testing.T) {

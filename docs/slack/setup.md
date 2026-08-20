@@ -28,6 +28,10 @@ own durable records and posts from them, so:
   back, so an outage delays messages rather than dropping them. A process killed
   between posting a message and recording that it posted repeats that one
   message; the durable record is the authority and this is a view of it.
+- Catching up does not flood the channel. Messages go at about one a second,
+  which is what Slack keeps accepting indefinitely, and a backlog too deep to
+  post one message at a time is summarized per thread instead of replayed. See
+  *Coming back from a long gap* below.
 - No run and no agent ever holds a Slack token. The tokens live in this one
   process's environment and nowhere else — never in `.yoyodyne`, never in a
   prompt, never in a run.
@@ -349,6 +353,28 @@ including one closing unresolved at its round cap, but nothing produces them yet
 so no `exchange:` thread is ever opened. When that work lands it adds messages to
 this channel and changes nothing about your setup.
 
+## Coming back from a long gap
+
+A sink that was off overnight comes back to everything the harness recorded while
+it was down. Two things shape how that reaches the channel.
+
+**It is posted at the rate Slack sustains** — roughly one message a second. Slack
+does not delay an application that posts faster than it tolerates: it suppresses
+the overflow, tells the application `due to a high volume of activity, we are not
+displaying some messages sent by this application`, and those messages are hidden
+for good rather than late. Pacing is what keeps a catch-up late instead of
+invisible, and it is why a twelve-hour gap takes a few minutes to appear rather
+than arriving at once.
+
+**A deep backlog is digested per thread.** When one pass has more than about a
+minute of messages in it, everything older than the last half hour is collapsed
+into a single line in each item's thread — how many events accumulated, over what
+span, and the reminder that the durable record holds every one of them. Three
+things are never collapsed: anything in a backlog shallow enough to post in full,
+anything from the last half hour, and anything **critical**, which is always said
+in its own words. `yoyo status` and `yoyo reports` read the full record from the
+command line whenever the digest is not enough.
+
 ## Limits worth knowing
 
 - **The thread map is per machine.** Two people running their own harnesses
@@ -359,6 +385,9 @@ this channel and changes nothing about your setup.
 - **A message that is too long is truncated**, with a marker naming the durable
   record that holds the whole of it. Nothing is ever split across a flood of
   messages to fit.
+- **A deep backlog is summarized rather than replayed**, so the individual
+  messages behind a digest line are in the durable records and not in the
+  channel. What is recent, and anything critical, is always said in full.
 - **Reporting is not an audit trail.** The durable records under the state root
   are; this is a view of them. `yoyo status`, `yoyo reports`, and `yoyo cost`
   read the same records from the command line.
@@ -375,6 +404,7 @@ this channel and changes nothing about your setup.
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
+| Slack says it is `not displaying some messages sent by this application` | Slack suppressed messages for volume, and suppressed ones are hidden rather than delayed. The sink paces itself below that threshold, so seeing this means something else is posting as the same app into the same channel — a second sink, or another integration sharing the app. What was suppressed is still in the durable records. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
