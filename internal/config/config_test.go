@@ -310,3 +310,44 @@ func TestValidateAllowsCodexOnlyForThinRoles(t *testing.T) {
 		t.Fatalf("Decode() architect Codex error = %v, want capability error", err)
 	}
 }
+
+// A project may say which classes of work its per-item gate is not asking
+// about. Nothing is exempt until it does: an exemption is the operator handing
+// over a decision, so it is written down rather than inherited or defaulted.
+func TestWorkItemExemptionsAreConfiguredAndOtherwiseEmpty(t *testing.T) {
+	t.Parallel()
+
+	silent, err := Decode(strings.NewReader(validBootstrapConfig))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(silent.Approvals.WorkItemExemptions) != 0 {
+		t.Fatalf("exemptions = %#v, want a project that carved out nothing to have carved out nothing", silent.Approvals.WorkItemExemptions)
+	}
+
+	exempting, err := Decode(strings.NewReader(strings.Replace(validBootstrapConfig,
+		"  integration: human\n",
+		"  integration: human\n  work_item_exemptions:\n    - diagnosis\n", 1)))
+	if err != nil {
+		t.Fatalf("Decode() error = %v", err)
+	}
+	if len(exempting.Approvals.WorkItemExemptions) != 1 || exempting.Approvals.WorkItemExemptions[0] != domain.WorkItemClassDiagnosis {
+		t.Fatalf("exemptions = %#v, want the diagnosis class", exempting.Approvals.WorkItemExemptions)
+	}
+}
+
+// A class the harness does not recognize exempts nothing, so the file is
+// refused rather than loaded with a policy its author believes is in force.
+func TestAnUnknownWorkItemExemptionIsRefused(t *testing.T) {
+	t.Parallel()
+
+	_, err := Decode(strings.NewReader(strings.Replace(validBootstrapConfig,
+		"  integration: human\n",
+		"  integration: human\n  work_item_exemptions:\n    - housekeeping\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "housekeeping") {
+		t.Fatalf("Decode() error = %v, want the unknown class named", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), `"diagnosis"`) {
+		t.Fatalf("Decode() error = %v, want it to name the classes there are", err)
+	}
+}

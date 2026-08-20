@@ -298,6 +298,13 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "approvals.goals", approvals.Goals, &r.config.Approvals.Goals, applied.origin)
 		setValue(r.origins, "approvals.designs", approvals.Designs, &r.config.Approvals.Designs, applied.origin)
 		setValue(r.origins, "approvals.work_items", approvals.WorkItems, &r.config.Approvals.WorkItems, applied.origin)
+		// Copied rather than aliased, like the check list: a layer's own slice must
+		// not become the resolved configuration's, or a later layer would be editing
+		// what an earlier document holds.
+		if approvals.WorkItemExemptions != nil {
+			r.config.Approvals.WorkItemExemptions = append([]domain.WorkItemClass(nil), (*approvals.WorkItemExemptions)...)
+			r.origins["approvals.work_item_exemptions"] = applied.origin
+		}
 		setValue(r.origins, "approvals.integration", approvals.Integration, &r.config.Approvals.Integration, applied.origin)
 		setValue(r.origins, "approvals.publishing", approvals.Publishing, &r.config.Approvals.Publishing, applied.origin)
 	}

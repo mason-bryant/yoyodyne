@@ -108,11 +108,77 @@ type Conversation struct {
 	// conversation, it is durable for the same reason the provider session is.
 	// It is bounded, and an id dropped from it is delivered once more rather
 	// than lost, which is the right way for this to fail.
-	DeliveredAmendmentIDs []string  `json:"delivered_amendment_ids,omitempty"`
+	DeliveredAmendmentIDs []string `json:"delivered_amendment_ids,omitempty"`
+	// PendingProposals are the work items an agent proposed that nobody has
+	// decided yet. They are durable for the reason the provider session is, and
+	// the reason is sharper here than anywhere else in this record: a proposal
+	// made by one `--message` invocation is decided by another, and a process
+	// that could not read back what was proposed had nothing for an approval to
+	// name. The operator's "y" then arrived as ordinary speech, the proposal was
+	// never decided, and nothing reached the queue.
+	//
+	// It holds only the undecided ones. A decision is an event in the log and
+	// stays there; what is kept here is the set a later process may still act on,
+	// so a proposal leaves this list the moment it is approved or declined.
+	PendingProposals []PendingProposal `json:"pending_proposals,omitempty"`
+	// PendingNotices is the account of harness activity the agent has not been
+	// told about yet, and PendingNoticesDropped says older activity was cut to
+	// keep it bounded. They are durable for the same reason the tracker results
+	// beside them are: the process that watched the operator act is usually not
+	// the one that asks the next question, and an agent that never learns the
+	// operator approved its own proposal will describe the queue wrongly.
+	PendingNotices        []string  `json:"pending_notices,omitempty"`
+	PendingNoticesDropped bool      `json:"pending_notices_dropped,omitempty"`
 	LastSequence          uint64    `json:"last_sequence"`
 	StartedAt             time.Time `json:"started_at"`
 	UpdatedAt             time.Time `json:"updated_at"`
 }
+
+// PendingProposal is one proposed work item as the record keeps it: what was
+// proposed, which turn proposed it, and why the harness did not simply admit
+// it. The conversation it belongs to is the record it sits in, so it is not
+// repeated here.
+//
+// It is declared in this package rather than shared with the conversation code
+// that builds it, because that code already depends on this one and the
+// dependency may not run both ways. The field names are the ones the proposal
+// contract uses, so what is written here reads as what was proposed.
+type PendingProposal struct {
+	ID          string `json:"id"`
+	Turn        int    `json:"turn"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Rationale   string `json:"rationale"`
+	Goal        string `json:"goal"`
+	Parent      string `json:"parent,omitempty"`
+	// Dependencies name the items the proposed work waits for.
+	Dependencies []string `json:"dependencies,omitempty"`
+	// Class is the kind of work the proposal claims to be, where a project treats
+	// a kind of work differently at admission. It is kept because it decides
+	// whether the operator is asked at all, so a proposal that came back without
+	// it would be a different proposal from the one that was made.
+	Class string `json:"class,omitempty"`
+	// Asking is what kept this proposal out of a queue it would otherwise have
+	// gone into, worked out when it was proposed rather than when it is decided.
+	Asking string `json:"asking,omitempty"`
+}
+
+// MaxPendingProposals bounds the undecided proposals one conversation carries.
+// A proposal carries the whole of what an operator decides from — its
+// description and its rationale — so unlike the amendment identifiers above it
+// is a bound on something large: twenty of them at their own maximum size is
+// comfortably inside what a state file may hold, while a hundred would put a
+// conversation in the state where every save of it fails.
+//
+// It is well above any conversation anybody holds. One reply proposes at most
+// ten items, and a second reply proposing ten more with none of the first
+// decided is already a conversation nobody is reading.
+const MaxPendingProposals = 20
+
+// MaxPendingNotices bounds the account of harness activity one conversation
+// carries forward. It matches the bound the conversation itself keeps, so what
+// is written is always what was going to be delivered.
+const MaxPendingNotices = 20
 
 // MaxDeliveredAmendmentIDs bounds that record. It is far above any plausible
 // backlog of undecided proposals, and it exists so a conversation's state file
@@ -176,6 +242,21 @@ func (c Conversation) Validate() error {
 	if len(c.DeliveredAmendmentIDs) > MaxDeliveredAmendmentIDs {
 		problems = append(problems, fmt.Errorf("%d delivered amendment ids are recorded, limit is %d",
 			len(c.DeliveredAmendmentIDs), MaxDeliveredAmendmentIDs))
+	}
+	if len(c.PendingProposals) > MaxPendingProposals {
+		problems = append(problems, fmt.Errorf("%d undecided proposals are recorded, limit is %d",
+			len(c.PendingProposals), MaxPendingProposals))
+	}
+	// An undecided proposal nobody can name is one nobody can decide, so the
+	// identifier an approval has to say is required rather than merely usual.
+	for i, proposal := range c.PendingProposals {
+		if strings.TrimSpace(proposal.ID) == "" {
+			problems = append(problems, fmt.Errorf("pending_proposals[%d] has no id", i))
+		}
+	}
+	if len(c.PendingNotices) > MaxPendingNotices {
+		problems = append(problems, fmt.Errorf("%d pending notices are recorded, limit is %d",
+			len(c.PendingNotices), MaxPendingNotices))
 	}
 	// A picture is deliberately allowed to predate the conversation that carries
 	// it: it is assembled before the record exists, and a refresh moves it
