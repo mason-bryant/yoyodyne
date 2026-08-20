@@ -3,15 +3,6 @@
 *For an operator asking what the work cost and what came back. Part of
 [yoyo's documentation](../README.md#further-reading).*
 
-> **Where its links point while the split is in progress.** This document is
-> tranche 1 of the README split, so one of the documents it links to is not
-> written yet. Resolving today: `slack/setup.md` and
-> `../README.md#further-reading` — the README is untouched by this tranche and
-> keeps that heading. Not yet:
-> `operations.md#following-a-run-a-conversation-or-a-branch-review` and
-> `operations.md#checking-the-installation`, which arrive in tranche 2. This
-> note goes when they do.
-
 ## What the work cost
 
 Ask what is done and the completed items come back with a price tag:
