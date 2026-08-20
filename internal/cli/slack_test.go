@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -43,6 +45,21 @@ func TestTheSinkRefusesAProjectThatHasNotOptedIn(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "slack.enabled") {
 		t.Fatalf("stderr = %q, want the setting that turns it on named", stderr)
+	}
+}
+
+// Every speaker's name is qualified by the product it speaks for, and the sink
+// refuses to assemble without one. So a sink built from a project that names its
+// product is a sink that was handed it: forgetting the wiring is a refusal here
+// rather than a channel of names that do not say which harness is talking.
+func TestTheSinkIsAssembledWithTheProductItReportsOn(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	t.Setenv("SLACK_BOT_TOKEN", "xoxb-test")
+	t.Setenv("SLACK_APP_TOKEN", "xapp-test")
+	configPath := writeConfig(t, slackConfig)
+
+	if _, _, err := buildSlackSink(configPath, time.Second, time.Minute, io.Discard); err != nil {
+		t.Fatalf("buildSlackSink() error = %v", err)
 	}
 }
 

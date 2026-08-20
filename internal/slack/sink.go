@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 )
 
@@ -54,6 +55,10 @@ const (
 type Options struct {
 	// Channel is where threads are opened.
 	Channel string
+	// Product is the id of the product being reported on. Every speaker's name
+	// carries it, so a workspace reading two harnesses can tell which one is
+	// talking without opening a thread.
+	Product domain.ProductID
 	// Avatars is the project's per-speaker override of the picture beside a name.
 	// It is optional, and a sink given none posts every persona under the avatar
 	// the harness ships.
@@ -88,11 +93,13 @@ type Options struct {
 // Sink is the long-running reporting process for one product.
 type Sink struct {
 	channel string
-	avatars notify.Avatars
-	store   *Store
-	api     *API
-	feed    Feed
-	poll    time.Duration
+	// appearance is how this product's speakers appear here: its own id after
+	// every name, and the pictures the project chose.
+	appearance notify.Appearance
+	store      *Store
+	api        *API
+	feed       Feed
+	poll       time.Duration
 	// refusal is how long to wait after a refusal only a person can clear. It is
 	// a field only so a test can drive that path without spending the wait;
 	// every sink the harness builds gets refusalBackoff.
@@ -121,6 +128,12 @@ func New(options Options) (*Sink, error) {
 	if strings.TrimSpace(options.Channel) == "" {
 		problems = append(problems, errors.New("a channel is required"))
 	}
+	// A sink with no product would post names that say a Development Manager
+	// spoke without saying whose, which is exactly the message an operator
+	// running two harnesses cannot read.
+	if strings.TrimSpace(string(options.Product)) == "" {
+		problems = append(problems, errors.New("the product id is required; it is what every speaker's name is qualified by"))
+	}
 	if options.Store == nil {
 		problems = append(problems, errors.New("the sink's own state store is required"))
 	}
@@ -143,7 +156,10 @@ func New(options Options) (*Sink, error) {
 	}
 	return &Sink{
 		channel: strings.TrimSpace(options.Channel),
-		avatars: options.Avatars,
+		appearance: notify.Appearance{
+			Product: domain.ProductID(strings.TrimSpace(string(options.Product))),
+			Avatars: options.Avatars,
+		},
 		store:   options.Store,
 		api:     options.API,
 		feed:    options.Feed,
@@ -303,7 +319,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
 	into := &poster{sink: s, threads: &threads}
-	notifier := notify.New(into, s.avatars)
+	notifier := notify.New(into, s.appearance)
 
 	// How deep the backlog is has to be decided over the whole batch before any of
 	// it is posted, because a digest says how many events it stands for. An
@@ -447,7 +463,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // happened to speak first, because opening a thread is not anybody's account of
 // anything.
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
-	identity := s.avatars.Identity(notify.Harness())
+	identity := s.appearance.Identity(notify.Harness())
 	emoji, url := icon(identity.Avatar)
 	ts, err := s.post(ctx, Message{
 		Channel:   s.channel,

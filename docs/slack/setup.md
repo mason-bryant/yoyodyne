@@ -15,6 +15,12 @@ account of a real act and no agent performs one. What an agent actually wrote �
 a report, the argument in a proposal — is carried through word for word under
 that agent's name.
 
+Every one of those names says which product it is speaking for, taken from
+`product.id`: **Development Manager (yoyodyne)**, **Yoyodyne (yoyodyne)**, and so
+on for every speaker. An operator with a second product in development is reading
+a second harness, and the name is the only thing a message carries that says
+which one is talking.
+
 None of that costs a model call. Every milestone is rendered from the record by
 a fixed line per role, so the channel is deterministic and no model sits between
 a fact and its reporting.
@@ -140,8 +146,9 @@ shortcode or the https URL of an image. Leave a speaker out to keep the picture
 the harness ships. Both shapes work with the scopes the manifest already asked
 for, so neither costs a reinstall. **The names are not configurable** — only the
 picture is: who speaks is a claim about who did the work, and that stays the
-harness's to make. [`docs/configuration.md`](../configuration.md#avatars) has
-the whole of it.
+harness's to make. The product each name carries is not a choice either; it is
+read from `product.id`.
+[`docs/configuration.md`](../configuration.md#avatars) has the whole of it.
 
 Who may steer the harness from a thread is not part of this block. It comes from
 the top-level `operators` mapping, which is where the project says which humans

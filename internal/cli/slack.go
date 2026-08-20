@@ -165,6 +165,11 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, stdout io.
 	}
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,
+		// Which product is talking, after every speaker's name. It is the id the
+		// configuration already carries rather than anything this process decides,
+		// so an operator running a second harness reads two channels — or one
+		// shared one — and can tell them apart without opening a thread.
+		Product: productID,
 		// What the project configured is the picture beside each name and nothing
 		// else about who is speaking; a speaker it named none for keeps the one
 		// the harness ships.

@@ -57,10 +57,15 @@ func (i Identity) Validate() error {
 	return errors.Join(problems...)
 }
 
-// Identity is how this speaker appears. The configured agent is named only where
-// it says something the role does not, which is a project that configured more
-// than one agent for a role — the same rule a collected report is rendered under,
-// so the same speaker is named the same way wherever it is read.
+// Identity is how this speaker appears as the harness ships it, before any one
+// project's configuration is applied to it. The configured agent is named only
+// where it says something the role does not, which is a project that configured
+// more than one agent for a role — the same rule a collected report is rendered
+// under, so the same speaker is named the same way wherever it is read.
+//
+// What it does not carry is the product, because the voice table is the same
+// table whichever product is running it. That is Appearance's, and Appearance is
+// what a posted identity comes from.
 func (s Speaker) Identity() Identity {
 	spoken, ok := voices[s.Key()]
 	if !ok {
@@ -76,21 +81,58 @@ func (s Speaker) Identity() Identity {
 // Avatars is a project's override of the picture beside a speaker's name, keyed
 // exactly as an envelope names a speaker: a role, or the harness.
 //
-// It is the only part of an identity configuration may move, and that boundary
-// is the point. The name a message appears under, and whose account it is, stay
-// the voice table's: who speaks is a claim about who did the work, and a project
-// that could rewrite it could attribute a promotion to a developer. The avatar
-// is what the design calls strict decoration, so it is the part that can be a
-// preference without any of that riding on it.
+// It is the only part of an identity a project chooses, and that boundary is the
+// point. Who speaks, and the name that says so, stay the voice table's: whose
+// account a message is is a claim about who did the work, and a project that
+// could rewrite it could attribute a promotion to a developer. The avatar is
+// what the design calls strict decoration, so it is the part that can be a
+// preference without any of that riding on it. The product a name is qualified
+// by is not a preference either — it is read from the product's own id, the same
+// for every speaker — so it is Appearance's rather than this table's.
 type Avatars map[string]string
 
-// Identity is how a speaker appears once this project's overrides are applied.
-// An entry that is absent or blank leaves the shipped default, so configuring
-// one persona's avatar does not quietly un-decorate the rest.
-func (a Avatars) Identity(speaker Speaker) Identity {
+// avatar is this project's picture for one speaker, or empty where it named
+// none. An entry that is blank is the same as no entry: configuring one
+// persona's avatar does not quietly un-decorate the rest.
+func (a Avatars) avatar(speaker Speaker) string {
+	return strings.TrimSpace(a[speaker.Key()])
+}
+
+// Appearance is how the speakers of one product appear: the product they speak
+// for, and that project's overrides of the pictures beside their names. It is
+// one type rather than two arguments because it is the single door a posted
+// identity comes through — a surface that could reach the shipped name directly
+// is a surface that could post a name saying nothing about which harness said
+// it.
+type Appearance struct {
+	// Product is the id of the product this harness runs, taken from the
+	// configuration and never authored per message. Every speaker's name carries
+	// it, the harness's included: an operator develops more than one product, and
+	// where two of them are read in one channel the name is the only thing a
+	// message carries that says which harness is talking. A configuration that
+	// names no product leaves the shipped names alone, which is the appearance
+	// there was before there was a second product to tell apart.
+	Product domain.ProductID
+	// Avatars is this project's override of the picture beside each name, and is
+	// nil for a project that configured none.
+	Avatars Avatars
+}
+
+// Identity is how a speaker appears once this product and its overrides are
+// applied: the shipped name with the product it speaks for after it, and the
+// picture the project chose for it. The product is last and always in the same
+// shape, so two harnesses in one channel are told apart at a glance rather than
+// by reading a message.
+func (a Appearance) Identity(speaker Speaker) Identity {
 	identity := speaker.Identity()
-	if override := strings.TrimSpace(a[speaker.Key()]); override != "" {
+	if override := a.Avatars.avatar(speaker); override != "" {
 		identity.Avatar = override
+	}
+	// A speaker with no voice has no name to qualify, and a product suffix on its
+	// own would be a name for nobody rather than the empty identity a caller has
+	// to notice.
+	if product := strings.TrimSpace(string(a.Product)); product != "" && identity.Name != "" {
+		identity.Name += " (" + product + ")"
 	}
 	return identity
 }

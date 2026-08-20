@@ -12,6 +12,13 @@ import (
 
 var moment = time.Date(2026, 8, 19, 15, 4, 5, 0, time.UTC)
 
+// testProduct is the product these speakers speak for, and testAppearance is the
+// appearance of a project that configured nothing but is still running a named
+// product — which is every project, because the id is required configuration.
+const testProduct domain.ProductID = "yoyodyne"
+
+var testAppearance = Appearance{Product: testProduct}
+
 // speakers is every speaker there is, which is what "events from every persona
 // type" has to mean for a test to be able to check it.
 func speakers() []Speaker {
@@ -142,14 +149,118 @@ func TestTheConfiguredAgentIsNamedOnlyWhenItSaysSomethingTheRoleDoesNot(t *testi
 	}
 }
 
+// Which harness is talking. An operator develops more than one product, and a
+// role name on its own says which chair spoke and not which product's — so every
+// name carries the product, the harness's included, in the same place and the
+// same shape whichever speaker it is.
+func TestEverySpeakerIsNamedWithTheProductItSpeaksFor(t *testing.T) {
+	for _, want := range []struct {
+		speaker Speaker
+		name    string
+	}{
+		{speaker: Harness(), name: "Yoyodyne (context-conductor)"},
+		{speaker: Persona(domain.RoleDevelopmentManager, ""), name: "Development Manager (context-conductor)"},
+		{speaker: Persona(domain.RoleProductManager, ""), name: "Product Manager (context-conductor)"},
+		{speaker: Persona(domain.RoleArchitect, ""), name: "Architect (context-conductor)"},
+		{speaker: Persona(domain.RoleDeveloper, ""), name: "Developer (context-conductor)"},
+		{speaker: Persona(domain.RoleReviewer, ""), name: "Reviewer (context-conductor)"},
+		// A project that configured more than one agent for a role still says the
+		// product last, so the last thing on every name is the same fact.
+		{speaker: Persona(domain.RoleDeveloper, "opus"), name: "Developer (opus) (context-conductor)"},
+	} {
+		appearance := Appearance{Product: "context-conductor"}
+		if got := appearance.Identity(want.speaker); got.Name != want.name {
+			t.Errorf("the %s appears as %q, want %q", want.speaker.Key(), got.Name, want.name)
+		}
+	}
+	// A speaker the voice table has nothing for has no name to qualify, and stays
+	// the empty identity a caller has to notice rather than becoming a product's
+	// name for nobody.
+	if got := (Appearance{Product: "context-conductor"}).Identity(Speaker{Role: "auditor"}); got != (Identity{}) {
+		t.Errorf("an unvoiced speaker appears as %+v, want nothing", got)
+	}
+}
+
+// The point of carrying it: two harnesses reporting into one channel are two
+// sets of names rather than one, so nothing said by either is ambiguous about
+// which product it is about.
+func TestTwoProductsShareNoSpeakerName(t *testing.T) {
+	here := Appearance{Product: testProduct}
+	elsewhere := Appearance{Product: "context-conductor"}
+	for _, speaker := range speakers() {
+		mine, theirs := here.Identity(speaker), elsewhere.Identity(speaker)
+		if mine.Name == theirs.Name {
+			t.Errorf("the %s appears as %q on both products", speaker.Key(), mine.Name)
+		}
+		if err := mine.Validate(); err != nil {
+			t.Errorf("the %s appears as %+v: %v", speaker.Key(), mine, err)
+		}
+	}
+}
+
+// The product qualifies the name and moves nothing else. Whose account a message
+// is is a claim about who did the work, and it is the same claim whichever
+// product the work was done on.
+func TestNamingTheProductMovesNothingAboutAttribution(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.13")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	posted := &recorder{}
+	speaker := Persona(domain.RoleDevelopmentManager, "")
+	if err := New(posted, testAppearance).Notify(context.Background(), topic, speaker, fullyRecorded(KindItemAdmitted)); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+	if len(posted.posted) != 1 {
+		t.Fatalf("posted %d messages, want one", len(posted.posted))
+	}
+	message := posted.posted[0]
+	if message.Speaker != speaker.Key() {
+		t.Errorf("message attributed to %q, want the %s", message.Speaker, speaker.Key())
+	}
+	if want := "Development Manager (yoyodyne)"; message.Identity.Name != want {
+		t.Errorf("message posted as %q, want %q", message.Identity.Name, want)
+	}
+	// The words are the persona's own, and naming the product beside the name
+	// leaves them exactly as the voice table renders them.
+	rendered, err := Render(topic, speaker, fullyRecorded(KindItemAdmitted))
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if message.Body != rendered.Body {
+		t.Errorf("message body = %q, want the rendered %q", message.Body, rendered.Body)
+	}
+}
+
+// A configuration that names no product is the appearance there was before there
+// were two products to tell apart, rather than a name with an empty parenthesis
+// in it or a speaker called nothing at all.
+func TestAnUnnamedProductLeavesTheShippedNames(t *testing.T) {
+	for name, appearance := range map[string]Appearance{
+		"no product":      {},
+		"a blank product": {Product: "   "},
+	} {
+		for _, speaker := range speakers() {
+			if got := appearance.Identity(speaker); got != speaker.Identity() {
+				t.Errorf("with %s the %s appears as %+v, want the shipped %+v", name, speaker.Key(), got, speaker.Identity())
+			}
+		}
+		// And a speaker the voice table has nothing for stays the empty identity a
+		// caller has to notice, rather than becoming a name for nobody.
+		if got := appearance.Identity(Speaker{Role: "auditor"}); got != (Identity{}) {
+			t.Errorf("with %s an unvoiced speaker appears as %+v, want nothing", name, got)
+		}
+	}
+}
+
 // A project may choose the picture beside a name, in either shape a surface
 // takes one. A speaker it configured nothing for keeps what the voice table
 // ships, so naming one persona's avatar does not quietly un-decorate the rest.
 func TestAConfiguredAvatarReplacesTheShippedOne(t *testing.T) {
-	avatars := Avatars{
+	appearance := Appearance{Product: testProduct, Avatars: Avatars{
 		HarnessSpeaker:               "https://example.invalid/faces/harness.png",
 		string(domain.RoleDeveloper): ":ship-it:",
-	}
+	}}
 	for _, want := range []struct {
 		speaker Speaker
 		avatar  string
@@ -158,7 +269,7 @@ func TestAConfiguredAvatarReplacesTheShippedOne(t *testing.T) {
 		{speaker: Persona(domain.RoleDeveloper, ""), avatar: ":ship-it:"},
 		{speaker: Persona(domain.RoleReviewer, ""), avatar: Persona(domain.RoleReviewer, "").Identity().Avatar},
 	} {
-		if got := avatars.Identity(want.speaker); got.Avatar != want.avatar {
+		if got := appearance.Identity(want.speaker); got.Avatar != want.avatar {
 			t.Errorf("the %s appears with %q, want %q", want.speaker.Key(), got.Avatar, want.avatar)
 		}
 	}
@@ -170,8 +281,9 @@ func TestAConfiguredAvatarReplacesTheShippedOne(t *testing.T) {
 		"a blank entry":      {string(domain.RoleDeveloper): "   "},
 	} {
 		speaker := Persona(domain.RoleDeveloper, "")
-		if got := configured.Identity(speaker); got != speaker.Identity() {
-			t.Errorf("with %s the developer appears as %+v, want the shipped %+v", name, got, speaker.Identity())
+		shipped := testAppearance.Identity(speaker)
+		if got := (Appearance{Product: testProduct, Avatars: configured}).Identity(speaker); got != shipped {
+			t.Errorf("with %s the developer appears as %+v, want the shipped %+v", name, got, shipped)
 		}
 	}
 }
@@ -180,10 +292,10 @@ func TestAConfiguredAvatarReplacesTheShippedOne(t *testing.T) {
 // message appears under, and whose account it is, are the voice table's, so
 // there is nothing a project can configure that moves either.
 func TestConfiguringAnAvatarMovesNothingAboutWhoSpeaks(t *testing.T) {
-	avatars := Avatars{string(domain.RoleDeveloper): ":ship-it:"}
+	appearance := Appearance{Product: testProduct, Avatars: Avatars{string(domain.RoleDeveloper): ":ship-it:"}}
 	for _, speaker := range speakers() {
-		shipped := speaker.Identity()
-		configured := avatars.Identity(speaker)
+		shipped := testAppearance.Identity(speaker)
+		configured := appearance.Identity(speaker)
 		if configured.Name != shipped.Name {
 			t.Errorf("the %s appears as %q with an avatar configured, want %q", speaker.Key(), configured.Name, shipped.Name)
 		}
@@ -195,14 +307,14 @@ func TestConfiguringAnAvatarMovesNothingAboutWhoSpeaks(t *testing.T) {
 	}
 	posted := &recorder{}
 	speaker := Persona(domain.RoleDeveloper, "")
-	if err := New(posted, avatars).Notify(context.Background(), topic, speaker, fullyRecorded(KindChecksPassed)); err != nil {
+	if err := New(posted, appearance).Notify(context.Background(), topic, speaker, fullyRecorded(KindChecksPassed)); err != nil {
 		t.Fatalf("Notify() error = %v", err)
 	}
 	if len(posted.posted) != 1 {
 		t.Fatalf("posted %d messages, want one", len(posted.posted))
 	}
 	message := posted.posted[0]
-	if message.Speaker != speaker.Key() || message.Identity.Name != speaker.Identity().Name {
+	if message.Speaker != speaker.Key() || message.Identity.Name != testAppearance.Identity(speaker).Name {
 		t.Fatalf("message = %+v, want it still attributed to the developer", message)
 	}
 	if message.Identity.Avatar != ":ship-it:" {

@@ -16,6 +16,13 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
+// testProduct is the product every sink in these tests reports on, and
+// testAppearance is how its speakers appear because of it: the shipped name and
+// picture, with the product after the name.
+const testProduct domain.ProductID = "yoyodyne"
+
+var testAppearance = notify.Appearance{Product: testProduct}
+
 // One thread per topic, held across restarts. The first thing said about a work
 // item opens its thread and everything else about it replies into that thread —
 // which is what makes a channel readable when three items are in flight at once.
@@ -129,7 +136,7 @@ func TestEachPersonaPostsUnderItsOwnDisplayIdentity(t *testing.T) {
 		t.Fatalf("posts = %d, want the thread and the report in it", len(posts.requests))
 	}
 	filed := posts.requests[1]
-	identity := notify.Persona(domain.RoleDeveloper, "").Identity()
+	identity := testAppearance.Identity(notify.Persona(domain.RoleDeveloper, ""))
 	if filed.Username != identity.Name || filed.IconEmoji != identity.Avatar {
 		t.Fatalf("post = %#v, want it under the developer's own name and face", filed)
 	}
@@ -140,7 +147,7 @@ func TestEachPersonaPostsUnderItsOwnDisplayIdentity(t *testing.T) {
 	}
 	// The thread is opened by the harness rather than by whichever persona
 	// happened to speak first: opening a thread is nobody's account of anything.
-	if posts.requests[0].Username != notify.Harness().Identity().Name {
+	if posts.requests[0].Username != testAppearance.Identity(notify.Harness()).Name {
 		t.Fatalf("thread opened by %q, want the harness", posts.requests[0].Username)
 	}
 }
@@ -168,7 +175,7 @@ func TestAConfiguredAvatarIsPostedInTheFieldItsShapeBelongsIn(t *testing.T) {
 	}}}, posts)
 	// The harness gets an image and the developer a shortcode, so one pass
 	// exercises both fields — the thread header is the harness's own post.
-	sink.avatars = notify.Avatars{
+	sink.appearance.Avatars = notify.Avatars{
 		notify.HarnessSpeaker:        "https://example.invalid/faces/harness.png",
 		string(domain.RoleDeveloper): ":ship-it:",
 	}
@@ -188,8 +195,69 @@ func TestAConfiguredAvatarIsPostedInTheFieldItsShapeBelongsIn(t *testing.T) {
 		t.Errorf("report posted as %#v, want the configured shortcode in icon_emoji alone", filed)
 	}
 	// The picture moved and nothing else did: the name is still the developer's.
-	if filed.Username != notify.Persona(domain.RoleDeveloper, "").Identity().Name {
+	if filed.Username != testAppearance.Identity(notify.Persona(domain.RoleDeveloper, "")).Name {
 		t.Errorf("report posted as %q, want it still under the developer's own name", filed.Username)
+	}
+}
+
+// Every name a sink posts under says which product it is reporting on, the
+// thread header the harness opens included. An operator develops more than one
+// product, and where two harnesses are read in one channel the name is the only
+// thing a message carries that says which of them is talking.
+func TestEveryNameASinkPostsUnderCarriesItsProduct(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream: reportStream,
+		Cursor: Cursor{Position: 1},
+		Notification: notify.Notification{
+			Topic:   workItemTopic(t, "yoyodyne-ifd.68.13"),
+			Speaker: notify.Persona(domain.RoleDevelopmentManager, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: report.SeverityNote,
+				Text:     "which harness is talking is the boundary that matters most",
+			},
+		},
+	}}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread and the report in it", len(posts.requests))
+	}
+	if want := "Yoyodyne (yoyodyne)"; posts.requests[0].Username != want {
+		t.Errorf("thread opened by %q, want %q", posts.requests[0].Username, want)
+	}
+	if want := "Development Manager (yoyodyne)"; posts.requests[1].Username != want {
+		t.Errorf("report posted by %q, want %q", posts.requests[1].Username, want)
+	}
+	for _, post := range posts.requests {
+		if !strings.HasSuffix(post.Username, " ("+string(testProduct)+")") {
+			t.Errorf("post = %#v, want a name saying which product is talking", post)
+		}
+	}
+}
+
+// The product a sink reports on is what its speakers are named with, so a sink
+// assembled without one would post names that say a role spoke without saying
+// whose. It is refused at assembly rather than discovered in a channel.
+func TestASinkWithoutAProductIsRefusedAtAssembly(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewStore(t.TempDir(), testProduct)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	api, err := NewAPI("xoxb-test", "xapp-test")
+	if err != nil {
+		t.Fatalf("NewAPI() error = %v", err)
+	}
+	if _, err := New(Options{Channel: "C1", Store: store, API: api, Feed: &fixedFeed{}}); err == nil {
+		t.Fatal("New() without a product = nil, want a refusal")
 	}
 }
 
@@ -202,7 +270,7 @@ func TestASpeakerWithNoConfiguredAvatarKeepsTheShippedOne(t *testing.T) {
 	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
 		milestone(1, notify.KindRunStarted),
 	}}, posts)
-	sink.avatars = notify.Avatars{string(domain.RoleDeveloper): ":ship-it:"}
+	sink.appearance.Avatars = notify.Avatars{string(domain.RoleDeveloper): ":ship-it:"}
 
 	if err := sink.pass(context.Background()); err != nil {
 		t.Fatalf("pass() error = %v", err)
@@ -682,6 +750,7 @@ func newTestSinkAt(t *testing.T, root string, feed Feed, posts *recordedPosts, n
 	}
 	options := Options{
 		Channel: "C1",
+		Product: testProduct,
 		Store:   store,
 		API:     newTestAPI(t, posts.handle),
 		Feed:    feed,
