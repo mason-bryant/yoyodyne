@@ -136,6 +136,12 @@ approvals:
   # and opens a pull request, and the reviewer's approving verdict merges it.
   integration: automatic
   publishing: automatic
+  # Goal-level approval operating as ifd.25 designed: the twelve goals are
+  # operator-approved, so admission against them flows directly and the
+  # operator is told rather than asked. The harness default of human, plus the
+  # broken --message proposal decision (ifd.120), had wedged admission
+  # entirely on 2026-08-20.
+  work_items: automatic
 
 # Checks are this project's own. Each entry is run through "/bin/sh -c" in the
 # run's worktree, so shell syntax works. A check must be non-interactive and
