@@ -198,7 +198,7 @@ var developmentManagerVoice = voice{
 		KindItemReprioritized: "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindWorkApproved:      "{item} was approved and is in my queue: {title}, for {goal}.",
 		KindWorkDeclined:      "{title} was declined, so nothing about it ever reaches my queue: {why}",
-		KindRunStarted:        "{item} is claimed and started as {run}. {by} chose it: {reason}",
+		KindRunStarted:        "I've pulled {item} off the queue, and it is claimed and started as {run}: {reason}",
 		KindChecksPassed:      "{item} cleared its checks and is on to review.",
 		KindChecksFailed:      "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
 		KindReviewApproved:    "{item} is approved and clear to integrate.",

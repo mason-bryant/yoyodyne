@@ -82,8 +82,46 @@ func TestARunStartingCarriesWhyItWasSelected(t *testing.T) {
 	if !strings.Contains(message.Body, "highest-priority item nothing is holding back") {
 		t.Fatalf("body %q does not carry the recorded reason", message.Body)
 	}
-	if !strings.Contains(message.Body, runstate.SelectedByDevelopmentManager) {
-		t.Fatalf("body %q does not say who chose it", message.Body)
+}
+
+func TestARunStartingIsSpokenByTheSelectorTheRecordNames(t *testing.T) {
+	// The development manager speaks only for the work its own triage chose. The
+	// operator is not a persona and the scheduler is not a role, so a run either
+	// of them selected is the harness's account rather than anybody's judgment.
+	for _, selected := range []struct {
+		by      string
+		speaker string
+	}{
+		{by: runstate.SelectedByDevelopmentManager, speaker: string(domain.RoleDevelopmentManager)},
+		{by: runstate.SelectedByOperator, speaker: HarnessSpeaker},
+		{by: runstate.SelectedByScheduler, speaker: HarnessSpeaker},
+	} {
+		state := running()
+		state.Selection = &runstate.Selection{By: selected.by, Reason: "named on the command line", At: moment}
+		_, notifications := crossed(t, runstate.State{}, state)
+		started := only(t, notifications, KindRunStarted)
+		if started.Speaker.Key() != selected.speaker {
+			t.Fatalf("a run selected by the %s is spoken by the %s, want the %s", selected.by, started.Speaker.Key(), selected.speaker)
+		}
+	}
+}
+
+func TestAnOperatorNamedRunSaysTheOperatorChoseIt(t *testing.T) {
+	// The harness speaks for it, and what it says still names the selector: the
+	// operator is who a reader has to be able to see behind the choice.
+	state := running()
+	state.Selection = &runstate.Selection{By: runstate.SelectedByOperator, Reason: "from a conversation, after turn 103", At: moment}
+	_, notifications := crossed(t, runstate.State{}, state)
+	started := only(t, notifications, KindRunStarted)
+	message, err := Render(started.Topic, started.Speaker, started.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, runstate.SelectedByOperator) {
+		t.Fatalf("body %q does not say the operator chose it", message.Body)
+	}
+	if !strings.Contains(message.Body, "from a conversation, after turn 103") {
+		t.Fatalf("body %q does not carry the recorded reason", message.Body)
 	}
 }
 
@@ -91,7 +129,12 @@ func TestARunWithNoRecordedSelectionSaysSoRatherThanNothing(t *testing.T) {
 	state := running()
 	state.Selection = nil
 	_, notifications := crossed(t, runstate.State{}, state)
-	message, err := Render(notifications[0].Topic, notifications[0].Speaker, notifications[0].Event)
+	started := only(t, notifications, KindRunStarted)
+	// Nobody is named as having chosen it, so nobody speaks for it either.
+	if !started.Speaker.IsHarness() {
+		t.Fatalf("an unaccounted run is spoken by the %s", started.Speaker.Key())
+	}
+	message, err := Render(started.Topic, started.Speaker, started.Event)
 	if err != nil {
 		t.Fatalf("render: %v", err)
 	}
