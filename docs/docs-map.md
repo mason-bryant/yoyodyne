@@ -415,16 +415,22 @@ work item that mis-assumed which surfaces existed. Doing it again by accident,
 through a documentation restructure, would be worse than doing it on purpose.
 
 So: **`shippedDocumentation` grows to name every document in this map's table**,
-and that is part of the execution work rather than a follow-up. The set stays
-explicit — this map is the enumeration it needs, which is the argument for the
-map existing as a checked-in document rather than as a decision recorded in a
-conversation.
+and that is part of the execution work rather than a follow-up. The run that
+lands the last split document lands the list. The set stays explicit — this map
+is the enumeration it needs, which is the argument for the map existing as a
+checked-in document rather than as a decision recorded in a conversation.
 
-The README split grew it in its own change, to the eight documents that exist
-today: `README.md`, `docs/configuration.md`, and the six beside them. The
-configuration split adds the seven under `docs/configuration/`. Each half lands
-its own entries rather than one run landing all of them, because a list naming
-documents nobody has written yet reads as coverage that is not there.
+**What the README split did instead, recorded rather than decided here.** That
+run grew the list to the eight documents that exist today — `README.md`,
+`docs/configuration.md`, and the six beside them — rather than leaving it to the
+configuration split as the rule above says, because naming the seven documents
+under `docs/configuration/` before anybody has written them would assert
+coverage that is not there. That is a departure from the rule, and the rule
+stands as written until somebody with the authority to change it says otherwise:
+whether it should become one-half-lands-its-own-entries is yoyodyne-ifd.121.1's
+to settle or the operator's, not an execution run's. Either way the
+configuration split still adds the seven under `docs/configuration/`, so what is
+open is which run was supposed to do what, not what the list ends up holding.
 
 **Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
 makes "every link resolves" its definition of done, and the only thing standing
