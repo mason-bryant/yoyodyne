@@ -13,7 +13,17 @@ one document rather than two so the link map lands once and the README never
 links into an anchor its sibling split then moves. Each execution run cites the
 section here that it implements, and does not decide structure of its own.
 
-The problem it answers: the README is 152KB across 2,602 lines and the
+**Execution state.** The README split has landed, under yoyodyne-ifd.121: the
+README is 480 lines, the six documents beside it exist, and every citation of a
+README anchor was rewritten with it. The configuration guide split has not, so
+`docs/configuration.md` is still the whole reference at its current path and
+every `configuration.md#…` citation below still resolves as written. The tables
+here have been re-derived against the tree as it stands after the README split;
+a run implementing the configuration split re-derives again rather than trusting
+them, for the reason [the citation section](#every-anchor-citation-and-where-it-goes)
+already gives.
+
+The problem it answers: the README was 152KB across 2,602 lines and the
 configuration guide is 132KB across 2,377 lines. The adoption goal — *a newcomer
 can go from the documented install to a working first run on their own
 repository using the readme alone* — is failed by a document nobody reads to the
@@ -115,27 +125,33 @@ trust, because anything landed between drafting and execution adds rows.
 
 ### Citations of `docs/configuration.md` anchors
 
-With the document each moves to and its tier. Verified against the tree at the
-time of drafting.
+With the document each moves to and its tier. Re-derived against the tree after
+the README split; the sixteen anchors are the same sixteen the draft found, and
+what changed is which file cites each one, because most of the citing prose left
+the README for the documents beside it.
 
 | Anchor | Cited by | New home |
 |---|---|---|
-| `#checks` | `README.md:316`, `internal/config/scaffold.go:360`, `internal/cli/init_test.go:214` | **Tier 1 stub stays**; canonical `configuration/runs.md#checks` |
+| `#checks` | `README.md:316`, `internal/config/scaffold.go:361`, `internal/cli/init_test.go:214` | **Tier 1 stub stays**; canonical `configuration/runs.md#checks` |
 | `#product-specifications` | `docs/designs/v1-harness-design.md:243`, `docs/product/goals/README.md:11` | **Tier 1 stub stays**; canonical `configuration/artifacts.md#product-specifications` |
-| `#what-reaches-the-queue` | `README.md:608`, `:679`, `:1101`, `:1888` | `configuration/goals.md` |
-| `#where-the-tracker-syncs` | `README.md:274`, `:1782` | `configuration/setup.md` |
-| `#what-one-work-item-has-been-given` | `README.md:1193`, `:2476` | `configuration/recovery.md` |
-| `#publishing-through-pull-requests` | `README.md:440`, `:1758` | `configuration/publishing.md` |
-| `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `README.md:551` | `configuration/artifacts.md` |
-| `#traceability-references-and-orphans` | `README.md:1929` | `configuration/goals.md` |
-| `#scheduling-ready-work` | `README.md:1616` | `configuration/runs.md` |
-| `#protected-paths-in-a-developers-change` | `README.md:1516` | `configuration/artifacts.md` |
-| `#personas` | `README.md:537` | `configuration/agents.md` |
+| `#what-reaches-the-queue` | `docs/conversation.md:141`, `:212`, `:542`, `docs/artifacts.md:43` | `configuration/goals.md` |
+| `#where-the-tracker-syncs` | `README.md:274` | `configuration/setup.md` |
+| `#what-one-work-item-has-been-given` | `docs/conversation.md:634`, `docs/operations.md:383` | `configuration/recovery.md` |
+| `#publishing-through-pull-requests` | `README.md:442`, `docs/work.md:271` | `configuration/publishing.md` |
+| `#what-the-product-manager-sees-besides-them-and-what-it-does-not` | `docs/conversation.md:84` | `configuration/artifacts.md` |
+| `#traceability-references-and-orphans` | `docs/artifacts.md:84` | `configuration/goals.md` |
+| `#scheduling-ready-work` | `docs/work.md:129` | `configuration/runs.md` |
+| `#protected-paths-in-a-developers-change` | `docs/work.md:29` | `configuration/artifacts.md` |
+| `#personas` | `docs/conversation.md:70` | `configuration/agents.md` |
 | `#operators` | `docs/slack/setup.md:161` | `configuration/agents.md` |
-| `#losing-a-race-for-the-target-branch` | `README.md:2461` | `configuration/publishing.md` |
+| `#losing-a-race-for-the-target-branch` | `docs/operations.md:368` | `configuration/publishing.md` |
 | `#how-long-a-check-may-take` | `README.md:328` | `configuration/runs.md` |
 | `#avatars` | `docs/slack/setup.md:139` | `configuration/agents.md` |
-| `#approving-a-document` | `README.md:1895` | `configuration/artifacts.md` |
+| `#approving-a-document` | `docs/artifacts.md:50` | `configuration/artifacts.md` |
+
+One citation the draft listed is gone rather than moved: `README.md:1782`, the
+second citation of `#where-the-tracker-syncs`, sat in `## Configuring a project`,
+which the README split merged away.
 
 ### Citations of `README.md` anchors
 
@@ -153,6 +169,12 @@ the README keeps four things and needs no stub of its own depends on it:
 |---|---|---|---|
 | `#talking-to-the-other-agents` | `docs/configuration.md:178` | 2 | `conversation.md#talking-to-the-other-agents` |
 | `#getting-started` | `.github/release-notes-preamble.md:28` | **1** | stays in the README — see below |
+
+**Both rows are settled.** The Tier 2 citation was rewritten in the README
+split's own change, and `#getting-started` is where it was. The README also
+acquired one new anchor that other documents now cite — `#further-reading`, from
+the orientation line each of the six new documents opens with — which is Tier 2
+by the same rule and moves only with its citations.
 
 **Those two rows are the whole set.** No work item, design, `docs/product/`,
 `docs/slack/`, or Go source file cites a README anchor at all, and the only
@@ -184,11 +206,12 @@ same new document. Both sources have many, and they are the largest category by
 count in this effort — 67 links — so they are the likeliest thing for an
 execution run to miss.
 
-**The README links into itself 38 times across 26 anchors.** Six anchors stay
-put — `#install`, `#getting-started`, the three numbered step headings, and
-`#optional-publishing-and-auto-merge` — because their sections stay. The other
-20 become relative links into the new documents, resolved from the disposition
-table below.
+**The README linked into itself 38 times across 26 anchors**, and that half is
+done. Six anchors stayed put — `#install`, `#getting-started`, the three
+numbered step headings, and `#optional-publishing-and-auto-merge` — because
+their sections stayed. The other 20 became relative links, resolved from the
+disposition table below: a link whose target landed in the same new document
+stayed a bare `#slug`, and the rest name the document they went to.
 
 **`docs/configuration.md` links into itself 29 times across 21 anchors**, and
 after the split most cross a document boundary. Resolve each against the
@@ -397,18 +420,44 @@ lands the last split document lands the list. The set stays explicit — this ma
 is the enumeration it needs, which is the argument for the map existing as a
 checked-in document rather than as a decision recorded in a conversation.
 
-**Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
-makes "every link resolves" its definition of done, and the only thing standing
-behind that today is a reviewer reading a diff — which is exactly the check that
+**What the README split did instead, recorded rather than decided here.** That
+run grew the list to the eight documents that exist today — `README.md`,
+`docs/configuration.md`, and the six beside them — rather than leaving it to the
+configuration split as the rule above says, because naming the seven documents
+under `docs/configuration/` before anybody has written them would assert
+coverage that is not there. That is a departure from the rule, and the rule
+stands as written until somebody with the authority to change it says otherwise:
+whether it should become one-half-lands-its-own-entries is yoyodyne-ifd.121.1's
+to settle or the operator's, not an execution run's. That run raised an
+amendment against this document asking one of them to settle it, so the
+contradiction between the rule and the tree has somewhere to go rather than
+being left for the next run to rediscover. Either way the configuration split
+still adds the seven under `docs/configuration/`, so what is open is which run
+was supposed to do what, not what the list ends up holding.
+
+**A fragment that resolves is checked by a script, and by no gate.**
+yoyodyne-ifd.121.2 makes "every link resolves" its definition of done, and what
+used to stand behind that was a reviewer reading a diff — exactly the check that
 does not catch a silently-ignored fragment. This has already happened once at a
 much smaller scale: yoyodyne-ifd.54 records two README anchors left dead by a
 rename, found by hand afterwards and repaired by asking a later run to grep for
 the old names. This effort moves 22 README sections and 30 configuration
-sections at once, and 67 intra-document links with them. A link checker over the repository's Markdown — resolving both
-relative paths and fragments, and covering `.github/` — wired into `make check`
-is the durable form of the whole policy above, and it is what would let a
-reviewer verify the tables here instead of re-deriving them. It is named here
-and in the summary as work to admit, not queued.
+sections at once, and 67 intra-document links with them.
+
+So the README split landed
+[`scripts/check-doc-links.py`](../scripts/check-doc-links.py), which resolves
+every intra-repository Markdown link — path and fragment both, under GitHub's
+own slug rules — across the whole tree including `.github/`, and resolves the
+`docs/…#fragment` anchors cited from Go source with it, which is what holds
+`docs/configuration.md#checks` to the heading every generated
+`.yoyodyne/config.yaml` names. **The configuration split runs it rather than
+re-deriving these tables by hand**, and a run that moves a section runs it
+before it says it is done.
+
+What is still missing is the gate: nothing runs that script unless somebody
+does. Wiring it into `make check` is the durable form of the whole policy above,
+and it is named here and in the summary as work to admit, not queued — an
+execution run does not add a gate the whole repository must then pass.
 
 ## What the architect is being asked
 
