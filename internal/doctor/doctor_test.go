@@ -213,8 +213,8 @@ func TestAStaleSinkIsNamedAsStale(t *testing.T) {
 	if !found {
 		t.Fatalf("Diagnose() never compared the sink's build: %s", render(report))
 	}
-	if finding.Status != StatusProblem {
-		t.Fatalf("slack-sink-version = %s, want a problem: %s", finding.Status, finding.Summary)
+	if finding.Status != StatusWarning {
+		t.Fatalf("slack-sink-version = %s, want a warning: %s", finding.Status, finding.Summary)
 	}
 	// Both builds have to be named. "Restart the sink" over an unnamed drift is
 	// advice; the two versions side by side are the evidence.
@@ -248,7 +248,7 @@ func TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken(t *testing.T) {
 	report := world.diagnose()
 
 	finding, found := findingFor(report, "slack-secrets")
-	if !found || finding.Status != StatusProblem {
+	if !found || finding.Status != StatusWarning {
 		t.Fatalf("slack-secrets = %#v, want this project's missing pair reported: %s", finding, render(report))
 	}
 	for _, want := range []string{"yoyo-slack-bot.yoyodyne", "yoyo-slack-app.yoyodyne"} {
@@ -263,12 +263,55 @@ func TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken(t *testing.T) {
 	}
 }
 
-// TestAChannelEditedOnAWorkingInstallIsNotCalledHealthy covers the config-edit
+// TestReportingNeverStopsWorkRunning holds doctor's exit status to what the rest
+// of the harness already promises: reporting is an observation and never a gate,
+// so no state of it may make an installation that runs work report that it
+// cannot. It is asserted over every reporting state at once rather than one at a
+// time, because the rule is about the class and one case reclassified later
+// would slip past a per-case assertion.
+func TestReportingNeverStopsWorkRunning(t *testing.T) {
+	t.Parallel()
+
+	for name, broken := range brokenInstallations() {
+		if !strings.HasPrefix(name, "reporting is on") && !strings.HasPrefix(name, "the running sink") &&
+			!strings.HasPrefix(name, "slack.channel") && !strings.HasPrefix(name, "a sink is running") {
+			continue
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			world := newWorld(t)
+			broken(world)
+			report := world.diagnose()
+
+			if !report.Healthy() {
+				t.Fatalf("a stopped or misdirected sink made this installation report that it cannot run work: %s", render(report))
+			}
+			// Healthy is not the same as silent. Every one of these still has to
+			// be named, with the command that ends it -- what is being held here
+			// is the exit status, not the reporting.
+			named := false
+			for _, finding := range report.Findings {
+				if strings.HasPrefix(finding.Check, "slack") && finding.Status == StatusWarning {
+					named = true
+					if strings.TrimSpace(finding.Remedy) == "" {
+						t.Fatalf("%s is warned about with no remedy", finding.Check)
+					}
+				}
+			}
+			if !named {
+				t.Fatalf("nothing was said about reporting at all: %s", render(report))
+			}
+		})
+	}
+}
+
+// TestAChannelEditedOnAWorkingInstallIsNamed covers the config-edit
 // case the completeness bar makes first-class. `slack.channel` is one line
 // anybody can change on an install that is working, and changing it does nothing
 // to the process already running: the sink keeps posting where it connected, the
 // channel the project now names stays empty, and no error is raised by either.
-func TestAChannelEditedOnAWorkingInstallIsNotCalledHealthy(t *testing.T) {
+func TestAChannelEditedOnAWorkingInstallIsNamed(t *testing.T) {
 	t.Parallel()
 
 	world := newWorld(t)
@@ -277,8 +320,8 @@ func TestAChannelEditedOnAWorkingInstallIsNotCalledHealthy(t *testing.T) {
 	report := world.diagnose()
 
 	finding, found := findingFor(report, "slack-sink-channel")
-	if !found || finding.Status != StatusProblem {
-		t.Fatalf("slack-sink-channel = %#v, want a problem: %s", finding, render(report))
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-sink-channel = %#v, want a warning: %s", finding, render(report))
 	}
 	if !strings.Contains(finding.Summary, "C1") || !strings.Contains(finding.Summary, "C2") {
 		t.Fatalf("slack-sink-channel summary = %q, want both channels named", finding.Summary)
@@ -336,8 +379,8 @@ func TestAMachineWithNoKeychainIsStillRoutedOut(t *testing.T) {
 	report := world.diagnose()
 
 	secrets, found := findingFor(report, "slack-secrets")
-	if !found || secrets.Status != StatusProblem {
-		t.Fatalf("slack-secrets = %#v, want a problem: %s", secrets, render(report))
+	if !found || secrets.Status != StatusWarning {
+		t.Fatalf("slack-secrets = %#v, want a warning: %s", secrets, render(report))
 	}
 	wanted := filepath.Join("yoyo", "yoyodyne", "slack.env")
 	if !strings.Contains(secrets.Remedy, wanted) {
@@ -372,8 +415,8 @@ func TestASinkOnAnotherProjectsSecretsIsNamed(t *testing.T) {
 	report := world.diagnose()
 
 	finding, found := findingFor(report, "slack-sink-secrets")
-	if !found || finding.Status != StatusProblem {
-		t.Fatalf("slack-sink-secrets = %#v, want a problem: %s", finding, render(report))
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-sink-secrets = %#v, want a warning: %s", finding, render(report))
 	}
 	if !strings.Contains(finding.Summary, "sibling") || !strings.Contains(finding.Summary, "yoyodyne") {
 		t.Fatalf("slack-sink-secrets summary = %q, want both products named", finding.Summary)
@@ -422,7 +465,7 @@ func TestADeadSinkIsNotMistakenForALiveOne(t *testing.T) {
 	report := world.diagnose()
 
 	finding, found := findingFor(report, "slack-sink")
-	if !found || finding.Status != StatusProblem {
+	if !found || finding.Status != StatusWarning {
 		t.Fatalf("slack-sink = %#v, want a stopped sink reported: %s", finding, render(report))
 	}
 	if !strings.Contains(finding.Detail, "4242") {
@@ -450,18 +493,38 @@ func TestReportingOffIsHealthyRatherThanMissing(t *testing.T) {
 	}
 }
 
-// TestAForgeIsOnlyAskedAboutWhenTheProjectPublishes holds the same line for the
+// TestAForgeIsOnlyAskedAboutWhenTheHarnessPublishes holds the same line for the
 // other opt-in. Everything stays on the machine until a project says otherwise,
 // and a missing `gh` is then not a defect.
-func TestAForgeIsOnlyAskedAboutWhenTheProjectPublishes(t *testing.T) {
+//
+// The setting this turns on is worth being exact about, because `human` reads
+// like an approval gate and is not one. `approvals.integration: human` does mean
+// a person authorizes a promotion the harness still performs; `approvals.
+// publishing: human` means nothing is pushed at all -- the design's publishing
+// matrix gives both of its rows as "purely local", the field's own documentation
+// says it "leaves pushing and pull requests to the operator", and
+// Pipeline.resolvePublishing returns before the publisher is consulted.
+// TestDoctorAgreesWithThePipelineAboutWhoPublishes, over in the orchestrator,
+// is what keeps this reading and that behavior from drifting apart.
+func TestAForgeIsOnlyAskedAboutWhenTheHarnessPublishes(t *testing.T) {
 	t.Parallel()
 
+	if !strings.Contains(healthyConfig, "publishing: human") {
+		t.Fatal("this test is about a project on publishing: human and the fixture is not one")
+	}
 	world := newWorld(t)
 	world.absent("gh")
 	report := world.diagnose()
 
-	if finding, found := findingFor(report, "forge"); !found || finding.Status != StatusOK {
-		t.Fatalf("forge = %#v, want a non-publishing project to need no forge", finding)
+	finding, found := findingFor(report, "forge")
+	if !found || finding.Status != StatusOK {
+		t.Fatalf("forge = %#v, want a project the harness never publishes for to need no forge", finding)
+	}
+	// The summary is a claim about the harness, not about the operator: somebody
+	// on `human` may push and open pull requests themselves, and doctor has no
+	// business calling that project one that "does not publish".
+	if strings.Contains(finding.Summary, "this project does not publish") {
+		t.Fatalf("forge summary = %q, want a claim about what the harness does", finding.Summary)
 	}
 	if !report.Healthy() {
 		t.Fatalf("Diagnose() = %s, want healthy: %s", report.Status, render(report))

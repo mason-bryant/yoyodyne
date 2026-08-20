@@ -401,14 +401,24 @@ step "7. doctor checks the whole installation, not only the file"
 # parts it calls healthy. It is not asserted to pass overall: this scratch
 # project runs a `yoyo` that is deliberately not on PATH, and may run without an
 # authenticated provider, both of which doctor is right to report.
-diagnosis="$("$yoyo" doctor --json 2>&1 || true)"
-if python3 - "$diagnosis" <<'PY'
+# `--json` is machine-readable output, so it is read from stdout alone. Folding
+# stderr into it would turn one stray diagnostic line into a parse failure
+# reported as a broken report, which is a different claim from the one being
+# checked -- and "this output is machine-readable" is itself worth asserting.
+doctor_stderr="$scratch/doctor.stderr"
+diagnosis="$("$yoyo" doctor --json 2>"$doctor_stderr" || true)"
+if [ -s "$doctor_stderr" ]; then
+  fail "doctor --json wrote to stderr, so its output is not machine-readable -- got: $(cat "$doctor_stderr")"
+elif reason="$(python3 - "$diagnosis" <<'ASSERT' 2>&1
 import json, sys
 
 report = json.loads(sys.argv[1])
 if report.get("schema_version") != 1:
     raise SystemExit("doctor --json reported schema_version %r" % report.get("schema_version"))
 findings = {finding["check"]: finding for finding in report["findings"]}
+# These four are what the walk has itself set up by now, so they are the ones it
+# can hold doctor to. `path` and `binary` are deliberately not among them: this
+# walk runs a `yoyo` that was never put on PATH, which doctor is right to report.
 for check in ("configuration", "repository", "tracker", "checks"):
     if check not in findings:
         raise SystemExit("doctor never checked %s" % check)
@@ -417,11 +427,13 @@ for check in ("configuration", "repository", "tracker", "checks"):
 for finding in report["findings"]:
     if finding["status"] != "ok" and not finding.get("remedy", "").strip():
         raise SystemExit("doctor reported %s as %s with no remedy" % (finding["check"], finding["status"]))
-PY
-then
+ASSERT
+)"; then
   pass "doctor calls this project's configuration, repository, tracker, and checks healthy, and carries a remedy for everything it does not"
 else
-  fail "doctor's report is not what the README describes -- got: $diagnosis"
+  # The assertion says which claim broke, so this reports that rather than
+  # summarizing every failure as the same sentence.
+  fail "$reason -- report was: $diagnosis"
 fi
 
 step "8. write down what the product is for"

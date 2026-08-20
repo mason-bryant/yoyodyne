@@ -53,6 +53,14 @@ const SchemaVersion = 1
 // will not work" and "this works and something about it is worth knowing" ask
 // different things of an operator and a report that ran them together would be
 // one nobody reads twice.
+//
+// The line between the last two is one question and not a judgement of how much
+// something matters: would this stop work running. An unauthenticated provider
+// refuses every invocation, so it is a problem. A sink nobody started reports
+// nothing while every run proceeds exactly as it would have, so it is a warning
+// however badly the operator wants to know — reporting is an observation and
+// never a gate, and a status that disagreed with that would put `yoyo doctor`'s
+// exit code at odds with the rest of the harness.
 type Status string
 
 const (
@@ -613,15 +621,19 @@ func providerFinding(check, binary string, named domain.Backend, availability ba
 	}
 }
 
-// checkForge asks about the forge only when the project opted in to publishing.
-// A project that publishes nothing needs no `gh` and no remote, and reporting a
+// checkForge asks about the forge only when the harness would actually use one.
+// A project it never publishes for needs no `gh` and no remote, and reporting a
 // missing one as a problem would be reporting a decision as a defect.
 func (d *diagnosis) checkForge(ctx context.Context, resolved config.Resolved, repository string) Finding {
-	if resolved.Config.Approvals.Publishing != domain.ApprovalAutomatic {
+	if !HarnessPublishes(resolved.Config.Approvals.Publishing) {
 		return Finding{
-			Check:   "forge",
-			Status:  StatusOK,
-			Summary: "this project does not publish, so no forge access is needed",
+			Check:  "forge",
+			Status: StatusOK,
+			// Said as a fact about the harness rather than about the project,
+			// because they are not the same claim: under `human` the operator may
+			// well push and open pull requests themselves, and whether they keep a
+			// forge CLI for that is theirs rather than something to diagnose.
+			Summary: "the harness publishes nothing for this project, so it needs no forge access",
 			Detail:  fmt.Sprintf("approvals.publishing is %s", resolved.Config.Approvals.Publishing),
 		}
 	}
@@ -668,6 +680,26 @@ func (d *diagnosis) checkForge(ctx context.Context, resolved config.Resolved, re
 		Summary: fmt.Sprintf("gh is authenticated and %s is where this project publishes", remote),
 		Detail:  availability.Version,
 	}
+}
+
+// HarnessPublishes decides whether a run would ever reach the forge, and it has
+// to agree with orchestrator.Pipeline.publishes(), which is the predicate that
+// actually decides it. It is exported for one reason: so the pipeline's own test
+// can hold the two together, because a diagnosis gated differently from the
+// behavior it diagnoses reports a healthy installation as broken or a broken one
+// as healthy, and neither failure would show up in this package's tests.
+//
+// `human` is the off switch here rather than an approval gate, which is the one
+// thing about this setting worth being explicit about: it does not mean "a
+// person authorizes the push the harness then makes", the way `integration:
+// human` means a person authorizes a promotion. The design's publishing matrix
+// gives both `human` publishing rows as "purely local -- nothing is pushed", the
+// setting's own documentation says it "leaves pushing and pull requests to the
+// operator", and resolvePublishing returns before the publisher is consulted at
+// all. So a project on `human` reaches no forge, and requiring `gh` for it would
+// fail an installation that is complete.
+func HarnessPublishes(publishing domain.ApprovalMode) bool {
+	return publishing == domain.ApprovalAutomatic
 }
 
 func repositoryPath(project, repository string) string {

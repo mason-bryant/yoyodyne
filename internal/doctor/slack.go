@@ -22,6 +22,20 @@ package doctor
 //
 // None of those is answerable from the lease, which is why the sink writes down
 // what it is and this reads it back.
+//
+// Nothing in this file ever reaches StatusProblem, and that is a rule rather
+// than an accident of the cases that happen to be here. A problem is what stops
+// work running, and reporting is an observation and never a gate: a sink that
+// was never started, a workspace that is down, a token nobody stored — none of
+// them changes anything about any run, so an operator with all three still has
+// an installation that works and an exit status that says so. Reported as
+// problems, these would make `yoyo doctor` fail on a healthy machine, and the
+// first thing anybody gating on it would do is stop gating on it.
+//
+// What they are instead is the whole reason this file is long. A warning here is
+// not a small problem; it is the class of failure that produces silence rather
+// than an error, which is why each one is named exactly and carries the command
+// that ends it.
 
 import (
 	"context"
@@ -104,7 +118,7 @@ func (d *diagnosis) checkSlackSecrets(ctx context.Context, productID domain.Prod
 		}
 		return Finding{
 			Check:   "slack-secrets",
-			Status:  StatusProblem,
+			Status:  StatusWarning,
 			Summary: fmt.Sprintf("this project's Slack secrets are not stored: %s", strings.Join(missing, " and ")),
 			// The names carry the product deliberately. A generic pair on a
 			// machine running several harnesses is a pair that passes this check
@@ -117,7 +131,7 @@ func (d *diagnosis) checkSlackSecrets(ctx context.Context, productID domain.Prod
 	directory, file := d.envFileRemedyPaths(productID)
 	return Finding{
 		Check:   "slack-secrets",
-		Status:  StatusProblem,
+		Status:  StatusWarning,
 		Summary: fmt.Sprintf("this project's Slack secrets are not stored for %s", productID),
 		Detail:  fmt.Sprintf("no %s, and this platform has no keychain to hold %s and %s", file, bot, app),
 		Remedy:  fmt.Sprintf("mkdir -p %s && install -m 600 /dev/null %s && ${EDITOR:-vi} %s", directory, file, file),
@@ -131,7 +145,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 	if err != nil {
 		return []Finding{{
 			Check:   "slack-sink",
-			Status:  StatusProblem,
+			Status:  StatusWarning,
 			Summary: "the sink's state could not be found, so nothing here can say whether one is running",
 			Detail:  err.Error(),
 			Remedy:  "export YOYODYNE_STATE_HOME=$HOME/.local/state/yoyodyne",
@@ -141,7 +155,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 	if err != nil {
 		return []Finding{{
 			Check:   "slack-sink",
-			Status:  StatusProblem,
+			Status:  StatusWarning,
 			Summary: "the sink's state could not be opened, so nothing here can say whether one is running",
 			Detail:  err.Error(),
 			Remedy:  "export YOYODYNE_STATE_HOME=$HOME/.local/state/yoyodyne",
@@ -153,7 +167,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 	if err != nil {
 		return []Finding{{
 			Check:   "slack-sink",
-			Status:  StatusProblem,
+			Status:  StatusWarning,
 			Summary: "the sink's lease could not be read, so nothing here can say whether one is running",
 			Detail:  err.Error(),
 			Remedy:  fmt.Sprintf("ls -l %s", shellQuote(filepath.Join(store.Root(), ".sink.lock"))),
@@ -164,7 +178,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 	if !running {
 		finding := Finding{
 			Check:   "slack-sink",
-			Status:  StatusProblem,
+			Status:  StatusWarning,
 			Summary: "no sink is running for this product, so nothing is being reported",
 			Remedy:  start,
 		}
@@ -241,7 +255,7 @@ func (d *diagnosis) checkSinkChannel(presence slack.Presence, resolved config.Re
 	}
 	return []Finding{{
 		Check:   "slack-sink-channel",
-		Status:  StatusProblem,
+		Status:  StatusWarning,
 		Summary: fmt.Sprintf("the running sink posts into %s, and this project now reports into %s", running, configured),
 		// Both halves of the damage are worth saying. The threads already open in
 		// the old channel are not moved by a restart -- a thread timestamp only
@@ -278,7 +292,7 @@ func (d *diagnosis) checkSinkBuild(presence slack.Presence, installed string, pr
 	}
 	return Finding{
 		Check:   "slack-sink-version",
-		Status:  StatusProblem,
+		Status:  StatusWarning,
 		Summary: "the running sink is an older build than the installed one, and reports only what that build knew how to report",
 		Detail:  fmt.Sprintf("running: %s; installed: %s", running, current),
 		Remedy:  d.restartCommand(presence, productID),
@@ -311,7 +325,7 @@ func (d *diagnosis) checkSinkSecrets(presence slack.Presence, productID domain.P
 	}
 	return Finding{
 		Check:   "slack-sink-secrets",
-		Status:  StatusProblem,
+		Status:  StatusWarning,
 		Summary: fmt.Sprintf("the running sink holds %s's secrets, not %s's", namespace, productID),
 		Detail: fmt.Sprintf("it is reporting %s's work through another project's Slack app%s",
 			productID, describeWorkspace(presence)),

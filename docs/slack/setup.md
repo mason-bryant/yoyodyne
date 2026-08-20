@@ -248,6 +248,14 @@ drift apart with no event between them: nothing fails, nothing is logged, and th
 milestones added since it started are simply never posted. In the channel that
 reads as a quiet week.
 
+Everything doctor says about reporting comes back as a **warning**, and it still
+exits 0. That is the same rule as everywhere else here: reporting is an
+observation and never a gate, so a sink you never started, a workspace that is
+down, and a token nobody stored all leave a machine that runs work exactly as it
+was. Do not wire `yoyo doctor`'s exit status up as a check on whether reporting
+is healthy — read the findings, which name every one of these in full and carry
+the command that ends it.
+
 **It reports what happens from the first time you ever start it.** A product
 with two hundred runs behind it does not get two hundred threads on the day
 somebody turns reporting on: work that was already over is left in the records,

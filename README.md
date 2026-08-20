@@ -2205,13 +2205,15 @@ command.** That is the whole difference between this and a status listing: what
 it prints under a problem is what to run.
 
 ```text
-yoyodyne cannot run work: 2 problems
+yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
 
 problem  tracker                bd is installed but could not read this project's issues
                                 fix: bd init
 ok       checks                 4 checks configured, and every command resolves here
 problem  provider:claude-code   claude is installed but not authenticated, so every agent invocation would be refused
                                 fix: claude auth login
+warning  slack-sink             no sink is running for this product, so nothing is being reported
+                                fix: SLACK_BOT_TOKEN="$(security find-generic-password …
 ```
 
 Findings come in the order you would fix them in — the tools, then the project,
@@ -2221,9 +2223,15 @@ drops the healthy ones and changes nothing else.
 
 A healthy installation says so in as many words, because an empty list of
 complaints and a check that never ran read the same. It exits 1 when something
-would stop work running and 0 otherwise — a warning is something worth knowing
-about an installation that works, such as the `yoyo` on your `PATH` having
-drifted away from the one you are running.
+would stop work running and 0 otherwise.
+
+**A warning is not a small problem — it is something about an installation that
+works.** The `yoyo` on your `PATH` having drifted from the one you are running is
+one. Every reporting finding is another, and deliberately so: reporting is an
+observation and never a gate, so a sink you never started, a workspace that is
+down, and a token nobody stored all leave an installation that runs work exactly
+as it would have. They are still named, in full, with the command that ends each
+one — what the exit status refuses to do is fail a machine that works.
 
 It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is ever read: whether a secret is stored is
