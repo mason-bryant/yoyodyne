@@ -161,22 +161,30 @@ func (a TrackerAction) escalates() bool {
 // vocabulary draws that line: a note asks for nothing, and an escalation asks
 // for a person.
 func refuseUnreportedEscalation(parsed parsedReply) error {
-	escalated := ""
+	// One escalating reply may cover several docket entries, and each blocked
+	// item needs its own account: a single report satisfying every escalation
+	// would leave the rest blocked with nothing reaching the operator about
+	// them. So the count of warning-or-above reports must cover the count of
+	// escalations, and the refusal names every item that would go unaccounted.
+	var escalated []string
 	for _, action := range parsed.Actions {
 		if action.escalates() {
-			escalated = strings.TrimSpace(action.ID)
-			break
+			escalated = append(escalated, strings.TrimSpace(action.ID))
 		}
 	}
-	if escalated == "" {
+	if len(escalated) == 0 {
 		return nil
 	}
+	reported := 0
 	for _, entry := range parsed.Reports {
 		if entry.Severity == report.SeverityWarning || entry.Severity == report.SeverityCritical {
-			return nil
+			reported++
 		}
 	}
-	return &EscalationError{WorkItemID: escalated}
+	if reported >= len(escalated) {
+		return nil
+	}
+	return &EscalationError{WorkItemID: strings.Join(escalated[reported:], ", ")}
 }
 
 // carryOutTriage records one triage decision. The budget is spent before the
