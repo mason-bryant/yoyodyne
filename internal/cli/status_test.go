@@ -560,7 +560,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 	for _, want := range []string{
 		"triage of yoyodyne-ifd.2.7: triage has spent nothing on it",
-		"a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here",
+		"waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say",
 	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
@@ -597,7 +597,7 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 		// The second pass is the fact somebody is looking for, and it is said
 		// first.
 		"triage of yoyodyne-ifd.2.7: triage has spent 2 passes on it",
-		"review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4",
+		"review rounds: 3 spent across every run of this item, under the cap of 4",
 		"repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains",
 		"merge re-arms: 1 of 2 permitted",
 		"1 grant(s) were cut down to the rounds the cap still had room for",
@@ -665,10 +665,10 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	var out bytes.Buffer
 	printItemTriage(&out, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 4}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
 	rendered := out.String()
-	if !strings.Contains(rendered, "at or past the cap of 4, so triage may only escalate or re-scope") {
+	if !strings.Contains(rendered, "at or past the cap of 4, so no decision that buys a round remains") {
 		t.Fatalf("rendered = %q, want the at-the-cap line", rendered)
 	}
-	if strings.Contains(rendered, "while under the cap") {
+	if strings.Contains(rendered, "under the cap of 4") {
 		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
 }

@@ -1178,7 +1178,7 @@ What the harness does not do is carry any of it out. Nothing starts a run or
 asks a forge for anything because a decision was recorded, so acting on one is
 yours: `yoyo run <id>` for a repair or a re-run, and for a re-arm, asking the
 forge to merge the pull request again yourself — nothing in the harness repeats
-a merge request the forge dropped. The budget is spent when the decision is
+a merge request the forge dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
 recorded whether or not you act on it, which is the same direction every counter
 here fails in: an attempt nobody took rather than one nobody counted. What
 triage changed is that stopped work is decided by the role that owns it, the
@@ -2344,7 +2344,7 @@ counters are what bound it:
 
 ```text
 triage of yoyodyne-ifd.90: triage has spent 2 passes on it
-  review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
+  review rounds: 3 spent across every run of this item, under the cap of 4
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
   a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here

@@ -187,14 +187,16 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 // were never counting.
 func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps runstate.TriageCaps) {
 	fmt.Fprintf(writer, "triage of %s: %s\n", counters.WorkItemID, describeTriagePasses(counters))
-	// The branch is the gate's own predicate, so the line and the refusal
-	// cannot drift: at the cap exactly, nothing may be handed back, and the
-	// line says so.
+	// The rounds line states the rounds and nothing else. Every conclusion it
+	// used to assert acquired a second predicate sooner or later — the grant
+	// budget refuses repairs the rounds would allow, and a re-arm ignores the
+	// rounds entirely — so what may still happen is said by the budget lines
+	// below, each beside the numbers that decide it.
 	if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
-		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so triage may only escalate or re-scope\n",
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item — at or past the cap of %d, so no decision that buys a round remains\n",
 			counters.ReviewRounds, caps.ReviewRounds)
 	} else {
-		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item; triage may hand back repairs while under the cap of %d\n",
+		fmt.Fprintf(writer, "  review rounds: %d spent across every run of this item, under the cap of %d\n",
 			counters.ReviewRounds, caps.ReviewRounds)
 	}
 	// Each of these is refused by two budgets rather than one, and the line says
@@ -212,7 +214,7 @@ func printItemTriage(writer io.Writer, counters runstate.TriageCounters, caps ru
 		fmt.Fprintf(writer, "  %d grant(s) were cut down to the rounds the cap still had room for; %d round(s) were granted in total\n",
 			counters.TruncatedGrants, counters.GrantedRounds)
 	}
-	fmt.Fprintln(writer, "  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here")
+	fmt.Fprintln(writer, "  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say")
 }
 
 // describeTriagePasses says how many times triage has spent something on an

@@ -1687,12 +1687,15 @@ item's runs, in text and in `--json`:
 
 ```text
 triage of yoyodyne-ifd.90: triage has spent 2 passes on it
-  review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
+  review rounds: 3 spent across every run of this item, under the cap of 4
 ```
 
 At or past the cap — 4 of 4 exactly included, because a grant needs a round and
 none remains — the same line reads: `review rounds: 6 spent across every run of
-this item — at or past the cap of 4, so triage may only escalate or re-scope`.
+this item — at or past the cap of 4, so no decision that buys a round remains`.
+What may still happen is what the budget lines beside it say: waiting,
+re-scoping, and escalating spend nothing, and a merge re-arm spends only its
+own budget, whatever the rounds say.
 
 ```text
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
