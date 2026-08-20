@@ -19,6 +19,20 @@ make build
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
 runs.
 
+Two scripts check things the gate does not, and a change that touches what they
+cover should run them:
+
+```sh
+scripts/check-doc-links.py     # every Markdown link resolves, fragment included
+scripts/walk-adoption.sh       # the README's Getting started, executed
+```
+
+`check-doc-links.py` resolves relative paths and fragments against the headings
+that exist, under GitHub's own slug rules, and covers the `docs/…#anchor`
+citations in Go source as well as the Markdown. A fragment nothing resolves is
+ignored silently by GitHub rather than 404ing, so it is the one broken link that
+survives review; run this after moving or renaming any heading.
+
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports

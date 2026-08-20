@@ -428,22 +428,36 @@ under `docs/configuration/` before anybody has written them would assert
 coverage that is not there. That is a departure from the rule, and the rule
 stands as written until somebody with the authority to change it says otherwise:
 whether it should become one-half-lands-its-own-entries is yoyodyne-ifd.121.1's
-to settle or the operator's, not an execution run's. Either way the
-configuration split still adds the seven under `docs/configuration/`, so what is
-open is which run was supposed to do what, not what the list ends up holding.
+to settle or the operator's, not an execution run's. That run raised an
+amendment against this document asking one of them to settle it, so the
+contradiction between the rule and the tree has somewhere to go rather than
+being left for the next run to rediscover. Either way the configuration split
+still adds the seven under `docs/configuration/`, so what is open is which run
+was supposed to do what, not what the list ends up holding.
 
-**Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
-makes "every link resolves" its definition of done, and the only thing standing
-behind that today is a reviewer reading a diff — which is exactly the check that
+**A fragment that resolves is checked by a script, and by no gate.**
+yoyodyne-ifd.121.2 makes "every link resolves" its definition of done, and what
+used to stand behind that was a reviewer reading a diff — exactly the check that
 does not catch a silently-ignored fragment. This has already happened once at a
 much smaller scale: yoyodyne-ifd.54 records two README anchors left dead by a
 rename, found by hand afterwards and repaired by asking a later run to grep for
 the old names. This effort moves 22 README sections and 30 configuration
-sections at once, and 67 intra-document links with them. A link checker over the repository's Markdown — resolving both
-relative paths and fragments, and covering `.github/` — wired into `make check`
-is the durable form of the whole policy above, and it is what would let a
-reviewer verify the tables here instead of re-deriving them. It is named here
-and in the summary as work to admit, not queued.
+sections at once, and 67 intra-document links with them.
+
+So the README split landed
+[`scripts/check-doc-links.py`](../scripts/check-doc-links.py), which resolves
+every intra-repository Markdown link — path and fragment both, under GitHub's
+own slug rules — across the whole tree including `.github/`, and resolves the
+`docs/…#fragment` anchors cited from Go source with it, which is what holds
+`docs/configuration.md#checks` to the heading every generated
+`.yoyodyne/config.yaml` names. **The configuration split runs it rather than
+re-deriving these tables by hand**, and a run that moves a section runs it
+before it says it is done.
+
+What is still missing is the gate: nothing runs that script unless somebody
+does. Wiring it into `make check` is the durable form of the whole policy above,
+and it is named here and in the summary as work to admit, not queued — an
+execution run does not add a gate the whole repository must then pass.
 
 ## What the architect is being asked
 
