@@ -21,5 +21,7 @@ is designed knowing where it leads.
 
 ## Goals
 
-- An operations role runs monitoring, uptime watching, and reboot-class recovery as routine work within capability ceilings: observation freely, runbook actions within recorded bounds, world-mutating actions only through an approval gate. *Supports: the system can operate what it ships.*
-- A deploy happens only with the operator's explicit approval, recorded like any approval. *Supports: the system can operate what it ships.*
+- An operations role runs monitoring, uptime watching, and reboot-class recovery as routine work within capability ceilings: observation freely, runbook actions within recorded bounds, world-mutating actions only through an approval gate.
+  *Supports: the system can operate what it ships.*
+- A deploy happens only with the operator's explicit approval, recorded like any approval.
+  *Supports: the system can operate what it ships.*
