@@ -424,7 +424,10 @@ git add -A
 git commit -qm "adopt yoyo"
 pass "committed the adoption"
 
-step "9. the commands the README points a new project at"
+# These were pointed at from the README until yoyodyne-ifd.121.2 reduced it to
+# the value proposition and the first run; they are now reached through the
+# documents it links, which is the same claim one hop further out.
+step "9. the commands the documentation points a new project at"
 reconcile="$("$yoyo" reconcile 2>&1)"
 contains "$reconcile" "no runs need reconciliation" "yoyo reconcile reports nothing outstanding"
 invariants="$("$yoyo" invariant list 2>&1)"
@@ -466,8 +469,9 @@ if [ "${WALK_PROVIDER:-0}" = "1" ]; then
   missing "$outcome" "uncommitted changes" "the run got past the repository readiness gate"
   contains "$outcome" "run-" "a run was created and reported an outcome by id"
 
-  # There is a run to look at now, so the tool the README points at for watching
-  # one is exercised against a real record rather than an empty directory.
+  # There is a run to look at now, so the tool docs/operations.md points at for
+  # watching one is exercised against a real record rather than an empty
+  # directory.
   listing="$("$repository/bin/yoyo-status" -l 2>&1 || true)"
   printf '%s\n' "$listing"
   contains "$listing" "run-" "yoyo-status -l lists the run"
