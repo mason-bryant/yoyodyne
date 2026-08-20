@@ -1625,15 +1625,21 @@ interval and asks no provider anything. Holding intake brakes a watching session
 in place rather than stopping it — it keeps polling, chooses nothing, and resumes
 when you release it.
 
-Three things guard a loop that no longer ends. An item whose run fails *before it
-starts* is left alone until something about the item changes, so a start the
-harness cannot get past is not retried every minute forever. Runs blocking one
-after another with nothing landing between them hold intake at
+Three things guard a loop that no longer ends. A session does not start the same
+item twice unless the item has changed — what it says, what it is for, its
+priority, its status, what it depends on, its notes — so a start the harness
+cannot get past is not retried every minute forever, and a blocker you release is
+picked up because releasing it changed the item. Runs blocking one after another
+with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
 whole backlog through a failed run overnight. And the session records what it is
 doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
 Slack sink read it, because an idle session and a dead one are otherwise the same
-silence. `--budget <usd>` caps what one session spends.
+silence.
+
+`--budget <usd>` caps what one session spends, and fails closed: a pass that
+cannot price itself is refused before it starts, and a session that meets a run
+whose evidence will not price stops and names it rather than counting it as free.
 
 The default is still the drain, and `--until-drained` says so out loud. What
 changes when you watch is what bounds the spend: a drain is bounded by the queue

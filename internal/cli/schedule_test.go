@@ -103,6 +103,10 @@ func TestWorkUsageSaysWhatWatchingIsAndThatDrainingIsTheDefault(t *testing.T) {
 		"execution.blocked_runs_before_intake_hold",
 		"Holding intake brakes a watching session in place",
 		"--budget",
+		// A bound that can stop the session has to say so where the flag is
+		// documented: an operator who reads "caps what one session spends" and
+		// meets a stop instead is reading the wrong promise.
+		"--budget fails closed",
 	} {
 		if !strings.Contains(usage.String(), want) {
 			t.Fatalf("work usage = %q, want it to say %q", usage.String(), want)

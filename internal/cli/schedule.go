@@ -255,14 +255,21 @@ the next poll, and an idle session costs one tracker read per interval and no
 provider call at all. Holding intake brakes a watching session in place -- it
 keeps polling and chooses nothing -- and releasing it resumes it.
 
-A watching session guards itself three ways. An item whose run fails before it
-starts is left alone until something about the item changes, so a start the
-harness cannot get past is not retried every interval. Runs blocking one after
-another with nothing landing between them hold intake at
+A watching session guards itself three ways. It does not start the same item
+twice unless the item has changed -- what it says, what it is for, its priority,
+its status, what it depends on, its notes -- so a start the harness cannot get
+past is not retried every interval, and a blocker you release is picked up
+because releasing it changed the item. Runs blocking one after another with
+nothing landing between them hold intake at
 execution.blocked_runs_before_intake_hold, and it stays held for you to lift.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.
+
+--budget fails closed. A pass with no way to price itself is refused before
+anything starts, and a session that meets a run whose recorded evidence will not
+price stops and says which run it was rather than counting it as free and
+carrying on inside a bound it can no longer hold.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

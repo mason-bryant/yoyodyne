@@ -114,6 +114,13 @@ const (
 	// harness running out of anything, which is why it reads like the limit
 	// above rather than like a failure.
 	ScheduleBudgetSpent = "the session spent the budget it was given"
+	// ScheduleSpendUnreadable reports a bounded session that stopped because it
+	// could not tell what it had spent. A budget measured against evidence
+	// nobody can read is not a smaller budget, it is no budget at all, so the
+	// session stops rather than carrying on inside a bound it has lost the
+	// ability to hold. An unbounded pass is unaffected: nothing there was
+	// spending against a number.
+	ScheduleSpendUnreadable = "what this session had spent could not be read, and it was given a budget to stay inside"
 )
 
 // ScheduleTracker is the tracker access one pull needs: the admitted work, so it
@@ -156,10 +163,14 @@ type ScheduleBrake interface {
 }
 
 // ScheduleSpend prices what a session has spent, from the same recorded run
-// evidence `yoyo cost` reads. It is optional and it bounds nothing on its own: a
-// pull wired without one runs exactly the same items, and a session given a
-// budget without one reports that it could not tell what it was spending rather
-// than proceeding as though it were free.
+// evidence `yoyo cost` reads.
+//
+// It is optional exactly as far as the budget is. A pass with no budget runs the
+// same items without one and simply prices nothing; a pass given a budget is
+// refused without one, because a bound nothing can measure is not a bound and
+// must not be reported as one. The same rule holds once a session is running: a
+// run whose evidence will not price stops a bounded session rather than being
+// counted as free.
 //
 // It is satisfied by runstate.Store.
 type ScheduleSpend interface {
@@ -210,15 +221,31 @@ type Pull struct {
 	// counts the storm and reports it without stopping the line, because a brake
 	// nothing can apply must not be reported as applied.
 	Brake ScheduleBrake
-	// Spend prices what the session has spent. It is optional; see ScheduleSpend.
+	// Spend prices what the session has spent. It is required of a pass that was
+	// given a budget and of no other; see ScheduleSpend.
 	Spend ScheduleSpend
 	Start Starter
 }
 
-func (p Pull) validate(watching bool) error {
+// pullNeeds is what this pass will actually ask of a pull, which is not the same
+// for every pass. A watch waits, so it needs an interval; a session spending
+// against a number needs a way to read what it has spent. A drain asks for
+// neither and is not refused for lacking either.
+type pullNeeds struct {
+	waits   bool
+	bounded bool
+}
+
+func (p Pull) validate(needs pullNeeds) error {
 	var problems []error
-	if watching && p.Poll <= 0 {
+	if needs.waits && p.Poll <= 0 {
 		problems = append(problems, fmt.Errorf("a watch interval of %s reads the queue with nothing between the readings", p.Poll))
+	}
+	// A budget with nothing to measure it against is the one refusal here that
+	// is about the operator rather than about the harness: they asked for a
+	// bound, and a pass that ran anyway would be reporting a bound it never had.
+	if needs.bounded && p.Spend == nil {
+		problems = append(problems, errors.New("a pull given a budget requires a way to price what it has spent"))
 	}
 	if p.Tracker == nil {
 		problems = append(problems, errors.New("a pull requires a work tracker"))
@@ -362,9 +389,10 @@ type Schedule struct {
 	// bounded and nothing priced.
 	SpentUSD float64 `json:"spent_usd,omitempty"`
 	Budget   float64 `json:"budget,omitempty"`
-	// SpendProblem names run evidence that could not be priced. A bounded
-	// session that cannot tell what it is spending says so rather than treating
-	// what it could not read as free.
+	// SpendProblem names run evidence that could not be priced. On an unbounded
+	// pass it is a note beside a total that is a floor rather than an exact
+	// number; on a bounded one it is why the session stopped, because a budget
+	// measured against evidence nobody can read is no budget at all.
 	SpendProblem string `json:"spend_problem,omitempty"`
 	// SessionProblem names a transition that could not be recorded. It costs the
 	// session its visibility rather than its work, so it is reported beside the
@@ -503,13 +531,22 @@ pulling:
 			schedule.Stopped = ScheduleBudgetSpent
 			break
 		}
+		// A bounded session that has lost the ability to measure itself stops
+		// here rather than at the end. Carrying on would be spending against a
+		// number nothing is comparing anything to, and the operator would find
+		// out in the morning — from a field on a schedule this session does not
+		// return until it is over.
+		if s.Budget > 0 && schedule.SpendProblem != "" {
+			schedule.Stopped = ScheduleSpendUnreadable
+			break
+		}
 		if ctx.Err() != nil {
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
 		pull, err := s.Open(ctx)
 		if err == nil {
-			err = pull.validate(s.Watching)
+			err = pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0})
 		}
 		if err != nil {
 			failure = fmt.Errorf("open a pull: %w", err)
@@ -685,16 +722,35 @@ pulling:
 		running--
 		settle(done)
 	}
-	session.enter(runstate.WatchStopped, schedule.Stopped)
+	session.enter(runstate.WatchStopped, stopping(schedule))
 	return schedule, failure
 }
 
-// cooling reports an item this pass has already tried and should not try again.
-// A drain never tries one twice at all. A watch tries one again when the item
-// itself has changed, and not otherwise: what a failed start leaves behind is an
-// item exactly as it was, and re-reading it will produce exactly the same
-// failure until somebody edits the work, reprioritizes it, or unblocks what it
-// depends on.
+// stopping is what the session's last recorded line says: why it stopped, and
+// the detail behind it where the reason alone would not be actionable. A session
+// that stopped because it could not price itself is read in a channel rather
+// than in this process's terminal, so the run nothing could price has to travel
+// with the reason rather than staying on a schedule nobody there sees.
+func stopping(schedule Schedule) string {
+	if schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "" {
+		return schedule.Stopped + ": " + schedule.SpendProblem
+	}
+	return schedule.Stopped
+}
+
+// cooling reports an item this pass has already started and should not start
+// again. A drain never starts one twice at all. A watch starts one again when
+// the item itself has changed, and not otherwise: what a failed start leaves
+// behind is an item exactly as it was, and re-reading it will produce exactly
+// the same failure until somebody edits the work, reprioritizes it, or unblocks
+// what it depends on.
+//
+// It covers every item the session has started rather than only the starts that
+// failed, and that is deliberate. The case it must not miss is the one that
+// leaves an item pullable and unclaimed with nothing recorded anywhere — a run
+// the operator's hold stopped before it claimed anything — where starting again
+// produces the same non-result immediately and with no wait in between. Narrowed
+// to failed starts, that case spins.
 func (s Scheduler) cooling(tried map[string]string, item beads.WorkItem) bool {
 	recorded, attempted := tried[item.ID]
 	if !attempted {
@@ -703,12 +759,23 @@ func (s Scheduler) cooling(tried map[string]string, item beads.WorkItem) bool {
 	return !s.Watching || recorded == fingerprint(item)
 }
 
-// fingerprint is what "something about the item changed" means. It is every part
-// of the item a person steers with — what the work says, what it is for, where
-// it sits in the queue, what it waits on — and deliberately not the notes, which
-// is where the harness writes its own account of the run that just failed. A
-// fingerprint the harness moves by failing is one that clears the cooldown it
-// just earned, which is the loop this guard exists to stop.
+// fingerprint is what "something about the item changed" means: every part of
+// the item a person steers with — what the work says, what it is for, where it
+// sits in the queue, what it waits on — and the notes, which is where the
+// harness records what became of a run.
+//
+// The notes are the half that is not obvious, and they are what makes the
+// ordinary recovery work. A run that stops on a blocker takes the item out of
+// the ready queue and writes the blocker into its notes; a development manager
+// who then unblocks it without editing anything leaves every other field exactly
+// as this session first read it, and a fingerprint that ignored the notes would
+// have the session refusing to pull work somebody had just deliberately
+// released. Reading them costs the guard nothing, because the one case it exists
+// for — a start that fails before a run claims anything — writes to the tracker
+// not at all: the harness only ever appends to the notes of an item it has
+// claimed, blocked, or closed, and none of those is an item still sitting
+// pullable in the queue. A change that made the harness write to a pullable
+// item's notes would put that spin back.
 func fingerprint(item beads.WorkItem) string {
 	parts := []string{
 		item.Status,
@@ -717,6 +784,7 @@ func fingerprint(item beads.WorkItem) string {
 		item.Description,
 		item.Design,
 		item.AcceptanceCriteria,
+		item.Notes,
 		item.Assignee,
 		item.Parent,
 	}
@@ -752,7 +820,13 @@ func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
 // priceRun is what one finished run cost, from the recorded evidence. A run that
 // never got as far as a record is priced at nothing because there is nothing to
 // price, which is the truth about a start that failed before it began; evidence
-// that exists and cannot be read is reported rather than assumed to be free.
+// that exists and cannot be read is reported rather than assumed to be free, and
+// under a budget that report is what stops the session.
+//
+// A pass with nothing to price with reaches here only when nothing is bounded,
+// because a budget without a way to measure it is refused at the pull. So the
+// nil is silence about a pass nobody asked to bound rather than a bound quietly
+// dropped.
 func priceRun(spend ScheduleSpend, outcome Outcome) (float64, string) {
 	if spend == nil || strings.TrimSpace(outcome.RunID) == "" {
 		return 0, ""

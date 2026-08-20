@@ -1001,12 +1001,16 @@ func TestASessionStopsWhenItHasSpentItsBudget(t *testing.T) {
 	}
 }
 
-// A session that cannot be told what it spent says so. A budget measured against
-// evidence nobody could read would be a bound that silently stopped bounding.
-func TestASessionReportsSpendItCouldNotRead(t *testing.T) {
+// A bounded session that cannot tell what it spent stops, rather than carrying
+// on inside a bound it has lost the ability to hold. It is the difference
+// between a budget and the appearance of one: an unpriceable run left running is
+// a session spending against a number nothing is comparing anything to, and the
+// operator would find that out from a schedule this session does not return
+// until it is over.
+func TestABoundedSessionStopsWhenItCannotTellWhatItSpent(t *testing.T) {
 	t.Parallel()
 
-	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
 	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
 		h.close(id)
 		// A run whose price is not among the recorded runs of its item is
@@ -1014,16 +1018,120 @@ func TestASessionReportsSpendItCouldNotRead(t *testing.T) {
 		return Outcome{RunID: "run-elsewhere", WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
 	}
 	harness.prices["yoyodyne-one"] = 1
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
 
-	schedule, err := Scheduler{Open: harness.open, Budget: 5}.Schedule(context.Background())
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Budget: 100}
+	schedule, err := scheduler.Schedule(context.Background())
 	if err != nil {
 		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleSpendUnreadable {
+		t.Fatalf("stopped = %q, want the session stopped rather than left unbounded: %s", schedule.Stopped, schedule.Render())
+	}
+	// The budget is nowhere near spent, so nothing but the unreadable evidence
+	// could have stopped this, and it stopped before the queue was drained.
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %d run(s), want the session to stop at the first run it could not price", len(schedule.Started))
 	}
 	if !strings.Contains(schedule.SpendProblem, "run-elsewhere") {
 		t.Fatalf("spend problem = %q, want the unpriceable run named", schedule.SpendProblem)
 	}
-	if !strings.Contains(schedule.Render(), "spent $0.00 of the $5.00") {
-		t.Fatalf("rendered = %q, want the floor and the budget both stated", schedule.Render())
+	// And it says so where somebody who is not at this terminal reads it, which
+	// is the whole reason a session that stops has to stop loudly.
+	said := sessions.said(runstate.WatchStopped)
+	if !strings.Contains(said, "budget") || !strings.Contains(said, "run-elsewhere") {
+		t.Fatalf("recorded stop = %q, want the budget and the run it could not price both carried into it", said)
+	}
+}
+
+// An unbounded pass is unaffected by the same evidence: nothing there was
+// spending against a number, so the unpriceable run costs the report a sentence
+// and the pass nothing at all.
+func TestAnUnboundedPassReportsSpendItCouldNotReadAndCarriesOn(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.close(id)
+		return Outcome{RunID: "run-elsewhere", WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 2 || schedule.Stopped != ScheduleDrained {
+		t.Fatalf("schedule = %s, want every item run and the pass drained", schedule.Render())
+	}
+	if !strings.Contains(schedule.SpendProblem, "run-elsewhere") {
+		t.Fatalf("spend problem = %q, want the unpriceable run named", schedule.SpendProblem)
+	}
+}
+
+// A budget with nothing to measure it against is refused before anything is
+// started. The operator asked for a bound; a pass that ran anyway would be
+// reporting one it never had.
+func TestASessionGivenABudgetIsRefusedWithNoWayToPriceItself(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	unpriced := func(ctx context.Context) (Pull, error) {
+		pull, err := harness.open(ctx)
+		pull.Spend = nil
+		return pull, err
+	}
+
+	schedule, err := (Scheduler{Open: unpriced, Budget: 20}).Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "price what it has spent") {
+		t.Fatalf("Schedule() error = %v, want a budget nothing can measure refused", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable {
+		t.Fatalf("stopped = %q, want the unusable pull named", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing run under a bound that was never held", schedule.Started)
+	}
+	// The same pull is fine unbounded: nothing there is spending against a
+	// number, so nothing needs to price it.
+	if _, err := (Scheduler{Open: unpriced}).Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v, want an unbounded pass unaffected", err)
+	}
+}
+
+// The ordinary recovery a development manager makes: a run stops on a blocker,
+// they release the item without editing anything else, and the session pulls it
+// again. The blocker the harness wrote into the item's notes is what says the
+// item is not the one this session already tried.
+func TestWatchingPullsAnItemAgainAfterItsBlockerIsReleased(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-blocked")...)
+	harness.blockedRuns = 0
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// What a blocked run does to the tracker: the item leaves the ready
+		// queue, and the blocker is appended to its notes.
+		h.block(id, "the replay conflicted and was left for a person")
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 2 {
+			// The development manager unblocks it and changes nothing else.
+			h.unblock("yoyodyne-blocked")
+		}
+		return sleeps < 4
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if starts := len(harness.pullOrder()); starts != 2 {
+		t.Fatalf("the item was started %d time(s), want it pulled again once somebody released it: %v", starts, harness.pullOrder())
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want both attempts accounted for", schedule.Started)
 	}
 }
 
@@ -1282,6 +1390,34 @@ func (h *scheduleHarness) admit(items ...beads.WorkItem) {
 	h.items = append(h.items, items...)
 	for _, item := range items {
 		h.ready[item.ID] = true
+	}
+}
+
+// block is what a run that stopped on a blocker does to the tracker: the item's
+// status moves out of the ready queue and the reason is appended to its notes,
+// which is exactly what beads.Client.Block does.
+func (h *scheduleHarness) block(workItemID, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.ready, workItemID)
+	for index := range h.items {
+		if h.items[index].ID == workItemID {
+			h.items[index].Status = "blocked"
+			h.items[index].Notes = strings.TrimSpace(h.items[index].Notes + "\n" + reason)
+		}
+	}
+}
+
+// unblock is the development manager releasing that item and changing nothing
+// else about it, which is the recovery a session has to notice.
+func (h *scheduleHarness) unblock(workItemID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ready[workItemID] = true
+	for index := range h.items {
+		if h.items[index].ID == workItemID {
+			h.items[index].Status = "open"
+		}
 	}
 }
 

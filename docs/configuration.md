@@ -1346,15 +1346,28 @@ the runs too, and lifting it resumes them from their own records.
 
 **Three guards, because the loop no longer ends.**
 
-An item whose run fails *before it starts* — unreadable acceptance criteria, a
-provider that is not authenticated, a context bundle that will not assemble —
-leaves that item exactly as ready as it was. A drain tries it once and returns; a
-watch would otherwise retry it every interval forever. So a watching session
-leaves such an item alone until something about the item changes: what it says,
-what it is for, its priority, its status, what it depends on. The item's notes
-are deliberately not part of that, because the harness writes its own account of
-the failed run into them, and a cooldown the harness could clear by failing is
-not one.
+**A watching session does not start the same item twice unless the item has
+changed.** The case that forces this is a run that fails *before it starts* —
+unreadable acceptance criteria, a provider that is not authenticated, a context
+bundle that will not assemble. Nothing is claimed and nothing is recorded, so the
+item is left exactly as ready as it was: a drain tries it once and returns, and a
+watch with no memory would retry it every interval forever.
+
+The rule covers every item the session has started, not only the ones that failed
+that way, because the other cases that leave an item pullable with nothing
+recorded — a run the intake hold or your `yoyo pause` stopped before it claimed
+anything — would spin the same way. What lifts it is the item changing: what the
+work says, what it is for, its priority, its status, what it depends on, and its
+notes. The notes are what make the ordinary recovery work. A run that stops on a
+blocker takes the item out of the ready queue and writes the blocker into its
+notes, so when you release that item without editing anything else, the session
+sees an item it has not tried and pulls it. Nothing the harness writes can clear
+the cooldown of an item that stayed pullable, because it only ever appends to the
+notes of an item it has claimed, blocked, or closed.
+
+An item this session has already run and that nothing has touched since is
+therefore left alone for the life of the session. Restarting the session, or
+touching the item, is what asks for another attempt.
 
 `blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
 different thing from that cooldown: it is aimed at a broken machine rather than a
@@ -1372,6 +1385,15 @@ posts it. A session idling all night writes one line rather than one a minute.
 evidence `yoyo cost` prices items from. It is checked between pulls, never during
 a run: the money a running run has spent is already spent, and what stopping it
 would lose is the work it bought.
+
+A budget the harness cannot measure is not a smaller budget, it is no budget, so
+it fails closed at both ends. A pass given `--budget` with no way to price itself
+is refused before anything starts. A session that has started and then meets a
+run whose recorded evidence will not price — the run's event log gone, or a
+record it cannot read — stops there and says which run it was, rather than
+counting it as free and carrying on inside a bound it can no longer hold. The
+stop is announced like every other transition, so you find out while it matters
+rather than in the morning.
 
 **The default is still the drain**, and `--until-drained` says so explicitly.
 That is deliberate: watching is the shape this loop is meant to have, and turning
