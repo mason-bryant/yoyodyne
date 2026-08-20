@@ -29,6 +29,7 @@ func commandHelp() string {
 		printReportsUsage,
 		printRunUsage,
 		printWorkUsage,
+		printTriageUsage,
 		printStatusUsage,
 		printPauseUsage,
 		printResumeUsage,
