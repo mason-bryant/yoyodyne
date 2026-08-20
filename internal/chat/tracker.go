@@ -114,6 +114,13 @@ const (
 	actionUnlink       = "unlink"
 	actionClose        = "close"
 	actionRetire       = "retire"
+	// actionTriage records what the development manager decided about work that
+	// stopped moving. It is the one action whose subject is an event rather than
+	// an item — a run that ended on a blocker, a publication the forge never
+	// merged — which is why it names the run as well as the item, and why it is
+	// not an "update" with a well-worded note: a decision nobody can find is the
+	// state triage exists to leave behind.
+	actionTriage = "triage"
 )
 
 // trackerActionArguments names the optional arguments each operation accepts.
@@ -132,13 +139,14 @@ var trackerActionArguments = map[string][]string{
 	actionUnlink:       {"depends_on"},
 	actionClose:        {},
 	actionRetire:       {},
+	actionTriage:       {"run", "decision"},
 }
 
 // trackerActionNames lists the operations in the order the contract states them,
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
 	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
-	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire,
+	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire, actionTriage,
 }
 
 // TrackerAction is one bounded operation on the work tracker. It carries
@@ -171,6 +179,16 @@ type TrackerAction struct {
 	// Note is text appended to the item's notes, which is how the product
 	// manager writes on an item without replacing what is already there.
 	Note string `json:"note,omitempty"`
+	// Run names the stopped run a triage decision settles, copied from the
+	// docket entry the decision is about. It is required there and taken by
+	// nothing else: an item can stop more than once, and a decision that does not
+	// say which stoppage it was about is one nobody can match to an entry.
+	Run string `json:"run,omitempty"`
+	// Decision is what triage decided, from the fixed vocabulary in triage.go. It
+	// is a named decision rather than prose because the harness acts on it — a
+	// repair, a re-run, and a re-arm each spend a budget, and an escalation
+	// blocks the item — and prose is what "reason" carries beside it.
+	Decision string `json:"decision,omitempty"`
 	// Reason is why this is being done. It is required on everything that
 	// changes something: the operator reads the queue afterwards and is owed the
 	// reasoning, not only the edit.
@@ -403,6 +421,8 @@ func (a TrackerAction) validateArguments() []error {
 		} else if strings.TrimSpace(a.DependsOn) == strings.TrimSpace(a.ID) {
 			problems = append(problems, errors.New("an item cannot depend on itself"))
 		}
+	case actionTriage:
+		problems = append(problems, a.triageProblems()...)
 	}
 	// The arguments an operation does accept are checked wherever they appear, so
 	// a value that could not be applied is refused before anything is run.
@@ -463,6 +483,12 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
+	}
+	if strings.TrimSpace(a.Run) != "" {
+		carried = append(carried, "run")
+	}
+	if strings.TrimSpace(a.Decision) != "" {
+		carried = append(carried, "decision")
 	}
 	return carried
 }
@@ -639,6 +665,13 @@ func refuseWhenClosed(action, id, status string) string {
 		return fmt.Sprintf("%s is already closed, so there was nothing to close", id)
 	case actionRetire:
 		return fmt.Sprintf("%s is already closed and has left the backlog, so there was nothing to retire", id)
+	case actionTriage:
+		// Triage decides what becomes of work that stopped, and closed work has
+		// left the backlog: there is nothing to hand back, nothing to run again,
+		// and an escalation would put a closed item back into a blocked state
+		// nobody asked for. A note about what was learned is still worth writing,
+		// which is what "update" is for.
+		return fmt.Sprintf("%s is closed, so what becomes of the work that stopped is no longer a decision; nothing was recorded, and a note about it is what \"update\" is for", id)
 	default:
 		return ""
 	}
@@ -787,6 +820,8 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.applied("retired %s from the backlog without it being done", id)
+	case actionTriage:
+		s.carryOutTriage(ctx, outcome)
 	default:
 		// Validation admits nothing else, so reaching this is a harness bug rather
 		// than a badly formed request; it is reported as a failure all the same.

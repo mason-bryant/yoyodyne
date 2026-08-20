@@ -1208,6 +1208,10 @@ type fakeTracker struct {
 	links   [][2]string
 	unlinks [][2]string
 	closed  [][2]string
+	// blocked is every item it was asked to block and the reason each carried,
+	// which is what makes "an escalation lands on the item" an assertion rather
+	// than a claim about prose.
+	blocked [][2]string
 	err     error
 }
 
@@ -1252,6 +1256,14 @@ func (f *fakeTracker) Update(_ context.Context, id string, change beads.WorkItem
 	}
 	f.updates = append(f.updates, trackerUpdate{id: id, change: change})
 	return beads.WorkItem{ID: id, Title: change.Title}, nil
+}
+
+func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkItem, error) {
+	if f.err != nil {
+		return beads.WorkItem{}, f.err
+	}
+	f.blocked = append(f.blocked, [2]string{id, reason})
+	return beads.WorkItem{ID: id, Status: "blocked"}, nil
 }
 
 func (f *fakeTracker) AddBlocker(_ context.Context, id, blockerID string) error {

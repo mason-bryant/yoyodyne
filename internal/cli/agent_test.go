@@ -65,7 +65,7 @@ func TestAgentListReportsEveryConfiguredAgentAndItsDurableState(t *testing.T) {
 		"architect (architect) claude-code, model opus",
 		"owns the designs, the decision records, and the architectural invariants",
 		"development-manager (development-manager)",
-		"owns decomposition, dependency structure, and assignment of admitted work",
+		"owns decomposition, dependency structure, and triage of work that has stopped moving",
 		"no conversation recorded",
 	} {
 		if !strings.Contains(stdout, want) {

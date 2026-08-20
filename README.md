@@ -1082,7 +1082,7 @@ project rewrites any persona it likes and the boundaries do not move:
 | --- | --- | --- | --- |
 | product manager | yes | admits, orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
-| development manager | yes | creates and links **only underneath admitted work** | none |
+| development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
 
 The development manager is the one worth reading twice, because it is where a
@@ -1094,7 +1094,9 @@ the backlog's order stays the product manager's. What it created is recorded as
 what it was: the item's own notes say it was created under its parent,
 decomposing it, rather than admitted to the backlog, so the two acts stay
 distinguishable long after the conversation that made one of them is gone. Work it discovers that belongs
-elsewhere it says to you, for the product manager to admit.
+elsewhere it says to you, for the product manager to admit. It is also the role
+that decides what becomes of work that stopped moving, which is the [triage
+docket](#deciding-what-becomes-of-stopped-work) below.
 
 The architect owns the designs, the decision records, and the invariants, and it
 cannot edit any of them from a conversation, because no conversation has tools.
@@ -1141,6 +1143,47 @@ nothing happening is not something anything can be present for. Two things scan:
 `yoyo reconcile`, and opening a development manager conversation. There is no
 scheduled process behind either, so the configured age is a floor rather than a
 promise about when the entry appears.
+
+#### Deciding what becomes of stopped work
+
+An entry decides nothing, and the development manager is the role that does. It
+records one decision per entry, on the work item, through a `triage` action that
+names the run the entry is about: `repair` hands the item another bounded go at
+the change it has, `rerun` runs it again from the start, `rescope` splits out
+what was refused as out of scope, `rearm` repeats a merge the forge dropped,
+`wait` says the forge still has it, and `escalate` hands it to you. The decision
+lands in the item's notes, so the next reader of a run that stopped finds the
+reasoning beside the evidence rather than deciding it a second time.
+
+Four of the six the harness holds to more than a note. **A repair, a re-run, and
+a re-arm each spend the item's durable budget as they are recorded**, and are
+refused once it is gone — the refusal names the budget, which is the evidence for
+escalating instead. A repair and a re-run are each once per item — a second of
+either is an escalation rather than a larger budget — and past the
+[review-round cap](docs/configuration.md#what-one-work-item-has-been-given) even
+the first is refused. A merge re-arm is bounded per item by the
+integration-retry budget rather than the rounds, because it buys no round at
+all; the design's stricter rule — once per publication — arrives with the
+re-arm action itself, whose counter will be keyed to the publication it
+repeats. **An escalation is a durable blocker on the item and a report at
+`warning` severity or above**, in the same reply: the item itself says it is
+waiting on a person, and the report reaches [the pile you
+read](#what-agents-report-and-where-it-reaches-you). Prose alone is not an escalation, and the
+harness refuses one carrying no such report rather than blocking an item you
+were never told about. `rescope` and `wait` are the two that are a note and
+nothing else — a re-scope's real work is the child item it creates beside the
+note, and a wait asks for nothing at all.
+
+What the harness does not do is carry any of it out. Nothing starts a run or
+asks a forge for anything because a decision was recorded, so acting on one is
+yours: `yoyo run <id>` for a repair or a re-run, and for a re-arm, asking the
+forge to merge the pull request again yourself — nothing in the harness repeats
+a merge request the forge dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
+recorded whether or not you act on it, which is the same direction every counter
+here fails in: an attempt nobody took rather than one nobody counted. What
+triage changed is that stopped work is decided by the role that owns it, the
+decision is durable on the item, and it reaches you only when the development
+manager judged it had to.
 
 Everything you type as a command — `/status`, `/backlog`, `/show`, `/work`,
 `/reports`, `/refresh` — means the same thing in every conversation, because
@@ -2321,16 +2364,22 @@ Every budget a run spends starts again at zero in the next run, so an item hande
 back, run again, and handed back again is an item nothing bounds. The per-item
 counters are what bound it:
 
-The shape the counters will report once a triage action exists — today every
-item reads `triage has not acted on it`, because nothing yet grants, re-runs,
-or re-arms:
-
 ```text
-triage of yoyodyne-ifd.90: triaged 2 times
-  review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4
-  repair grants: 1; re-runs: 0; both are refused once no round remains
+triage of yoyodyne-ifd.90: triage has spent 2 passes on it
+  review rounds: 3 spent across every run of this item, under the cap of 4
+  repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
+  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
 ```
+
+Every figure here is a budget, and the first line counts what has been spent
+rather than how many times somebody looked. Only three of the development
+manager's six decisions spend anything — a repair grant, a re-run, a merge
+re-arm — so an item it escalated or told to wait shows `triage has spent nothing
+on it` and zeroes across the rest. **That is not evidence nobody looked.** The
+decision itself is recorded on the work item, which is where to read whether
+stopped work has been decided and what was decided; an escalated item is blocked
+there as well.
 
 A **round** is a reviewer verdict a developer attempt produced, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
@@ -2339,19 +2388,20 @@ and gets a fresh verdict on the replayed change is not charged for it. Rounds ar
 what runs actually spend, and every run records them.
 
 The lines under it are the budget for what triage can decide about work that did
-not land — another go at the change, a re-run, a re-armed merge. **No triage
-decision in this release takes any of those actions**, so they read as zero on
-every item today. What is in place is the durable budget and the gate on it: each
-is recorded before the action it counts takes effect, so a crash cannot
-double-grant, and each is refused once its budget is spent — a grant truncated to
-the rounds the cap still has room for, a re-run refused outright once none
-remain, a merge re-arm bounded on its own because it buys no round at all. The
+not land — another go at the change, a re-run, a re-armed merge — and they move
+when [the development manager decides one](#deciding-what-becomes-of-stopped-work).
+Each is recorded before the action it counts takes effect, so a crash cannot
+double-grant, and each is refused once its budget is spent. A grant and a re-run
+are each once per item and are also refused by the rounds — the grant truncated
+to what the cap still has room for, the re-run refused outright once none
+remain — and a merge re-arm is bounded on its own because it buys no round at
+all. The rounds alone would bound neither of the first two on an item whose runs
+keep stopping before a reviewer ever sees them. The
 numbers are the `triage` keys and the integration retries in [the configuration
-guide](docs/configuration.md#what-one-work-item-has-been-given), and a triage
-action added later goes through that gate rather than around it. An item triaged
-more than once says so in the first line, which is the fact worth looking for:
-work that keeps coming back is usually work where something other than the change
-is wrong.
+guide](docs/configuration.md#what-one-work-item-has-been-given). An item triage
+has spent more than one pass on says so in the first line, which is the fact
+worth looking for: work that keeps coming back is usually work where something
+other than the change is wrong.
 
 The listing folds each reason onto one line and bounds it at 160 bytes with
 an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;

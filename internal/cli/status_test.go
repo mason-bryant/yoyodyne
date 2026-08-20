@@ -550,19 +550,26 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	failed.Phase = runstate.PhaseReviewing
 	saveRun(t, store, failed)
 
-	// An item nobody has triaged says so, rather than printing zeroes that read
-	// as a budget somebody has been spending.
+	// An item triage has given nothing says that, rather than printing zeroes
+	// that read as a budget somebody has been spending. It says it of the budget
+	// rather than of triage: a decision that spends nothing reaches no counter
+	// here, so this line must not be read as "nobody has looked".
 	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.2.7")
 	if code != 0 {
 		t.Fatalf("status code = %d, stderr = %q", code, stderr)
 	}
-	if !strings.Contains(stdout, "triage of yoyodyne-ifd.2.7: triage has not acted on it") {
-		t.Fatalf("stdout = %q, want an untriaged item to say so", stdout)
+	for _, want := range []string{
+		"triage of yoyodyne-ifd.2.7: triage has spent nothing on it",
+		"waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
 	}
 
 	// The caps the harness defaults give this configuration: four rounds in
 	// total, and two merge re-arms following the integration retries a run has.
-	caps := runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2}
+	caps := runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
 	triage := store.Triage()
 	for _, attempt := range []string{"run-a#0", "run-a#1", "run-a#2"} {
 		if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", attempt, started); err != nil {
@@ -589,9 +596,9 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	for _, want := range []string{
 		// The second pass is the fact somebody is looking for, and it is said
 		// first.
-		"triage of yoyodyne-ifd.2.7: triaged 2 times",
-		"review rounds: 3 spent across every run of this item; triage may hand back repairs while under the cap of 4",
-		"repair grants: 1; re-runs: 0; both are refused once no round remains",
+		"triage of yoyodyne-ifd.2.7: triage has spent 2 passes on it",
+		"review rounds: 3 spent across every run of this item, under the cap of 4",
+		"repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains",
 		"merge re-arms: 1 of 2 permitted",
 		"1 grant(s) were cut down to the rounds the cap still had room for",
 	} {
@@ -631,16 +638,18 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 }
 
-// The JSON keys are a machine commitment: this fails if either caps key
-// drifts from snake_case, independent of the Go type the payload decodes into.
+// The JSON keys are a machine commitment: this fails if any caps key drifts
+// from snake_case, independent of the Go type the payload decodes into. Each
+// cap carries a distinct value so a key rendered from the wrong field is a
+// failure rather than a coincidence.
 func TestTriageCapsSerializeWithSnakeCaseKeys(t *testing.T) {
 	t.Parallel()
 
-	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
+	payload, err := json.Marshal(runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 2, MergeRearms: 3})
 	if err != nil {
 		t.Fatalf("marshal caps: %v", err)
 	}
-	for _, want := range []string{"\"review_rounds\":4", "\"merge_rearms\":2"} {
+	for _, want := range []string{"\"review_rounds\":4", "\"repair_grants\":1", "\"reruns\":2", "\"merge_rearms\":3"} {
 		if !strings.Contains(string(payload), want) {
 			t.Fatalf("caps json = %s, want it to carry %s", payload, want)
 		}
@@ -656,10 +665,10 @@ func TestStatusSaysAtTheCapExactlyThatNothingMayBeHandedBack(t *testing.T) {
 	var out bytes.Buffer
 	printItemTriage(&out, runstate.TriageCounters{WorkItemID: "yoyodyne-ifd.90", ReviewRounds: 4}, runstate.TriageCaps{ReviewRounds: 4, MergeRearms: 2})
 	rendered := out.String()
-	if !strings.Contains(rendered, "at or past the cap of 4, so triage may only escalate or re-scope") {
+	if !strings.Contains(rendered, "at or past the cap of 4, so no decision that buys a round remains") {
 		t.Fatalf("rendered = %q, want the at-the-cap line", rendered)
 	}
-	if strings.Contains(rendered, "while under the cap") {
+	if strings.Contains(rendered, "under the cap of 4") {
 		t.Fatalf("rendered = %q, want no under-cap claim at the boundary", rendered)
 	}
 }

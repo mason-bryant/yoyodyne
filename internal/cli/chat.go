@@ -338,6 +338,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.
 		Intake: parts.intake,
+		// The durable budget the development manager's triage decisions spend.
+		// It is wired for that role alone, like the docket those decisions are
+		// about, so a repair grant or a re-run is bounded by what the operator
+		// configured wherever it is decided from.
+		Triage: conversationTriage(parts, role),
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
