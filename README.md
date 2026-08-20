@@ -1262,9 +1262,12 @@ itself the way every other chosen run does; **your hold on intake applies to
 it**, because the harness is the one choosing here and the exemption for an item
 named by hand is yours rather than the development manager's.
 
-Three things refuse it. The stopped run has to be really over — terminal, with
+Four things refuse it. The stopped run has to be really over — terminal, with
 its blocker standing, read from the run's own record rather than from the docket
-entry. One docketed stoppage is re-run once. And a decision of the development
+entry. One docketed stoppage is re-run once. The work item has to be one a run
+may start on — open, with nothing it depends on outstanding — which for a
+docketed stoppage usually means somebody has put it back, because stopping the
+run blocked it. And a decision of the development
 manager's has to be there to carry out: deciding a re-run spends the item's
 re-run budget as it is decided, and each decision authorizes exactly one re-run,
 so the harness reads what it has already carried out for the item back against
@@ -1274,6 +1277,15 @@ already run again needs somebody to decide about *that* stoppage, which past the
 once-per-item cap means an escalation rather than a bigger budget. The harness
 will not start a run attributed to a decision that does not exist, or to one that
 was about something else.
+
+**Every one of the four is asked before anything is claimed**, so a refused
+re-run costs the stoppage nothing and says what would make it stop refusing.
+That matters most for the item's own state: the budget is spent by claiming it
+rather than by running anything, so a refusal made after the claim would be the
+decision defeating itself on exactly the blocked items it exists for — refused
+once for the status, and refused again by the once-only guard for a run that
+never happened. Put the item back and ask again, and the same decision is
+carried out.
 
 What that stopped run preserved is kept until the fresh run integrates and
 retired explicitly then — removed, and the removal written onto the stopped run's

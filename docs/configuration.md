@@ -1932,12 +1932,26 @@ all been carried out is refused too, because that counter is a total nothing
 clears and reading it alone would let a second stoppage of an already re-run item
 start on the strength of a decision that was about the first. A second stoppage
 needs a second decision, which past the once-per-item cap is an escalation rather
-than a larger budget. The intake hold applies too, because the harness is the one
+than a larger budget. It is refused, finally, unless the work item itself is one
+a run may start on — open, with nothing it depends on outstanding — which for a
+docketed stoppage ordinarily means somebody has put it back, because the run
+stopping blocked it. The intake hold applies too, because the harness is the one
 choosing the work; a re-run under a hold starts nothing and claims nothing, so the
 stoppage keeps its re-run for after the hold is lifted. The fresh run records
 the development manager as having chosen it and the reasoning the harness was
 given as why, which is what the `selected-work-passes-intake-and-records-why`
 invariant requires of anything the harness chooses for itself.
+
+**Every one of those refusals is made before the stoppage's re-run is claimed**,
+and the claim is what spends it. A condition asked after the claim would spend
+the budget on refusing to use it: the item's status is the one that showed this,
+where a re-run of a blocked item was refused for the status and the next attempt
+was then refused by the once-only guard, for a run that had never happened. So a
+refused re-run leaves the stoppage its re-run and says what would make it stop
+refusing, and asking again once that is true carries out the same decision. The
+opposite order holds past the claim, deliberately: the claim is taken before the
+run is started, so a process that dies between the two has spent a re-run nobody
+took rather than taken one nobody recorded.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped

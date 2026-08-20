@@ -10,9 +10,9 @@ package cli
 // The decision is not made here and cannot be. What this takes is the run the
 // docket entry names and the reasoning the development manager recorded for
 // deciding a re-run of it, and what it does with them is the harness's own
-// work — reading the intake hold, proving the stoppage is over, claiming the one
-// re-run that stoppage gets, and starting the fresh run with the decision
-// recorded as why it exists.
+// work — reading the intake hold, proving the stoppage is over, reading that the
+// item is one a run may start on, claiming the one re-run that stoppage gets, and
+// starting the fresh run with the decision recorded as why it exists.
 
 import (
 	"context"
@@ -85,6 +85,10 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 		// `yoyo status` reports, so what proves the decision was made and what an
 		// operator reads about it can never be two different records.
 		Decisions: parts.store.Triage(),
+		// The item itself, read before the stoppage's one re-run is claimed. It is
+		// the same tracker the fresh run starts on, so what refuses here is exactly
+		// what would otherwise have refused past the claim.
+		Items: parts.tracker(),
 		// What the stopped run preserved is retired through the same manager that
 		// created it, which is what keeps the removal inside the ownership rules
 		// every other removal here is held to.
@@ -147,6 +151,11 @@ func printTriageUsage(writer io.Writer) {
 Carries out a development manager's recorded re-run decision: starts a fresh run
 of the item whose stopped run the docket entry names. The stoppage is re-run
 once; the intake hold applies, because the harness is choosing the work.
+
+Everything that refuses is asked before the stoppage's one re-run is claimed, so
+a refusal costs nothing and asking again once it no longer applies carries out
+the same decision. The item has to be one a run may start on, which for a run
+that stopped on a blocker means putting the item back first.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
