@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -238,6 +239,67 @@ func TestReviewAsksForAFindingWhenAChangeViolatesADeliveredInvariant(t *testing.
 	}
 	if !strings.HasPrefix(plain.request.Prompt, "# Untrusted review evidence") {
 		t.Fatalf("an absent invariant set produced a section: %q", plain.request.Prompt)
+	}
+}
+
+// A work item that granted a protected path admitted the path and nothing more:
+// the gate in front of this review refused every ungranted one, so the only
+// question left is whether somebody decided the edit the grant admits. The
+// judgement is the model's, so what is deterministic here is that the
+// instruction asking for it reaches the provider, that the granting item text
+// arrives as evidence to read it against, and that the finding survives the
+// verdict contract. TestLocalGrantReviewConformance exercises the judgement.
+func TestReviewAsksForAFindingWhenAGrantedPathNamesNoDecidedChange(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{finalText: `{"decision":"repair","summary":"the grant names no decided change","findings":[{"severity":"major","message":"docs/designs/v1-harness-design.md is granted, but the item names no approved amendment or operator decision behind the grant","location":{"file":"docs/designs/v1-harness-design.md","line":12}}]}`}
+	request := newRequest(nil)
+	// The item admits the design home and says nothing about who decided what
+	// goes into it, which is the whole shape this instruction is for.
+	request.Context = "# Assigned work item\n\nID: yoyodyne-task\nTitle: Record the ordering in the design\n\n" +
+		"## Description\n\nThe design should say the promotion is a fast-forward.\n\n" +
+		"Protected-path grant: docs/designs/v1-harness-design.md\n"
+	request.Changes = gitworktree.ChangeDiff{
+		Status: " M docs/designs/v1-harness-design.md",
+		Patch: "diff --git a/docs/designs/v1-harness-design.md b/docs/designs/v1-harness-design.md\n" +
+			"+Promotion is a fast-forward and nothing else.\n",
+	}
+
+	result, err := (Reviewer{Backend: provider, Clock: reviewClock{}, Model: testReviewModel}).Review(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	for _, want := range []string{
+		// The marker is named, because a grant is only recognizable by it, and
+		// named as the gate reads it: an item that capitalized it still granted.
+		protectedpath.GrantMarker,
+		"capitalized however the item wrote it",
+		"A grant admits the path; it does not decide what goes into it",
+		"read the item for the decided change named behind each grant it makes",
+		"names no decided change behind the grant is a finding at major severity or higher",
+	} {
+		if !strings.Contains(provider.request.SystemPrompt, want) {
+			t.Errorf("review contract is missing %q: %q", want, provider.request.SystemPrompt)
+		}
+	}
+	// The instruction is worth nothing without the item text a grant lives in.
+	// The item here capitalizes the marker as the documentation renders it, and
+	// the gate matches it either way, so the haystack is lowered rather than the
+	// item rewritten to the constant's own case.
+	if !strings.Contains(strings.ToLower(provider.request.Prompt), protectedpath.GrantMarker) {
+		t.Fatalf("the granting item text never reached the reviewer: %q", provider.request.Prompt)
+	}
+	if result.Decision != DecisionRepair || len(result.Verdict.Findings) != 1 {
+		t.Fatalf("Review() = %#v, want a repair verdict with the grant finding", result)
+	}
+	if finding := result.Verdict.Findings[0]; finding.Severity != SeverityMajor || finding.Location == nil || finding.Location.File != "docs/designs/v1-harness-design.md" {
+		t.Fatalf("finding = %#v, want a major finding against the granted path", finding)
+	}
+
+	// A branch review reads no work item, so it is not asked to conclude one
+	// from evidence it does not have.
+	if strings.Contains(reviewSystemPrompt(ScopeBranch, ""), protectedpath.GrantMarker) {
+		t.Error("the branch contract asks for a grant finding it has no item text to make")
 	}
 }
 

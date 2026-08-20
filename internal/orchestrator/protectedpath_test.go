@@ -138,6 +138,20 @@ func TestAGrantInTheWorkItemAdmitsThePathForEveryAttemptTheItemMakes(t *testing.
 	if state.PathRefusal != nil {
 		t.Fatalf("a granted path was refused: %#v", state.PathRefusal)
 	}
+	// The gate admitted the path; whether anybody decided what went into it is
+	// the other half of the same mechanism, and that half is the reviewer's. So
+	// the review this run asked for carries both the instruction to look for the
+	// decision behind the grant and the item text the grant is written in.
+	reviews := provider.requestsForRole(domain.RoleReviewer)
+	if len(reviews) != 1 {
+		t.Fatalf("reviews = %d, want the granted change judged once", len(reviews))
+	}
+	if !strings.Contains(reviews[0].SystemPrompt, "read the item for the decided change named behind each grant") {
+		t.Fatalf("the reviewer was not asked what decided the granted edit:\n%s", reviews[0].SystemPrompt)
+	}
+	if !strings.Contains(strings.ToLower(reviews[0].Prompt), protectedpath.GrantMarker) {
+		t.Fatalf("the granting item text never reached the reviewer:\n%s", reviews[0].Prompt)
+	}
 	// The grant covers the file it names and nothing around it.
 	if refused := protectedpath.Protect(pipeline.Config).Refused(
 		[]string{"docs/designs/another-design.md"},

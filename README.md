@@ -1480,7 +1480,10 @@ granting it is refused before any check runs and before any reviewer is asked,
 and handed back to the same developer in the same repair loop a failing check
 uses. An item grants an exception in its own text, on a line beginning
 `Protected-path grant:`, so every exception is declared in reviewed item text
-rather than discovered in a diff. [Configuration](docs/configuration.md#protected-paths-in-a-developers-change)
+rather than discovered in a diff. A grant admits the path and decides nothing
+about what goes into it, so the reviewer is told to read the item for the decided
+change behind each grant and to raise a finding when none is named.
+[Configuration](docs/configuration.md#protected-paths-in-a-developers-change)
 has the details.
 
 Then the configured checks run in that worktree, and an independent reviewer —
