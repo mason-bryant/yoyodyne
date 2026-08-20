@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -421,5 +422,53 @@ func TestConversationStoreRefusesToListARecordItCannotRead(t *testing.T) {
 	}
 	if _, err := store.Recorded(); err == nil || !strings.Contains(err.Error(), "product-manager.json") {
 		t.Fatalf("Recorded() error = %v, want the file it could not read named", err)
+	}
+}
+
+// The undecided proposals a conversation carries are the largest thing in its
+// record, so a conversation that filled the bound must still be one that saves.
+// The failure this guards is total: a record that cannot be written is a
+// conversation that cannot take another turn.
+func TestAConversationFullOfUndecidedProposalsStillSaves(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewConversationStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	now := time.Now().UTC()
+	conversation := Conversation{
+		SchemaVersion:  ConversationSchemaVersion,
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		ProductID:      "yoyodyne",
+		RepositoryID:   "yoyodyne",
+		Agent:          "product-manager",
+		Role:           "product-manager",
+		Backend:        domain.BackendClaudeCode,
+		StartedAt:      now,
+		UpdatedAt:      now,
+		// And the rest of what the record carries at its own bounds, because the
+		// state file holds all of it at once or none of it.
+		PendingTrackerResults: strings.Repeat("r", MaxPendingTrackerResultBytes),
+	}
+	for i := 0; i < MaxPendingProposals; i++ {
+		conversation.PendingProposals = append(conversation.PendingProposals, PendingProposal{
+			ID:          fmt.Sprintf("%d.1", i+1),
+			Turn:        i + 1,
+			Title:       strings.Repeat("t", 200),
+			Description: strings.Repeat("d", 8<<10),
+			Rationale:   strings.Repeat("w", 8<<10),
+			Goal:        strings.Repeat("g", 400),
+		})
+	}
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	loaded, err := store.Load(ConversationIdentity{Agent: "product-manager", Role: "product-manager"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(loaded.PendingProposals) != MaxPendingProposals {
+		t.Fatalf("loaded %d proposal(s), want %d", len(loaded.PendingProposals), MaxPendingProposals)
 	}
 }

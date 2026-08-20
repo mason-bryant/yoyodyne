@@ -65,6 +65,62 @@ type decision struct {
 	reason string
 }
 
+// DecisionOutcome is what became of one proposal the operator decided. It is
+// what a decision made outside a conversation is reported by, where there is no
+// prompt to print underneath: the same decision, said once, in a shape a script
+// can read.
+type DecisionOutcome struct {
+	ProposalID string `json:"proposal_id"`
+	// Title is the work the decision was about, taken from the created item where
+	// there is one and from the proposal where there is not.
+	Title    string `json:"title"`
+	Approved bool   `json:"approved"`
+	// WorkItemID is the item an approval created. It is empty on a decline, and
+	// on an approval the tracker would not carry out.
+	WorkItemID string `json:"work_item_id,omitempty"`
+	// Reason is why a declined proposal was turned down, in the operator's own
+	// words where they gave any.
+	Reason string `json:"reason,omitempty"`
+	// Problem is what stopped the decision landing whole. An approval carries one
+	// where nothing was created and where the item exists but is incomplete, and
+	// those are different situations, which is what Undecided says.
+	Problem string `json:"problem,omitempty"`
+	// Undecided says the approval created nothing, so the proposal is still
+	// awaiting a decision and can be approved again once whatever refused it
+	// answers.
+	Undecided bool `json:"undecided,omitempty"`
+}
+
+// Render describes one decision for an operator reading what their message did.
+// It leads with the proposal, because that is what they named, and says the
+// item's identifier where there is one to say.
+func (d DecisionOutcome) Render() string {
+	switch {
+	case !d.Approved:
+		return fmt.Sprintf("[%s] declined: %s\n", d.ProposalID, strings.TrimSpace(d.Title)) +
+			indent("because: "+d.Reason)
+	case d.Undecided:
+		return fmt.Sprintf("[%s] not created: %s\n", d.ProposalID, strings.TrimSpace(d.Title)) +
+			indent(d.Problem) +
+			indent("it is still awaiting a decision; approve it again once the tracker answers")
+	case d.Problem != "":
+		return fmt.Sprintf("[%s] created %s: %s\n", d.ProposalID, d.WorkItemID, strings.TrimSpace(d.Title)) +
+			indent("the item is incomplete: "+d.Problem)
+	default:
+		return fmt.Sprintf("[%s] created %s: %s\n", d.ProposalID, d.WorkItemID, strings.TrimSpace(d.Title))
+	}
+}
+
+// declineReason is what the record keeps about why a proposal was turned down.
+// An operator who declined it without saying anything still declined it, so the
+// record says that rather than recording no reason at all.
+func declineReason(reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed
+	}
+	return "the operator declined it without giving a reason"
+}
+
 // errNotADecision reports an answer that is not a decision at all: it names no
 // proposal and begins with nothing the harness recognizes. It is separate from
 // every other failure here because it is the one the contract already decides —

@@ -334,8 +334,10 @@ func (r *recordingRunner) Run(_ context.Context, command execution.Command, _ ex
 	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.stdout}, nil
 }
 
-// A one-shot message has nobody to approve anything, so proposals it produced
-// are reported as proposals and the operator is told where to decide on them.
+// A one-shot message creates nothing, so proposals it produced are reported as
+// proposals and the operator is told how to decide one. What they are told has
+// to be something that works from where they are: a proposal is named by its own
+// identifier, and the next message is what decides it.
 func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	t.Parallel()
 
@@ -351,7 +353,7 @@ func TestChatReportsProposalsAsUncreatedWork(t *testing.T) {
 	}}
 	var oneShot bytes.Buffer
 	printChatProposals(&oneShot, domain.RoleProductManager, proposals)
-	for _, required := range []string{"Nothing was created", "yoyodyne chat", "[1.1] Pause on a usage limit"} {
+	for _, required := range []string{"nothing was created for them", `approve 1.1`, `decline 1.1 <reason>`, "[1.1] Pause on a usage limit"} {
 		if !strings.Contains(oneShot.String(), required) {
 			t.Fatalf("one-shot output = %q, want it to contain %q", oneShot.String(), required)
 		}

@@ -604,12 +604,46 @@ say one thing and do another. Decomposition is not admission: a role that may
 only create underneath work you already admitted is building structure under a
 decision that was made, and it is unaffected by either setting.
 
+**`approvals.work_item_exemptions` narrows the per-item gate without lifting it.**
+It is a list of classes of work this project admits without asking, whatever
+`work_items` says, and it is empty until you write one:
+
+```yaml
+approvals:
+  work_items: human
+  work_item_exemptions:
+    - diagnosis
+```
+
+There is one class. `diagnosis` is work that only looks: it reads what is already
+there, says up front what it will read and stops there, and produces findings
+rather than a change. It exists because "ask me about every work item" turns out
+to be coarser than most operators who set it mean — being asked before something
+reads the repository and writes down what it found is not what the gate was put
+up for, and with no way to say so the policy stays a sentence nothing enforces.
+
+**The class is the agent's claim about its own work, and the exemption is yours.**
+A proposal or a `create` may carry `class: diagnosis`, and it means nothing at all
+in a project that has not exempted that class — the product manager is told about
+a class only where you have exempted it, precisely so it is never invited to claim
+one that would change nothing. What keeps the claim honest is that the exempted
+class is work that changes nothing: an item claiming to be diagnosis and then
+doing something else is an item whose description says what it does, under a goal
+that had to resolve, in a queue you read.
+
+**An exemption moves who is asked and never whether the work is for anything.**
+Work admitted under one still names a goal the repository records, and one that
+resolves to nothing is refused exactly as any other work naming it is. What an
+exemption does not require is that the goal be *approved*, which is what makes it
+usable by the projects that keep the human gate.
+
 **What was admitted without asking is reported where a decision would have been.**
 Each item is named with the goal that let it through, in the conversation and in
 `yoyo chat --message ... --json` under `admitted`, and the item's own notes record
-that the harness admitted it under an approved goal rather than that you approved
-it. The conversation's event log records an admission as its own event, so work
-nobody was asked about is never readable as work somebody approved.
+what actually admitted it — the approved goal, or the class you exempted, never
+that you approved the item. The conversation's event log records an admission as
+its own event, so work nobody was asked about is never readable as work somebody
+approved.
 
 **Approving writes nothing but the approval.** The prose, the title, what the
 document supports, and its status are untouched, so an approval can never become

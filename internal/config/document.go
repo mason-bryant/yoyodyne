@@ -79,9 +79,14 @@ type approvalsDocument struct {
 	// policy rather than the only behavior. A layer that does not supply it
 	// leaves the harness default in place, which is the per-item gate such a
 	// file was written for.
-	WorkItems   *domain.ApprovalMode `yaml:"work_items"`
-	Integration *domain.ApprovalMode `yaml:"integration"`
-	Publishing  *domain.ApprovalMode `yaml:"publishing"`
+	WorkItems *domain.ApprovalMode `yaml:"work_items"`
+	// WorkItemExemptions replaces an inherited list wholesale rather than adding
+	// to it, the way the check list does and unlike the Slack avatars: the list is
+	// one statement about how far a project's gate comes down, and half of one
+	// operator's answer joined to half of another's is a policy nobody decided.
+	WorkItemExemptions *[]domain.WorkItemClass `yaml:"work_item_exemptions"`
+	Integration        *domain.ApprovalMode    `yaml:"integration"`
+	Publishing         *domain.ApprovalMode    `yaml:"publishing"`
 }
 
 // slackDocument deliberately has no operators key. A file that still carries one
