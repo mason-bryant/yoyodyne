@@ -150,8 +150,9 @@ product:
 	fmt.Fprintf(&builder, `  # The product manager reads product intent from the specifications under this
   # directory and from nowhere else in the repository. Beside them, labeled as a
   # description of what is built rather than as intent, it is given the README,
-  # the configuration guide, and the help the commands print -- not this file,
-  # not the source, not the design document. It must stay inside the repository.
+  # the operator-facing documents under docs/ that it links to, and the help the
+  # commands print -- not this file, not the source, not the design document. It
+  # must stay inside the repository.
   specifications: %s
   # The architect's durable architectural invariants: one Markdown file per
   # constraint, named by its id. The harness delivers the ones relevant to a

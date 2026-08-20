@@ -1,0 +1,456 @@
+# Operations and recovery
+
+*For an operator recovering from a stall, a crash, or a provider refusal. Part
+of [yoyo's documentation](../README.md#further-reading).*
+
+## Pausing everything, and resuming it
+
+`yoyo pause` stops everything the harness would spend on a provider, and
+`yoyo resume` starts it again:
+
+```sh
+./bin/yoyo pause      # to conserve tokens, or for any other reason of your own
+./bin/yoyo resume     # everything parked on it carries on
+```
+
+It is one durable switch over the whole machine rather than one item. Every
+provider-call boundary reads it before it spends — a developer attempt, each
+reissue of one after a refusal, a reviewer invocation, a conversation turn — so
+a pause placed while a developer is working reaches that run at its next
+attempt rather than only reaching the runs that had not started. The flag lives
+at the state root rather than under a product, because what makes you pause is
+an account or an afternoon rather than any one project.
+
+A run that meets the pause parks exactly as one waiting out a
+[usage limit](#waiting-out-a-provider-usage-limit) does, on the same machinery
+with you as its reset instead of a clock: the park is durable before any waiting
+starts, and the item stays claimed with its branch, worktree, and developer
+session all preserved. A process already parked acts on `yoyo resume` within
+seconds and carries on unaided; one that exited while the pause stood is
+continued by `yoyo run <beads-id>`. Nothing is cancelled, so nothing has to be
+reconciled afterwards — which is the whole difference between this and killing
+processes, where the run lands cancelled with its item still claimed and the
+work has to be developed again from scratch. A conversation turn is refused
+rather than parked, because there is a person in front of it: saying the same
+thing again once the pause is lifted takes the turn that was refused. `yoyo
+review` is refused for the same reason, having no run to park.
+
+The honest boundary is that a provider call already in flight is not
+interrupted. The flag is read before a call, so a generation that is already
+streaming finishes and is charged for, and the pause takes effect at the next
+boundary — which for a developer attempt can be minutes away. Stopping a
+generation mid-flight would throw away what it had already cost and leave the
+run needing the same work again, which is the cost that makes a kill the wrong
+verb in the first place.
+
+Time a run spends held is accounted under its own kind, separately from what a
+provider's refusals are allowed to spend: a hold never eats a run's
+`execution.usage_limit_max_pause` budget, and nothing bounds it, because the
+thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
+`/status` lead with a PAUSED banner naming when the pause was placed, because a
+system somebody paused and forgot looks exactly like a system that died.
+
+This is the broad switch, and there is a narrow one beside it. `yoyo pause` stops
+everything including the runs already under way, which park keeping everything
+they have; the conversation's [`/hold`](conversation.md#steering-the-work-from-the-conversation)
+stops only the harness choosing new work and lets what is running finish. Reach
+for the first when the reason is your account or your afternoon, and the second
+when the reason is the queue.
+
+## Waiting out a provider usage limit
+
+When the provider reports that a usage limit is exhausted, the run pauses
+instead of failing — for either provider invocation a run makes, the developer
+attempt or the review. The reset time the provider named is recorded in durable
+run state before any waiting starts, and nothing is cleaned up: the worktree,
+the branch, the claimed Beads item, and the developer session are all kept, so
+the reissued attempt continues the same change rather than starting it over. A
+review that was declined is simply asked for again once the limit resets,
+without redeveloping the change or spending a repair attempt.
+
+The recorded reset is an upper bound on the wait rather than a gate on it. A run
+sleeps `execution.usage_limit_unknown_reset_pause` — thirty minutes by default —
+or the time left to the deadline, whichever is shorter, and then reissues the
+attempt: the reissue *is* the probe. A reset time is a claim about the provider,
+and claims go stale in both directions — capacity gets bought mid-wait, and a
+rolling window can free room before the quoted edge — so a probe into a window
+that is still closed costs one refused request and re-parks on whatever the
+provider now reports. A run sleeps probes inside this process until it has spent
+`execution.usage_limit_in_process_pause` on this run, and then exits with the
+run still in flight instead of sleeping the next one; running `yoyo run` on the
+same item continues it, with the whole bound available to that process again.
+That bound counts every probe this process has already slept rather than each
+one on its own, because a bound applied per probe would stop bounding how long
+the process stays open at all.
+`execution.usage_limit_max_pause` bounds what one run may spend waiting in total
+rather than each wait separately, so a provider that keeps refusing cannot walk
+a run past it, and what it records is what was actually waited rather than the
+span to a deadline the run never reached. A limit reported without a reset time
+polls under exactly the same rule, because it is unknown rather than
+unwaitable: the monthly overage allowance reports this way while the ordinary
+rolling window keeps resetting on its usual schedule, so it waits the same
+interval and asks again. Unifying the two was the point — one polling
+discipline, whether or not a deadline was quoted. A limit the harness genuinely
+cannot wait for — a reset that is not in the future, or one that no longer fits
+the run's remaining budget — stops the run and records a blocker rather than
+guessing a wait. An exhausted limit is not the only thing a run waits out:
+[an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
+same machinery on a much shorter clock.
+
+## Waiting out an overloaded provider
+
+A provider whose own servers are transiently overloaded refuses the same way an
+exhausted limit does — the work is never judged, only declined — so it takes the
+same machinery rather than a second one of its own. The difference is the clock.
+An overload quotes no reset time and lifts in seconds rather than hours, so a run
+waits `execution.server_overload_pause` — ninety seconds by default — and
+reissues, instead of parking for the half-hour probe interval a usage limit uses.
+Everything else is shared: the deadline is durable before the wait starts, the
+wait spends the same `execution.usage_limit_max_pause` budget, and an overload
+that never lifts therefore walks into that maximum and stops with a blocker
+rather than reissuing forever. [Releasing a wait early](#releasing-a-wait-early)
+below covers one of these exactly as it covers a usage-limit wait.
+
+Ordinary transient throttling still never reaches any of this: the provider CLI
+retries that on its own, and the harness does not duplicate the wait. What it
+does act on is the terminal result the CLI ends on once its own retries are
+spent — an `api_error` reporting HTTP 529 — because at that point the provider
+has stopped retrying and somebody has to. An overload is the only terminal
+`api_error` that becomes a wait;
+[the rest of them](#when-the-provider-dies-mid-run) become a relaunch.
+
+## Releasing a wait early
+
+Everything above honors the recorded deadline as an upper bound, and a restart
+mid-wait serves the rest of it rather than asking again, which is what keeps a
+crash from retrying straight back into a window that is still closed.
+`yoyo resume` with a work item named is the one thing that overrides that
+deadline, and it overrides nothing else:
+
+```sh
+./bin/yoyo resume yoyodyne-ifd.53
+```
+
+(With no work item named it is the other half of
+[`yoyo pause`](#pausing-everything-and-resuming-it) and lifts the operator's
+hold over everything instead. Both are the same act — stop waiting and carry on
+— and what the argument says is whose decision is being withdrawn: the
+provider's refusal of one run, or your own hold over all of them.)
+
+It exists because the deadline is a claim about the provider and you are the one
+who can change what it is a claim about. Raise the account's capacity while runs
+are asleep against an 18:50 reset and that reset has stopped being true; a run
+waiting out a limit its owner has already lifted is autonomy working against
+them. The command moves the next probe to now and does nothing else. In
+particular it does not stop anything: killing a waiting run leaves a cancelled
+run whose item stays claimed, and recovering from that means reconciling,
+reopening the item, and developing it again from scratch. Released, the run
+keeps its claim, its branch, its worktree, and its developer session, and a
+process already asleep on the wait acts on the release within seconds. If the
+provider still refuses, the run records the new report and waits again, so the
+worst a premature release costs is one refused request. It is refused when the
+named item has no run in flight, or has one that is not waiting on the provider
+at all, because a release recorded against a run that is not waiting would be
+acted on by whatever pause that run took next.
+
+## When the provider dies mid-run
+
+Not every way a provider ends an invocation is a refusal it names in advance.
+Sometimes it simply dies: the API answers with an error its own retry ladder did
+not outlast, or the connection carrying the response goes away before the reply
+is finished — `API Error: Connection closed mid-response`, which quotes no HTTP
+status because nothing answered. Nothing was judged and nothing is wrong with the
+change; the run just stops existing. That used to fail the run outright and leave
+a person to reconcile it, reopen the item, and launch it again — twice in the
+week before this was built.
+
+The run relaunches itself now. The dead invocation is reissued in the same
+worktree and the same developer session, up to
+`execution.transient_relaunches_before_blocking` times — two by default — and
+then the run carries on as if nothing had happened. Continuing the session is
+what makes this cheap rather than merely automatic: an attempt that died
+mid-response had already made part of the change, and the relaunch picks that up
+instead of asking a developer to derive it a second time. There is no wait
+attached, because there is no condition to wait out: a dropped connection is
+already gone, and the provider's own retries are spent before the harness sees
+the terminal.
+
+One budget covers both provider invocations a run makes. A review the provider
+killed is asked for again on the same count, without redeveloping the change,
+because what the budget bounds is how much of the provider's weather one run
+absorbs rather than how often either role is asked. Nothing is handed back to the
+developer either way, so a relaunch spends no repair attempt — the change is not
+what went wrong.
+
+Relaunches are counted in durable run state before each one begins, so a process
+that dies mid-relaunch resumes against the budget it had rather than a fresh one.
+A run that spends the budget stops and records a blocker on the work item naming
+the provider's own last message. That is the only case a person sees. Setting the
+bound to `0` restores the earlier behavior: the first provider death ends the run.
+
+What else that blocker says depends on what the run was carrying, because a
+provider dies during a repair attempt as readily as during the first one. A run
+nothing had judged yet says so plainly — no check failed, no reviewer asked for
+repair, nothing here says the change is wrong — which is what tells you to pick
+the work up rather than replan it. A run killed inside its repair loop names the
+repair attempts it had spent, the check that was failing, and the findings it was
+answering, and says the provider is what stopped it rather than that verdict:
+the evidence is unresolved rather than dismissed.
+
+A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
+4xx status — a malformed request, a key that is not permitted, a limit the
+provider is enforcing — would earn the identical answer on the next attempt, so
+it fails the run exactly as it always did. So does a 529, which is
+[a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
+any terminal the API did not report at all.
+
+## When a provider stalls or runs out of budget
+
+A provider invocation is bounded by two separate questions, because one deadline
+cannot answer both. Whether it is stuck is answered by activity: the harness
+already stamps every event it parses, so a gap of five minutes with no event at
+all means nothing is happening, and the invocation is stopped as stalled.
+Whether it is worth continuing is answered by a total budget of four hours,
+because an agent can stay live and unproductive — retrying, looping, thrashing —
+and no liveness signal will ever catch that. An agent that emitted a tool result
+seconds ago is demonstrably working, so elapsed time alone never stops it. Both
+stops leave the run in flight rather than failing it, exactly as a usage-limit
+pause does: the worktree, the branch, the claimed Beads item, and the developer
+session are all preserved, and running `yoyo run` on the same item continues
+that run — the developer resumes its session, and a stopped review is simply
+asked for again without redeveloping the change or spending a repair attempt.
+The reason is reported as what it was, a stall or an exhausted budget, and
+neither is ever described as the agent having reported a failure, because it
+reported nothing. Only a stop with nothing to continue from — no session, no
+worktree — ends the run, and it still says the harness stopped the provider.
+Short Git commands keep their flat deadlines, which is the right bound for a
+command whose duration is known.
+
+## Recovering interrupted runs
+
+A process that is killed mid-run leaves durable state describing where it got
+to. `yoyo reconcile` settles what it left behind, and then converges your local
+state onto what the forge has:
+
+```sh
+./bin/yoyo reconcile --json
+```
+
+It compares the recorded run against the repository and Beads, and then finishes
+the run's own remaining step or hands the item to you. It also builds the triage
+docket on the way past, so a run it stopped and a publication the forge quietly
+never merged reach the development manager rather than waiting for somebody to
+go looking. A run whose work reached
+the target branch is closed and its worktree and branch removed, including when
+the run died before it could record the promotion. A run stopped anywhere
+earlier becomes a durable blocker naming the branch and worktree that were
+preserved. A run that finished with its merge queued at the forge is settled
+here too: reconcile asks the forge and, once the merge has landed, finishes the
+publication — merge commit recorded, remote branch deleted, and your local
+target branch caught up onto the merge commit the forge made. Settling a merge
+is complete on its own that way rather than leaning on the sweep below, so a
+checkout is never left behind by which command somebody happened to run.
+
+Two settle-path outcomes leave a publication outstanding for a person, each
+with its own line on the work item. A merge the forge **dropped** is the
+first: something the base branch required went unmet, the harness does not
+merge past a requirement, and nothing about that publication is confirmed. A
+merge that **landed but could not be confirmed** is the second: the forge
+performed it, and the steps that confirm it — verifying the remote carries the
+promotion, recording the merge commit, retiring the consumed branch — failed,
+so the record honestly says the publication is not settled even though the
+merge is real. In both, your local branch is deliberately left where it is
+rather than moved on a publication nothing verified. A catch-up the settle
+could not make is neither of these: it is ordinary, the run settles, and the
+convergence sweep below finishes it on the next pass. Other reports on this page
+still reach you when the evidence demands it — a preserved blocker, a diverged
+remote, a catch-up that could not finish — but none of them asks reconcile to
+exercise judgement: it reports and leaves the decision where it belongs.
+Reconcile never invokes a provider either: a lost process handle is not a
+reason to start a second developer for an item.
+
+Once the runs are settled it converges local state, which is the rest of the
+post-merge hygiene you would otherwise do by hand. Every target branch the
+harness knows about is caught up onto its remote counterpart — the same
+fast-forward the settle paths make, for a target left behind by something no run
+is going to finish, or a catch-up that was held at the time — and every settled
+run's leftover branch whose work the target already carries is deleted. Both
+refuse on evidence rather than on a record: a remote that has diverged from
+your local branch is reported for you to decide rather than reconciled, a
+branch carrying work nothing promoted is
+kept, and a branch a checkout still holds is left alone. Catching a branch up
+takes that branch's promotion lease, so it never races a run promoting into it.
+
+Repeating the whole thing is safe — a settled run is no longer outstanding, a
+branch already level with the remote has nothing to catch up to, and cleanup
+over artifacts that are already gone does nothing. A run another process still holds
+is left to that process, and a run `yoyo run` can continue on its own — one
+inside its repair loop, one paused for a provider usage limit, one whose
+provider the harness stopped on time, one paused for an [unresolved
+directive](conversation.md#directives-and-the-work-they-pause), or one parked on an
+[operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
+for that command to pick up.
+
+## What became of the runs, and why one failed
+
+`yoyo status` reads back what the runs themselves recorded — newest first, the
+work item, the status and the phase the run reached, what it cost, why the item
+was chosen, and the reasons its record kept:
+
+```sh
+./bin/yoyo status                    # the twenty most recent runs
+./bin/yoyo status --failed           # only the ones that did not succeed
+./bin/yoyo status yoyodyne-ifd.90    # one item's runs
+./bin/yoyo status --limit 0 --json   # every recorded run, for a script
+```
+
+The listing below is `./bin/yoyo status --failed --limit 2`:
+
+```text
+runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+  selected by the operator: the operator ran this item by name from the command line
+  reason: developer reported failure: api_error: API Error: 529 Overloaded.
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  selected: no reason recorded
+  reason: verification failed: make test exited with 2
+  failing check: make test exited 2
+7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
+each reason is shown as one line; --json carries what the record holds in full
+```
+
+The `selected` line is on every run, including — in those words — a run that
+recorded no reason at all. That is deliberate: work the harness chose and cannot
+account for is exactly what you most need to see, and a line left out would read
+as a reason you had already looked at rather than as one nobody wrote.
+
+Each of the other reasons is printed under the run it belongs to and named for
+what it is, because the records keep them apart deliberately. Only `reason` says
+the work itself failed. An `outstanding publication`, an `outstanding cleanup`, a
+`failing check`, and a `completion recorded late` are recorded around the work,
+and a run can carry one of them with its change already promoted. The last of
+those is the class whose work-item note is itself unreliable — recording that
+note is part of what was failing — so the run record this verb reads is its
+authoritative home.
+
+`outstanding` in the brackets marks a finished run that still owes somebody a
+step, and the `outstanding:` line under it says which — cleanup that is not
+recorded as finished, or a merge the forge queued and nothing has settled — so
+the marker is never left for you to go and interpret out of the run's JSON.
+[`yoyo reconcile`](#recovering-interrupted-runs) is what settles either. The
+marker is said only of finished runs: one still in flight owes its own remaining
+steps by definition.
+
+Naming an item reports one more thing under its runs, because it is the one
+question no run can answer: what that item has cost and what it has been given.
+Every budget a run spends starts again at zero in the next run, so an item handed
+back, run again, and handed back again is an item nothing bounds. The per-item
+counters are what bound it:
+
+```text
+triage of yoyodyne-ifd.90: triage has spent 2 passes on it
+  review rounds: 3 spent across every run of this item, under the cap of 4
+  repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
+  merge re-arms: 1 of 2 permitted
+  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
+```
+
+Every figure here is a budget, and the first line counts what has been spent
+rather than how many times somebody looked. Only three of the development
+manager's six decisions spend anything — a repair grant, a re-run, a merge
+re-arm — so an item it escalated or told to wait shows `triage has spent nothing
+on it` and zeroes across the rest. **That is not evidence nobody looked.** The
+decision itself is recorded on the work item, which is where to read whether
+stopped work has been decided and what was decided; an escalated item is blocked
+there as well.
+
+A **round** is a reviewer verdict a developer attempt produced, counted across
+every run of the item. A re-review no developer attempt produced is not one, so a
+promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
+and gets a fresh verdict on the replayed change is not charged for it. Rounds are
+what runs actually spend, and every run records them.
+
+The lines under it are the budget for what triage can decide about work that did
+not land — another go at the change, a re-run, a re-armed merge — and they move
+when [the development manager decides one](conversation.md#deciding-what-becomes-of-stopped-work).
+Each is recorded before the action it counts takes effect, so a crash cannot
+double-grant, and each is refused once its budget is spent. A grant and a re-run
+are each once per item and are also refused by the rounds — the grant truncated
+to what the cap still has room for, the re-run refused outright once none
+remain — and a merge re-arm is bounded on its own because it buys no round at
+all. The rounds alone would bound neither of the first two on an item whose runs
+keep stopping before a reviewer ever sees them. The
+numbers are the `triage` keys and the integration retries in [the configuration
+guide](configuration.md#what-one-work-item-has-been-given). An item triage
+has spent more than one pass on says so in the first line, which is the fact
+worth looking for: work that keeps coming back is usually work where something
+other than the change is wrong.
+
+The listing folds each reason onto one line and bounds it at 160 bytes with
+an ellipsis, never cutting mid-character, so a reviewer's whole verdict does not become the listing;
+`--json` carries what the record holds in full, along with the same figures.
+
+Cost comes from the same recorded evidence [`yoyo cost`](reporting.md#what-the-work-cost)
+prices from, so a run still going reports what it has spent so far, and one
+whose event log no longer survives reads as `cost unknown` rather than as free.
+
+Reading a run decides nothing about it, so this holds nothing and settles
+nothing: a run another process is executing is listed exactly as a finished one
+is. Reporting a failure is not itself a failure either — the exit status says
+whether the records could be read, so a script can read this without guarding
+against the answer.
+
+## Following a run, a conversation, or a branch review
+
+`bin/yoyo-status` follows the normalized event stream a run, a conversation, or
+a [branch review](work.md#reviewing-what-a-branch-adds-up-to) records, which is the
+closest thing there is to watching an agent work. It is a different thing from
+the `yoyo status` verb above despite the name: that reads back what the records
+hold now — a run still in flight as readily as one that finished — and this
+follows a run's events as they arrive. It is a shell script that
+lives in a checkout of this repository rather than part of the `yoyo` binary, so
+`go install` and a release download do not carry it; clone the repository, or
+copy the single file out of it, if you want it:
+
+```sh
+./bin/yoyo-status          # follow the newest of any kind
+./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
+./bin/yoyo-status -c       # report token spend and cost for each, and in total
+```
+
+A conversation and a branch review each record the same kind of event stream a
+run does, and "is this alive" is the same question asked of all three, so every
+mode covers all of them and the default never asks which kind you meant.
+Selecting one by id or by a unique id prefix works the same for each. `--runs`,
+`--chats`, and `--reviews` narrow it to one kind when that is what you want.
+
+A run's listed status is the status it recorded. A conversation has no such
+record of its own, so its status is derived and says what an operator is
+actually asking: `answering` while an agent is working on a turn, `waiting`
+between turns, and `ended` once the role has moved on to a later conversation. A
+branch review has no state file either — its verdicts share one log rather than
+having a record each — so its status comes from its own events: `reviewing`
+while the verdict is being made, and `reviewed` once it has been.
+
+Every mode leads with a PAUSED banner while
+[activity is paused](#pausing-everything-and-resuming-it), naming when the pause
+was placed: a quiet machine somebody paused and a quiet machine that died look
+identical, and this is the one place an operator is already looking.
+
+It resolves the state directory the same way the harness does, so it keeps
+working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
+of its options. It shapes its output with `jq` when `jq` is installed, and cost
+reporting requires it. What it prices is one row per run, per conversation, and
+per branch review, and a mixed total says how much of it was each — a
+conversation turn and a branch review are each a provider invocation like any
+other, and leaving either out understated every total it belonged in.
+[`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
+item the runs were for, which is what answers "what did that piece of work
+cost"; it leaves conversations and branch reviews out, deliberately and for the
+same reason — a conversation that discussed five items, and a review of a branch
+that carried a dozen, cannot be attributed to any one of them.
+
+[`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
+against a fabricated state directory holding runs, conversations, and branch
+reviews, without a provider or a repository and without reading your real
+state.
