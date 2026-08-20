@@ -2,11 +2,16 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // TestDoctorPutsEveryRemedyUnderWhatItRemedies is the whole of why this reads
@@ -123,6 +128,73 @@ func TestDoctorJSONCarriesTheSameFindingsWithRemedies(t *testing.T) {
 			t.Fatalf("finding %q is %s in JSON with no remedy to act on", finding.Check, finding.Status)
 		}
 	}
+}
+
+// TestDoctorReadsThisExecutablesOwnVersionOutput ties the drift check to the
+// bytes it actually compares. `yoyo version` prints the bare version, and the
+// check is exact string equality against that, so nothing but this holds the two
+// together: a banner, a prefix, or a second line there would put a permanent
+// spurious warning on every healthy installation, which is how a check stops
+// being read at all.
+func TestDoctorReadsThisExecutablesOwnVersionOutput(t *testing.T) {
+	t.Parallel()
+
+	const version = "v1.2.3"
+	var printed, discarded bytes.Buffer
+	if code := Run([]string{"version"}, &printed, &discarded, version); code != 0 {
+		t.Fatalf("Run(version) code = %d, stderr = %q", code, discarded.String())
+	}
+
+	matched := diagnoseAgainstVersionOutput(t, printed.String(), version)
+	if matched.Status != doctor.StatusOK {
+		t.Fatalf("binary = %s against this executable's own `version` output %q: %s",
+			matched.Status, printed.String(), matched.Summary)
+	}
+	if matched.Remedy != "" {
+		t.Fatalf("a healthy build carries the remedy %q", matched.Remedy)
+	}
+
+	// And the comparison is live rather than trivially passing: the same output
+	// against a different running build is the drift it exists to catch.
+	drifted := diagnoseAgainstVersionOutput(t, printed.String(), "v9.9.9")
+	if drifted.Status != doctor.StatusWarning || drifted.Remedy == "" {
+		t.Fatalf("binary = %#v against a build that really did drift", drifted)
+	}
+}
+
+// diagnoseAgainstVersionOutput runs one diagnosis whose `yoyo version` answers
+// with exactly the given bytes, and returns what it made of the build.
+func diagnoseAgainstVersionOutput(t *testing.T, stdout, running string) doctor.Finding {
+	t.Helper()
+	report := doctor.Diagnose(context.Background(), doctor.Environment{
+		Runner:      versionRunner{stdout: stdout},
+		LookPath:    func(program string) (string, error) { return "/usr/local/bin/" + program, nil },
+		Getenv:      func(string) string { return "" },
+		UserHomeDir: func() (string, error) { return t.TempDir(), nil },
+		GOOS:        runtime.GOOS,
+		Version:     running,
+		// The configuration is deliberately unavailable: this is about the build
+		// on PATH, which is read before anything a project configures.
+		Load: func() (config.Resolved, error) { return config.Resolved{}, errors.New("no configuration here") },
+	})
+	for _, finding := range report.Findings {
+		if finding.Check == "binary" {
+			return finding
+		}
+	}
+	t.Fatalf("the diagnosis never compared the build on PATH: %#v", report.Findings)
+	return doctor.Finding{}
+}
+
+// versionRunner answers `yoyo version` with what this executable's own version
+// command printed, and everything else with a bare success.
+type versionRunner struct{ stdout string }
+
+func (r versionRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
+	if len(command.Args) == 1 && command.Args[0] == "version" {
+		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.stdout}, nil
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
 }
 
 func TestDoctorRejectsPositionalArguments(t *testing.T) {

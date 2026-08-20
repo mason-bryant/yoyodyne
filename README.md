@@ -2195,8 +2195,9 @@ It looks at the `yoyo` on your `PATH` and whether it is the build you think it
 is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
 checks and whether this machine can run the programs they name, each provider
-your agents name and whether it is authenticated, forge access when the project
-publishes — and, when reporting is on, this project's own Slack secrets and the
+your agents name — installed always, and authenticated where the harness has an
+adapter that can ask, which today is Claude Code — forge access when the project
+publishes, and, when reporting is on, this project's own Slack secrets and the
 sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
@@ -2208,10 +2209,15 @@ yoyodyne cannot run work: 2 problems
 
 problem  tracker                bd is installed but could not read this project's issues
                                 fix: bd init
+ok       checks                 4 checks configured, and every command resolves here
 problem  provider:claude-code   claude is installed but not authenticated, so every agent invocation would be refused
                                 fix: claude auth login
-ok       checks                 4 checks configured, and every command resolves here
 ```
+
+Findings come in the order you would fix them in — the tools, then the project,
+then what the project turns on — rather than worst first, because the first
+problem in the list is usually why the ones under it are problems too. `--quiet`
+drops the healthy ones and changes nothing else.
 
 A healthy installation says so in as many words, because an empty list of
 complaints and a check that never ran read the same. It exits 1 when something

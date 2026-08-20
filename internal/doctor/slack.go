@@ -178,13 +178,19 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 		return []Finding{finding}
 	}
 
+	// A sink that is running and said nothing about itself still has to be
+	// stoppable, or this is a state that can be described and not routed out of:
+	// a second sink is refused while the first holds the lease, so "start one"
+	// is not a remedy on its own, and with no recorded pid the process has to be
+	// found through the lease it is holding.
+	unidentified := d.restartUnidentifiedCommand(store, productID)
 	if presenceErr != nil {
 		return []Finding{{
 			Check:   "slack-sink",
 			Status:  StatusWarning,
 			Summary: "a sink is running for this product and its record could not be read",
 			Detail:  presenceErr.Error(),
-			Remedy:  start,
+			Remedy:  unidentified,
 		}}
 	}
 	if !recorded {
@@ -193,7 +199,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 			Status:  StatusWarning,
 			Summary: "a sink is running for this product and recorded nothing about itself",
 			Detail:  "it predates the record, so which build it is and whose secrets it holds are both unknown",
-			Remedy:  start,
+			Remedy:  unidentified,
 		}}
 	}
 
@@ -206,6 +212,7 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 	}}
 	findings = append(findings, d.checkSinkBuild(presence, installed, productID))
 	findings = append(findings, d.checkSinkSecrets(presence, productID))
+	findings = append(findings, d.checkSinkChannel(presence, resolved, productID)...)
 	if configured := strings.TrimSpace(presence.Config); configured != "" && configured != resolved.Path {
 		findings = append(findings, Finding{
 			Check:   "slack-sink-config",
@@ -216,6 +223,34 @@ func (d *diagnosis) checkSlackSink(resolved config.Resolved, productID domain.Pr
 		})
 	}
 	return findings
+}
+
+// checkSinkChannel is the config-edit case, and it is first-class rather than
+// exotic: `slack.channel` is one line in a file anybody can edit on a working
+// install, and editing it changes nothing about the process that is already
+// running. The sink keeps posting into the channel it connected to, the channel
+// the project now names stays empty, and neither of those is an error anything
+// reports. Comparing the two is the only way that surfaces at all -- the
+// configuration path does not, because an edit in place leaves the path exactly
+// as it was.
+func (d *diagnosis) checkSinkChannel(presence slack.Presence, resolved config.Resolved, productID domain.ProductID) []Finding {
+	running := strings.TrimSpace(presence.Channel)
+	configured := strings.TrimSpace(resolved.Config.Slack.Channel)
+	if running == "" || configured == "" || running == configured {
+		return nil
+	}
+	return []Finding{{
+		Check:   "slack-sink-channel",
+		Status:  StatusProblem,
+		Summary: fmt.Sprintf("the running sink posts into %s, and this project now reports into %s", running, configured),
+		// Both halves of the damage are worth saying. The threads already open in
+		// the old channel are not moved by a restart -- a thread timestamp only
+		// means anything inside the channel it was posted in -- so the operator
+		// is deciding about two channels rather than about one process.
+		Detail: fmt.Sprintf("%s has been silent since the channel was changed in %s, and the threads already open in %s stay where they are",
+			configured, resolved.Path, running),
+		Remedy: d.restartCommand(presence, productID),
+	}}
 }
 
 // checkSinkBuild is the check the stale-sink outage turns on. A sink is a
@@ -335,10 +370,12 @@ func (d *diagnosis) namespacedEnvFile(productID domain.ProductID) (string, bool)
 	return path, true
 }
 
+// namespacedEnvFilePath is one path and deliberately not two. Honoring
+// XDG_CONFIG_HOME as well would mean an operator who followed the documented
+// path exactly is told their secrets are not stored, by a check reading a
+// directory the document never named -- and the failure would only appear on
+// the machines that set it. The documented path is the checked path.
 func (d *diagnosis) namespacedEnvFilePath(productID domain.ProductID) (string, error) {
-	if configured := strings.TrimSpace(d.getenv("XDG_CONFIG_HOME")); configured != "" {
-		return filepath.Join(configured, "yoyo", string(productID), "slack.env"), nil
-	}
 	home, err := d.homeDir()
 	if err != nil {
 		return "", err
@@ -386,6 +423,17 @@ func (d *diagnosis) restartCommand(presence slack.Presence, productID domain.Pro
 		return start
 	}
 	return fmt.Sprintf("kill %d && %s", presence.PID, start)
+}
+
+// restartUnidentifiedCommand restarts a sink that did not say which process it
+// is. The lease is how it is found: the holder has that file open, so the
+// operating system can name it even though the sink could not. It is still this
+// product's sink and nobody else's, because the lease is per product -- which is
+// what a `pkill` over a command line would not be on a machine running more than
+// one harness.
+func (d *diagnosis) restartUnidentifiedCommand(store *slack.Store, productID domain.ProductID) string {
+	lease := shellQuote(filepath.Join(store.Root(), ".sink.lock"))
+	return fmt.Sprintf("kill $(lsof -t %s) && %s", lease, d.startCommand(productID))
 }
 
 // keychainAddCommand writes the store commands for whichever items are missing.

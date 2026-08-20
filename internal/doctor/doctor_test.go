@@ -146,6 +146,14 @@ func brokenInstallations() map[string]func(*world) {
 			w.configuration = reportingConfig
 			w.sinkRunning(slack.Presence{Version: currentVersion, PID: 4242, Channel: "C1"})
 		},
+		"slack.channel was edited on a working install": func(w *world) {
+			w.configuration = strings.Replace(reportingConfig, "channel: C1", "channel: C2", 1)
+			w.sinkRunning(slack.Presence{Version: currentVersion, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1"})
+		},
+		"a sink is running and recorded nothing about itself": func(w *world) {
+			w.configuration = reportingConfig
+			w.sinkLeaseHeld()
+		},
 		"the running sink read another configuration": func(w *world) {
 			w.configuration = reportingConfig
 			w.sinkRunning(slack.Presence{
@@ -252,6 +260,66 @@ func TestSecretsAreCheckedForThisInstanceRatherThanForAnyToken(t *testing.T) {
 	// history. The keychain prompts for it instead, which `-w` with no value is.
 	if strings.Contains(finding.Remedy, "xoxb") || strings.Contains(finding.Remedy, "-w '") {
 		t.Fatalf("slack-secrets remedy = %q, want the value prompted for rather than written", finding.Remedy)
+	}
+}
+
+// TestAChannelEditedOnAWorkingInstallIsNotCalledHealthy covers the config-edit
+// case the completeness bar makes first-class. `slack.channel` is one line
+// anybody can change on an install that is working, and changing it does nothing
+// to the process already running: the sink keeps posting where it connected, the
+// channel the project now names stays empty, and no error is raised by either.
+func TestAChannelEditedOnAWorkingInstallIsNotCalledHealthy(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = strings.Replace(reportingConfig, "channel: C1", "channel: C2", 1)
+	world.sinkRunning(slack.Presence{Version: currentVersion, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1"})
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-sink-channel")
+	if !found || finding.Status != StatusProblem {
+		t.Fatalf("slack-sink-channel = %#v, want a problem: %s", finding, render(report))
+	}
+	if !strings.Contains(finding.Summary, "C1") || !strings.Contains(finding.Summary, "C2") {
+		t.Fatalf("slack-sink-channel summary = %q, want both channels named", finding.Summary)
+	}
+	if !strings.Contains(finding.Remedy, "kill 4242") || !strings.Contains(finding.Remedy, "yoyo slack") {
+		t.Fatalf("slack-sink-channel remedy = %q, want the running sink restarted", finding.Remedy)
+	}
+	// A sink whose channel still agrees is the control: this must not fire on
+	// every reporting project, or it is a finding operators learn to skip past.
+	agreeing := newWorld(t)
+	agreeing.configuration = reportingConfig
+	agreeing.sinkRunning(slack.Presence{Version: currentVersion, PID: 4242, SecretNamespace: "yoyodyne", Channel: "C1"})
+	if _, found := findingFor(agreeing.diagnose(), "slack-sink-channel"); found {
+		t.Fatal("slack-sink-channel fired on a sink posting into the configured channel")
+	}
+}
+
+// TestASinkThatSaidNothingCanStillBeStopped keeps a live sink out of the one
+// state doctor cannot route out of. A second sink is refused while the first
+// holds the lease, so "start one" is not a remedy on its own, and a sink that
+// recorded no pid has to be found through the lease it is holding.
+func TestASinkThatSaidNothingCanStillBeStopped(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.configuration = reportingConfig
+	world.sinkLeaseHeld()
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "slack-sink")
+	if !found || finding.Status != StatusWarning {
+		t.Fatalf("slack-sink = %#v, want a running sink that said nothing: %s", finding, render(report))
+	}
+	if !strings.HasPrefix(finding.Remedy, "kill ") {
+		t.Fatalf("slack-sink remedy = %q, want the sink holding the lease stopped first", finding.Remedy)
+	}
+	if !strings.Contains(finding.Remedy, ".sink.lock") {
+		t.Fatalf("slack-sink remedy = %q, want this product's own lease named", finding.Remedy)
+	}
+	if !strings.Contains(finding.Remedy, "yoyo slack") {
+		t.Fatalf("slack-sink remedy = %q, want a sink started again afterwards", finding.Remedy)
 	}
 }
 
@@ -528,6 +596,13 @@ func (w *world) sinkRecorded(presence slack.Presence) {
 func (w *world) sinkRunning(presence slack.Presence) {
 	w.t.Helper()
 	w.sinkRecorded(presence)
+	w.sinkLeaseHeld()
+}
+
+// sinkLeaseHeld holds the lease and records nothing, which is a sink from before
+// there was a record to leave -- alive, and saying nothing about itself.
+func (w *world) sinkLeaseHeld() {
+	w.t.Helper()
 	store, err := slack.NewStore(w.stateRoot, "yoyodyne")
 	if err != nil {
 		w.t.Fatalf("NewStore() error = %v", err)
@@ -571,10 +646,6 @@ func (w *world) getenv(name string) string {
 	switch name {
 	case "YOYODYNE_STATE_HOME":
 		return w.stateRoot
-	case "XDG_CONFIG_HOME":
-		// Somewhere with nothing in it, so the keychain is the store under test
-		// rather than a file left behind by another case.
-		return filepath.Join(w.project, "config")
 	default:
 		return ""
 	}

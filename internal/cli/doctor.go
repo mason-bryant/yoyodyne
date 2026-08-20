@@ -73,10 +73,15 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 	return 0
 }
 
-// renderDiagnosis prints the findings, worst first within the order they were
-// made, with each remedy on a line of its own directly under what it remedies.
-// Keeping them adjacent is the whole point: a list of problems followed by a
-// list of commands is a list an operator has to match up by hand.
+// renderDiagnosis prints the findings in the order they were made, with each
+// remedy on a line of its own directly under what it remedies. Keeping them
+// adjacent is the whole point: a list of problems followed by a list of commands
+// is a list an operator has to match up by hand.
+//
+// Severity deliberately does not reorder them. The order they were made is the
+// order somebody would fix them in -- the tools, then the project, then what the
+// project turns on -- and the first problem in that list is usually why the ones
+// under it are problems too.
 func renderDiagnosis(stdout io.Writer, report doctor.Report, quiet bool) {
 	fmt.Fprintln(stdout, verdict(report))
 	if report.Config != "" {
@@ -126,7 +131,8 @@ Usage: yoyo doctor [options]
 Check whether this installation can actually run work, and say what would fix it
 where it cannot. It reads the build on PATH against the one running, Git, the
 tracker, the configuration, the deterministic checks, each provider the agents
-name, forge access where the project publishes, and -- where reporting is on --
+name -- installed always, and authenticated where the harness has an adapter that
+can ask -- forge access where the project publishes, and, where reporting is on,
 this project's own Slack secrets and the sink that is supposed to be using them.
 
 Every finding that is not healthy carries a remedy, and a remedy is a command:

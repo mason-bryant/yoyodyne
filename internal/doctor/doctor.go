@@ -309,6 +309,12 @@ func (d *diagnosis) checkInstallation(ctx context.Context) (string, []Finding) {
 		Detail:  path,
 	}}
 
+	// `yoyo version` prints the bare version and nothing else, which is pinned by
+	// a test in the cli package because two other things compare those bytes
+	// literally. This depends on the same property, and internal/cli holds a test
+	// that runs that command's real output through this comparison: a warning on
+	// every healthy installation is the kind of finding operators learn to skip
+	// past, which would cost this command more than the drift it catches.
 	result, err := d.run(ctx, "", path, "version")
 	if err != nil || result.Status != execution.ProcessSucceeded {
 		findings = append(findings, Finding{
@@ -320,7 +326,7 @@ func (d *diagnosis) checkInstallation(ctx context.Context) (string, []Finding) {
 		})
 		return d.env.Version, findings
 	}
-	installed := strings.TrimSpace(result.Stdout)
+	installed := firstLine(result.Stdout)
 	if installed != d.env.Version {
 		// This is not pedantry about a version string. Every other answer in this
 		// report is about the machine as the running build understands it, while
@@ -557,12 +563,15 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend) Fin
 	if named != domain.BackendClaudeCode {
 		// Only Claude Code has an adapter that can be asked about its own
 		// authentication. Saying so is better than reporting an unauthenticated
-		// provider as healthy because nothing here could tell.
+		// provider as healthy because nothing here could tell -- and the remedy
+		// is the login rather than a second diagnostic, because what an operator
+		// can act on here is making the answer yes, not asking again.
 		return Finding{
 			Check:   check,
 			Status:  StatusWarning,
-			Summary: fmt.Sprintf("%s is installed, and this build cannot check whether it is authenticated", binary),
-			Remedy:  fmt.Sprintf("%s --version", binary),
+			Summary: fmt.Sprintf("%s is installed, and this build has no adapter that can ask whether it is authenticated", binary),
+			Detail:  "an unauthenticated provider would refuse every agent invocation, so this is worth confirming by hand",
+			Remedy:  providerLoginCommand(named),
 		}
 	}
 	availability, err := (claudecode.Backend{Runner: d.env.Runner}).CheckAvailability(ctx)
