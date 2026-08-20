@@ -1657,11 +1657,25 @@ func (s *Session) isDecided(proposalID string) bool {
 // recorded for each of them is identical either way. A proposal the tracker
 // would not create is added to refused, which is what keeps it from being put
 // again on the next round.
+//
+// Each decision is saved as it is made, for the reason Decide saves: what the
+// conversation's state carries is the proposals still awaiting a decision, and
+// Approve and Reject only mark the record decided in memory. An operator who
+// approves the proposal a resumed conversation put to them and then leaves
+// without taking a turn would otherwise exit with the state file still listing
+// it, and the next process would put an item that already exists back on the
+// table to be created a second time. That the proposals became durable at all is
+// what made this reachable — nothing needed saving here while they lived only in
+// the process that proposed them.
 func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions []decision, refused map[string]bool) error {
 	for _, made := range decisions {
 		outcome, err := s.decideOne(ctx, made)
+		saved := s.record()
 		if err != nil {
-			return err
+			return errors.Join(err, saved)
+		}
+		if saved != nil {
+			return saved
 		}
 		switch {
 		case !outcome.Approved:

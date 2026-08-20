@@ -14,6 +14,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 // diagnosisProposal is a proposal for work that only reads and reports, claiming
@@ -273,6 +274,142 @@ func TestUnderAutomaticAnExemptedClassIsAdmittedOnTheApprovedGoal(t *testing.T) 
 	}
 	if notes := tracker.created[0].Notes; !strings.Contains(notes, "a goal the operator approved") {
 		t.Fatalf("notes = %q, want the approved goal named as what admitted it", notes)
+	}
+}
+
+// The direct "create" is the other door, and it narrows by exactly as much. An
+// exempt class under `work_items: automatic` is held to the approved goal that
+// admits every other direct creation there, because a carve-out that opened one
+// door wider than the other would be work arriving through whichever asked less
+// — which is the failure the exemption was written not to be.
+func TestAnExemptCreateUnderAutomaticIsHeldToTheApprovedGoal(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting the survey.",
+			`{"action":"create","title":"Count the items carrying an attribution","description":"Read and report.","goal":"`+recordedGoal+`","class":"diagnosis","reason":"the operator asked how many"}`)},
+		{SessionID: "session-1", FinalText: "It was refused."},
+	}})
+	options.Tracker = tracker
+	options.Goals = unapprovedGoals(recordedGoal)
+	options.Admission = Admission{
+		WorkItems: domain.ApprovalAutomatic,
+		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
+	}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "how many items carry an attribution?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the creation refused under an unapproved goal", reply.Actions)
+	}
+	if !strings.Contains(reply.Actions[0].Failure, "records no approval") {
+		t.Fatalf("failure = %q, want the unapproved goal named", reply.Actions[0].Failure)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v, want nothing admitted under a goal nobody approved", tracker.created)
+	}
+}
+
+// And where the approved goal is what admitted an exempt creation, the item says
+// so. Under `work_items: automatic` the class stood nothing down, so a note
+// claiming the carve-out would record an authority nobody exercised.
+func TestAnExemptCreateUnderAutomaticRecordsTheApprovedGoalThatAdmittedIt(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting the survey.",
+			`{"action":"create","title":"Count the items carrying an attribution","description":"Read and report.","goal":"`+recordedGoal+`","class":"diagnosis","reason":"the operator asked how many"}`)},
+		{SessionID: "session-1", FinalText: "It is in the queue."},
+	}})
+	options.Tracker = tracker
+	options.Goals = recordedGoals(recordedGoal)
+	options.Admission = Admission{
+		WorkItems: domain.ApprovalAutomatic,
+		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
+	}
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "how many items carry an attribution?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("created = %#v, want the creation admitted on the approved goal", tracker.created)
+	}
+	if notes := tracker.created[0].Notes; strings.Contains(notes, "work_item_exemptions") {
+		t.Fatalf("notes = %q, want no claim of a carve-out that admitted nothing", notes)
+	}
+}
+
+// An exemption moves who is asked and never whether the work is for anything, and
+// a goal the repository has nothing to check against is not a goal it records. A
+// claim nobody could check is exactly what the operator is asked about, whatever
+// class the work claims — admitting on it would be admitting on nothing.
+func TestAnExemptionDoesNotAdmitWorkWhoseGoalNobodyCouldCheck(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: proposalReply("This only looks.", diagnosisProposal("Count the items carrying an attribution")),
+	}}})
+	options.Tracker = tracker
+	// A repository with no goals in force: the attribution is neither confirmed
+	// nor denied, which is the state configuration.md calls uncheckable.
+	options.Goals = goal.Set{}
+	options.Admission = Admission{
+		WorkItems: domain.ApprovalHuman,
+		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
+	}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "how many items carry an attribution?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Admitted) != 0 || len(tracker.created) != 0 {
+		t.Fatalf("admitted = %#v and created = %#v, want nothing admitted on an unanswerable claim", reply.Admitted, tracker.created)
+	}
+	if len(reply.Proposals) != 1 {
+		t.Fatalf("proposals = %#v, want the work put to the operator instead", reply.Proposals)
+	}
+	if asking := reply.Proposals[0].Asking; asking == "" {
+		t.Fatalf("asking = %q, want the card to say why they are being asked", asking)
+	}
+}
+
+// The same on the direct door: a creation of exempt-class work is refused where
+// the goal it names is one nothing could check.
+func TestAnExemptCreateIsRefusedWhereTheGoalsCannotBeChecked(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting the survey.",
+			`{"action":"create","title":"Count the items carrying an attribution","description":"Read and report.","goal":"`+recordedGoal+`","class":"diagnosis","reason":"the operator asked how many"}`)},
+		{SessionID: "session-1", FinalText: "It was refused."},
+	}})
+	options.Tracker = tracker
+	options.Goals = goal.Set{}
+	options.Admission = Admission{
+		WorkItems: domain.ApprovalHuman,
+		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
+	}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "how many items carry an attribution?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the creation refused", reply.Actions)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v, want nothing admitted on an unanswerable claim", tracker.created)
 	}
 }
 

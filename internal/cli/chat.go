@@ -201,9 +201,15 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	if jsonOutput {
 		evidence := reply.Evidence
 		return writeJSON(stdout, stderr, chatOutput{
-			Evidence:           &evidence,
-			Reply:              reply.Text,
-			Proposals:          reply.Proposals,
+			Evidence:  &evidence,
+			Reply:     reply.Text,
+			Proposals: reply.Proposals,
+			// Everything still awaiting a decision, exactly as the text output
+			// below lists it. A script reads this document where a person reads
+			// that, so a turn that reported only what it had just proposed would
+			// hide the earlier proposals from the reader least able to go
+			// looking for them.
+			Pending:            session.Proposals(),
 			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,

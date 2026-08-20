@@ -145,6 +145,20 @@ func namedWorkItemClasses() string {
 // who wants the other behavior has to be able to find the thing to change.
 const perItemApprovalReason = `this project asks about every work item before it is admitted, as approvals.work_items is "human"`
 
+// exemptsFromPerItemApproval reports the class the work claims standing the
+// per-item question down. It is the one predicate both doors into the queue ask,
+// rather than each deciding for itself: the product manager reaches the proposal
+// path and the direct "create", and a carve-out that opened one of them wider
+// than the other would be work arriving through whichever asked less — which is
+// the failure the exemption was written not to be.
+//
+// It is false wherever there is no per-item question to stand down. A project
+// that has moved that approval up to its goals admits on the approved goal, and
+// an exemption reaching past that would admit work under a goal nobody approved.
+func (s *Session) exemptsFromPerItemApproval(class domain.WorkItemClass) bool {
+	return s.options.Admission.Exempts(class) && s.options.Admission.PerItemApproval()
+}
+
 // admissionGap says why work serving the named goal is not admitted to the
 // queue without the operator being asked, and is empty exactly when it is. It
 // is the one place that decision is made, so the proposal path and the tracker
@@ -165,10 +179,18 @@ const perItemApprovalReason = `this project asks about every work item before it
 // exemption that reached past the per-item question would be the carve-out
 // admitting work under a goal nobody approved, which is the one thing this
 // file's header says the arrangement rests on not happening.
+//
+// The goal an exemption does ask for is a resolved one, and nothing weaker. A
+// goal the repository has nothing to check against is neither confirmed nor
+// denied, so admitting on it would be admitting on a claim nobody could check —
+// which is what the operator is asked about instead, whatever class the work
+// claims. Every state that is not a resolved goal says why in its own words, so
+// the refusal is the attribution's own reason rather than a sentence about the
+// exemption.
 func (s *Session) admissionGap(named string, class domain.WorkItemClass) string {
 	attribution := s.options.Goals.Attribute(named)
-	if s.options.Admission.Exempts(class) && s.options.Admission.PerItemApproval() {
-		if attribution.State == goal.StateUnresolved {
+	if s.exemptsFromPerItemApproval(class) {
+		if !attribution.Resolved() {
 			return attribution.Reason
 		}
 		return ""
@@ -184,8 +206,15 @@ func (s *Session) admissionGap(named string, class domain.WorkItemClass) string 
 // written onto the item for the reason the goal is: the queue has to say why
 // each thing in it was allowed in, and an item that reached it on a carve-out
 // nobody can see afterwards is the one an operator cannot audit.
+//
+// A class that changed nothing includes one claimed where there is no per-item
+// question for it to have stood down. The exemption is not what let that item in
+// — the approved goal is, exactly as for every other item in a project that
+// admits on its goals — and a note claiming the carve-out would name an
+// authority that was not the one exercised. It is the same predicate the gate
+// itself asks, so what an item records can never disagree with what admitted it.
 func (s *Session) classNote(class domain.WorkItemClass) string {
-	if !s.options.Admission.Exempts(class) {
+	if !s.exemptsFromPerItemApproval(class) {
 		return ""
 	}
 	return "\n\n" + exemptClassNote(class)

@@ -649,20 +649,30 @@ func (s *Session) admissionRefusal(action TrackerAction) string {
 	if action.Action != actionCreate || s.authority().ParentRequired {
 		return ""
 	}
-	// Work of a class the operator carved out is admitted whatever the setting
-	// says, which is the whole of what the carve-out is. The goal it names has
-	// already been resolved against the recorded goals before this runs, so an
-	// exemption never lets through work that is for nothing.
-	if s.options.Admission.Exempts(action.Class) {
-		return ""
-	}
-	if s.options.Admission.PerItemApproval() {
-		return perItemApprovalReason + ", so admitting work directly is refused; propose it instead and the operator decides"
-	}
 	// The goal is judged from the action itself rather than taken from the
 	// caller, so a creation that somehow carried none is refused by a gate that
 	// had something to judge rather than waved through by one that had nothing.
 	attribution := s.options.Goals.Attribute(action.Goal)
+	// Work of a class the operator carved out stands the per-item question down,
+	// which is the whole of what the carve-out is — and the whole of what it
+	// touches. The same predicate answers here as on the proposal path, so the
+	// two doors the product manager reaches cannot come to differ: an exemption
+	// narrows nothing where there is no per-item question, and the approved-goal
+	// gate below then judges an exempt creation like any other.
+	//
+	// What it still asks for is a resolved goal. An unresolved one is refused
+	// before this runs; a goal the repository has nothing to check against is
+	// not, and admitting on it would be admitting on a claim nobody could check.
+	if s.exemptsFromPerItemApproval(action.Class) {
+		if attribution.Resolved() {
+			return ""
+		}
+		return fmt.Sprintf("it names the goal %q, and %s; %s-class work is admitted without asking only where it serves a goal the repository records, so raise it as a concern or propose it and let them decide",
+			singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason, action.Class)
+	}
+	if s.options.Admission.PerItemApproval() {
+		return perItemApprovalReason + ", so admitting work directly is refused; propose it instead and the operator decides"
+	}
 	gap := attribution.ApprovalGap()
 	if gap == "" {
 		return ""

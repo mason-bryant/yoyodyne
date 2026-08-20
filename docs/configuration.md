@@ -632,10 +632,15 @@ doing something else is an item whose description says what it does, under a goa
 that had to resolve, in a queue you read.
 
 **An exemption moves who is asked and never whether the work is for anything.**
-Work admitted under one still names a goal the repository records, and one that
-resolves to nothing is refused exactly as any other work naming it is. What an
-exemption does not require is that the goal be *approved*, which is what makes it
-usable by the projects that keep the human gate.
+Work admitted under one names a goal that *resolves* — one an in-force goals
+document actually states — and nothing weaker. Anything short of that is put to
+you exactly as it would be for work claiming no class: a goal the documents do
+not state is `unresolved` and refused, and a goal nothing could check against is
+`uncheckable` and asked about, because an attribution nobody could check is not
+one you agreed to. What an exemption does not require is that the goal be
+*approved*, which is what makes it usable by the projects that keep the human
+gate. The [attribution table](#goals-and-the-work-attributed-to-them) is the same
+table for exempted work as for everything else.
 
 **What it narrows is the per-item gate and only that.** Under `work_items:
 human` the exemption stands the per-item question down, and the goal has only to

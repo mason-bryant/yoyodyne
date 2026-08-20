@@ -425,6 +425,47 @@ func TestAnApprovalTheTrackerRefusesIsReportedAsCreatingNothing(t *testing.T) {
 	}
 }
 
+// An ordinary turn reports everything still awaiting a decision, not only what
+// it just proposed. The text output has always listed the whole of it, because a
+// decision arrives as its own message and what the operator has to be able to
+// name is everything waiting on them; a JSON document that reported less would
+// hide the earlier proposals from the reader least able to go looking — a script,
+// which has nothing but this document.
+func TestAnOrdinaryMessageReportsEverythingStillAwaitingADecision(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &recordingChatTracker{}
+	var stdout, stderr bytes.Buffer
+	first := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: proposalReply}}
+	proposed := openTestChatSession(t, root, first, tracker)
+	if code := runChatMessage(context.Background(), proposed, domain.RoleProductManager, "what about usage limits?", false, &stdout, &stderr); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	// A second turn that proposes nothing at all. The proposal from the first is
+	// still waiting, and this document is the only place a script would see it.
+	quiet := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: "Nothing further for now."}}
+	resumed := openTestChatSession(t, root, quiet, tracker)
+	var out, aside bytes.Buffer
+	if code := runChatMessage(context.Background(), resumed, domain.RoleProductManager, "anything else?", true, &out, &aside); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
+	}
+	var decoded chatOutput
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, out.String())
+	}
+	if len(decoded.Proposals) != 0 {
+		t.Fatalf("proposals = %#v, want nothing proposed by this turn", decoded.Proposals)
+	}
+	if len(decoded.Pending) != 1 || decoded.Pending[0].ID != "1.1" {
+		t.Fatalf("pending = %#v, want the earlier proposal a script would decide next", decoded.Pending)
+	}
+	if decoded.Pending[0].Proposal.Title != "Pause on a usage limit" {
+		t.Fatalf("pending = %#v, want what the operator was shown", decoded.Pending[0].Proposal)
+	}
+}
+
 // A command that recorded something and then failed to report it recorded it
 // all the same, so what it printed is written before the failure rather than
 // lost behind it — and the failure is still the command's, which is what the

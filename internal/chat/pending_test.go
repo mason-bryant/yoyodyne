@@ -405,4 +405,57 @@ func TestAConversationOpensByPuttingWhatIsStillWaitingToTheOperator(t *testing.T
 	if len(resumed.Proposals()) != 0 {
 		t.Fatalf("%d proposal(s) still pending after being approved", len(resumed.Proposals()))
 	}
+	// And it is decided in the record, not only in this process. The operator
+	// approved what a resumed conversation put to them and then left without
+	// taking a turn, so nothing but the decision itself was ever going to save
+	// this — and a third process reading a proposal that already exists would
+	// put it back on the table and create the item a second time.
+	third := openTestSession(t, perItemApprovalOptions(t, root, tracker, "nothing to say"))
+	if pending := third.Proposals(); len(pending) != 0 {
+		t.Fatalf("pending = %#v, want an approved proposal to stay approved across processes", pending)
+	}
+	outcomes, decided, err := third.Decide(context.Background(), "approve 1.1")
+	if !decided || err == nil {
+		t.Fatalf("Decide() = %v, %t, %v; want the decided proposal refused out loud", outcomes, decided, err)
+	}
+	if len(tracker.created) != 1 {
+		t.Fatalf("created = %#v, want the approval spent exactly once", tracker.created)
+	}
+}
+
+// A decline made at the prompt is durable the same way, and it is the half that
+// nothing else was going to save. An approval writes an event after it marks the
+// proposal decided, so the record catches up on its way past; Reject writes its
+// event first and marks the proposal decided after, so only a save taken
+// afterwards takes it off the table. Without one, an operator who declined what a
+// resumed conversation put to them and then left would be asked again by the next
+// process — and the work they turned down would be waiting for them.
+func TestADeclineMadeAtThePromptIsDurableWithoutATurnBeingTaken(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	proposed := openTestSession(t, perItemApprovalOptions(t, root, tracker, oneProposalTurn))
+	if _, err := proposed.Send(context.Background(), "what should we do about usage limits?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	resumed := openTestSession(t, perItemApprovalOptions(t, root, tracker, "nothing to say"))
+	var out strings.Builder
+	// The proposal is put up front, turned down, and the input ends: no turn is
+	// taken, so nothing after this decision was ever going to write the record.
+	if err := resumed.Converse(context.Background(), testConsole(strings.NewReader("no\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v, want a declined proposal to create nothing", tracker.created)
+	}
+	if len(resumed.Proposals()) != 0 {
+		t.Fatalf("%d proposal(s) still pending after being declined", len(resumed.Proposals()))
+	}
+
+	third := openTestSession(t, perItemApprovalOptions(t, root, tracker, "nothing to say"))
+	if pending := third.Proposals(); len(pending) != 0 {
+		t.Fatalf("pending = %#v, want a declined proposal to stay declined across processes", pending)
+	}
 }
