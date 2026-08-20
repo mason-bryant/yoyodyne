@@ -217,6 +217,61 @@ func TestSettlingAnUnclaimedStoppageIsRefused(t *testing.T) {
 	}
 }
 
+// A claim taken for a run that never existed is given back, so the stoppage
+// keeps the re-run its decision authorized. What makes that sound is that the
+// re-run really is unspent: the record carries no run, and the same decision is
+// claimable again afterwards.
+func TestAClaimWhoseRunNeverExistedIsGivenBack(t *testing.T) {
+	t.Parallel()
+
+	store := newRerunStore(t)
+	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if err := store.Withdraw(context.Background(), rerunDocketKey); err != nil {
+		t.Fatalf("Withdraw() error = %v", err)
+	}
+	if recorded, found, err := store.Find(rerunDocketKey); err != nil || found {
+		t.Fatalf("Find() = %#v, found = %t, error = %v, want the claim given back", recorded, found, err)
+	}
+	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+		t.Fatalf("Claim() after the withdrawal error = %v, want the same decision claimable", err)
+	}
+}
+
+// A claim with a run on it was acted on, whatever became of that run, so it is
+// not one to give back: withdrawing it would be the second re-run of one
+// stoppage that this record exists to refuse.
+func TestAClaimThatStartedARunIsNotGivenBack(t *testing.T) {
+	t.Parallel()
+
+	store := newRerunStore(t)
+	if _, err := store.Claim(context.Background(), claimedRerun()); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if _, err := store.Settle(context.Background(), rerunDocketKey, "run-fedcba9876543210fedcba9876543210",
+		PreservedArtifacts{Disposition: PreservedKept, Branch: "yoyodyne/task/abc"}); err != nil {
+		t.Fatalf("Settle() error = %v", err)
+	}
+	err := store.Withdraw(context.Background(), rerunDocketKey)
+	if err == nil || !strings.Contains(err.Error(), "run-fedcba9876543210fedcba9876543210") {
+		t.Fatalf("Withdraw() error = %v, want a refusal naming the run the claim started", err)
+	}
+	if _, found, _ := store.Find(rerunDocketKey); !found {
+		t.Fatal("the claim of a stoppage that was run again was removed")
+	}
+}
+
+// Withdrawing a claim nothing took leaves exactly what it would have left, so a
+// caller giving one back need not first find out whether it exists.
+func TestWithdrawingAnUnclaimedStoppageIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	if err := newRerunStore(t).Withdraw(context.Background(), rerunDocketKey); err != nil {
+		t.Fatalf("Withdraw() error = %v, want an absence to be what it already is", err)
+	}
+}
+
 // The contract each record is held to. Every one of these describes a re-run
 // somebody could misread as accounted for.
 func TestARerunIsValidatedAgainstWhatItHasToSay(t *testing.T) {

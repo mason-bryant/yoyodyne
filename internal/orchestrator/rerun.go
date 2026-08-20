@@ -30,6 +30,24 @@ package orchestrator
 // run means a process that dies between the two has spent a re-run nobody took
 // rather than taken one nobody recorded.
 //
+// # Why a full harness is a state rather than a refusal
+//
+// Developer capacity is the one condition here that says nothing at all about
+// the decision: two developers happening to be busy at this second is not an
+// argument against running the item again, and it stops being true on its own.
+// So a carry-out that meets it neither fails nor spends anything — it reports
+// what it is waiting on and leaves the authorization standing, to be carried out
+// by asking again once a slot frees. The item is meanwhile in the open pool the
+// scheduler pulls from, which is the other way the same work reaches a
+// developer; the two agree because nothing was claimed here.
+//
+// That is also the one thing withdrawn past the claim. The slot can go to
+// another run between the reading and the reservation, and a claim taken for a
+// run the reservation then refused is a re-run spent on a run that provably
+// never existed — the reservation refuses before the run's record, the item's
+// claim and any agent. So it is given back, and the carry-out reports the same
+// waiting state it would have reported a moment earlier.
+//
 // # Why the hold applies
 //
 // A re-run is the harness choosing work. The development manager naming the item
@@ -120,6 +138,10 @@ type RerunRecords interface {
 	Claim(ctx context.Context, rerun runstate.Rerun) (runstate.Rerun, error)
 	Settle(ctx context.Context, docketKey, runID string, preserved runstate.PreservedArtifacts) (runstate.Rerun, error)
 	Claimed(workItemID string) ([]runstate.Rerun, error)
+	// Withdraw gives the claim back, for the one case where the run it was taken
+	// for provably never existed: a reservation refused for developer capacity.
+	// See runstate.RerunStore.Withdraw for why that case and no other.
+	Withdraw(ctx context.Context, docketKey string) error
 }
 
 // RerunItems is the work item the stoppage is about. It is read and never
@@ -166,6 +188,11 @@ type Rerunner struct {
 	// asks the same question past the claim, so a re-run that could not ask it
 	// here would go on spending the stoppage's one re-run to find out.
 	Items RerunItems
+	// Capacity is execution.max_concurrent_developers as this carry-out read it,
+	// which is the same number the reservation enforces. Required: a carry-out
+	// that could not tell a full harness from a free one would go on spending the
+	// stoppage's re-run to find out there was no slot for it.
+	Capacity int
 	// Preserved retires the stopped run's branch and worktree once the fresh run
 	// integrates. Optional; see PreservedRetirer.
 	Preserved PreservedRetirer
@@ -196,7 +223,12 @@ type RerunResult struct {
 	// IntakeHeld is the operator's hold, when one is what stopped this. Nothing
 	// was claimed and the stoppage keeps its re-run.
 	IntakeHeld *runstate.IntakeHold `json:"intake_held,omitempty"`
-	Outcome    Outcome              `json:"outcome"`
+	// CapacityFull is every developer slot being occupied, when that is what this
+	// is waiting on. It is not a refusal and not a failure: nothing was claimed,
+	// the decision stands until it is carried out or the development manager
+	// withdraws it, and asking again once a slot frees carries out the same one.
+	CapacityFull *runstate.CapacityError `json:"capacity_full,omitempty"`
+	Outcome      Outcome                 `json:"outcome"`
 	// Preserved is what the stopped run left behind and what became of it.
 	Preserved runstate.PreservedArtifacts `json:"preserved"`
 	// RecordProblem names a durable record this action could not update after the
@@ -279,6 +311,19 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 		result.IntakeHeld = &hold
 		return result, nil
 	}
+	// Capacity is read last of everything asked before the claim, because it is
+	// the condition most likely to have changed while the rest were being asked
+	// and the one a moment's wait can settle. A full harness is reported rather
+	// than refused: the decision stands, and nothing was claimed to carry it out
+	// with.
+	full, free, err := r.slotIsFree()
+	if err != nil {
+		return result, err
+	}
+	if !free {
+		result.CapacityFull = &full
+		return result, nil
+	}
 
 	claimed, err := r.Reruns.Claim(ctx, runstate.Rerun{
 		DocketKey:  entry.Key,
@@ -299,6 +344,13 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 		Reason: result.Reason,
 		At:     r.now(),
 	})
+	// The last free slot going to another run between the reading above and the
+	// reservation is the same waiting state read a moment too late, and it has to
+	// cost the same: the claim taken for a run that never existed is given back,
+	// and there is nothing to settle behind it.
+	if capacity, refused := capacityRefused(outcome, runErr); refused {
+		return r.withdraw(ctx, entry, capacity, result), nil
+	}
 	result.Outcome = outcome
 	result.Preserved = r.settle(ctx, entry, prior, outcome, &result)
 	return result, runErr
@@ -430,6 +482,64 @@ func (r Rerunner) noRunInFlight(workItemID string) error {
 		}
 	}
 	return nil
+}
+
+// slotIsFree reports a developer slot being free for the fresh run, and reports
+// a full harness as a state rather than as a refusal.
+//
+// Capacity is the one condition here that is about the moment rather than about
+// the work: two developers being busy at this second says nothing about whether
+// the item should be run again, and it stops being true without anybody doing
+// anything. A carry-out that failed on it would make a recorded decision of the
+// development manager's weaker than an ordinary scheduler poll, which simply
+// comes back — so this waits instead, and waiting costs the stoppage nothing
+// because it is asked before the claim.
+//
+// The same number the reservation enforces is counted the same way, from the
+// runs in flight, so what is read here and what would refuse the fresh run are
+// one fact rather than two.
+func (r Rerunner) slotIsFree() (runstate.CapacityError, bool, error) {
+	incomplete, err := r.Runs.Incomplete()
+	if err != nil {
+		return runstate.CapacityError{}, false, fmt.Errorf("read what is already in flight: %w", err)
+	}
+	if len(incomplete) >= r.Capacity {
+		return runstate.CapacityError{Limit: r.Capacity, Active: len(incomplete)}, false, nil
+	}
+	return runstate.CapacityError{}, true, nil
+}
+
+// capacityRefused reports the fresh run having been refused a developer slot and
+// nothing else having happened. Both halves are the condition: the reservation
+// is what refuses for capacity and it is taken before the run's record exists,
+// before the work item is claimed and before any agent runs, so a refusal that
+// nonetheless names a run is not this and is left to be settled like any other
+// run that ended badly.
+func capacityRefused(outcome Outcome, err error) (runstate.CapacityError, bool) {
+	var capacity runstate.CapacityError
+	if !errors.As(err, &capacity) || outcome.RunID != "" {
+		return runstate.CapacityError{}, false
+	}
+	return capacity, true
+}
+
+// withdraw gives back the claim taken for a fresh run a full harness refused to
+// reserve, and reports the same waiting state a carry-out that met capacity
+// before the claim reports.
+//
+// A claim that could not be given back is said out loud rather than swallowed:
+// the stoppage has then paid for a refusal that was meant to be free, and the
+// decision it authorized needs a person to look at it, because nothing else here
+// will notice.
+func (r Rerunner) withdraw(ctx context.Context, entry triage.Entry, capacity runstate.CapacityError, result RerunResult) RerunResult {
+	result.Started = false
+	result.CapacityFull = &capacity
+	if err := r.Reruns.Withdraw(ctx, entry.Key); err != nil {
+		result.note(fmt.Sprintf(
+			"the last free developer slot went to another run before this re-run of %s was reserved, and the claim taken for it could not be given back, so the stoppage has spent its re-run on a run that never started: %v",
+			entry.WorkItemID, err))
+	}
+	return result
 }
 
 // settle records what became of the stopped run's artifacts and reports the
@@ -618,6 +728,9 @@ func (r Rerunner) validate() error {
 	if r.Start == nil {
 		problems = append(problems, errors.New("a re-run requires a way to start a run"))
 	}
+	if r.Capacity < 1 {
+		problems = append(problems, fmt.Errorf("developer capacity is %d, which starts nothing; a re-run reads the same limit the reservation enforces, so that a full harness costs the stoppage nothing", r.Capacity))
+	}
 	return errors.Join(problems...)
 }
 
@@ -638,6 +751,16 @@ func (result RerunResult) Render() string {
 			fmt.Fprintln(&rendered, reason)
 		}
 		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; release the hold and ask again\n", result.PriorRunID)
+		return rendered.String()
+	}
+	if result.CapacityFull != nil {
+		fmt.Fprintf(&rendered, "WAITING FOR A DEVELOPER: nothing was started for %s, %d active run(s), limit %d\n",
+			result.WorkItemID, result.CapacityFull.Active, result.CapacityFull.Limit)
+		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run and the decision still stands, so asking again once a slot frees carries out the same one\n", result.PriorRunID)
+		fmt.Fprintf(&rendered, "%s is meanwhile open work the scheduler pulls from, so it can reach a developer without this being asked again\n", result.WorkItemID)
+		if result.RecordProblem != "" {
+			fmt.Fprintln(&rendered, result.RecordProblem)
+		}
 		return rendered.String()
 	}
 	fmt.Fprintf(&rendered, "re-ran %s on the stopped work of run %s\n", result.WorkItemID, result.PriorRunID)

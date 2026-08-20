@@ -100,9 +100,14 @@ func (l *Lease) Release() error {
 	return nil
 }
 
+// CapacityError is every developer slot being occupied. It carries the two
+// numbers rather than only refusing, because a caller that waits for a slot
+// rather than failing has to be able to say what it is waiting on — and the
+// fields are named in its JSON for the same reason: a state an operator reads is
+// a state a machine reads too.
 type CapacityError struct {
-	Limit  int
-	Active int
+	Limit  int `json:"limit"`
+	Active int `json:"active"`
 }
 
 func (e CapacityError) Error() string {

@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The verb carries out a decision somebody else recorded, so what it needs is
@@ -60,15 +63,50 @@ func TestTriageRerunReportsARefusalAsJSON(t *testing.T) {
 	}
 }
 
-// The usage says the two things that are easy to get wrong about this verb: the
-// stoppage is re-run once, and the intake hold applies because the harness is
-// the one choosing the work.
+// A carry-out that met a full harness is not a failure: nothing was claimed and
+// the decision still stands, so what it reports is the state it is waiting on.
+// A claim that could not be given back is the exception, because the stoppage
+// has then paid for a wait that was meant to cost it nothing.
+func TestTriageRerunReportsAFullHarnessAsAWaitRatherThanAFailure(t *testing.T) {
+	t.Parallel()
+
+	waiting := orchestrator.RerunResult{
+		WorkItemID:   "yoyodyne-ifd.68.13",
+		PriorRunID:   "run-0123456789abcdef0123456789abcdef",
+		CapacityFull: &runstate.CapacityError{Limit: 2, Active: 2},
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := reportRerun(&stdout, &stderr, false, waiting, nil); code != 0 {
+		t.Fatalf("reportRerun() code = %d, want a wait reported as something other than a failure; stderr = %q", code, stderr.String())
+	}
+	for _, want := range []string{"limit 2", "keeps its one re-run", "decision still stands"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("stdout = %q, is missing %q", stdout.String(), want)
+		}
+	}
+
+	waiting.RecordProblem = "the claim taken for it could not be given back"
+	stdout.Reset()
+	stderr.Reset()
+	if code := reportRerun(&stdout, &stderr, false, waiting, nil); code != 1 {
+		t.Fatalf("reportRerun() code = %d, want a spent claim reported as a failure", code)
+	}
+	if !strings.Contains(stdout.String(), "could not be given back") {
+		t.Fatalf("stdout = %q, want the spent claim named", stdout.String())
+	}
+}
+
+// The usage says the three things that are easy to get wrong about this verb:
+// the stoppage is re-run once, the intake hold applies because the harness is
+// the one choosing the work, and a harness with no free developer is a wait
+// rather than a refusal.
 func TestTriageUsageSaysWhatBoundsARerun(t *testing.T) {
 	t.Parallel()
 
 	var usage bytes.Buffer
 	printTriageUsage(&usage)
-	for _, want := range []string{"once", "intake hold", "--reason"} {
+	for _, want := range []string{"once", "intake hold", "--reason", "no free developer"} {
 		if !strings.Contains(usage.String(), want) {
 			t.Fatalf("usage does not mention %q:\n%s", want, usage.String())
 		}

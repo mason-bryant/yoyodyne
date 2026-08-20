@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,10 @@ type rerunHarness struct {
 	retirement gitworktree.Retirement
 	retired    int
 	retireErr  error
+	// capacity is execution.max_concurrent_developers as the action reads it. It
+	// leaves room for a run of something else, so only the sequences that are
+	// about a full harness fill it.
+	capacity int
 }
 
 func (h *rerunHarness) RetirePreserved(context.Context, gitworktree.Worktree, string) (gitworktree.Retirement, error) {
@@ -77,6 +82,7 @@ func (h *rerunHarness) rerunner() Rerunner {
 		Reruns:    h.reruns,
 		Decisions: h.runs.Triage(),
 		Items:     h,
+		Capacity:  h.capacity,
 		Preserved: h,
 		Clock:     docketClock{},
 		Start: func(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
@@ -118,7 +124,8 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 		// The item has been put back to something a run may start on, which is
 		// what a development manager deciding a re-run of a blocked item does
 		// before the harness is asked to carry the decision out.
-		item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "open"},
+		item:     beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "open"},
+		capacity: 2,
 		outcome: Outcome{
 			RunID:      "run-fedcba9876543210fedcba9876543210",
 			WorkItemID: state.WorkItemID,
@@ -371,6 +378,156 @@ func TestARerunIsRefusedWhileTheItemHasARunInFlight(t *testing.T) {
 	if len(harness.started) != 0 {
 		t.Fatalf("started = %#v, want nothing started", harness.started)
 	}
+}
+
+// A carry-out that meets a full harness waits: the development manager's
+// decision does not expire because two developers happened to be busy at that
+// second, so nothing is claimed, nothing fails, and the state is said plainly.
+// Asking again once a slot frees carries out the same decision.
+func TestARerunMeetingAFullHarnessWaitsAndSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.capacity = 1
+	occupying := runningState("run-11112222333344445555666677778888", "yoyodyne-ifd.other")
+	if err := harness.runs.Create(occupying); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v, want a full harness waited on rather than failed", err)
+	}
+	if result.Started || len(harness.started) != 0 {
+		t.Fatalf("started = %t / %#v, want nothing started with no slot free", result.Started, harness.started)
+	}
+	if result.CapacityFull == nil || result.CapacityFull.Active != 1 || result.CapacityFull.Limit != 1 {
+		t.Fatalf("capacity = %#v, want what it is waiting on", result.CapacityFull)
+	}
+	if _, claimed, err := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the stoppage to keep its re-run", claimed, err)
+	}
+	// What it is waiting on is what a reader has to be told, and that the
+	// authorization is still there to be carried out.
+	rendered := result.Render()
+	for _, want := range []string{"limit 1", "keeps its one re-run", "decision still stands"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, is missing %q", rendered, want)
+		}
+	}
+
+	// The other run ends, and the same decision is carried out: the full harness
+	// delayed the re-run rather than consuming it.
+	occupying.Status = runstate.StatusSucceeded
+	completed := docketedNow
+	occupying.CompletedAt = &completed
+	if err := harness.runs.Save(occupying); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() once a slot freed error = %v", err)
+	}
+	if len(harness.started) != 1 {
+		t.Fatalf("started = %#v, want the re-run to have run once a developer was free", harness.started)
+	}
+}
+
+// The slot can go to another run between the reading and the reservation, and a
+// claim taken for a run the reservation then refused is a re-run spent on a run
+// that never existed. It is given back, and the carry-out reports the waiting
+// state it would have reported a moment earlier.
+func TestAReservationRefusedForCapacityGivesTheClaimBack(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = fmt.Errorf("reserve developer run: %w", runstate.CapacityError{Limit: 2, Active: 2})
+	harness.outcome = Outcome{}
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v, want the raced slot waited on rather than failed", err)
+	}
+	if result.Started {
+		t.Fatalf("result = %#v, want a run that was never reserved reported as not started", result)
+	}
+	if result.CapacityFull == nil || result.CapacityFull.Active != 2 {
+		t.Fatalf("capacity = %#v, want what the reservation refused it for", result.CapacityFull)
+	}
+	if result.RecordProblem != "" {
+		t.Fatalf("record problem = %q, want the claim given back cleanly", result.RecordProblem)
+	}
+	if _, claimed, err := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+	// The decision survives the race: asking again once a developer is free
+	// carries out the same one rather than meeting the once-only guard.
+	harness.failure = nil
+	harness.outcome = Outcome{RunID: "run-fedcba9876543210fedcba9876543210", WorkItemID: docketedItem, Status: runstate.StatusSucceeded}
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() after the race error = %v", err)
+	}
+	if len(harness.started) != 2 {
+		t.Fatalf("starts = %d, want the refused attempt and the one that ran", len(harness.started))
+	}
+}
+
+// A claim that could not be given back is said out loud: the stoppage has then
+// paid for a wait that was meant to cost it nothing, and only somebody looking
+// can give it back.
+func TestAClaimThatCouldNotBeGivenBackIsReported(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = fmt.Errorf("reserve developer run: %w", runstate.CapacityError{Limit: 2, Active: 2})
+	harness.outcome = Outcome{}
+	rerunner := harness.rerunner()
+	rerunner.Reruns = unwithdrawableReruns{RerunRecords: harness.reruns}
+	result, err := rerunner.Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if result.CapacityFull == nil {
+		t.Fatalf("result = %#v, want the full harness still reported", result)
+	}
+	if !strings.Contains(result.RecordProblem, "could not be given back") {
+		t.Fatalf("record problem = %q, want the spent claim named", result.RecordProblem)
+	}
+}
+
+// A refusal that is not about capacity is settled like any other run that ended
+// badly: the claim stands, because something happened on it.
+func TestARunThatFailedForSomethingElseKeepsItsClaim(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.failure = errors.New("the worktree could not be created")
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "worktree could not be created") {
+		t.Fatalf("Rerun() error = %v, want the failure reported", err)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); !claimed {
+		t.Fatal("a re-run that failed for something other than capacity gave its claim back")
+	}
+}
+
+// runningState is a run of something else that is in flight, which is what
+// occupies a developer slot.
+func runningState(runID, workItemID string) runstate.State {
+	state := stoppedState()
+	state.RunID = runID
+	state.WorkItemID = workItemID
+	state.Status = runstate.StatusRunning
+	state.CompletedAt = nil
+	state.Blocker = ""
+	return state
+}
+
+// unwithdrawableReruns claims exactly as the store does and cannot give a claim
+// back.
+type unwithdrawableReruns struct {
+	RerunRecords
+}
+
+func (unwithdrawableReruns) Withdraw(context.Context, string) error {
+	return errors.New("the record is unwritable")
 }
 
 // The item a fresh run would start on is read before anything is claimed. A run
@@ -707,6 +864,59 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	}
 }
 
+// The sequence this seam was opened by, over the real pipeline: the last free
+// developer slot goes while the claim is being taken, and the reservation
+// refuses the fresh run for capacity. The claim is given back, so the same
+// decision launches on the first attempt that finds a slot — rather than being
+// refused by the once-only guard for a run that never happened.
+func TestARerunRacedForTheLastSlotGivesTheClaimBackAndLaunchesLater(t *testing.T) {
+	t.Parallel()
+
+	var pipelined *pipelinedRerun
+	occupying := runningState("run-11112222333344445555666677778888", "yoyodyne-ifd.other")
+	raced := false
+	pipelined = newPipelinedRerun(t, func() {
+		// Another run takes the last slot while this carry-out is committing to the
+		// work, which is the window the reading before the claim cannot cover. It
+		// happens once: the second attempt is the one that finds a developer.
+		if raced {
+			return
+		}
+		raced = true
+		if err := pipelined.runs.Create(occupying); err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+	})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() error = %v, want the raced slot waited on rather than failed", err)
+	}
+	if result.Started || result.CapacityFull == nil {
+		t.Fatalf("result = %#v, want a full harness reported and nothing started", result)
+	}
+	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+		t.Fatalf("developer invocations = %d, want none behind a reservation that was refused", invocations)
+	}
+	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the claim given back", claimed, err)
+	}
+
+	// The other run ends, and the same decision is carried out.
+	occupying.Status = runstate.StatusSucceeded
+	completed := docketedNow
+	occupying.CompletedAt = &completed
+	if err := pipelined.runs.Save(occupying); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() once a slot freed error = %v", err)
+	}
+	if !rerun.Started || rerun.Outcome.Integration == nil {
+		t.Fatalf("result = %#v, want the fresh run started and landed", rerun)
+	}
+}
+
 // The sequence that was worked around by hand on yoyodyne-ifd.125.1, replayed
 // over the real pipeline: the stopped run had blocked its item, so the first
 // carry-out is refused — and because the refusal is made before anything is
@@ -824,6 +1034,9 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 			// record: a test that wired the action to a different item from the one
 			// the pipeline starts on would prove nothing about either.
 			Items: tracker,
+			// The limit the pipeline reserves against, so the action's reading and
+			// the reservation's are one number rather than two.
+			Capacity: 1,
 			Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 				if beforeStart != nil {
 					beforeStart()
@@ -917,7 +1130,7 @@ func TestARerunNobodyDecidedIsRefused(t *testing.T) {
 	started := 0
 	rerunner := Rerunner{
 		Docket: docket, Runs: runs, Intake: intake, Reruns: runs.Reruns(), Decisions: runs.Triage(),
-		Items: openWorkItem(docketedItem),
+		Items: openWorkItem(docketedItem), Capacity: 1,
 		Start: func(context.Context, string, runstate.Selection) (Outcome, error) {
 			started++
 			return Outcome{}, nil
@@ -992,7 +1205,7 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("Rerun() with nothing wired did not refuse")
 	}
-	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "work item", "start a run"} {
+	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "work item", "start a run", "developer capacity"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal is missing %q: %v", want, err)
 		}

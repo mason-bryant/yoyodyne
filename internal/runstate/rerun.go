@@ -342,6 +342,49 @@ func (s *RerunStore) Settle(ctx context.Context, docketKey, runID string, preser
 	return settled, nil
 }
 
+// Withdraw gives back the claim on one docketed stoppage, so the stoppage keeps
+// the re-run a decision authorized rather than having spent it on nothing.
+//
+// It is not a general undo, and everything about it is narrow on purpose: a
+// claim is spent by being taken, and the one case where giving it back is sound
+// is a claim whose fresh run provably never existed. A run refused a developer
+// slot is that case — the reservation refuses before the run's record exists,
+// before the work item is claimed and before any agent runs — so there is a
+// claim here and demonstrably nothing it caused. A record carrying a run is
+// therefore refused rather than removed: whatever became of that run, something
+// happened on this claim, and a second re-run of it is the thing the claim
+// exists to prevent.
+//
+// A stoppage nothing has claimed is already what this would leave behind, so
+// withdrawing one is not an error.
+func (s *RerunStore) Withdraw(ctx context.Context, docketKey string) error {
+	key := strings.TrimSpace(docketKey)
+	if key == "" {
+		return errors.New("a docket entry is required to withdraw its re-run")
+	}
+
+	release, err := s.lock(ctx, key)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	claimed, found, err := s.load(key)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return nil
+	}
+	if run := strings.TrimSpace(claimed.RunID); run != "" {
+		return fmt.Errorf("the re-run of the stoppage keyed %s started run %s, so its claim was acted on and is not one to give back", key, run)
+	}
+	if err := os.Remove(s.path(key)); err != nil {
+		return fmt.Errorf("withdraw the triage re-run of %s: %w", key, err)
+	}
+	return syncDirectory(s.root)
+}
+
 // Find reports the re-run of one docketed stoppage. A stoppage nothing has been
 // recorded about is the ordinary answer rather than a failure to look, and a
 // record that cannot be read is neither: it is an error, because a claim nobody
