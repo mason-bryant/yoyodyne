@@ -143,7 +143,9 @@ func fromTrackerAction(conversation runstate.Conversation, event execution.Event
 		return Notification{}, fmt.Errorf("address the %s recorded in %s: %w", kind, conversation.ConversationID, err)
 	}
 	return Notification{
-		Topic: topic,
+		// An admission is usually the first thing said about an item, so this is
+		// where most threads get the name their header carries.
+		Topic: topic.WithTitle(detail.Title),
 		// The role's own act, in its own voice: what is admitted, decomposed,
 		// attributed, or reordered is a judgment the role made, and the harness
 		// only carried it out on the role's behalf.
@@ -194,7 +196,7 @@ func fromApprovedWork(conversation runstate.Conversation, earlier []execution.Ev
 		return Notification{}, fmt.Errorf("address the work item created in %s: %w", conversation.ConversationID, err)
 	}
 	return Notification{
-		Topic:   topic,
+		Topic:   topic.WithTitle(created.Title),
 		Speaker: Harness(),
 		Event: Event{
 			Kind:     KindWorkApproved,

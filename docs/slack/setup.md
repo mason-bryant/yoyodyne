@@ -218,6 +218,13 @@ the first one exits.
 
 ## What it posts
 
+Each thread is headed by the item it is about — its identifier and what the item
+is called, as `yoyodyne-ifd.118 — Slack thread headers carry the item's title` —
+so a channel scrolls as a list of subjects rather than a list of identifiers. The
+title comes from the durable record whatever opened the thread was read from, so
+work the harness ran before it started recording titles is headed by the
+identifier alone, and threads that are already open stay exactly as they are.
+
 Into the work item's thread, as they happen:
 
 - the item arriving in the backlog: **admitted, with the goal it serves**, or

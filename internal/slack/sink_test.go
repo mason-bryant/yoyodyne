@@ -56,6 +56,50 @@ func TestATopicOpensOneThreadAndEverythingElseRepliesIntoIt(t *testing.T) {
 	}
 }
 
+// A thread header is read by people, and an identifier on its own is a name
+// they have to go and resolve before they know what the thread is about. So the
+// header names the item and then says what it is called, from what the durable
+// record carried — the sink never asks the tracker anything.
+func TestAThreadHeaderNamesTheItemAndWhatItIsCalled(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	titled := milestone(1, notify.KindRunStarted)
+	titled.Notification.Topic = titled.Notification.Topic.WithTitle(
+		"Slack run-started messages speak as the role that actually selected the run")
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{titled}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread and the milestone in it", len(posts.requests))
+	}
+	want := "*yoyodyne-ifd.68.3 — Slack run-started messages speak as the role that actually selected the run*"
+	if posts.requests[0].Text != want {
+		t.Fatalf("header = %q, want %q", posts.requests[0].Text, want)
+	}
+}
+
+// A record that carried no title heads its thread with the identifier alone,
+// which is exactly what every thread was before titles were carried: a header
+// with a dangling separator would read as a name somebody failed to write.
+func TestAThreadForAnUntitledTopicIsHeadedByTheIdentifierAlone(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		milestone(1, notify.KindRunStarted),
+	}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if posts.requests[0].Text != "*yoyodyne-ifd.68.3*" {
+		t.Fatalf("header = %q, want the identifier alone", posts.requests[0].Text)
+	}
+}
+
 // Each persona speaks under its own name and face. One sink posts for all of
 // them, so a channel where they all arrived as one app would leave the voice as
 // the only thing telling the speakers apart.

@@ -55,6 +55,60 @@ func TestTopicRefusesAKeyThatCouldNotNameAThread(t *testing.T) {
 	}
 }
 
+// A title names the topic for a reader without becoming part of what addresses
+// it. If it were part of the key, renaming a work item would open a second
+// thread for the same item and split its narrative in two.
+func TestATitleNamesATopicWithoutAddressingIt(t *testing.T) {
+	item, err := WorkItem("yoyodyne-ifd.68.5")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	named := item.WithTitle("Slack run-started messages speak as the role that actually selected the run")
+	if named.Title != "Slack run-started messages speak as the role that actually selected the run" {
+		t.Fatalf("title = %q, want what the record calls the item", named.Title)
+	}
+	if named.Key() != item.Key() {
+		t.Fatalf("key = %q, want the identifier alone: %q", named.Key(), item.Key())
+	}
+	if err := named.Validate(); err != nil {
+		t.Fatalf("a titled topic was refused: %v", err)
+	}
+	// A record that carried no title leaves the topic exactly as it was, so
+	// nothing is worse off than before titles were carried.
+	if untitled := item.WithTitle("   "); untitled != item {
+		t.Fatalf("an absent title made %+v, want the topic unchanged", untitled)
+	}
+	// The product opens no thread, so there is no header for a title to name.
+	if titled := Product().WithTitle("the whole line"); titled != Product() {
+		t.Fatalf("the product topic took a title: %+v", titled)
+	}
+}
+
+// A header is one line and a title is decoration on an identifier that is
+// already exact, so an awkward title is folded and cut rather than refused —
+// refusing one would take a work item's whole narrative out of the channel over
+// the way somebody phrased its name.
+func TestAnAwkwardTitleIsFoldedAndCutRatherThanRefused(t *testing.T) {
+	item, err := WorkItem("yoyodyne-ifd.118")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	folded := item.WithTitle("  Slack thread headers carry\nthe item's\ttitle  ")
+	if folded.Title != "Slack thread headers carry the item's title" {
+		t.Fatalf("title = %q, want it folded onto one line", folded.Title)
+	}
+	cut := item.WithTitle(strings.Repeat("long ", 200))
+	if len(cut.Title) > MaxTopicTitleBytes {
+		t.Fatalf("title is %d bytes, limit is %d", len(cut.Title), MaxTopicTitleBytes)
+	}
+	if !strings.HasSuffix(cut.Title, titleCut) {
+		t.Fatalf("title = %q, want it to say where it was cut", cut.Title)
+	}
+	if err := cut.Validate(); err != nil {
+		t.Fatalf("a cut title was refused: %v", err)
+	}
+}
+
 func TestSpeakerNamesTheHarnessAndTheRoles(t *testing.T) {
 	if !Harness().IsHarness() || Harness().Key() != HarnessSpeaker {
 		t.Fatalf("the harness speaker is %+v", Harness())

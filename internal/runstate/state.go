@@ -42,7 +42,10 @@ import (
 // gate existed meant. The review rounds a run accumulated and the blocker it
 // stopped on are the two newest, and both behave identically: absent means
 // nothing counted the rounds and nothing blocked this run, which is what every
-// run written before triage docketed anything meant.
+// run written before triage docketed anything meant. What the work item was
+// called is the newest of them and behaves the same way: absent means nothing
+// recorded a title for it, which is what every run written before a surface
+// needed to name the work in words meant.
 const StateSchemaVersion = 1
 
 type Status string
@@ -418,6 +421,15 @@ type State struct {
 	ProductID     domain.ProductID `json:"product_id"`
 	RepositoryID  string           `json:"repository_id"`
 	WorkItemID    string           `json:"work_item_id"`
+	// WorkItemTitle is what the item is called, written with the run because the
+	// claim is where the harness has the tracker's answer in hand and everything
+	// reading the record afterwards does not. It is what lets a surface name the
+	// work in words a person reads rather than in an identifier they would have to
+	// resolve, and it is a copy rather than a reference on purpose: the record says
+	// what the item was called when the run started, which is what an account of
+	// that run should say however the item is renamed later. Absent means nothing
+	// recorded a title, which is what every run written before this did.
+	WorkItemTitle string `json:"work_item_title,omitempty"`
 	// Selection is why the harness is running this item: who chose it and on
 	// what grounds. It is written when the run is reserved and never rewritten.
 	// Absent means nothing accounted for the choice, which is not the same as a

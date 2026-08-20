@@ -36,6 +36,11 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	if err != nil {
 		return nil, fmt.Errorf("address run %s: %w", after.RunID, err)
 	}
+	// The record carries what the item is called, so the thread this run opens can
+	// be named in words rather than in the identifier alone. A run recorded before
+	// titles were written carries none, and its topic is addressed exactly as it
+	// was before there was one.
+	topic = topic.WithTitle(after.WorkItemTitle)
 	refs := Refs{RunID: after.RunID, WorkItemID: after.WorkItemID}
 	if after.PullRequest != nil {
 		refs.PullRequest = after.PullRequest.URL

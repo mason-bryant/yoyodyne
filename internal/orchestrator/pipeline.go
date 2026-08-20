@@ -604,6 +604,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		ProductID:     p.Config.Product.ID,
 		RepositoryID:  string(p.Config.Product.RepositoryID),
 		WorkItemID:    workItemID,
+		// What the item is called is written with the run because this is where the
+		// tracker's answer is in hand: everything that reads the record afterwards
+		// reads only the record, so a title not copied here is a title nothing can
+		// say the work by.
+		WorkItemTitle: item.Title,
 		Backend:       domain.BackendClaudeCode,
 		Status:        runstate.StatusPending,
 		StartedAt:     now,

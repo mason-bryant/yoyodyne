@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -150,6 +151,16 @@ const (
 // and a thread's identity, so it is a name rather than a payload.
 const MaxTopicIDBytes = 128
 
+// MaxTopicTitleBytes bounds the title carried beside a topic, and titleCut says
+// where one was cut. A title is a line somebody scans rather than a record they
+// read — the whole of what an item says is in the tracker — so a title long
+// enough to push the identifier off a reader's screen is cut to the part that
+// names it.
+const (
+	MaxTopicTitleBytes = 160
+	titleCut           = "…"
+)
+
 // Topic is the thread key. The primary one is the work item, because the item is
 // what a narrative is about: an exchange concerning an item is addressed to that
 // item rather than to itself, and only an exchange with no item gets a thread of
@@ -160,6 +171,14 @@ type Topic struct {
 	// ID names the item or exchange, and is empty for the product, which is the
 	// one topic there is only ever one of.
 	ID string `json:"id,omitempty"`
+	// Title is what the topic is called, in the words the durable record the
+	// message was read from carried. It is what makes a thread header a subject a
+	// reader recognizes rather than an identifier they have to go and resolve, and
+	// it is deliberately not part of the key: the same topic is the same thread
+	// whatever it was called when each message was said, so an item somebody
+	// renamed never opens a second one. Empty is ordinary — a record that carried
+	// no title leaves the identifier to name the topic on its own.
+	Title string `json:"title,omitempty"`
 }
 
 // WorkItem addresses a topic to one item of work.
@@ -179,6 +198,38 @@ func Exchange(id string) (Topic, error) {
 // anything else that is about every item rather than one of them.
 func Product() Topic {
 	return Topic{Kind: TopicProduct}
+}
+
+// WithTitle names a topic in words, from what the record a message was read
+// from calls it. It sanitizes rather than refuses, which is the whole reason it
+// is separate from the constructors: the identifier is already exact, so a title
+// is what a header adds to it, and refusing an awkward one would take a work
+// item's entire narrative out of the channel over the way somebody phrased its
+// name. So it is folded onto one line — a header is a line — cut to the bound,
+// and left absent where the record carried nothing.
+func (t Topic) WithTitle(title string) Topic {
+	// The product is the whole line rather than a subject somebody named, and it
+	// opens no thread to head, so it is left as the one topic that is only ever
+	// itself.
+	if t.Kind == TopicProduct {
+		return t
+	}
+	t.Title = boundTitle(title)
+	return t
+}
+
+// boundTitle is a title as a header can carry it: one line, and short enough
+// that the identifier beside it is still the first thing read.
+func boundTitle(title string) string {
+	folded := strings.Join(strings.Fields(title), " ")
+	if len(folded) <= MaxTopicTitleBytes {
+		return folded
+	}
+	cut := MaxTopicTitleBytes - len(titleCut)
+	for cut > 0 && !utf8.RuneStart(folded[cut]) {
+		cut--
+	}
+	return strings.TrimRight(folded[:cut], " ") + titleCut
 }
 
 // Key is the topic as one string, which is what a thread map is keyed by and
@@ -437,15 +488,20 @@ func (e Event) Validate() error {
 // appears, how much attention it is asking for, the words, and the way back to
 // the record.
 type Message struct {
-	SchemaVersion int             `json:"schema_version"`
-	Kind          Kind            `json:"kind"`
-	Topic         string          `json:"topic"`
-	Speaker       string          `json:"speaker"`
-	Identity      Identity        `json:"identity"`
-	Severity      report.Severity `json:"severity"`
-	Body          string          `json:"body"`
-	Refs          Refs            `json:"refs"`
-	At            time.Time       `json:"at"`
+	SchemaVersion int    `json:"schema_version"`
+	Kind          Kind   `json:"kind"`
+	Topic         string `json:"topic"`
+	// TopicTitle is what the topic is called, carried beside the key rather than
+	// inside it so a surface opening a thread can name the subject in words while
+	// still addressing it by the key alone. Absent where the record carried no
+	// title, which reads as the identifier naming the topic by itself.
+	TopicTitle string          `json:"topic_title,omitempty"`
+	Speaker    string          `json:"speaker"`
+	Identity   Identity        `json:"identity"`
+	Severity   report.Severity `json:"severity"`
+	Body       string          `json:"body"`
+	Refs       Refs            `json:"refs"`
+	At         time.Time       `json:"at"`
 }
 
 // Validate rejects a message that could not be posted as an account of anything.
