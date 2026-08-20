@@ -183,6 +183,49 @@ func TestAConversationPutDownIsReachableAndCanBeTakenUpAgain(t *testing.T) {
 	}
 }
 
+// The process that owns a conversation defers its release for the life of the
+// command, and the conversation is put down and taken up many times underneath
+// that defer. So the deferred release routinely runs against a hold that is
+// already down — every conversation that ends at the prompt is one — and it has
+// to be a no-op rather than anything at all.
+func TestReleasingAConversationThatIsAlreadyDownIsANoOp(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	identity := ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager}
+	hold, err := newConversationStore(t, root).Claim(identity)
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+	// This is the deferred one, running behind a conversation that put itself
+	// down at the prompt and never took it back.
+	if err := hold.Release(); err != nil {
+		t.Fatalf("Release() on a hold that is already down error = %v", err)
+	}
+	if hold.Held() {
+		t.Fatal("a twice-released hold reports the conversation as held")
+	}
+	// And it let go of nothing it did not own: somebody else's claim, taken
+	// while this one was down, survives the second release rather than being
+	// dropped by it.
+	other, err := newConversationStore(t, root).Claim(identity)
+	if err != nil {
+		t.Fatalf("Claim() by another process error = %v", err)
+	}
+	if err := hold.Release(); err != nil {
+		t.Fatalf("third Release() error = %v", err)
+	}
+	if _, err := newConversationStore(t, root).Hold(identity); !errors.Is(err, ErrConversationHeld) {
+		t.Fatalf("Hold() error = %v, want ErrConversationHeld: a stale release dropped another process's claim", err)
+	}
+	if err := other.Release(); err != nil {
+		t.Fatalf("other Release() error = %v", err)
+	}
+}
+
 // Taking a conversation back waits for whoever has it rather than refusing.
 // Refusing is right for the first claim, where there is something else for the
 // caller to do; here the operator has already typed, and the other process's

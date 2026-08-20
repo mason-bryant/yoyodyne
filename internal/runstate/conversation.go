@@ -395,10 +395,17 @@ func (s *ConversationStore) Claim(identity ConversationIdentity) (*ConversationH
 }
 
 // Release puts the conversation down. Releasing one that is already down is a
-// no-op, so a caller can put it down between turns and still defer the release
-// that ends its ownership.
+// no-op, and it has to be: the process that owns a conversation defers this for
+// the life of the command while the conversation is put down and taken up many
+// times underneath, so the deferred release routinely runs against a hold that
+// is already down — every conversation that ends at the prompt is one.
+//
+// The absent lease is answered here rather than left to the lease's own
+// nil-receiver guard. That guard makes this safe today, and a hold that depends
+// on how a type it merely refers to handles being nil is one sentence away from
+// not being safe tomorrow.
 func (h *ConversationHold) Release() error {
-	if h == nil {
+	if h == nil || h.lease == nil {
 		return nil
 	}
 	lease := h.lease

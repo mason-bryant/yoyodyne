@@ -20,6 +20,9 @@ type promptHold struct {
 	// given which release this is, because the console puts the conversation
 	// down before every prompt and a test usually means one of them.
 	meanwhile func(release int)
+	// slow is how long taking the conversation back takes, which is how long the
+	// other process is still mid-turn for.
+	slow time.Duration
 }
 
 func (h *promptHold) Release() error {
@@ -32,6 +35,12 @@ func (h *promptHold) Release() error {
 
 func (h *promptHold) Retake(context.Context) error {
 	h.retakes++
+	// slow stands in for another process still mid-turn: taking the conversation
+	// back is a wait rather than a refusal, and how long it takes is what decides
+	// whether the operator is told about it.
+	if h.slow > 0 {
+		time.Sleep(h.slow)
+	}
 	return nil
 }
 
@@ -109,6 +118,58 @@ func TestAConversationTakenAtThePromptIsResumedRatherThanOverwritten(t *testing.
 	}
 }
 
+// A wait long enough to notice is said out loud, because a prompt that swallowed
+// a line and then sat there is indistinguishable from one that has hung. The
+// turn still happens once the other process is finished: the operator is told
+// what they are waiting for, not turned away.
+func TestAWaitForAnotherProcessMidTurnIsSaidOutLoud(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Two goals are missing."},
+	}}
+	options := testOptions(t, provider)
+	// Comfortably past the threshold, so the line is printed before the wait
+	// ends rather than racing it.
+	options.Hold = &promptHold{slow: 4 * quietHoldWait}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// The conversation ends at the prompt rather than with /exit, so the one slow
+	// retake this measures is the one the message went through.
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what is missing?\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "another process is mid-turn with the product manager; waiting for it to finish.") {
+		t.Fatalf("the operator was not told what they were waiting for: %q", out.String())
+	}
+	// The wait ended in a turn rather than in a refusal.
+	if len(provider.requests) != 1 {
+		t.Fatalf("provider took %d turn(s), want 1", len(provider.requests))
+	}
+}
+
+// A short wait is not worth a line. Every message would carry one where nothing
+// else is talking to the agent, which is nearly every message.
+func TestAWaitTooShortToReadIsNotAnnounced(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5-20260514", FinalText: "Two goals are missing."},
+	}}
+	options := testOptions(t, provider)
+	options.Hold = &promptHold{}
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("what is missing?\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if strings.Contains(out.String(), "another process is mid-turn") {
+		t.Fatalf("an instant wait was announced: %q", out.String())
+	}
+}
+
 // A run started from the conversation reports itself into the record from under
 // the prompt, while the operator is still typing. A conversation that had let go
 // would be writing to a record somebody else now owns, so it does not let go:
@@ -135,6 +196,47 @@ func TestAConversationRunningWorkKeepsItWhileTheOperatorIsAtThePrompt(t *testing
 	}
 	if hold.releases != 1 {
 		t.Fatalf("the conversation was put down %d time(s), want 1: only the prompt before the run", hold.releases)
+	}
+}
+
+// The real hold, ended the way an operator ends a conversation: at the prompt,
+// with the conversation already put down. The command's own deferred release
+// then runs against a hold that is down, which is the ordinary path rather than
+// an edge — and afterwards the conversation must be free, because a chat that
+// exited still holding it would be exactly the seam this change closes.
+func TestARealHoldEndedAtThePromptLeavesTheConversationFree(t *testing.T) {
+	t.Parallel()
+
+	options := testOptions(t, &fakeBackend{})
+	store := options.Store.(*runstate.ConversationStore)
+	identity := options.identity()
+	hold, err := store.Claim(runstate.ConversationIdentity{Agent: identity.Agent, Role: identity.Role})
+	if err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+	options.Hold = hold
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// Nothing typed at all: the console puts the conversation down, the operator
+	// presses Ctrl-D, and the conversation ends without ever taking it back.
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader(""), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if hold.Held() {
+		t.Fatal("the conversation was still held at the prompt it ended on")
+	}
+	// This is `converse`'s deferred release in internal/cli/chat.go, running
+	// against a hold that is already down.
+	if err := hold.Release(); err != nil {
+		t.Fatalf("the deferred Release() error = %v", err)
+	}
+	reachable, err := store.Hold(identity)
+	if err != nil {
+		t.Fatalf("the conversation was not free after the chat ended: %v", err)
+	}
+	if err := reachable.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
 	}
 }
 
