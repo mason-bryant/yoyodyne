@@ -206,6 +206,27 @@ Nothing here assumes your project is written in Go, and nothing after step 1
 needs a checkout of yoyo: a configured project carries its own configuration
 and personas.
 
+**Or have step 2 walked for you.** `yoyo setup` is that step and everything
+around it as questions — the tracker, the configuration, the checks read from
+what your repository already declares, the tracker's sync remote, and then the
+optional offer of [reporting into Slack](#reporting-into-slack) — ending with
+`yoyo doctor`, which is what decides whether the installation actually works:
+
+```sh
+cd path/to/your/project
+yoyo setup
+```
+
+Everything it does is something you could have typed, and it asks before each
+one, so read step 2 below if you would rather know what you are saying yes to.
+It changes nothing that is already there — a configuration that does not load is
+handed back rather than regenerated, and a Slack token already stored is left
+alone — and it keeps no record of its own, which is what makes running it again
+safe: every step looks at your installation first, says what was already true,
+and resumes an interrupted setup where it actually got to rather than where a
+record claims. `--yes` answers every question with the answer it proposes, and
+`--json` reports the same walk machine-readably and asks nothing at all.
+
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
@@ -2313,6 +2334,13 @@ It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is ever read: whether a secret is stored is
 asked in the form that answers without producing the value.
 
+What *does* change things is [`yoyo setup`](#getting-started), which is this
+command's other half: it walks the steps that reach the state described here,
+asking first, and then runs this diagnosis and takes its exit status from it. So
+a finding here is either something setup can offer to do — the tracker, the
+configuration, this project's Slack secrets — or something it deliberately
+leaves to you, which it hands over with the same command you see above.
+
 The two checks worth calling out are the ones that catch an installation that
 was working and stopped. **A long-running sink is started from a binary that
 keeps moving underneath it**, so the build that is reporting and the build that
@@ -2834,6 +2862,14 @@ SLACK_APP_TOKEN="$(security find-generic-password -s yoyo-slack-app.<product id>
 YOYO_SLACK_SECRET_NAMESPACE=<product id> \
 exec yoyo slack
 ```
+
+**`yoyo setup` walks the half of this that is on your machine**: it asks which
+channel to report into, writes the block above into your configuration, and
+stores this project's two tokens under those names by handing you the keychain's
+own prompt — so no token reaches yoyo, its arguments, or your shell history, and
+a pair already stored is left exactly as it is. The app itself is made on Slack's
+own screens, which is what [`docs/slack/setup.md`](docs/slack/setup.md) is for;
+starting the sink is still yours.
 
 `YOYO_SLACK_SECRET_NAMESPACE` is not read as a credential and is not one: it is
 how the sink records whose secrets it was launched with, so

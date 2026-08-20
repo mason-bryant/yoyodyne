@@ -224,7 +224,7 @@ func Diagnose(ctx context.Context, env Environment) Report {
 	})
 
 	project := config.ProjectDirectory(resolved.Path)
-	repository := repositoryPath(project, resolved.Config.Product.Repository)
+	repository := RepositoryPath(project, resolved.Config.Product.Repository)
 	report.Findings = append(report.Findings, diagnosis.checkRepository(ctx, repository))
 	report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, repository))
 	report.Findings = append(report.Findings, diagnosis.checkStateRoot())
@@ -705,7 +705,13 @@ func HarnessPublishes(publishing domain.ApprovalMode) bool {
 	return publishing == domain.ApprovalAutomatic
 }
 
-func repositoryPath(project, repository string) string {
+// RepositoryPath resolves what a configuration means by its repository: the
+// project directory unless the configuration points somewhere else, and that
+// path made absolute where it does. It is exported because `yoyo setup` has to
+// initialize the tracker in the same directory this diagnosis then asks the
+// tracker about -- two answers to "which repository" would be a setup that put
+// one right and a diagnosis that reported the other as broken.
+func RepositoryPath(project, repository string) string {
 	if strings.TrimSpace(repository) == "" {
 		return project
 	}
