@@ -436,6 +436,91 @@ else
   fail "$reason -- report was: $diagnosis"
 fi
 
+step "7b. yoyo setup reaches the same state by asking, and again changes nothing"
+# The README offers `yoyo setup` as steps 2 to 7 above, walked as questions. Two
+# claims are worth executing rather than asserting: that it actually converges a
+# project with nothing in it, and that running it a second time changes nothing
+# -- which is also the resumability claim, since setup keeps no record of its own
+# and a resumed walk is just a second one.
+#
+# It runs against its own scratch project rather than the one above, because a
+# project that is already configured could not show the first claim. `--yes`
+# answers every question with the answer setup proposes, which declines the
+# optional Slack tier and so needs no workspace and no tokens.
+asked="$scratch/asked"
+mkdir -p "$asked"
+( cd "$asked" \
+  && git init -q -b main . \
+  && git config user.email walk@example.invalid \
+  && git config user.name "Adoption Walk" \
+  && git remote add origin "$scratch/origin.git" \
+  && printf 'check:\n\techo ok\n' > Makefile \
+  && git add -A && git commit -qm "a project with a Makefile" )
+setup_stderr="$scratch/setup.stderr"
+# It exits nonzero here for the same reason doctor does above -- this walk runs a
+# `yoyo` that was never put on PATH -- so the report is what is read, not the
+# status.
+walked="$("$yoyo" setup --directory "$asked" --yes --json 2>"$setup_stderr" || true)"
+if [ -s "$setup_stderr" ]; then
+  fail "setup --json wrote to stderr, so its output is not machine-readable -- got: $(cat "$setup_stderr")"
+elif reason="$(python3 - "$walked" <<'ASSERT' 2>&1
+import json, sys
+
+report = json.loads(sys.argv[1])
+if report.get("schema_version") != 1:
+    raise SystemExit("setup --json reported schema_version %r" % report.get("schema_version"))
+steps = {step["step"]: step for step in report["steps"]}
+for name in ("tracker", "configuration", "tracker-remote"):
+    if name not in steps:
+        raise SystemExit("setup never reached the %s step" % name)
+    # The tracker's sync remote is the one step recent bd versions may have
+    # settled themselves at `bd init`, which setup reports as already true
+    # rather than doing again; both outcomes are the README's claim.
+    settled = ("done",) if name != "tracker-remote" else ("done", "already")
+    if steps[name]["status"] not in settled:
+        raise SystemExit("setup reports %s as %s: %s" % (name, steps[name]["status"], steps[name]["summary"]))
+# Every step it did not finish has to name a command, which is the promise it
+# shares with doctor: a step that says what is undone and not what to do about
+# it is what this path exists to end.
+for step in report["steps"]:
+    if step["status"] in ("already", "done"):
+        continue
+    if not step.get("remedy", "").strip():
+        raise SystemExit("setup left %s %s with nothing to run" % (step["step"], step["status"]))
+findings = {finding["check"]: finding for finding in report["diagnosis"]["findings"]}
+for check in ("configuration", "repository", "tracker", "checks"):
+    if findings.get(check, {}).get("status") != "ok":
+        raise SystemExit("after setup, doctor reports %s as %r" % (check, findings.get(check, {}).get("status")))
+ASSERT
+)"; then
+  pass "setup converges a blank project, and doctor then calls its configuration, repository, tracker, and checks healthy"
+else
+  fail "$reason -- report was: $walked"
+fi
+
+if [ -f "$asked/.yoyodyne/config.yaml" ]; then
+  before="$(cksum < "$asked/.yoyodyne/config.yaml")"
+  again="$("$yoyo" setup --directory "$asked" --yes --json 2>/dev/null || true)"
+  after="$(cksum < "$asked/.yoyodyne/config.yaml")"
+  if [ "$before" != "$after" ]; then
+    fail "a second setup rewrote a configuration that was already there"
+  elif reason="$(python3 - "$again" <<'ASSERT' 2>&1
+import json, sys
+
+steps = {step["step"]: step for step in json.loads(sys.argv[1])["steps"]}
+for name in ("tracker", "configuration", "tracker-remote"):
+    if steps.get(name, {}).get("status") != "already":
+        raise SystemExit("a second setup reports %s as %r, not as already true" % (name, steps.get(name, {}).get("status")))
+ASSERT
+)"; then
+    pass "running setup again reports what is already true and changes nothing"
+  else
+    fail "$reason -- report was: $again"
+  fi
+else
+  fail "setup wrote no configuration to run again over"
+fi
+
 step "8. write down what the product is for"
 mkdir -p docs/product
 cat > docs/product/calc.md <<'MD'

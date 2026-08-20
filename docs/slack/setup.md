@@ -43,6 +43,14 @@ harness from a thread is designed and not built.
 Setting this up takes about five minutes and needs a Slack workspace you can
 install an app into.
 
+**`yoyo setup` offers to do steps 4 and 5 for you**, which are the two that
+happen on your own machine: it asks which channel to report into, writes the
+configuration block, and then hands you the keychain's own prompt for each
+token, under the same namespaced names step 5 describes. It will not overwrite a
+pair that is already stored. Steps 1 to 3 are on Slack's screens and step 6
+starts a process, so those stay here and stay yours; read them either way, since
+what setup asks you to confirm is that you have done them.
+
 ## 1. Create the app from the checked-in manifest
 
 The app is described by [`manifest.yaml`](manifest.yaml) beside this document.

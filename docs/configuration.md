@@ -32,6 +32,12 @@ yoyo init --tracker-remote <url>       # sync the tracker somewhere else
 yoyo init --force                      # overwrite what is already there
 ```
 
+`yoyo setup` is the same thing asked rather than typed: it runs `init` for you as
+one step of a walk from a binary on PATH to an installation `yoyo doctor` calls
+healthy, and it will not touch a configuration that is already there — one that
+does not load is handed back with the command to edit it rather than
+regenerated. Everything below is what it writes on your behalf.
+
 `init` writes `.yoyodyne/config.yaml` and one Markdown file per persona under
 `.yoyodyne/personas/`, then loads what it wrote and fails if the result is not
 usable. Without `--product`, the product is named after the directory being

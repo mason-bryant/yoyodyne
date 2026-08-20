@@ -31,6 +31,10 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runVersion(args[1:], stdout, stderr, version)
 	case "init":
 		return runInit(ctx, args[1:], stdout, stderr)
+	case "setup":
+		// Setup asks the operator yes or no before each step it takes, so it is
+		// bound to the process's own input the way a conversation is.
+		return runSetup(ctx, args[1:], os.Stdin, stdout, stderr, version)
 	case "config":
 		return runConfig(args[1:], stdout, stderr)
 	case "chat":
@@ -278,6 +282,7 @@ func printUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo <command> [options]
 
 Commands:
+  setup             walk this project to an installation that can run work
   init              write a project its own configuration, personas, and checks
   chat              talk with the product manager and steer the work from there
   agent             read the configured agents and their state, and address one
