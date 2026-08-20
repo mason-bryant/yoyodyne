@@ -18,6 +18,13 @@ package orchestrator
 // adds is the choosing: which items, in what order, how many at a time, and, for
 // every one of them, the recorded reason it was chosen.
 //
+// The one thing it decides about an item itself is whether the item is work at
+// all. A container whose unfinished children carry its execution is a heading
+// over the queue rather than an entry in it, and nothing downstream can tell:
+// the tracker reports it as pullable, the reservation sees a different item from
+// its child, and both runs then make the same change twice. Deciding that is
+// choosing rather than enforcing, which is why it is here.
+//
 // # A pull re-reads the configuration
 //
 // The scheduler is the first thing in the harness that holds a configuration
@@ -78,11 +85,22 @@ import (
 // already and closed work has left, so neither is still queued.
 var scheduledStatuses = []string{"open", "blocked"}
 
+// claimedStatus is the tracker slice that has left the backlog by being pulled.
+// The scheduler does not choose from it, and reads it for one thing: a child
+// somebody is running right now is the strongest possible cover over its
+// parent's execution, and it is precisely the child a queue reading alone cannot
+// see.
+const claimedStatus = "in_progress"
+
 // maxScheduleReasonBytes bounds one part of a recorded selection reason that
 // came from a document rather than from this package. The reason as a whole has
 // its own bound in the run state; this keeps a single amendment's prose from
 // filling it.
 const maxScheduleReasonBytes = 240
+
+// maxCoveringChildrenNamed bounds how many children a deferral names before it
+// falls back to counting them. The count stays exact either way.
+const maxCoveringChildrenNamed = 3
 
 // Why the scheduler stopped pulling. Each is a different thing for an operator
 // to do about it, which is why they are stated apart rather than folded into one
@@ -123,8 +141,9 @@ const (
 	ScheduleSpendUnreadable = "what this session had spent could not be read, and it was given a budget to stay inside"
 )
 
-// ScheduleTracker is the tracker access one pull needs: the admitted work, so it
-// can be put in the product manager's order, and the tracker's own account of
+// ScheduleTracker is the tracker access one pull needs: the work, by status, so
+// the admitted part can be put in the product manager's order and the claimed
+// part can say what is already being worked on, and the tracker's own account of
 // what can be pulled now. Readiness is asked for rather than inferred, for the
 // reason the backlog states — a listing carries dependencies without carrying
 // whether they are finished, so only the tracker's dependency graph can answer
@@ -320,9 +339,11 @@ type Started struct {
 
 // Deferred is one pullable item this pass declined to start, and why.
 //
-// Exactly one thing lands here: an unresolved directive. It is named against the
-// item because it needs a person, and because nothing else in the harness would
-// say that this particular item was passed over for it. The other reasons an
+// Two things land here: an unresolved directive, and an item whose unfinished
+// children already carry its execution. Each is named against the item rather
+// than counted, because each is a fact about that item that nothing else in the
+// harness would report — the first needs a person, and the second is the
+// scheduler passing over something the tracker called ready. The other reasons an
 // item is not started — the tracker not calling it ready, a run for it already
 // being in flight, no free developer slot — are facts about the pass rather than
 // about any one item, and the counts on the schedule report them at that grain.
@@ -447,10 +468,11 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// looked like and tries it again when that changes, which is the same thing a
 	// person means by "nothing has changed, don't try again".
 	tried := make(map[string]string)
-	// deferred is the items already named on the schedule as paused by a
-	// directive. It bounds the report rather than the choosing: the directive
-	// itself is re-read at every pull, so an item stops being deferred the moment
-	// somebody resolves what paused it.
+	// deferred is the items already named on the schedule as passed over — paused
+	// by a directive, or covered by children carrying their execution. It bounds
+	// the report rather than the choosing: both are re-read at every pull, so an
+	// item stops being deferred the moment somebody resolves what paused it or
+	// closes what covered it.
 	deferred := make(map[string]bool)
 	// blockedInARow counts the runs that ended blocked with nothing landing
 	// between them. It is the storm the brake watches for, and it is reset by any
@@ -650,6 +672,28 @@ pulling:
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
+				continue
+			}
+			// A decomposed item is not itself a run. Its children are where the work
+			// went, and starting the parent beside them buys the same change a second
+			// time — two developers rewriting one file, the second of them guaranteed
+			// a conflict at integration. Nothing downstream would catch it: the
+			// reservation sees two different items, and the tracker reports the parent
+			// as ready because nothing blocks it.
+			//
+			// A child covers whether it is queued or already claimed, because both are
+			// work that has not been done yet. This is re-read at every pull like
+			// everything else, so an item stops being covered when its last child
+			// closes, and one that is decomposed while the session watches stops being
+			// pullable at the next selection.
+			if covering := read.children[entry.ID]; len(covering) > 0 {
+				if !deferred[entry.ID] {
+					deferred[entry.ID] = true
+					schedule.Deferred = append(schedule.Deferred, Deferred{
+						WorkItemID: entry.ID,
+						Reason:     coveredReason(covering),
+					})
+				}
 				continue
 			}
 			// An unresolved directive stops the work whether it is read here or in
@@ -867,6 +911,27 @@ func idleReason(queue backlog.Queue) string {
 	return fmt.Sprintf("nothing among the %d ready item(s) is startable that this session has not already tried", queue.Ready())
 }
 
+// coveredReason says that the work has already been broken out, and names what
+// broke it out. The children are what makes it actionable: an operator reading
+// that an item was passed over needs to see where its execution went, and a
+// container left behind after its last child closes is read from the same line.
+//
+// The naming is bounded rather than exhaustive, for the reason every listing
+// here is: an epic decomposed into twenty children would otherwise put twenty
+// identifiers into a report whose whole job is to be read.
+func coveredReason(children []string) string {
+	named := children
+	if len(named) > maxCoveringChildrenNamed {
+		named = named[:maxCoveringChildrenNamed]
+	}
+	reason := fmt.Sprintf("its execution is covered by %d unfinished child item(s): %s",
+		len(children), strings.Join(named, ", "))
+	if further := len(children) - len(named); further > 0 {
+		reason += fmt.Sprintf(", and %d further", further)
+	}
+	return reason + ". The children are the work; pulling this beside them would make the same change twice"
+}
+
 // brakedReason says which brake stopped the line, because what an operator does
 // about it depends entirely on which one it was.
 func brakedReason(ownBrake bool, hold runstate.IntakeHold) string {
@@ -1023,6 +1088,11 @@ func occupiedItems(runs ScheduleRuns) (map[string]struct{}, error) {
 type pulled struct {
 	queue backlog.Queue
 	items map[string]beads.WorkItem
+	// children names the unfinished children of each item in this reading — the
+	// ones still queued, and the ones somebody has already pulled — in the
+	// product manager's order. A child that has closed is not here, which is
+	// exactly when its parent stops being covered by it.
+	children map[string][]string
 }
 
 // queue assembles the admitted work into the product manager's order. It is the
@@ -1050,7 +1120,29 @@ func (p Pull) queue(ctx context.Context) (pulled, error) {
 	for _, item := range admitted {
 		items[item.ID] = item
 	}
-	return pulled{queue: backlog.Order(admitted, pullable), items: items}, nil
+	queue := backlog.Order(admitted, pullable)
+	// Coverage is read one status wider than the backlog. A claimed child has left
+	// the queue and is never chosen from here, but it is a run in flight over the
+	// same work, so its parent is the last thing that should be started beside it.
+	claimed, err := p.Tracker.List(ctx, claimedStatus)
+	if err != nil {
+		return pulled{}, fmt.Errorf("list %s work items: %w", claimedStatus, err)
+	}
+	children := make(map[string][]string)
+	cover := func(item beads.WorkItem) {
+		if parent := strings.TrimSpace(item.Parent); parent != "" {
+			children[parent] = append(children[parent], item.ID)
+		}
+	}
+	// The queue first, so what a deferral names reads in the product manager's
+	// order rather than in whatever order the tracker listed.
+	for _, entry := range queue.Entries {
+		cover(items[entry.ID])
+	}
+	for _, item := range claimed {
+		cover(item)
+	}
+	return pulled{queue: queue, items: items, children: children}, nil
 }
 
 // stale reads what changed upstream of the admitted work after it was admitted,

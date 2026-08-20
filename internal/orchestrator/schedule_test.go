@@ -345,6 +345,112 @@ func TestSchedulerSkipsWorkAnUnresolvedDirectivePauses(t *testing.T) {
 	}
 }
 
+// The failure this guard exists for, replayed: an epic and the child that
+// carries its execution both sitting ready, and a pass with room for both. The
+// tracker reports both as pullable and the reservation sees two different items,
+// so nothing downstream would have stopped two developers making the same change
+// -- and the second of them would have met the first at integration.
+func TestSchedulerLeavesAnEpicItsOpenChildrenAlreadyCover(t *testing.T) {
+	t.Parallel()
+
+	epic := beads.WorkItem{ID: "yoyodyne-epic", Title: "Rewrite the README", Status: "open", Priority: 1}
+	child := beads.WorkItem{ID: "yoyodyne-epic.2", Title: "Rewrite the README", Status: "open", Priority: 1, Parent: epic.ID}
+	harness := newScheduleHarness(epic, child)
+	harness.capacity = 2
+
+	// One pass with room for both is the whole of the failure: the epic is first
+	// in the order, so a scheduler that did not know it was a container would have
+	// started it — and started the child beside it.
+	schedule, err := Scheduler{Open: harness.open, Limit: 1}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != child.ID {
+		t.Fatalf("started = %#v, want only the child that carries the work: %s", schedule.Started, schedule.Render())
+	}
+	// The skip is named against the item like any other selection decision, and
+	// it names where the execution went: a container left in the queue is only
+	// legible if the report says what is covering it.
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != epic.ID {
+		t.Fatalf("deferred = %#v, want the covered epic named rather than silently dropped", schedule.Deferred)
+	}
+	if !strings.Contains(schedule.Deferred[0].Reason, child.ID) {
+		t.Fatalf("deferred reason = %q, want the child that covers it named", schedule.Deferred[0].Reason)
+	}
+	if !strings.Contains(schedule.Render(), epic.ID+" was not pulled") {
+		t.Fatalf("rendered = %q, want the skip readable by an operator", schedule.Render())
+	}
+}
+
+// What covers an item is an unfinished child, whatever slice of the tracker it
+// is in. A blocked child is work somebody will release; a claimed one is a run
+// in flight over the very same change, and it is the case a reading of the queue
+// alone would miss, because a claimed item has left the queue.
+func TestSchedulerLeavesAnEpicItsUnfinishedChildrenCoverWhereverTheySit(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name        string
+		childStatus string
+	}{
+		{name: "a child waiting on a blocker", childStatus: "blocked"},
+		{name: "a child somebody is already running", childStatus: "in_progress"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			epic := beads.WorkItem{ID: "yoyodyne-epic", Title: "Rewrite the README", Status: "open", Priority: 1}
+			child := beads.WorkItem{ID: "yoyodyne-epic.2", Title: "Rewrite the README", Status: test.childStatus, Priority: 1, Parent: epic.ID}
+			other := beads.WorkItem{ID: "yoyodyne-other", Title: "Something else", Status: "open", Priority: 2}
+			harness := newScheduleHarness(epic, child, other)
+			harness.capacity = 2
+
+			schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+			if err != nil {
+				t.Fatalf("Schedule() error = %v", err)
+			}
+			if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != other.ID {
+				t.Fatalf("started = %#v, want the epic left to its child: %s", schedule.Started, schedule.Render())
+			}
+			if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != epic.ID {
+				t.Fatalf("deferred = %#v, want the epic named as covered", schedule.Deferred)
+			}
+			if !strings.Contains(schedule.Deferred[0].Reason, child.ID) {
+				t.Fatalf("deferred reason = %q, want the child that covers it named", schedule.Deferred[0].Reason)
+			}
+		})
+	}
+}
+
+// Coverage is read from the tracker at every pull rather than remembered, so it
+// is a state an item is in rather than a mark it carries: an item stops being
+// covered when its last unfinished child leaves, and is ordinary work again.
+// What the guard does not do is retire an item permanently -- a parent whose one
+// child has closed while it stayed open is common, and holding it back forever
+// would strand real work behind a decomposition that finished.
+func TestSchedulerPullsAContainerOnceItsChildrenHaveLeftTheBacklog(t *testing.T) {
+	t.Parallel()
+
+	epic := beads.WorkItem{ID: "yoyodyne-epic", Title: "Rewrite the README", Status: "open", Priority: 1}
+	child := beads.WorkItem{ID: "yoyodyne-epic.2", Title: "Rewrite the README", Status: "open", Priority: 1, Parent: epic.ID}
+	harness := newScheduleHarness(epic, child)
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if pulled := harness.pullOrder(); len(pulled) != 2 || pulled[0] != child.ID || pulled[1] != epic.ID {
+		t.Fatalf("pulled = %v, want the child first and the parent only once its run had closed it: %s",
+			pulled, schedule.Render())
+	}
+	// The deferral is what the pass said while the epic was covered, and it is
+	// said once: the item is skipped for as long as the cover lasts, not reported
+	// once per pull that skips it.
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != epic.ID {
+		t.Fatalf("deferred = %#v, want the coverage said once rather than once per pull", schedule.Deferred)
+	}
+}
+
 // Dependencies are the tracker's answer rather than the scheduler's guess: an
 // admitted item the tracker does not report as ready is left in the queue,
 // however high its priority.
