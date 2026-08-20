@@ -287,6 +287,39 @@ when a held intake brakes it — as a `warning`, because that one needs somebody
 when it resumes, and when it ends. Each of those is said once, so a session
 idling overnight posts one message rather than one a minute.
 
+**And one thing is a state rather than an event.** Everything above is said once,
+when it happens, which is right for a narrative and wrong for a night: intake
+held at 00:02 and a session that stopped at its budget both said so, correctly,
+and then nothing said anything for ten hours that could be told from a healthy
+quiet queue or a dead sink. So a line that is **choosing nothing while work is
+ready** says so again while it stands — every `--heartbeat`, an hour by default —
+naming what stopped it, how long that has been true, and how much the tracker
+calls ready behind it:
+
+> Nothing is being chosen on this product: intake is held — the harness held
+> intake after runs kept blocking, for 10 hours now, with 4 items ready to pull.
+
+Four states count: the operator holding all harness activity, a held intake
+(whoever held it), a watch session that has found nothing it can start, and no
+watch session running at all. It stops the moment the state clears, and says
+nothing about the clearing — the release, the session opening, or the run it
+starts says that itself.
+
+It is deliberately narrow about when it speaks. A run in flight is not a stalled
+line, so nothing is said while work is visibly moving. A product nobody has ever
+watched is not one either: running items by name is a queue you are choosing to
+keep, not a harness waiting on you. And **an idle line with nothing ready stays
+completely silent**, which is the whole point — silence has to keep meaning
+nothing to do, so that the times it does not are worth reading. Turning it off is
+not offered, because what that buys is silence that means waiting on you; how
+often is `--heartbeat`.
+
+Reading what is ready costs one local tracker (`bd`) read per heartbeat, asked
+only when a message is actually due, and never on the path of any run. A tracker
+the sink cannot read — no `bd` on the machine it runs on, say — costs that one
+message: the sink says so in its own log and asks again at the next interval,
+rather than guessing a number in either direction.
+
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo
 status` reads. A conversation's log is mostly the turn itself, and none of that
@@ -305,7 +338,10 @@ scrolling sideways, so a restart does not repeat what it already said — how fa
 each record has been read is written down as each message goes out and survives
 the process. What can honestly happen twice is said twice: a check that fails
 again, differently, after a repair attempt is its own message, and so is a run
-that waits out a second usage limit.
+that waits out a second usage limit. The heartbeat above is the one thing here
+that is not a transition, and it repeats on purpose: what somebody coming back in
+the morning needs is not that the line stopped, which was said at midnight, but
+that it is still stopped now.
 
 One thing to expect is not a thread at all. **Ask exchanges are designed and not
 built.** Every persona has words ready for a turn of one and for one closing,

@@ -830,6 +830,71 @@ func TestAWatchSessionIsAddressedToTheWholeLine(t *testing.T) {
 	}
 }
 
+// A line that is choosing nothing over ready work is the one thing said as a
+// state rather than as a crossing, so what it says has to carry the three facts
+// somebody woken by it needs: what stopped it, how long that has been true, and
+// how much is waiting behind it.
+func TestALineWaitingSaysWhatStoppedItHowLongAndWhatIsWaiting(t *testing.T) {
+	waiting := FromLine(Line{
+		Stopped: "intake is held, so nothing new is being chosen",
+		Since:   moment,
+		Ready:   3,
+	}, moment.Add(10*time.Hour))
+	if waiting.Topic.Kind != TopicProduct || !waiting.Speaker.IsHarness() {
+		t.Fatalf("a waiting line was addressed to %q and spoken by %q", waiting.Topic.Key(), waiting.Speaker.Key())
+	}
+	// Every persona says it, because the sink posts in whichever voice the message
+	// belongs to and a persona with no line for a kind is a message nobody wrote.
+	for _, speaker := range []Speaker{Harness(), Persona(domain.RoleDeveloper, ""), Persona(domain.RoleArchitect, "")} {
+		message, err := Render(waiting.Topic, speaker, waiting.Event)
+		if err != nil {
+			t.Fatalf("render a waiting line as the %s: %v", speaker.Key(), err)
+		}
+		for _, fact := range []string{"intake is held", "10 hours", "3 items"} {
+			if !strings.Contains(message.Body, fact) {
+				t.Fatalf("body %q does not carry %q", message.Body, fact)
+			}
+		}
+	}
+}
+
+// The age is what changes between one heartbeat and the next, so it is said the
+// way somebody would say it out loud rather than as a duration to parse — and
+// measured against the moment the message dates itself to, so a message read
+// later still says the age it had when it was said.
+func TestTheAgeOfAWaitingLineIsSaidInTheLargestHonestUnit(t *testing.T) {
+	for _, spoken := range []struct {
+		stood time.Duration
+		want  string
+	}{
+		{stood: 30 * time.Second, want: "under a minute"},
+		{stood: time.Minute, want: "one minute"},
+		{stood: 47 * time.Minute, want: "47 minutes"},
+		{stood: time.Hour, want: "one hour"},
+		{stood: 10*time.Hour + 3*time.Minute, want: "10 hours"},
+		{stood: 50 * time.Hour, want: "2 days"},
+	} {
+		waiting := FromLine(Line{Stopped: "no watch session is running", Since: moment, Ready: 1}, moment.Add(spoken.stood))
+		message, err := Render(waiting.Topic, Harness(), waiting.Event)
+		if err != nil {
+			t.Fatalf("render a line waiting %s: %v", spoken.stood, err)
+		}
+		if !strings.Contains(message.Body, spoken.want) {
+			t.Fatalf("a line waiting %s said %q, want it to carry %q", spoken.stood, message.Body, spoken.want)
+		}
+	}
+	// A state with no recorded start says so rather than reading as one that began
+	// at the zero time, which would be an age nobody could believe.
+	unrecorded := FromLine(Line{Stopped: "no watch session is running", Ready: 1}, moment)
+	message, err := Render(unrecorded.Topic, Harness(), unrecorded.Event)
+	if err != nil {
+		t.Fatalf("render a line with no recorded start: %v", err)
+	}
+	if !strings.Contains(message.Body, "an unrecorded length of time") {
+		t.Fatalf("body %q does not state that the start was not recorded", message.Body)
+	}
+}
+
 func watchTransition(state runstate.WatchState, reason string) runstate.WatchTransition {
 	return runstate.WatchTransition{
 		SchemaVersion: runstate.WatchSchemaVersion,

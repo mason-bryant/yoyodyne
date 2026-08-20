@@ -20,6 +20,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
@@ -39,6 +42,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	once := flags.Bool("once", false, "make one pass over the records and exit, rather than staying open")
 	poll := flags.Duration("poll", slack.DefaultPollInterval, "how often to read the durable records")
+	heartbeat := flags.Duration("heartbeat", slack.DefaultHeartbeat, "how often to say again that the line is choosing nothing over ready work")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -51,8 +55,15 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		fmt.Fprintln(stderr, "poll must be positive")
 		return 2
 	}
+	// There is no way to ask for no heartbeat at all, and that is deliberate: what
+	// it would buy is silence that means waiting-on-you, which is the thing the
+	// heartbeat exists to end. What an operator can change is how often.
+	if *heartbeat <= 0 {
+		fmt.Fprintln(stderr, "heartbeat must be positive; it is a cadence rather than a switch, because silence has to mean nothing to do")
+		return 2
+	}
 
-	sink, channel, err := buildSlackSink(*configPath, *poll, stdout)
+	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "slack failed: %v\n", err)
 		return 1
@@ -80,13 +91,23 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 // buildSlackSink assembles the sink from the configuration, the state root, and
 // the environment. It deliberately does not go through the run pipeline's
 // components, for the reason the reporting verbs do not: the sink needs no
-// repository, no worktree, and no process runner, and a process an operator
-// leaves running must not refuse to start because of where their checkout
-// happens to sit.
-func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*slack.Sink, string, error) {
+// worktree and no pipeline, and a process an operator leaves running must not
+// refuse to start because of what a run would need.
+//
+// It does need the tracker, and only for one question: how much admitted work is
+// ready. That is what separates a line waiting on somebody from an honestly quiet
+// one, and it is asked at most once per heartbeat and never on the path of
+// anything. A tracker that will not answer costs the sink that one message and
+// nothing else — it is said in the sink's own log and asked again later — so this
+// is still a process that starts wherever the operator runs it.
+func buildSlackSink(configPath string, poll, heartbeat time.Duration, stdout io.Writer) (*slack.Sink, string, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
 		return nil, "", err
+	}
+	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), resolved.Config.Product.Repository)
+	if err != nil {
+		return nil, "", fmt.Errorf("resolve product repository: %w", err)
 	}
 	settings := resolved.Config.Slack
 	if !settings.Enabled {
@@ -166,7 +187,12 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 			Holds:         holds,
 			Watch:         watch,
 			UsageLimits:   usageLimits,
-			Log:           log,
+			// A held or idle line with work ready to pull says so again while it
+			// stands, because the message that said it began is hours stale by the
+			// time somebody reads it and silence has to keep meaning nothing to do.
+			Backlog:   readyBacklog{tracker: beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}},
+			Heartbeat: heartbeat,
+			Log:       log,
 		},
 		Poll: poll,
 		Log:  log,
@@ -175,6 +201,24 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 		return nil, "", err
 	}
 	return sink, settings.Channel, nil
+}
+
+// readyBacklog is the tracker's own count of what is ready to pull, which is the
+// whole of what the sink asks the backlog. It is a count rather than the items
+// because which items they are is the scheduler's business and not a reporting
+// process's, and it is the tracker's answer rather than a listing this filtered:
+// readiness lives in the tracker's dependency graph, which is the same reason the
+// scheduler asks for it rather than inferring it.
+type readyBacklog struct {
+	tracker beads.Client
+}
+
+func (b readyBacklog) Ready(ctx context.Context) (int, error) {
+	items, err := b.tracker.Ready(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return len(items), nil
 }
 
 // slackAPI reads the two tokens. A missing one is refused here, before anything
@@ -212,6 +256,13 @@ than a gate: nothing waits on it, a workspace that is down delays messages
 rather than losing them, and a sink that has been away catches up from its own
 cursors when it returns.
 
+One thing it says is a state rather than an event. A line that is choosing
+nothing -- intake held, everything held, the watch session idle, or no session
+running -- while the tracker still calls work ready says so every --heartbeat,
+naming what stopped it, how long it has stood, and how much is waiting. It stops
+the moment the state clears, and a line that is idle with nothing ready says
+nothing at all: silence has to mean nothing to do rather than waiting on you.
+
 It needs both tokens in its own environment and takes them from nowhere else:
 
   export SLACK_BOT_TOKEN=xoxb-...
@@ -223,7 +274,9 @@ refused. Setting it up from nothing is `+"`docs/slack/setup.md`"+`, and the app
 manifest it asks for is beside it.
 
 Options:
-  --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --once            make one pass over the records and exit
-  --poll <d>        how often to read the durable records (default 15s)`)
+  --config <path>    configuration file (default: the nearest .yoyodyne/config.yaml)
+  --once             make one pass over the records and exit
+  --poll <d>         how often to read the durable records (default 15s)
+  --heartbeat <d>    how often to say again that the line is choosing nothing
+                     over ready work (default 1h)`)
 }
