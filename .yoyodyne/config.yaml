@@ -42,13 +42,15 @@ slack:
   # The faces are the project's own, committed under docs/slack/avatars and
   # served from the repository; versioned filenames because Slack caches
   # icons aggressively. operations-v1.png waits, unmapped, for the post-v1
-  # operations role; the harness keeps its gear.
+  # operations role. The harness wears the product's engraved gear, the same
+  # image as the Slack app icon (docs/slack/app-icon-v1.png).
   avatars:
     product-manager: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/pm-v1.png
     architect: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/architect-v1.png
     development-manager: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/dev-manager-v1.png
     developer: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/developer-v2.png
     reviewer: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/verifier-v1.png
+    harness: https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/docs/slack/avatars/harness-v1.png
   channel: C0BQY3ZHE8P
 
 product:
