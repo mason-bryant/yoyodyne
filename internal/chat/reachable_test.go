@@ -240,9 +240,10 @@ func TestARealHoldEndedAtThePromptLeavesTheConversationFree(t *testing.T) {
 	}
 }
 
-// A conversation that is not put down is not re-read either. A single message
-// holds from end to end, so nothing else can have written, and re-reading would
-// be work done to discover what this process already knows.
+// A conversation with no claim to put down is not re-read either: nothing else
+// can have written, and re-reading would be work done to discover what this
+// process already knows. This is a session driven directly, which is what an
+// embedder and every other test here are.
 func TestAConversationThatWasNeverPutDownIsNotReRead(t *testing.T) {
 	t.Parallel()
 
@@ -275,8 +276,10 @@ func TestAConversationThatWasNeverPutDownIsNotReRead(t *testing.T) {
 }
 
 // A different conversation recorded under the same agent is `--new` somewhere
-// else. Carrying on here would replace the record of a conversation somebody is
-// currently having, so this one ends and both survive.
+// else. An agent has one record, so the replacement destroyed this one's on its
+// way in: what ending protects is the new conversation, which carrying on here
+// would overwrite in turn. The displaced one is already unresumable, and this
+// says so rather than implying it was saved.
 func TestAConversationReplacedElsewhereEndsRatherThanOverwritingTheNewOne(t *testing.T) {
 	t.Parallel()
 
@@ -288,7 +291,7 @@ func TestAConversationReplacedElsewhereEndsRatherThanOverwritingTheNewOne(t *tes
 	identity := options.identity()
 	hold := &promptHold{}
 	options.Hold = hold
-	var replacementID string
+	var replacementID, displacedID string
 	hold.meanwhile = func(release int) {
 		if release != 2 {
 			return
@@ -303,6 +306,7 @@ func TestAConversationReplacedElsewhereEndsRatherThanOverwritingTheNewOne(t *tes
 			t.Errorf("NewConversationID() error = %v", err)
 			return
 		}
+		displacedID = recorded.ConversationID
 		replacementID = replacement
 		recorded.ConversationID = replacement
 		recorded.ProviderSessionID = ""
@@ -323,6 +327,7 @@ func TestAConversationReplacedElsewhereEndsRatherThanOverwritingTheNewOne(t *tes
 	if len(provider.requests) != 1 {
 		t.Fatalf("provider took %d turn(s), want 1: the second was never sent", len(provider.requests))
 	}
+	// The new conversation is untouched, which is the whole of what ending buys.
 	final, err := store.Load(identity)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -330,4 +335,39 @@ func TestAConversationReplacedElsewhereEndsRatherThanOverwritingTheNewOne(t *tes
 	if final.ConversationID != replacementID {
 		t.Fatalf("recorded conversation = %s, want the replacement %s", final.ConversationID, replacementID)
 	}
+	// And the displaced one is gone rather than saved somewhere: an agent has one
+	// record, so there is no second one to come back to. This is asserted rather
+	// than left implied, because "the conversation ended" reads like something was
+	// preserved and nothing was.
+	if final.ConversationID == displacedID {
+		t.Fatalf("the displaced conversation %s is still the recorded one", displacedID)
+	}
+	recorded := recordedConversations(t, store)
+	if len(recorded) != 1 {
+		t.Fatalf("%d conversations are recorded, want 1: an agent has one record", len(recorded))
+	}
+	if recorded[0].ConversationID != replacementID {
+		t.Fatalf("the recorded conversation is %s, want the replacement %s", recorded[0].ConversationID, replacementID)
+	}
+	// What does survive is its event log, under its own identifier, with nothing
+	// pointing at it. That is what the README promises is still recoverable.
+	events, err := store.LoadEvents(displacedID)
+	if err != nil {
+		t.Fatalf("LoadEvents() for the displaced conversation error = %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatalf("the displaced conversation %s left no event log behind", displacedID)
+	}
+}
+
+// recordedConversations is every conversation this product holds a record of,
+// which is one per agent.
+func recordedConversations(t *testing.T, store *runstate.ConversationStore) []runstate.Conversation {
+	t.Helper()
+
+	recorded, err := store.Recorded()
+	if err != nil {
+		t.Fatalf("Recorded() error = %v", err)
+	}
+	return recorded
 }

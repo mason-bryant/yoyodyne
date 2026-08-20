@@ -125,12 +125,16 @@ type Options struct {
 	Backend Backend
 	Store   Store
 	// Hold is this process's claim on the conversation, already taken by the
-	// caller. It is optional, and a conversation without one is held by whoever
-	// opened it for as long as they keep it: that is what a single message is,
-	// and it is what every conversation was before an interactive one learned to
-	// put itself down at the prompt. A conversation with one puts it down while
-	// the operator is typing and takes it up again for each turn, re-reading the
-	// durable record whenever it had let go of it.
+	// caller. Only an interactive conversation ever puts it down: it does so
+	// while the operator is typing and takes it up again for each turn,
+	// re-reading the durable record whenever it had let go of it. A single
+	// message carries one too and never releases it, so it holds from end to end
+	// exactly as every conversation did before the prompt learned to let go.
+	//
+	// It is optional because a caller may have no claim to hand over — an
+	// embedder, or a test driving a session directly. Such a conversation is
+	// never put down and so is never re-read, because nothing else could have
+	// written while it was held.
 	Hold Hold
 	// Tracker is the work tracker this conversation acts on: the items the
 	// operator approves, and the ones the product manager manages itself. It is
@@ -532,8 +536,10 @@ func (s *Session) adopt(existing runstate.Conversation) {
 // overwrite all of it — including the provider session, which would put this
 // conversation back onto a session the agent has already moved past.
 //
-// A conversation that was never put down needs none of this, and does none of
-// it: nothing else could have written while it was held.
+// A conversation with no claim to put down needs none of this, and does none of
+// it: nothing else could have written while it was held. That is a session a
+// caller drove directly rather than a single message, which carries a claim and
+// holds it from end to end without ever reaching here.
 func (s *Session) reload() error {
 	if s.options.Hold == nil {
 		return nil
@@ -548,10 +554,14 @@ func (s *Session) reload() error {
 	if err != nil {
 		return fmt.Errorf("re-read the recorded conversation: %w", err)
 	}
-	// A different conversation under this agent is `--new` somewhere else. This
-	// process's session is still real, and it no longer has anywhere to be
-	// recorded: saving would replace the record of a conversation somebody is
-	// currently having. Ending here is what leaves both of them intact.
+	// A different conversation under this agent is `--new` somewhere else. An
+	// agent has one record, so the replacement already destroyed this one's on
+	// its way in: what is being protected here is the new conversation, not the
+	// displaced one. This session is still real and no longer has anywhere to be
+	// recorded, and saving it would replace the record of a conversation somebody
+	// is currently having. Ending is the only thing left that costs nobody a
+	// second conversation. The displaced one cannot be resumed after this; its
+	// event log survives under its own identifier, with nothing pointing at it.
 	if existing.ConversationID != s.state.ConversationID {
 		return fmt.Errorf("this agent's recorded conversation is now %s rather than %s: another process started a new one, and carrying on here would overwrite it",
 			existing.ConversationID, s.state.ConversationID)
