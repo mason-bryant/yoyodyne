@@ -2260,16 +2260,24 @@ guessing a wait. An exhausted limit is not the only thing a run waits out:
 [an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
 same machinery on a much shorter clock.
 
-An exhausted limit is not only a run's problem, either. A conversation turn and
-an independent `yoyo review` are provider invocations with no run to park, so
-each of them records the refusal instead: what was stopped, the limit the
-provider named, and when it said it lifts. Nothing waits on it — the turn or the
-review fails at your terminal exactly as it did before — but the refusal is
-durable, so [reporting into Slack](#reporting-into-slack) says it as a `warning`
-from wherever it happened, and a run that parks on the same limit is said at that
-weight too. Hours in which nothing will happen is the one message a channel
-nobody is watching most needs to carry, and it must not weigh the same as checks
-passing.
+An exhausted limit is not only a run's problem, either. The harness asks a
+provider for work in three places: inside a run, which parks as above; a
+conversation turn; and an independent `yoyo review`, which uses the same reviewer
+with no run around it. The last two have no run to park, so each records the
+refusal instead — what was stopped, the limit the provider named, and when it
+said it lifts. Nothing waits on it: the turn or the review fails at your terminal
+exactly as it did before. What the record buys is that
+[reporting into Slack](#reporting-into-slack) says it as a `warning` without you
+there, and a run that parks on the same limit is said at that weight too. Hours
+in which nothing will happen is the one message a channel nobody is watching most
+needs to carry, and it must not weigh the same as checks passing.
+
+Selection is not a fourth place. A watching `yoyo work` session reads the tracker
+and starts runs and makes no provider call of its own, so a limit it meets is met
+by a run it started. That the three above are all of them is checked rather than
+asserted — `TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the
+tree and fails on a provider invocation with no account of what an exhausted
+limit does to it.
 
 ### Waiting out an overloaded provider
 
