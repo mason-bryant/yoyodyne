@@ -576,6 +576,66 @@ func TestCheckTimeoutMustBePositive(t *testing.T) {
 	}
 }
 
+// The watch settings resolve like every other execution key, and both of them
+// have to: the interval is how responsive a session is to a queue being
+// steered, and the brake is a safety bound a project sets against its own pace.
+func TestTheWatchSettingsResolveFromEveryLayer(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if got := inherited.Config.Execution.WorkPoll; got != Duration(60*time.Second) {
+		t.Fatalf("inherited work_poll = %s, want 60s", got)
+	}
+	if got := inherited.Config.Execution.BlockedRunsBeforeIntakeHold; got != 3 {
+		t.Fatalf("inherited blocked_runs_before_intake_hold = %d, want 3", got)
+	}
+
+	overridden := loadProject(t, minimalProjectConfig+`execution:
+  work_poll: 5m
+  blocked_runs_before_intake_hold: 5
+`, nil)
+	if got := overridden.Config.Execution.WorkPoll; got != Duration(5*time.Minute) {
+		t.Fatalf("overridden work_poll = %s, want 5m", got)
+	}
+	if got := overridden.Config.Execution.BlockedRunsBeforeIntakeHold; got != 5 {
+		t.Fatalf("overridden blocked_runs_before_intake_hold = %d, want 5", got)
+	}
+	if origin := overridden.Origins["execution.work_poll"]; origin == BuiltinV1 {
+		t.Fatalf("an overridden key kept the bundle's origin %q", origin)
+	}
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	if got := generated.Execution.WorkPoll; got != Duration(60*time.Second) {
+		t.Fatalf("generated work_poll = %s, want 60s", got)
+	}
+	if got := generated.Execution.BlockedRunsBeforeIntakeHold; got != 3 {
+		t.Fatalf("generated blocked_runs_before_intake_hold = %d, want 3", got)
+	}
+}
+
+// An interval of nothing is a session reading the queue as fast as the machine
+// allows, which is a spin rather than a watch. A brake of zero is a choice —
+// never brake, leave the operator as the only thing that holds intake — and a
+// negative one describes no run anybody could count.
+func TestTheWatchSettingsRefuseWhatWouldNotBeAWatch(t *testing.T) {
+	t.Parallel()
+
+	for _, body := range []string{"execution:\n  work_poll: 0s\n", "execution:\n  work_poll: -1m\n"} {
+		_, err := loadProjectError(t, minimalProjectConfig+body, nil)
+		if err == nil || !strings.Contains(err.Error(), "execution.work_poll must be positive") {
+			t.Fatalf("LoadResolved() error = %v, want one refusing %q", err, strings.TrimSpace(body))
+		}
+	}
+	_, err := loadProjectError(t, minimalProjectConfig+"execution:\n  blocked_runs_before_intake_hold: -1\n", nil)
+	if err == nil || !strings.Contains(err.Error(), "blocked_runs_before_intake_hold cannot be negative") {
+		t.Fatalf("LoadResolved() error = %v, want a negative brake refused", err)
+	}
+	turnedOff := loadProject(t, minimalProjectConfig+"execution:\n  blocked_runs_before_intake_hold: 0\n", nil)
+	if got := turnedOff.Config.Execution.BlockedRunsBeforeIntakeHold; got != 0 {
+		t.Fatalf("blocked_runs_before_intake_hold = %d, want the brake turned off as asked", got)
+	}
+}
+
 // A non-positive interval is refused, because the whole of an overload's wait is
 // this interval: there is no reset time underneath it to fall back on.
 func TestServerOverloadPauseMustBePositive(t *testing.T) {

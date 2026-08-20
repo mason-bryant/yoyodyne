@@ -211,6 +211,19 @@ execution:
   # multiplying the cores it runs on, so either this scales with
   # max_concurrent_developers or the checks are left to serialize themselves.
   check_timeout: %s
+  # "yoyo work --watch" stays open instead of returning when the queue is empty,
+  # and this is how long it waits before reading the queue again. Nothing is
+  # cached between readings, so this is also the delay on work you admit or
+  # reorder while it is running. An idle watch costs one local tracker read per
+  # interval and asks no provider anything.
+  work_poll: %s
+  # The failure-storm brake for a session left running unattended: this many runs
+  # blocking in a row, with nothing landing between them, holds intake and leaves
+  # it held for you to lift. It is aimed at a broken machine rather than a broken
+  # item -- an item that keeps failing is left alone until something about it
+  # changes -- and "0" turns it off, leaving you as the only thing that holds
+  # intake.
+  blocked_runs_before_intake_hold: %d
 
 # When work that has stopped moving is looked at, and what looking at it may
 # spend. An approved publication nobody has merged is docketed once it has sat
@@ -280,6 +293,8 @@ approvals:
 		renderScaffoldDuration(effective.Execution.UsageLimitUnknownResetPause),
 		renderScaffoldDuration(effective.Execution.ServerOverloadPause),
 		renderScaffoldDuration(effective.Execution.CheckTimeout),
+		renderScaffoldDuration(effective.Execution.WorkPoll),
+		effective.Execution.BlockedRunsBeforeIntakeHold,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,
 		effective.Approvals.Brief,

@@ -250,6 +250,14 @@ down — there is no item, because nothing was created — and anything an agent
 filed with no work item attached. Burying those in one item's thread would
 misfile them.
 
+What a watching `yoyo work` session is doing goes there too, and it is the one
+thing here that is news precisely because nothing is happening: a session that
+has gone quiet and a session that has died are the same silence otherwise. It
+says when it opens, when it goes idle over a queue with nothing pullable in it,
+when a held intake brakes it — as a `warning`, because that one needs somebody —
+when it resumes, and when it ends. Each of those is said once, so a session
+idling overnight posts one message rather than one a minute.
+
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo
 status` reads. A conversation's log is mostly the turn itself, and none of that

@@ -81,6 +81,18 @@ const (
 	KindIntakeReleased Kind = "intake.released"
 	KindHoldPlaced     Kind = "hold.placed"
 	KindHoldLifted     Kind = "hold.lifted"
+	// What a watch session is doing. A session that stays open until it is told
+	// to stop spends most of its life saying nothing, and an idle one and a dead
+	// one are the same silence: these are what tell them apart. Idle and braked
+	// are separate because they need different things — idle needs work admitted,
+	// braked needs somebody to look at what stopped the line — and stopping is
+	// said because a session that ended quietly is the case the rest of this
+	// exists to rule out.
+	KindWatchStarted Kind = "watch.started"
+	KindWatchIdle    Kind = "watch.idle"
+	KindWatchBraked  Kind = "watch.braked"
+	KindWatchResumed Kind = "watch.resumed"
+	KindWatchStopped Kind = "watch.stopped"
 )
 
 // Kinds is the whole reportable set, in the order work reaches them: the queue
@@ -115,6 +127,11 @@ func Kinds() []Kind {
 		KindIntakeReleased,
 		KindHoldPlaced,
 		KindHoldLifted,
+		KindWatchStarted,
+		KindWatchIdle,
+		KindWatchBraked,
+		KindWatchResumed,
+		KindWatchStopped,
 	}
 }
 
@@ -130,7 +147,8 @@ func (k Kind) Valid() bool {
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
 		KindRunParked, KindRunContinued, KindBlockerRecorded,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
-		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted:
+		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
+		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped:
 		return true
 	default:
 		return false

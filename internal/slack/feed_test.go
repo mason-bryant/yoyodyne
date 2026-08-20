@@ -257,6 +257,44 @@ func TestARecordThatCannotBeAddressedIsReadPastRatherThanRetriedForever(t *testi
 // The operator's two switches are the awkward pair: a hold is a record, and what
 // lifts it is only its absence. Both halves are said, because a queue that goes
 // quiet is indistinguishable from a broken one until something says which.
+// What a watch session is doing is carried like every other log: each
+// transition once, in the order it happened, and nothing said twice however
+// often the sink reads. A session going quiet is the whole reason this stream
+// exists, so an idle one has to reach the channel.
+func TestWhatAWatchSessionIsDoingIsSaidOnceEach(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
+	harness.watched(t, runstate.WatchIdle, "the backlog is empty", moment.Add(time.Minute))
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindWatchIdle)
+	// Read again with nothing new: a session that is still idle is still the
+	// same fact, and a channel that repeated it every minute would be one nobody
+	// reads.
+	cursors = harness.poll(t, cursors)
+
+	harness.watched(t, runstate.WatchBraked, "the operator is holding intake", moment.Add(2*time.Minute))
+	harness.poll(t, cursors, notify.KindWatchBraked)
+}
+
+// A session that ran before anybody pointed a channel at this product is
+// history: the watermark is read past in one silent advance rather than a
+// night's worth of idling arriving at once.
+func TestAWatchSessionFromBeforeTheWatermarkIsReadPast(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment)
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(-time.Hour))
+	harness.watched(t, runstate.WatchStopped, "the scheduler was cancelled", moment.Add(-time.Minute))
+	cursors := harness.poll(t, harness.start())
+	if cursors.Streams[watchStream].Position != 2 {
+		t.Fatalf("cursor = %#v, want what was read past advanced rather than re-read every pass", cursors.Streams[watchStream])
+	}
+	// What happens after the watermark is news, whatever came before it.
+	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment.Add(time.Hour))
+	harness.poll(t, cursors, notify.KindWatchStarted)
+}
+
 func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	t.Parallel()
 
@@ -312,6 +350,7 @@ type testHarness struct {
 	amend   *runstate.AmendmentStore
 	intake  *runstate.IntakeHoldStore
 	holds   *runstate.OperatorHoldStore
+	watch   *runstate.WatchStore
 }
 
 func newTestHarness(t *testing.T, since time.Time) *testHarness {
@@ -341,6 +380,10 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	if err != nil {
 		t.Fatalf("NewOperatorHoldStore() error = %v", err)
 	}
+	watch, err := runstate.NewWatchStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewWatchStore() error = %v", err)
+	}
 	return &testHarness{
 		since: since,
 		feed: &HarnessFeed{
@@ -350,6 +393,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 			Proposals:     amend,
 			Intake:        intake,
 			Holds:         holds,
+			Watch:         watch,
 			Now:           func() time.Time { return moment.Add(time.Hour) },
 		},
 		runs:    runs,
@@ -358,6 +402,7 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		amend:   amend,
 		intake:  intake,
 		holds:   holds,
+		watch:   watch,
 	}
 }
 
@@ -475,6 +520,20 @@ func (h *testHarness) fileAs(t *testing.T, id, workItemID string, severity repor
 		RecordedAt:    at,
 	}); err != nil {
 		t.Fatalf("Append() error = %v", err)
+	}
+}
+
+func (h *testHarness) watched(t *testing.T, state runstate.WatchState, reason string, at time.Time) {
+	t.Helper()
+	if err := h.watch.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         state,
+		At:            at,
+		Reason:        reason,
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
 	}
 }
 

@@ -217,6 +217,22 @@ type Execution struct {
 	// other wait, so a provider that stays overloaded walks into that bound rather
 	// than reissuing forever.
 	ServerOverloadPause Duration `yaml:"server_overload_pause" json:"server_overload_pause"`
+	// WorkPoll is how long a watch session waits before reading the queue again
+	// when it found nothing to start. It is the whole cost of an idle watch: one
+	// local tracker read per interval, no provider anywhere near it. Nothing is
+	// cached between polls, so it is also the whole of the latency on a change —
+	// work admitted, reprioritized, or unblocked is picked up at the next poll
+	// rather than by anything detecting it.
+	WorkPoll Duration `yaml:"work_poll" json:"work_poll"`
+	// BlockedRunsBeforeIntakeHold is the failure-storm brake: this many runs
+	// blocking in a row, with nothing landing between them, holds intake and
+	// leaves it held for the operator to lift. It is a bound on systemic
+	// breakage rather than on any one item — an item that keeps failing is the
+	// per-item cooldown's business — and it exists because a watch session left
+	// overnight against a broken machine would otherwise put the whole queue
+	// through a run each and dock every one of them. Zero never brakes, which is
+	// the behaviour a pass had before this bound existed.
+	BlockedRunsBeforeIntakeHold int `yaml:"blocked_runs_before_intake_hold" json:"blocked_runs_before_intake_hold"`
 }
 
 const (
@@ -256,6 +272,17 @@ const (
 	// minute or two of the overload lifting, which is the timescale the provider's
 	// own message describes.
 	defaultServerOverloadPause = Duration(90 * time.Second)
+	// defaultWorkPoll is a minute, which is the granularity a person steering a
+	// backlog actually works at: work admitted or reordered is picked up within
+	// a minute, and an idle session costs one tracker read a minute to be that
+	// responsive. Shorter buys latency nobody is waiting on; much longer makes
+	// reordering the queue feel like it did nothing.
+	defaultWorkPoll = Duration(60 * time.Second)
+	// defaultBlockedRunsBeforeIntakeHold is three, which is the same shape of
+	// bound as the repair and relaunch budgets: enough that one bad item and the
+	// unlucky item after it do not stop the line, and short of a session that
+	// spends the whole backlog finding out the machine is broken.
+	defaultBlockedRunsBeforeIntakeHold = 3
 )
 
 // Triage is what the triage workflow measures against: when work that has
@@ -480,6 +507,18 @@ func (c Config) Validate() error {
 	// same overloaded server with nothing between the attempts.
 	if c.Execution.ServerOverloadPause <= 0 {
 		problems = append(problems, "execution.server_overload_pause must be positive")
+	}
+	// Zero is not a choice here either: a watch session that polled with nothing
+	// between the readings would read the tracker as fast as the machine allows
+	// for as long as the queue stayed empty, which is a spin rather than a watch.
+	if c.Execution.WorkPoll <= 0 {
+		problems = append(problems, "execution.work_poll must be positive")
+	}
+	// Zero is a choice here — never brake, let the operator be the only thing
+	// that holds intake — so only a negative bound, which describes no run
+	// anybody could count, is refused.
+	if c.Execution.BlockedRunsBeforeIntakeHold < 0 {
+		problems = append(problems, "blocked_runs_before_intake_hold cannot be negative")
 	}
 	// An age of zero is not the choice the pauses above make with theirs: it
 	// dockets every approved publication the instant it is made, which is not a

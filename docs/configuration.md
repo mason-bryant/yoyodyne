@@ -1280,7 +1280,8 @@ It reads the admitted work in the order you set — highest priority first — t
 the items the tracker itself reports as ready to pull, and starts as many of them
 at once as this leaves free. Each run gets a worktree and a branch of its own,
 and the command returns once every run it started has ended. `--limit <n>` stops
-it after that many runs; without one it drains what is ready.
+it after that many runs; without one it drains what is ready, and
+[`--watch`](#watching-instead-of-draining) keeps it open instead.
 
 Nothing about running several at once relaxes anything. Capacity is enforced at
 the reservation rather than by the scheduler, so two schedulers, or a scheduler
@@ -1316,6 +1317,71 @@ configured, and the default of `1` is deliberate: raising it is a decision about
 your machine, and [how long a check may take](#how-long-a-check-may-take) is the
 setting that has to move with it.
 
+### Watching instead of draining
+
+`yoyo work` returns when nothing more is ready. `yoyo work --watch` does not: it
+waits out an interval and reads the queue again, until you stop it.
+
+```yaml
+execution:
+  work_poll: 60s                       # the default
+  blocked_runs_before_intake_hold: 3   # the default
+```
+
+Nothing else about the pass changes, and nothing needed to. Every pull already
+re-reads the configuration, re-reads the intake hold, takes the queue in the
+order you set, and records why it chose what it chose — so work you admit is
+picked up at the next poll, a reprioritization is honored at the next pull, and
+an item whose dependency landed becomes pullable because the tracker says so.
+There is no change detection anywhere in it, because nothing between the readings
+is cached. A run already in flight is never preempted by any of that.
+
+An idle session costs one local tracker read per `work_poll` and asks no provider
+anything, so a queue that is empty overnight spends nothing.
+
+**The intake hold is the remote brake.** Holding intake does not stop a watching
+session; it brakes it in place. The session keeps polling, chooses nothing, and
+resumes where it was when you release it. `yoyo pause` — the wider switch — parks
+the runs too, and lifting it resumes them from their own records.
+
+**Three guards, because the loop no longer ends.**
+
+An item whose run fails *before it starts* — unreadable acceptance criteria, a
+provider that is not authenticated, a context bundle that will not assemble —
+leaves that item exactly as ready as it was. A drain tries it once and returns; a
+watch would otherwise retry it every interval forever. So a watching session
+leaves such an item alone until something about the item changes: what it says,
+what it is for, its priority, its status, what it depends on. The item's notes
+are deliberately not part of that, because the harness writes its own account of
+the failed run into them, and a cooldown the harness could clear by failing is
+not one.
+
+`blocked_runs_before_intake_hold` is the failure-storm brake, and it is a
+different thing from that cooldown: it is aimed at a broken machine rather than a
+broken item. That many runs blocking one after another, with nothing landing
+between them, holds intake — the same hold you would place — and it stays held
+until you release it. Any run that lands clears the count, and `0` turns the
+brake off entirely, leaving you as the only thing that holds intake.
+
+And the session says what it is doing, because an idle session and a dead one are
+otherwise the same silence. Each transition — watching, idle, braked, resumed,
+stopped — is recorded once, where `yoyo status` prints it and the Slack sink
+posts it. A session idling all night writes one line rather than one a minute.
+
+**`--budget <usd>`** caps what one session spends, from the same recorded run
+evidence `yoyo cost` prices items from. It is checked between pulls, never during
+a run: the money a running run has spent is already spent, and what stopping it
+would lose is the work it bought.
+
+**The default is still the drain**, and `--until-drained` says so explicitly.
+That is deliberate: watching is the shape this loop is meant to have, and turning
+it on by default is a decision to make once stopped work reliably reaches
+somebody, rather than a side effect of the flag existing.
+
+What changes when you watch is what bounds the spend. A drain is bounded by the
+queue emptying; a watching session is bounded by what you admit to the queue. The
+backlog's order stops being a schedule and becomes the throttle.
+
 ### When a configuration change takes effect
 
 **At the next selection.** `yoyo work` re-reads the configuration before every
@@ -1329,6 +1395,11 @@ A run already in flight keeps the configuration its own pull read. Its capacity,
 its check budget, and its repair budget were fixed when it was reserved, and
 changing them under a running developer would mean a run judged by rules it was
 never started under.
+
+A watching session is the same answer said again: `work_poll` and
+`blocked_runs_before_intake_hold` are re-read at every pull too, so an interval
+you shorten or a brake you loosen takes effect at the next wait rather than at
+the next restart.
 
 ### Why each run says why it was there
 

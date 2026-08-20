@@ -54,6 +54,17 @@ execution:
   # raise it again for concurrency -- N runs at once multiply the wall clock of
   # every suite without multiplying the cores it runs on.
   check_timeout: 30m
+  # "yoyo work --watch" does not return when the queue empties: it waits this
+  # long and reads the queue again. Nothing is cached between readings, so this
+  # is also how long work admitted or reordered waits to be picked up, and an
+  # idle session costs one local tracker read per interval and no provider call.
+  work_poll: 60s
+  # The failure-storm brake for a session left running unattended: this many runs
+  # blocking in a row, with nothing landing between them, holds intake and leaves
+  # it held for the operator to lift. It is aimed at a broken machine rather than
+  # a broken item -- an item that keeps failing is left alone until something
+  # about it changes -- and 0 turns it off entirely.
+  blocked_runs_before_intake_hold: 3
 
 # What the operator approves, and what runs without asking.
 #
