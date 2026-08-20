@@ -22,6 +22,17 @@ effect of an edit is obvious, which matters more here than shared improvement.
 Inheritance is still supported for projects that would rather have the other
 half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bundle).
 
+**Where to look for what.**
+[Creating a project configuration](#creating-a-project-configuration) is what
+`yoyo init` writes and the remote it points the tracker at;
+[Layout](#layout) is the file itself, field by field; [Discovery](#discovery)
+and [Precedence](#precedence) are how `yoyo` finds it and what wins when more
+than one thing says something; [Inspection](#inspection) is how to ask what a
+configuration resolves to and where each value came from. Editing a field is the
+whole of what changes the harness's behavior, so there is no layer between this
+file and what runs. The [README](../README.md) is where a newcomer starts; this
+is the reference behind it.
+
 ## Creating a project configuration
 
 ```sh
@@ -174,9 +185,9 @@ the role is allowed to do. The set of role names is fixed for the same reason â€
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name â€” so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](#what-fails-closed). The README's
-[Talking to the other agents](../README.md#talking-to-the-other-agents) states
-the table itself.
+[refused when the configuration loads](#what-fails-closed).
+[Talking to the other agents](conversation.md#talking-to-the-other-agents)
+states the table itself.
 
 ## Discovery
 
