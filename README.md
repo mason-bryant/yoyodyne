@@ -354,10 +354,10 @@ yoyo chat
 `product.specifications` — `docs/product` by default — and nothing else in the
 repository is read as intent. Beside it, and labeled as description rather than
 intent, it is given the documentation of what the product ships today: this
-README and the documents it links, the configuration guide, and the help the
-commands print. Not the source, and not the design document. A specification opens with an introduction
-saying what the thing is and why it exists, and states the goals that serve it
-after that introduction:
+README and the operator documentation it links, the configuration guide, and the
+help the commands print. Not the source, and not the design document. A
+specification opens with an introduction saying what the thing is and why it
+exists, and states the goals that serve it after that introduction:
 
 ```markdown
 # Calc

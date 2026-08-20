@@ -352,10 +352,11 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is `README.md` and the documents it links,
-this file, and the help every command prints — carried in a section of its own, labeled as description
-of the implementation as built and never as authority about intent. No source,
-no design document, and no way to run a command.
+product ships today.** That last part is `README.md` and the operator
+documentation it links, this file, and the help every command prints — carried in
+a section of its own, labeled as description of the implementation as built and
+never as authority about intent. No source, no design document, and no way to
+run a command.
 
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the

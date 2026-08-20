@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist
+.PHONY: build test race vet fmt fmtcheck check walk dist dist-verify clean-dist
 .NOTPARALLEL: check
 
 build:
@@ -41,6 +41,15 @@ fmtcheck:
 	fi
 
 check: fmtcheck test race vet
+
+# The adoption walkthrough executes the README's install and getting-started
+# claims against a throwaway project, which is the only check that reads the
+# README as a stranger would. It is deliberately not part of `check`: it needs
+# `bd` on PATH and exits 2 without it, and neither CI nor a project consuming
+# this repository installs one. Run it before landing a change to the README's
+# first-run path.
+walk:
+	scripts/walk-adoption.sh
 
 clean-dist:
 	rm -rf $(DIST)

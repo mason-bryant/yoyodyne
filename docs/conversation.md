@@ -69,9 +69,10 @@ persona guidance, so a project that wants a different opening
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
-the product ships today**, which is the README, the documents it links, the
-configuration guide, and the help every command prints. It is labeled as exactly that — a description of
-the implementation as built, never authority about what the product is for — so
+the product ships today**, which is the README, the operator documentation it
+links, the configuration guide, and the help every command prints. It is labeled
+as exactly that — a description of the implementation as built, never authority
+about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist
 without you having to tell it. Where that description and a specification
 disagree, the product manager reports the conflict rather than settling it.
