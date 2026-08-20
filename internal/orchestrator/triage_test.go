@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,10 @@ func (d *memoryDocket) RecordOnce(entry triage.Entry) (bool, error) {
 	return true, nil
 }
 
-func (d *memoryDocket) List() ([]triage.Entry, error) { return d.entries, nil }
+// List hands back a copy, as the durable store does by decoding the log afresh:
+// what a reader joins onto the entries it was given must not travel back into
+// the log, which is written once and never revised.
+func (d *memoryDocket) List() ([]triage.Entry, error) { return slices.Clone(d.entries), nil }
 
 func (d *memoryDocket) keys() []string {
 	keys := make([]string, 0, len(d.entries))
@@ -52,13 +56,33 @@ func (d *memoryDocket) keys() []string {
 // recordedRuns is the run evidence a docket is built from.
 type recordedRuns struct {
 	states []runstate.State
-	rounds map[string]int
 }
 
 func (r recordedRuns) Recorded() ([]runstate.State, error) { return r.states, nil }
 
-func (r recordedRuns) ReviewRounds(workItemID string) (int, error) {
-	return r.rounds[workItemID], nil
+// recordedDecisions is the durable triage record the guards spend and refuse
+// against, without the disk: what triage has decided about a work item, and what
+// the harness has claimed against that item's stoppages.
+type recordedDecisions struct {
+	counters map[string]runstate.TriageCounters
+	claimed  map[string][]runstate.Rerun
+	// unreadable is the work item whose record cannot be read, which is the case
+	// an entry must never render as an item nothing was ever decided about.
+	unreadable string
+}
+
+func (d *recordedDecisions) Counters(workItemID string) (runstate.TriageCounters, error) {
+	if workItemID == d.unreadable {
+		return runstate.TriageCounters{}, errors.New("the triage record is unreadable")
+	}
+	return d.counters[workItemID], nil
+}
+
+func (d *recordedDecisions) Claimed(workItemID string) ([]runstate.Rerun, error) {
+	if workItemID == d.unreadable {
+		return nil, errors.New("the re-run records are unreadable")
+	}
+	return d.claimed[workItemID], nil
 }
 
 const (
@@ -76,15 +100,52 @@ type docketClock struct{}
 func (docketClock) Now() time.Time { return docketedNow }
 
 func docketerOver(states []runstate.State, docket *memoryDocket) Docketer {
+	recorded := &recordedDecisions{
+		counters: map[string]runstate.TriageCounters{docketedItem: {ReviewRounds: 3}},
+	}
+	return docketerDeciding(states, docket, recorded, recorded)
+}
+
+// docketedTriage is the configuration a docket is built against in these tests,
+// and docketedCaps the ceilings assembled from it — the same ones the guards are
+// refused against, which is the whole point of the docket reporting them.
+var (
+	docketedTriage = config.Triage{
+		StuckMergeAge:       config.Duration(2 * time.Hour),
+		ReviewRoundsCap:     4,
+		RepairGrantAttempts: 2,
+	}
+	docketedCaps = TriageCaps(config.Execution{IntegrationRetriesBeforeReconciliation: 1}, docketedTriage)
+)
+
+// docketerDeciding is a docket built over one triage record, for the tests that
+// are about what the record says rather than about what stopped.
+func docketerDeciding(states []runstate.State, docket *memoryDocket, decisions DocketDecisions, claimed DocketReruns) Docketer {
 	return Docketer{
-		Docket: docket,
-		Runs:   recordedRuns{states: states, rounds: map[string]int{docketedItem: 3}},
-		Triage: config.Triage{
-			StuckMergeAge:       config.Duration(2 * time.Hour),
-			ReviewRoundsCap:     4,
-			RepairGrantAttempts: 2,
-		},
-		Clock: docketClock{},
+		Docket:    docket,
+		Runs:      recordedRuns{states: states},
+		Decisions: decisions,
+		Reruns:    claimed,
+		// The caps are assembled the way every other reader of the same record
+		// assembles them, so the docket cannot report an item against a ceiling
+		// nothing enforces.
+		Caps:   docketedCaps,
+		Triage: docketedTriage,
+		Clock:  docketClock{},
+	}
+}
+
+// docketerOverStore is a docket over a real run store, reading the same two
+// durable records the triage guards spend: the item's counters and the re-runs
+// claimed against its stoppages.
+func docketerOverStore(docket Docket, store *runstate.Store, cfg config.Config) *Docketer {
+	return &Docketer{
+		Docket:    docket,
+		Runs:      store,
+		Decisions: store.Triage(),
+		Reruns:    store.Reruns(),
+		Caps:      TriageCaps(cfg.Execution, cfg.Triage),
+		Triage:    cfg.Triage,
 	}
 }
 
@@ -180,8 +241,12 @@ func TestARunThatStoppedOnABlockerIsDocketedWithItsEvidence(t *testing.T) {
 		t.Fatalf("artifacts = %#v, want the preserved branch and worktree", entry.Artifacts)
 	}
 	// The counters are the half of an entry a decision is measured against: the
-	// rounds are the item's total, and the budgets are the project's.
-	want := triage.Counters{ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2}
+	// rounds and the decisions are the item's durable triage record, and the caps
+	// beside each are what will refuse the next decision.
+	want := triage.Counters{
+		ReviewRounds: 3, ReviewRoundsCap: 4, RepairAttempts: 2, RepairGrantAttempts: 2,
+		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 1,
+	}
 	if entry.Counters != want {
 		t.Fatalf("counters = %#v, want %#v", entry.Counters, want)
 	}
@@ -447,7 +512,9 @@ func TestBuildingTheDocketTwiceDocketsEachEventOnce(t *testing.T) {
 	}
 	want := []string{
 		triage.Key(triage.ClassStoppedRun, stopped.RunID),
-		triage.Key(triage.ClassPublication, published.RunID),
+		// A publication is keyed to the run and the pull request together, so what
+		// the entry is about is two facts a reader can check against the record.
+		triage.PublicationKey(published.RunID, published.PullRequest.Number),
 	}
 	if strings.Join(docket.keys(), ",") != strings.Join(want, ",") {
 		t.Fatalf("docket keys = %v, want %v", docket.keys(), want)
@@ -470,6 +537,217 @@ func TestOneRunCanBeDocketedForBothWhatStoppedAndWhatWasNeverMerged(t *testing.T
 	}
 	if built.Added != 2 {
 		t.Fatalf("build = %#v, want the stoppage and the publication both docketed", built)
+	}
+}
+
+// The development manager's evidence from run-effbd604, replayed: a re-run
+// decided and durably recorded where the counters read, a resubmission refused
+// as one of one re-runs spent, and a docket that showed no recorded decision at
+// all — which is how one authorized recovery nearly got spent twice.
+//
+// The decision is made after the stoppage is docketed, because that is the only
+// order there is: the entry is what the decision is made against.
+func TestARecordedDecisionTheGuardWouldRefuseAgainShowsOnTheDocket(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	decisions, err := runstate.NewTriageStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	claimed, err := runstate.NewRerunStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewRerunStore() error = %v", err)
+	}
+	docket := &memoryDocket{}
+	docketer := docketerDeciding([]runstate.State{stoppedState()}, docket, decisions, claimed)
+
+	built, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 1 || built.Entries[0].Counters.Reruns != 0 {
+		t.Fatalf("build = %#v, want the stoppage docketed with nothing decided about it yet", built)
+	}
+
+	// The development manager decides a re-run, which spends the item's re-run
+	// budget as it is recorded and before anything acts on it.
+	if _, err := decisions.RecordRerun(context.Background(), docketedItem, docketedNow, docketedCaps); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+	// The resubmission the development manager made is refused by the guard, and
+	// the refusal is the proof the decision is really recorded.
+	var refused runstate.TriageCapError
+	_, err = decisions.RecordRerun(context.Background(), docketedItem, docketedNow, docketedCaps)
+	if !errors.As(err, &refused) || refused.Spent != 1 || refused.Cap != 1 {
+		t.Fatalf("second RecordRerun() error = %v, want the re-run budget refusing it", err)
+	}
+
+	rebuilt, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("second Build() error = %v", err)
+	}
+	if rebuilt.Added != 0 || len(rebuilt.Entries) != 1 {
+		t.Fatalf("build = %#v, want the same one entry", rebuilt)
+	}
+	entry := rebuilt.Entries[0]
+	if entry.Counters.Reruns != refused.Spent || entry.Counters.RerunsCap != refused.Cap {
+		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, refused.Spent, refused.Cap)
+	}
+	if entry.Counters.RerunsCarriedOut != 0 || !entry.Counters.Decided() {
+		t.Fatalf("counters = %#v, want a decision recorded and not carried out", entry.Counters)
+	}
+	rendered := entry.Render()
+	for _, want := range []string{
+		"1 of 1 re-run(s), 0 carried out",
+		"already recorded and not yet carried out",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the entry does not say %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// A stoppage the harness has already run again is the other half of the same
+// gate: the decision is spent and so is the one re-run this entry gets, and an
+// entry that still read as re-runnable is an entry somebody acts on and the
+// harness refuses.
+func TestAStoppageAlreadyReRunSaysSoRatherThanReadingAsAvailable(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	key := triage.Key(triage.ClassStoppedRun, stopped.RunID)
+	recorded := &recordedDecisions{
+		counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 1}},
+		claimed: map[string][]runstate.Rerun{docketedItem: {{
+			DocketKey:  key,
+			PriorRunID: stopped.RunID,
+			WorkItemID: docketedItem,
+			ClaimedAt:  docketedNow.Add(-time.Minute),
+			RunID:      "run-fedcba9876543210fedcba9876543210",
+		}}},
+	}
+	built, err := docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, recorded, recorded).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	entry := built.Entries[0]
+	if entry.Rerun == nil || entry.Rerun.RunID != "run-fedcba9876543210fedcba9876543210" {
+		t.Fatalf("rerun = %#v, want the fresh run the claim started", entry.Rerun)
+	}
+	if entry.Counters.RerunsCarriedOut != 1 || entry.Counters.Decided() {
+		t.Fatalf("counters = %#v, want the decision recorded as carried out", entry.Counters)
+	}
+	if rendered := entry.Render(); !strings.Contains(rendered, "already re-run as run run-fedcba9876543210fedcba9876543210") {
+		t.Fatalf("the entry does not say this stoppage was re-run:\n%s", rendered)
+	}
+}
+
+// A claim taken against another stoppage of the same item is not this entry's.
+// The docket key is what the guard refuses on, so it is what the view reads:
+// counting the item's claims alone would show a stoppage as spent that the
+// harness would run again, and matching on the item would hide the one that is.
+func TestAClaimAgainstAnotherStoppageIsNotReadAsThisOnes(t *testing.T) {
+	t.Parallel()
+
+	stopped := stoppedState()
+	recorded := &recordedDecisions{
+		counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 2}},
+		claimed: map[string][]runstate.Rerun{docketedItem: {{
+			DocketKey:  triage.Key(triage.ClassStoppedRun, "run-99999999999999999999999999999999"),
+			PriorRunID: "run-99999999999999999999999999999999",
+			WorkItemID: docketedItem,
+			ClaimedAt:  docketedNow.Add(-time.Hour),
+			RunID:      "run-fedcba9876543210fedcba9876543210",
+		}}},
+	}
+	built, err := docketerDeciding([]runstate.State{stopped}, &memoryDocket{}, recorded, recorded).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	entry := built.Entries[0]
+	if entry.Rerun != nil {
+		t.Fatalf("rerun = %#v, want no claim against this stoppage", entry.Rerun)
+	}
+	if entry.Counters.RerunsCarriedOut != 1 || !entry.Counters.Decided() {
+		t.Fatalf("counters = %#v, want one of the two decisions carried out", entry.Counters)
+	}
+}
+
+// A triage record that cannot be read is said out loud on the entry. Rendering
+// it as zeros would describe an item nobody has decided anything about, which is
+// the one reading that turns an unreadable record into a decision made twice.
+func TestATriageRecordThatCannotBeReadIsStatedRatherThanShownAsNothingDecided(t *testing.T) {
+	t.Parallel()
+
+	recorded := &recordedDecisions{
+		counters: map[string]runstate.TriageCounters{docketedItem: {Reruns: 1}},
+	}
+	docketer := docketerDeciding([]runstate.State{stoppedState()}, &memoryDocket{}, recorded, recorded)
+	if _, err := docketer.Build(); err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+
+	recorded.unreadable = docketedItem
+	built, err := docketer.Build()
+	if err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatalf("Build() error = %v, want the unreadable record reported", err)
+	}
+	if len(built.Entries) != 1 {
+		t.Fatalf("build = %#v, want the entry it had docketed", built)
+	}
+	entry := built.Entries[0]
+	if entry.CountersProblem == "" {
+		t.Fatalf("entry = %#v, want the unreadable record named on it", entry)
+	}
+	rendered := entry.Render()
+	if !strings.Contains(rendered, "Triage decisions could not be read") ||
+		!strings.Contains(rendered, "read the record before deciding") {
+		t.Fatalf("the entry does not say the record could not be read:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Triage decisions recorded") {
+		t.Fatalf("an unreadable record was rendered as decisions:\n%s", rendered)
+	}
+}
+
+// Reading a docket without what has been carried out would report every
+// decision as still standing, which is exactly the state a reader would spend
+// twice. It refuses instead.
+func TestReadingTheDocketWithoutWhatWasCarriedOutRefuses(t *testing.T) {
+	t.Parallel()
+
+	docketer := docketerOver([]runstate.State{stoppedState()}, &memoryDocket{})
+	docketer.Reruns = nil
+	if _, err := docketer.Build(); err == nil {
+		t.Fatalf("Build() read a docket without the re-runs already carried out")
+	}
+}
+
+// A publication docketed before the pull request joined the key is still on the
+// docket, and a build that read only the current key would docket it a second
+// time. The log is append-only, so both keys are what a reader has to answer to.
+func TestAPublicationDocketedUnderTheOlderKeyIsNotDocketedAgain(t *testing.T) {
+	t.Parallel()
+
+	published := publishedState(3 * time.Hour)
+	docket := &memoryDocket{}
+	docketer := docketerOver([]runstate.State{published}, docket)
+	entry, err := docketer.publicationEntry(published, docketedNow)
+	if err != nil {
+		t.Fatalf("publicationEntry() error = %v", err)
+	}
+	// The key an entry made before this change carries: the run alone.
+	entry.Key = triage.Key(triage.ClassPublication, published.RunID)
+	if _, err := docket.RecordOnce(entry); err != nil {
+		t.Fatalf("RecordOnce() error = %v", err)
+	}
+
+	built, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if built.Added != 0 || len(built.Entries) != 1 {
+		t.Fatalf("build = %#v, want the publication left as the one entry it already is", built)
 	}
 }
 
@@ -519,7 +797,7 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDocketStore() error = %v", err)
 	}
-	pipeline.Docket = &Docketer{Docket: docket, Runs: store, Triage: pipeline.Config.Triage}
+	pipeline.Docket = docketerOverStore(docket, store, pipeline.Config)
 
 	outcome, runErr := pipeline.Run(context.Background(), tracker.item.ID)
 	if runErr == nil || !outcome.Blocked {
@@ -550,7 +828,12 @@ func TestARunThatSpendsItsRepairBudgetDocketsItselfAsItStops(t *testing.T) {
 	}
 	// Two verdicts were obtained — the first one and the one after the repair —
 	// against a cap of four, and that is what a grant would be decided against.
-	want := triage.Counters{ReviewRounds: 2, ReviewRoundsCap: 4, RepairAttempts: 1, RepairGrantAttempts: 2}
+	// The rounds are the item's own triage record rather than a second count made
+	// from the runs, because that record is what the grant is truncated against.
+	want := triage.Counters{
+		ReviewRounds: 2, ReviewRoundsCap: 4, RepairAttempts: 1, RepairGrantAttempts: 2,
+		RepairGrantsCap: 1, RerunsCap: 1, MergeRearmsCap: 2,
+	}
 	if entry.Counters != want {
 		t.Fatalf("counters = %#v, want %#v", entry.Counters, want)
 	}
@@ -586,7 +869,7 @@ func TestASweepDocketsARunItStopsAndNeverDocketsItTwice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDocketStore() error = %v", err)
 	}
-	docketer := &Docketer{Docket: docket, Runs: store, Triage: pipeline.Config.Triage}
+	docketer := docketerOverStore(docket, store, pipeline.Config)
 	reconciler := Reconciler{
 		Tracker:   tracker,
 		Worktrees: newObserver(t, repository, worktreeRoot),
@@ -648,7 +931,7 @@ func TestASweepThatCannotDocketStillSettlesTheRun(t *testing.T) {
 		Tracker:   tracker,
 		Worktrees: newObserver(t, repository, worktreeRoot),
 		Store:     store,
-		Docket:    &Docketer{Docket: docket, Runs: store, Triage: pipeline.Config.Triage},
+		Docket:    docketerOverStore(docket, store, pipeline.Config),
 	}.Reconcile(context.Background())
 	if err != nil {
 		t.Fatalf("Reconcile() error = %v", err)

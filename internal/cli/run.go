@@ -343,6 +343,16 @@ func docketerFrom(parts components) *orchestrator.Docketer {
 	return &orchestrator.Docketer{
 		Docket: parts.docket,
 		Runs:   parts.store,
+		// The two records the triage guards spend and refuse against: what has
+		// been decided about the item, and what the harness has carried out of it.
+		// The docket reads those rather than a count of its own, so a decision a
+		// guard would enforce is never one the docket shows as absent.
+		Decisions: parts.store.Triage(),
+		Reruns:    parts.store.Reruns(),
+		// The same caps the conversation's budgets spend against, assembled once,
+		// so what an entry says an item has left and what refuses the next
+		// decision about it are one set of numbers.
+		Caps:   orchestrator.TriageCaps(parts.config.Execution, parts.config.Triage),
 		Triage: parts.config.Triage,
 	}
 }

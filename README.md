@@ -1209,12 +1209,28 @@ saying how many review rounds the item has accumulated against the configured
 cap and what a repair grant would be worth. A decision made without those last
 ones is a decision the cap then contradicts.
 
+It also carries **what triage has already decided about the item**: the repair
+grants, re-runs, and merge re-arms recorded against the item's durable budget,
+each beside the cap that will refuse the next one, how many of the recorded
+re-runs the harness has carried out, and whether this stoppage in particular has
+already been run again. Those figures are read from the same record the guards
+spend and refuse against, and they are read as the docket is read rather than
+frozen into the entry when the work stopped — a decision is always made after the
+entry exists, so an entry showing what was true when it was written would show
+every decision as absent. An entry that shows nothing decided where a decision
+stands is how one authorized recovery gets spent twice: once by the development
+manager, once by whoever is helping them. A record that could not be read says
+so on the entry rather than rendering as an item nobody has decided anything
+about.
+
 An entry states that something stopped; it decides nothing, and nothing decides
-it for the development manager. Docketing is keyed to what stopped, so a run
-that dockets its own ending and a sweep that settles it afterwards produce one
-entry between them, and a run that is merely parked — waiting out a usage limit,
-held by a directive, or paused by you — is never docketed at all, because it is
-owed a continuation rather than a decision.
+it for the development manager. Docketing is keyed to what stopped — a stoppage
+to the run it happened to, a publication to the run and the pull request
+together — so a run that dockets its own ending and a sweep that settles it
+afterwards produce one entry between them, and nothing has to work out which
+event an entry is about from the state of the work item. A run that is merely
+parked — waiting out a usage limit, held by a directive, or paused by you — is
+never docketed at all, because it is owed a continuation rather than a decision.
 
 Finding a publication nobody merged is a scan rather than an event, because
 nothing happening is not something anything can be present for. Two things scan:
