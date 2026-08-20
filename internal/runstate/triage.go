@@ -25,17 +25,20 @@ package runstate
 // one is the team-mode epic's, and `docs/team-mode-scope.md` states it where
 // that epic's designer will find it.
 //
-// Of the four counters, one has a caller in the harness today. Every run records
-// its review rounds here, because a round is something the run itself produces.
-// The three action counters have none, because no triage decision in this
-// release grants a repair, causes a re-run, or re-arms a dropped merge — the
-// harness blocks the item and hands it to a person instead, and reconciliation
-// deliberately does not ask a forge again about a merge it dropped. So the three
-// operations below are the gate rather than the decision: an action added later
-// records itself through one of them and is refused by the cap it finds, instead
-// of arriving with a budget of its own invention. Building the budget first is
-// what stops the second half of that pair being written by whoever is in a hurry
-// to ship the first.
+// All four counters have callers. Every run records its review rounds here,
+// because a round is something the run itself produces, and the development
+// manager's triage decisions spend the other three as they are recorded: a
+// repair grant, a re-run, and a merge re-arm each go through the operation
+// below that bounds it, and are refused by the cap they find.
+//
+// Spending the budget is not carrying the decision out, and the two are
+// deliberately apart. Recording the decision is the role's; starting the run,
+// or asking a forge for anything, is the harness's own hand afterwards — the
+// re-run action is the one that exists, and it is bounded again by its own
+// once-per-docketed-stoppage record. So these operations stay the gate rather
+// than the decision: an action records itself through one of them and is
+// refused by the cap it finds, instead of arriving with a budget of its own
+// invention.
 
 import (
 	"context"

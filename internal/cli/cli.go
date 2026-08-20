@@ -59,6 +59,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runWorkItem(ctx, args[1:], stdout, stderr)
 	case "work":
 		return scheduleWork(ctx, args[1:], stdout, stderr)
+	case "triage":
+		return runTriage(ctx, args[1:], stdout, stderr)
 	case "status":
 		return reportRunStatus(args[1:], stdout, stderr)
 	case "pause":
@@ -288,6 +290,7 @@ Commands:
   reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
+  triage            carry out what the development manager decided about a stoppage
   status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider

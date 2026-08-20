@@ -28,7 +28,9 @@ package chat
 // What the harness does not do is carry the decision out. Nothing here starts a
 // run, hands a developer a grant, or asks a forge for anything: causing work is
 // the harness's own hand on the operator's instruction, and this is a role
-// deciding. The record and the budget are what a later hand acts on.
+// deciding. The record and the budget are what a later hand acts on — for a
+// re-run that hand is `yoyo triage rerun`, which reads the intake hold, proves
+// the stoppage is over, and records this decision as why the fresh run exists.
 
 import (
 	"context"

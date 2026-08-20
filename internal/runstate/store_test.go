@@ -593,6 +593,42 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			mutate:  func(state *State) { state.Integration = nil; state.BranchRemoved = true },
 			problem: "removed artifacts require recorded integration",
 		},
+		{
+			// The second way a removal is earned: this run promoted nothing, and
+			// the run that superseded it is what its artifacts were retired for.
+			name: "removal earned by the run that superseded this one",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.BranchRemoved = true
+				state.ArtifactsRetiredBy = "run-fedcba9876543210fedcba9876543210"
+			},
+		},
+		{
+			name: "a retirement that removed nothing",
+			mutate: func(state *State) {
+				state.ArtifactsRetiredBy = "run-fedcba9876543210fedcba9876543210"
+			},
+			problem: "names what it removed",
+		},
+		{
+			name: "a run recorded as superseding itself",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.ArtifactsRetiredBy = state.RunID
+			},
+			problem: "does not supersede itself",
+		},
+		{
+			name: "a retirement by something that is not a run",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.BranchRemoved = true
+				state.ArtifactsRetiredBy = "somebody"
+			},
+			problem: "is not a run identifier",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
