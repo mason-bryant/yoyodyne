@@ -22,6 +22,17 @@ effect of an edit is obvious, which matters more here than shared improvement.
 Inheritance is still supported for projects that would rather have the other
 half of that trade; see [Extending a built-in bundle](#extending-a-built-in-bundle).
 
+**Where to look for what.**
+[Creating a project configuration](#creating-a-project-configuration) is what
+`yoyo init` writes and the remote it points the tracker at;
+[Layout](#layout) is the file itself, field by field; [Discovery](#discovery)
+and [Precedence](#precedence) are how `yoyo` finds it and what wins when more
+than one thing says something; [Inspection](#inspection) is how to ask what a
+configuration resolves to and where each value came from. Editing a field is the
+whole of what changes the harness's behavior, so there is no layer between this
+file and what runs. The [README](../README.md) is where a newcomer starts; this
+is the reference behind it.
+
 ## Creating a project configuration
 
 ```sh
@@ -174,9 +185,9 @@ the role is allowed to do. The set of role names is fixed for the same reason �
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](#what-fails-closed). The README's
-[Talking to the other agents](../README.md#talking-to-the-other-agents) states
-the table itself.
+[refused when the configuration loads](#what-fails-closed).
+[Talking to the other agents](conversation.md#talking-to-the-other-agents)
+states the table itself.
 
 ## Discovery
 
@@ -352,10 +363,21 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is `README.md`, this file, and the help
-every command prints — carried in a section of its own, labeled as description
-of the implementation as built and never as authority about intent. No source,
-no design document, and no way to run a command.
+product ships today.** That last part is `README.md`, this file, the six
+operator documents beside them — `docs/conversation.md`, `docs/work.md`,
+`docs/reporting.md`, `docs/artifacts.md`, `docs/operations.md`, and
+`docs/developing-yoyo.md` — and the help every command prints, carried in a
+section of its own, labeled as description of the implementation as built and
+never as authority about intent. No source, no design document, and no way to
+run a command.
+
+That set is fixed in the harness rather than configured here, and it is a named
+set rather than a walk of `docs/`, since a walk is what would sweep the design
+document and the decision records back in. It names all eight rather than the
+two entry points because the README is a landing page: carrying it alone would
+hand over a table of contents and leave out everything it points at. A path that
+names nothing in your repository is simply not there, so a project that has not
+written one of these has a smaller section rather than a broken one.
 
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
