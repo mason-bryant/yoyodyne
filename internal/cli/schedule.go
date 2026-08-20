@@ -8,15 +8,24 @@ package cli
 // and everything that separates the two lives in one place: the intake hold
 // applies here and not there, and every run this starts records why it was
 // chosen.
+//
+// It drains by default and watches when asked. That way round is deliberate and
+// it is temporary: watching is the shape the loop is meant to have, and it waits
+// on stopped work having an owner before it becomes what an operator gets
+// without asking for it. `--until-drained` states today's default out loud so
+// that flipping it is one line here rather than a behaviour change nobody wrote
+// down.
 
 import (
 	"context"
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -34,7 +43,10 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	flags := flag.NewFlagSet("work", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
-	limit := flags.Int("limit", 0, "stop after starting this many runs (default: drain what is ready)")
+	limit := flags.Int("limit", 0, "stop after starting this many runs (default: no bound on how many)")
+	watch := flags.Bool("watch", false, "keep pulling work as it becomes ready, until stopped")
+	untilDrained := flags.Bool("until-drained", false, "return once nothing more is ready to pull (the default)")
+	budget := flags.Float64("budget", 0, "stop once the runs this session started have cost this many dollars (default: unbounded)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -48,9 +60,21 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "--limit cannot be negative")
 		return 2
 	}
+	if *budget < 0 {
+		fmt.Fprintln(stderr, "--budget cannot be negative; leave it out for an unbounded session")
+		return 2
+	}
+	// Asking for both is asking for opposite things, and guessing which one was
+	// meant is how a session ends up running all night that was meant to return.
+	if *watch && *untilDrained {
+		fmt.Fprintln(stderr, "--watch and --until-drained ask for opposite things: one stays open, the other returns when the queue is empty")
+		return 2
+	}
 
 	scheduler := orchestrator.Scheduler{
-		Limit: *limit,
+		Limit:    *limit,
+		Watching: *watch,
+		Budget:   *budget,
 		// The configuration is read here rather than above, once per pull. That
 		// is the decision the design question asked for: capacity and priority
 		// changes take effect at the next selection, which keeps the answer the
@@ -59,8 +83,58 @@ func scheduleWork(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		// read, because a run's parameters are fixed when it is reserved.
 		Open: func(context.Context) (orchestrator.Pull, error) { return openPull(*configPath) },
 	}
+	// A session that stays open says so where somebody who is not at this
+	// terminal can read it. Failing to open that log fails the command rather
+	// than starting a session nothing can see: an unattended session nobody can
+	// tell is alive is the state the whole guard exists to prevent, and it is
+	// better refused at the start than discovered in the morning.
+	if *watch {
+		sessions, err := openWatchSession(*configPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "work failed: %v\n", err)
+			return 1
+		}
+		scheduler.Sessions = sessions
+	}
 	schedule, err := scheduler.Schedule(ctx)
 	return reportSchedule(stdout, stderr, *jsonOutput, schedule, err)
+}
+
+// openWatchSession names one session of watching and gives it somewhere durable
+// to say what it is doing. The identifier is made here rather than in the
+// scheduler because it is the session's identity rather than the loop's, and
+// because a scheduler that generated one would have no way to tell a caller
+// which session it had just written under.
+func openWatchSession(configPath string) (orchestrator.WatchSessions, error) {
+	parts, err := buildComponents(configPath)
+	if err != nil {
+		return nil, err
+	}
+	sessionID, err := runstate.NewWatchSessionID()
+	if err != nil {
+		return nil, err
+	}
+	return watchSessionLog{store: parts.watch, productID: parts.config.Product.ID, sessionID: sessionID}, nil
+}
+
+// watchSessionLog is the scheduler's account of itself, written into the
+// product's watch log. It carries the identity the scheduler has no business
+// knowing about — which product, which session — and nothing else.
+type watchSessionLog struct {
+	store     *runstate.WatchStore
+	productID domain.ProductID
+	sessionID string
+}
+
+func (w watchSessionLog) Record(state runstate.WatchState, at time.Time, reason string) error {
+	return w.store.Record(runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     w.productID,
+		SessionID:     w.sessionID,
+		State:         state,
+		At:            at,
+		Reason:        reason,
+	})
 }
 
 // openPull builds everything one pull acts through from one reading of the
@@ -82,7 +156,16 @@ func openPull(configPath string) (orchestrator.Pull, error) {
 			product:    parts.config.Product,
 			tracker:    tracker,
 		},
-		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
+		Capacity:                    parts.config.Execution.MaxConcurrentDevelopers,
+		Poll:                        parts.config.Execution.WorkPoll.Duration(),
+		BlockedRunsBeforeIntakeHold: parts.config.Execution.BlockedRunsBeforeIntakeHold,
+		// The brake places the operator's own switch, so it is the same store
+		// the hold is read from. Nothing here releases it.
+		Brake: parts.intake,
+		// What a session has spent is read from the same recorded run evidence
+		// `yoyo cost` prices items from, so a bounded session and a ledger can
+		// never disagree about what a run cost.
+		Spend: parts.store,
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so each run gets its own with its own
 			// selection on it. Two runs started from one pull therefore record
@@ -150,7 +233,7 @@ func printWorkUsage(writer io.Writer) {
 
 Pulls ready work from the backlog and runs it, up to
 execution.max_concurrent_developers at once, in a worktree of its own per run.
-It returns once every run it started has ended.
+It returns once nothing more is ready and every run it started has ended.
 
 Items are taken in the product manager's order -- highest priority first -- and
 only where the tracker itself reports them as ready to pull, so dependencies are
@@ -165,8 +248,34 @@ flight keep the configuration they started under.
 Holding intake stops it choosing anything more; runs already going carry on to
 their own end. An item you name with "yoyo run" is not subject to that hold.
 
+With --watch it does not return when the queue empties: it waits out
+execution.work_poll and reads the queue again, until you stop it with Ctrl-C.
+Nothing is cached between readings, so work you admit or reorder is picked up at
+the next poll, and an idle session costs one tracker read per interval and no
+provider call at all. Holding intake brakes a watching session in place -- it
+keeps polling and chooses nothing -- and releasing it resumes it.
+
+A watching session guards itself three ways. It does not start the same item
+twice unless the item has changed -- what it says, what it is for, its priority,
+its status, what it depends on, its notes -- so a start the harness cannot get
+past is not retried every interval, and a blocker you release is picked up
+because releasing it changed the item. Runs blocking one after another with
+nothing landing between them hold intake at
+execution.blocked_runs_before_intake_hold, and it stays held for you to lift.
+And what the session is doing -- watching, idle, braked, resumed, stopped -- is
+recorded where "yoyo status" and the Slack sink read it, because an idle session
+and a dead one are otherwise the same silence.
+
+--budget fails closed. A pass with no way to price itself is refused before
+anything starts, and a session that meets a run whose recorded evidence will not
+price stops and says which run it was rather than counting it as free and
+carrying on inside a bound it can no longer hold.
+
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
-  --limit <n>       stop after starting this many runs (default: drain what is ready)
+  --limit <n>       stop after starting this many runs (default: no bound)
+  --watch           keep pulling work as it becomes ready, until stopped
+  --until-drained   return once nothing more is ready to pull (the default)
+  --budget <usd>    stop once this session's runs have cost this much (default: unbounded)
   --json            emit machine-readable JSON`)
 }

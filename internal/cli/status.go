@@ -51,7 +51,16 @@ type statusOutput struct {
 	// still returned. It is its own key so error keeps meaning what it always
 	// meant — the command failed, and the exit status agrees.
 	TriageError string `json:"triage_error,omitempty"`
-	Error       string `json:"error,omitempty"`
+	// Watch is where the session that chooses work got to, when one has ever run
+	// for this product. It is the one fact here that is not about a run: a
+	// session choosing nothing has no run to say so with, and its silence and a
+	// dead process read identically without it.
+	Watch *runstate.WatchTransition `json:"watch,omitempty"`
+	// WatchError accompanies a successful listing, for the reason TriageError
+	// does: an unreadable watch log costs this answer a line rather than the runs
+	// it found.
+	WatchError string `json:"watch_error,omitempty"`
+	Error      string `json:"error,omitempty"`
 }
 
 // defaultStatusRuns is how many runs are reported when nobody says. It is a
@@ -110,26 +119,39 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
+	// Where the session that chooses work got to is read whatever the listing
+	// found, and it is read for the whole product rather than for a named item:
+	// a session is about the queue, and the question it answers — is anything
+	// still choosing work — is the one an operator asks before any question
+	// about a particular run.
+	watched, watchFailure := latestWatch(*configPath)
+
 	if *jsonOutput {
 		output := statusOutput{
 			Runs:     history.Runs,
 			Matched:  history.Matched,
 			Recorded: history.Recorded,
 			Triage:   counters,
+			Watch:    watched,
 		}
 		if counters != nil {
 			recorded := caps
 			output.TriageCaps = &recorded
 		}
 		output.TriageError = triageFailure
+		output.WatchError = watchFailure
 		return writeJSON(stdout, stderr, output)
 	}
+	printWatch(stdout, watched)
 	printRunHistory(stdout, history, flags.Arg(0), *failedOnly)
 	if counters != nil {
 		printItemTriage(stdout, *counters, caps)
 	}
 	if triageFailure != "" {
 		fmt.Fprintln(stderr, triageFailure)
+	}
+	if watchFailure != "" {
+		fmt.Fprintln(stderr, watchFailure)
 	}
 	// A failed run is what this exists to report, so reporting one is this
 	// command working. An exit status that treated the answer as a failure would
@@ -165,6 +187,54 @@ func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, 
 	// beside them: "three review rounds" says nothing about whether this item is
 	// nearly out of them.
 	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), nil
+}
+
+// latestWatch reads where the session that chooses work got to. A product
+// nobody has watched has no session rather than an idle one, which is why the
+// absence is carried as a nil rather than as a state: never having watched and
+// having stopped watching are different answers to the question being asked.
+//
+// It resolves its own store for the reason the run records do: reading what a
+// session said needs no repository and no worktree, and a verb reached for when
+// something looks wrong must not refuse over where a checkout happens to sit.
+func latestWatch(configPath string) (*runstate.WatchTransition, string) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return nil, fmt.Sprintf("what the harness is watching could not be read: %v", err)
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return nil, fmt.Sprintf("what the harness is watching could not be read: %v", err)
+	}
+	store, err := runstate.NewWatchStore(stateRoot, resolved.Config.Product.ID)
+	if err != nil {
+		return nil, fmt.Sprintf("what the harness is watching could not be read: %v", err)
+	}
+	latest, watched, err := store.Latest()
+	if err != nil {
+		return nil, fmt.Sprintf("what the harness is watching could not be read: %v", err)
+	}
+	if !watched {
+		return nil, ""
+	}
+	return &latest, ""
+}
+
+// printWatch says where the session that chooses work got to, in one line above
+// the runs. A product nobody has ever watched says nothing at all rather than
+// asserting that nothing is running: this command has never known that, and a
+// line claiming it would be the confident emptiness the rest of this file
+// avoids.
+func printWatch(writer io.Writer, watched *runstate.WatchTransition) {
+	if watched == nil {
+		return
+	}
+	fmt.Fprintf(writer, "the session choosing work is %s as of %s",
+		watched.State, watched.At.UTC().Format(time.RFC3339))
+	if reason := strings.TrimSpace(watched.Reason); reason != "" {
+		fmt.Fprintf(writer, ": %s", reason)
+	}
+	fmt.Fprintln(writer)
 }
 
 // printItemTriage says what triage has spent on the named item and what the

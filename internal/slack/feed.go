@@ -35,6 +35,7 @@ const (
 	reportStream   = "reports"
 	proposalStream = "proposals"
 	productStream  = "product"
+	watchStream    = "watch"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -96,6 +97,12 @@ type HarnessFeed struct {
 	Proposals     *runstate.AmendmentStore
 	Intake        *runstate.IntakeHoldStore
 	Holds         *runstate.OperatorHoldStore
+	// Watch is where a watch session says what it is doing. It is optional in the
+	// same sense the conversations are: a feed assembled without one reports
+	// everything else, and what is lost is the one thing nothing else in the
+	// record says — that the session choosing work is alive and idle rather than
+	// dead.
+	Watch *runstate.WatchStore
 	// Now is read for the moment a hold was seen to have lifted, which is the one
 	// thing here no record holds: what lifts a hold is its absence. It is
 	// injected so a test can say when that was.
@@ -175,12 +182,39 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, raised...)
 
+	watched, err := f.watchDeliveries(cursors, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, watched...)
+
 	switches, err := f.holdDeliveries(cursors.Streams[productStream])
 	if err != nil {
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, switches...)
 	return batch, nil
+}
+
+// watchDeliveries says what the sessions that choose work have been doing. It is
+// an append-only log like the reports pile and advances by position, and it is a
+// stream of its own rather than part of the product's marks because it is a
+// history rather than a switch that is on or off: a session that idled all night
+// and one that stopped at midnight are both things somebody reads afterwards.
+func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+	if f.Watch == nil {
+		return nil, nil
+	}
+	streams[watchStream] = struct{}{}
+	transitions, err := f.Watch.List()
+	if err != nil {
+		return nil, fmt.Errorf("read what the watch sessions did: %w", err)
+	}
+	return f.logDeliveries(watchStream, cursors.Streams[watchStream], len(transitions), cursors.Since,
+		func(index int) (time.Time, notify.Notification, error) {
+			notification, err := notify.FromWatch(transitions[index])
+			return transitions[index].At, notification, err
+		})
 }
 
 // runDeliveries says what one run's record crossed since the reading already

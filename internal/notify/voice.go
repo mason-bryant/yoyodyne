@@ -138,6 +138,11 @@ var harnessVoice = voice{
 		KindIntakeReleased:    "Intake is released for this product.",
 		KindHoldPlaced:        "All harness activity is held.",
 		KindHoldLifted:        "The hold on harness activity is lifted.",
+		KindWatchStarted:      "A watch session is open on this product: {why}",
+		KindWatchIdle:         "The watch session found nothing to start and is polling: {why}",
+		KindWatchBraked:       "The watch session is choosing nothing while intake is held: {why}",
+		KindWatchResumed:      "The watch session is choosing work again: {why}",
+		KindWatchStopped:      "The watch session ended: {why}",
 	},
 }
 
@@ -173,6 +178,11 @@ var developerVoice = voice{
 		KindIntakeReleased:    "Intake is open again; I'll take what I'm given.",
 		KindHoldPlaced:        "Held before my next provider call. Nothing of the change is lost.",
 		KindHoldLifted:        "The hold is lifted; I'm carrying on.",
+		KindWatchStarted:      "Work can reach me without anybody typing an identifier now: {why}",
+		KindWatchIdle:         "There's nothing queued for me to pick up, so I'm waiting rather than working: {why}",
+		KindWatchBraked:       "Nothing is being handed to me while intake is held: {why}",
+		KindWatchResumed:      "Work is being handed out again, and I'll take what I'm given: {why}",
+		KindWatchStopped:      "Nothing more will be handed to me until somebody starts it again: {why}",
 	},
 }
 
@@ -208,6 +218,11 @@ var reviewerVoice = voice{
 		KindIntakeReleased:    "Intake is open; work will reach me again.",
 		KindHoldPlaced:        "Held before my next review. Nothing already judged changes.",
 		KindHoldLifted:        "The hold is lifted; reviews resume.",
+		KindWatchStarted:      "Changes will keep arriving for a verdict without anybody starting them: {why}",
+		KindWatchIdle:         "Nothing is being worked on, so there is no change coming to judge: {why}",
+		KindWatchBraked:       "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
+		KindWatchResumed:      "Work is starting again, so changes will come back to me: {why}",
+		KindWatchStopped:      "No more changes will arrive from this session; what I judged already stands: {why}",
 	},
 }
 
@@ -242,6 +257,11 @@ var developmentManagerVoice = voice{
 		KindIntakeReleased:    "Intake is released; I'm pulling from the top of the backlog again.",
 		KindHoldPlaced:        "Everything is held. Nothing new starts, and nothing in flight is lost.",
 		KindHoldLifted:        "The hold is lifted; the work in flight carries on.",
+		KindWatchStarted:      "The queue is being pulled from until somebody stops it, rather than once: {why}",
+		KindWatchIdle:         "The queue has nothing pullable in it, so the line is waiting on admissions rather than on work: {why}",
+		KindWatchBraked:       "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
+		KindWatchResumed:      "I'm pulling from the top of the queue again: {why}",
+		KindWatchStopped:      "The queue stops being pulled from here; what is in it stays in it: {why}",
 	},
 }
 
@@ -277,6 +297,11 @@ var productManagerVoice = voice{
 		KindIntakeReleased:    "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:        "The operator holds all harness activity.",
 		KindHoldLifted:        "The operator lifted the hold.",
+		KindWatchStarted:      "What is admitted is now what is spent on, since the queue is pulled from until somebody stops it: {why}",
+		KindWatchIdle:         "Nothing is being spent, because nothing admitted is ready to be worked on: {why}",
+		KindWatchBraked:       "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
+		KindWatchResumed:      "Work is being chosen again, and what I admit is what gets spent on: {why}",
+		KindWatchStopped:      "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
 	},
 }
 
@@ -312,6 +337,11 @@ var architectVoice = voice{
 		KindIntakeReleased:    "Intake is released; selection resumes.",
 		KindHoldPlaced:        "All harness activity is held, at the provider-call boundary rather than mid-generation.",
 		KindHoldLifted:        "The hold is lifted, and every parked run resumes from its own record.",
+		KindWatchStarted:      "Selection is now a loop rather than a pass, and nothing between its readings is cached: {why}",
+		KindWatchIdle:         "Selection is polling an empty queue, which costs a tracker read and no provider call: {why}",
+		KindWatchBraked:       "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
+		KindWatchResumed:      "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
+		KindWatchStopped:      "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 	},
 }
 

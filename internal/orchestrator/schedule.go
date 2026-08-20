@@ -38,12 +38,34 @@ package orchestrator
 // an item whose goal was amended after it was admitted is pulled exactly as it
 // would have been — and the fact is written into the run's recorded selection
 // reason, where whoever reads what the harness chose can see it.
+//
+// # Draining and watching
+//
+// A pass either drains what is ready and returns, or stays open until somebody
+// stops it. They are one loop with one difference: where a drain concludes the
+// queue is empty and stops choosing, a watch waits out a configured interval and
+// reads it again. Nothing else changes, and nothing else needed to — every pull
+// already re-reads the configuration, re-reads the intake hold, takes the queue
+// in the product manager's order, and records why it chose what it chose, so a
+// reprioritization is honored at the next pull and an admission at the next poll
+// without anything here detecting either.
+//
+// What watching adds is three guards, and each one is against a failure that
+// only exists because the loop no longer ends. An item whose run failed before
+// it ever started is left alone until something about the item changes, because
+// a queue the harness cannot get past is one it would otherwise re-pull every
+// interval for as long as it ran. Runs blocking one after another with nothing
+// landing between them hold intake, because systemic breakage left overnight
+// would otherwise put the whole backlog through a failed run each. And a session
+// says what it is doing where somebody who is not at its terminal can read it,
+// because an idle session and a dead one are the same silence.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -87,6 +109,18 @@ const (
 	// ScheduleCancelled reports a scheduler whose context ended. Runs already
 	// started see the same cancellation and are waited out.
 	ScheduleCancelled = "the scheduler was cancelled"
+	// ScheduleBudgetSpent reports a session that reached the spend the operator
+	// bounded it to. It is the operator bounding one session rather than the
+	// harness running out of anything, which is why it reads like the limit
+	// above rather than like a failure.
+	ScheduleBudgetSpent = "the session spent the budget it was given"
+	// ScheduleSpendUnreadable reports a bounded session that stopped because it
+	// could not tell what it had spent. A budget measured against evidence
+	// nobody can read is not a smaller budget, it is no budget at all, so the
+	// session stops rather than carrying on inside a bound it has lost the
+	// ability to hold. An unbounded pass is unaffected: nothing there was
+	// spending against a number.
+	ScheduleSpendUnreadable = "what this session had spent could not be read, and it was given a budget to stay inside"
 )
 
 // ScheduleTracker is the tracker access one pull needs: the admitted work, so it
@@ -116,6 +150,41 @@ type ScheduleStaleness interface {
 	Stale(ctx context.Context) ([]staleness.WorkItem, error)
 }
 
+// ScheduleBrake is how a failure storm stops the line: the same intake hold an
+// operator places, placed by the harness when runs keep blocking with nothing
+// landing between them. It is satisfied by runstate.IntakeHoldStore.
+//
+// Only the placing is here. Nothing in this package releases a hold, whoever
+// placed it: a brake the harness could lift by itself would stop the line
+// exactly as long as it took the next run to fail, and what a held queue needs
+// is a person, which is the whole reason for tripping it.
+type ScheduleBrake interface {
+	Hold(reason string, at time.Time) (runstate.IntakeHold, error)
+}
+
+// ScheduleSpend prices what a session has spent, from the same recorded run
+// evidence `yoyo cost` reads.
+//
+// It is optional exactly as far as the budget is. A pass with no budget runs the
+// same items without one and simply prices nothing; a pass given a budget is
+// refused without one, because a bound nothing can measure is not a bound and
+// must not be reported as one. The same rule holds once a session is running: a
+// run whose evidence will not price stops a bounded session rather than being
+// counted as free.
+//
+// It is satisfied by runstate.Store.
+type ScheduleSpend interface {
+	Price(workItemID string) (runstate.ItemPrice, error)
+}
+
+// WatchSessions is where a watch session says what it is doing, for the reader
+// who is not at its terminal. It is optional: a session wired without one
+// behaves identically and is simply invisible between the runs it starts, which
+// is the state this exists to end.
+type WatchSessions interface {
+	Record(state runstate.WatchState, at time.Time, reason string) error
+}
+
 // Starter runs one chosen item to its end. It is a function rather than the
 // pipeline itself because a pull hands each run the configuration that pull
 // read, and because what the scheduler needs from a run is only its outcome.
@@ -138,11 +207,46 @@ type Pull struct {
 	// same number across every process, and this only keeps the scheduler from
 	// walking into a refusal it can see coming.
 	Capacity int
-	Start    Starter
+	// Poll is execution.work_poll as this pull read it: how long a watch session
+	// waits before reading the queue again. It is read per pull like everything
+	// else here, so an interval changed under a running session takes effect at
+	// the next wait rather than at the next restart. A drain never waits and
+	// never reads it.
+	Poll time.Duration
+	// BlockedRunsBeforeIntakeHold is execution.blocked_runs_before_intake_hold as
+	// this pull read it: how many runs may block in a row, with nothing landing
+	// between them, before the brake holds intake. Zero never brakes.
+	BlockedRunsBeforeIntakeHold int
+	// Brake places that hold. It is optional, and a session wired without one
+	// counts the storm and reports it without stopping the line, because a brake
+	// nothing can apply must not be reported as applied.
+	Brake ScheduleBrake
+	// Spend prices what the session has spent. It is required of a pass that was
+	// given a budget and of no other; see ScheduleSpend.
+	Spend ScheduleSpend
+	Start Starter
 }
 
-func (p Pull) validate() error {
+// pullNeeds is what this pass will actually ask of a pull, which is not the same
+// for every pass. A watch waits, so it needs an interval; a session spending
+// against a number needs a way to read what it has spent. A drain asks for
+// neither and is not refused for lacking either.
+type pullNeeds struct {
+	waits   bool
+	bounded bool
+}
+
+func (p Pull) validate(needs pullNeeds) error {
 	var problems []error
+	if needs.waits && p.Poll <= 0 {
+		problems = append(problems, fmt.Errorf("a watch interval of %s reads the queue with nothing between the readings", p.Poll))
+	}
+	// A budget with nothing to measure it against is the one refusal here that
+	// is about the operator rather than about the harness: they asked for a
+	// bound, and a pass that ran anyway would be reporting a bound it never had.
+	if needs.bounded && p.Spend == nil {
+		problems = append(problems, errors.New("a pull given a budget requires a way to price what it has spent"))
+	}
 	if p.Tracker == nil {
 		problems = append(problems, errors.New("a pull requires a work tracker"))
 	}
@@ -170,10 +274,32 @@ type Scheduler struct {
 	// Open assembles one pull. It is called once per pull rather than once per
 	// scheduler, which is the whole of how a configuration change is picked up.
 	Open func(ctx context.Context) (Pull, error)
-	// Limit bounds how many runs one pass starts. Zero means the pass drains
-	// what is ready, which is what an unattended scheduler wants; an operator
-	// watching one wants a number.
+	// Limit bounds how many runs one pass starts. Zero means no bound on the
+	// count, which is what an unattended scheduler wants; an operator sitting in
+	// front of one wants a number. What ends an unbounded pass is what it was
+	// asked for: an empty queue for a drain, and the operator for a watch.
 	Limit int
+	// Watching keeps the pass open when it runs out of work instead of
+	// returning: the queue is read again after the configured interval, and the
+	// pass ends only when the operator stops it, when a bound it was given is
+	// reached, or when the harness can no longer be read.
+	Watching bool
+	// Budget caps what one session may spend, in the provider's own reported
+	// dollars, over the runs the session started. Zero is unbounded, which is
+	// what a drain has always been. The bound is checked between pulls rather
+	// than during a run: a run already under way is never stopped part way for
+	// money, because the spend is already made and what it would lose is the
+	// work it bought.
+	Budget float64
+	// Sessions is where the session's state transitions are recorded. Optional;
+	// see WatchSessions.
+	Sessions WatchSessions
+	// Sleep waits out one poll interval and reports false when the context ended
+	// first. It is injected so a test does not have to spend real seconds, and
+	// defaults to a timer.
+	Sleep func(ctx context.Context, interval time.Duration) bool
+	// Now stamps the recorded transitions. It defaults to the wall clock.
+	Now func() time.Time
 }
 
 // Started is one item this pass chose, and what became of the run for it.
@@ -242,10 +368,43 @@ type Schedule struct {
 	// recorded reasons a sentence and costs the schedule nothing else, so it is
 	// reported beside the pass rather than failing it.
 	StalenessProblem string `json:"staleness_problem,omitempty"`
+	// Watched reports a pass that stayed open rather than draining, and Polls
+	// counts the intervals it waited out. A session that started nothing and
+	// polled four hundred times is a session that was alive, which is the fact a
+	// schedule read afterwards would otherwise be missing.
+	Watched bool `json:"watched,omitempty"`
+	Polls   int  `json:"polls,omitempty"`
+	// Braked is the intake hold this session's own failure-storm brake placed,
+	// and BlockedInARow is what tripped it. Nothing here lifts it: a held queue
+	// needs a person, which is the whole reason for holding it.
+	Braked        *runstate.IntakeHold `json:"braked,omitempty"`
+	BlockedInARow int                  `json:"blocked_in_a_row,omitempty"`
+	// BrakeProblem names a brake that could not be applied — no way to place the
+	// hold, or a hold that would not be written. The storm is still counted and
+	// still reported, because a brake that failed is exactly the thing an
+	// operator must not find out about by inferring it from the silence.
+	BrakeProblem string `json:"brake_problem,omitempty"`
+	// SpentUSD is what the runs this pass started cost, as the provider reported
+	// it, and Budget is what it was allowed. Both are absent from a pass nobody
+	// bounded and nothing priced.
+	SpentUSD float64 `json:"spent_usd,omitempty"`
+	Budget   float64 `json:"budget,omitempty"`
+	// SpendProblem names run evidence that could not be priced. On an unbounded
+	// pass it is a note beside a total that is a floor rather than an exact
+	// number; on a bounded one it is why the session stopped, because a budget
+	// measured against evidence nobody can read is no budget at all.
+	SpendProblem string `json:"spend_problem,omitempty"`
+	// SessionProblem names a transition that could not be recorded. It costs the
+	// session its visibility rather than its work, so it is reported beside the
+	// pass rather than failing it — the alternative is a session that stops
+	// working because nobody could be told it was working.
+	SessionProblem string `json:"session_problem,omitempty"`
 }
 
 // Schedule pulls ready work and runs it, up to the capacity the configuration
-// allows, and returns once every run it started has ended.
+// allows. A drain returns once every run it started has ended; a watch stays
+// open, waiting out the configured interval whenever it finds nothing to start,
+// and returns when the operator stops it or a bound it was given is reached.
 //
 // It returns an error only for something that stopped it pulling. A run that
 // failed is on the schedule as a failed run, because one item failing is not a
@@ -258,8 +417,12 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	if s.Limit < 0 {
 		return Schedule{}, fmt.Errorf("a scheduler limit of %d starts nothing", s.Limit)
 	}
+	if s.Budget < 0 {
+		return Schedule{}, fmt.Errorf("a session budget of %.2f spends nothing", s.Budget)
+	}
 
-	schedule := Schedule{}
+	schedule := Schedule{Watched: s.Watching, Budget: s.Budget}
+	session := s.session(&schedule)
 	// completions carries each started run back to this goroutine, which is the
 	// only one that touches the schedule. The runs themselves never share
 	// anything: each has its own worktree, its own reservation, and its own
@@ -270,33 +433,111 @@ func (s Scheduler) Schedule(ctx context.Context) (Schedule, error) {
 	// reserves, which is several steps after it is started, and a pull that
 	// counted only the recorded runs would start the same slot twice.
 	mine := make(map[string]int)
-	// tried is every item this pass has already chosen or deferred. Nothing is
-	// ever removed from it: a run that ends without moving the item out of the
-	// ready queue would otherwise be chosen again on the next pull, for as long
-	// as the pass ran.
-	tried := make(map[string]bool)
+	// tried is every item this pass has already started, against the item as it
+	// read at the time. A drain never looks at that reading: nothing is ever
+	// removed, because a run that ends without moving the item out of the ready
+	// queue would otherwise be chosen again on the next pull.
+	//
+	// A watch cannot afford that rule in either direction. Keeping an item out
+	// for the life of a session that never ends is a queue the session can never
+	// get back to; letting it back in unconditionally is the failure that
+	// provoked this guard — an item whose run fails before it starts leaves the
+	// item exactly as ready as it was, and a loop with no memory would re-pull it
+	// every interval until somebody noticed. So a watch remembers what the item
+	// looked like and tries it again when that changes, which is the same thing a
+	// person means by "nothing has changed, don't try again".
+	tried := make(map[string]string)
+	// deferred is the items already named on the schedule as paused by a
+	// directive. It bounds the report rather than the choosing: the directive
+	// itself is re-read at every pull, so an item stops being deferred the moment
+	// somebody resolves what paused it.
+	deferred := make(map[string]bool)
+	// blockedInARow counts the runs that ended blocked with nothing landing
+	// between them. It is the storm the brake watches for, and it is reset by any
+	// run that finishes: one item failing is not a systemic failure, and the
+	// per-item guard above is what that case is for.
+	blockedInARow := 0
+	// spend is how the runs this session started are priced, taken from the last
+	// pull that could be opened. It is held outside the loop because a run
+	// collected after the final pull still cost what it cost.
+	var spend ScheduleSpend
 	running := 0
 
-	// collect takes one finished run into the schedule. It reports false when the
-	// context ended first, which stops the pulling; the runs still in flight are
-	// waited out below either way.
+	// settle takes one finished run into the schedule: what became of it, what it
+	// cost, and what it does to the storm the brake is counting.
+	settle := func(done completed) {
+		started := &schedule.Started[done.index]
+		started.record(done)
+		switch {
+		case started.Declined != "":
+			// The work went to another process, which is two schedulers doing
+			// exactly what they should. It says nothing about the machine and
+			// nothing about the item, so it neither counts nor clears.
+		case started.blockedRun():
+			blockedInARow++
+			if blockedInARow > schedule.BlockedInARow {
+				schedule.BlockedInARow = blockedInARow
+			}
+		case started.Outcome.Paused:
+			// A parked run is owed a continuation rather than having failed.
+		default:
+			blockedInARow = 0
+		}
+		if cost, problem := priceRun(spend, started.Outcome); problem != "" {
+			schedule.SpendProblem = problem
+		} else {
+			schedule.SpentUSD += cost
+		}
+	}
+
+	// collect takes one finished run. It reports false when the context ended
+	// first, which stops the pulling; the runs still in flight are waited out
+	// below either way.
 	collect := func() bool {
 		select {
 		case done := <-completions:
 			running--
 			delete(mine, schedule.Started[done.index].WorkItemID)
-			schedule.Started[done.index].record(done)
+			settle(done)
 			return true
 		case <-ctx.Done():
 			return false
 		}
 	}
 
+	// wait is what a watch does instead of concluding the queue is empty: it
+	// collects a run of its own if one is still going, because a run finishing
+	// changes the answer sooner than any interval would, and otherwise sleeps out
+	// the interval this pull read. It reports false when the context ended, which
+	// is the operator stopping the session.
+	wait := func(pull Pull, state runstate.WatchState, reason string) bool {
+		session.enter(state, reason)
+		if running > 0 {
+			return collect()
+		}
+		schedule.Polls++
+		return s.sleep(ctx, pull.Poll)
+	}
+
+	session.enter(runstate.WatchWatching, s.opening())
 	var failure error
 pulling:
 	for {
 		if s.Limit > 0 && len(schedule.Started) >= s.Limit {
 			schedule.Stopped = ScheduleLimitReached
+			break
+		}
+		if s.Budget > 0 && schedule.SpentUSD >= s.Budget {
+			schedule.Stopped = ScheduleBudgetSpent
+			break
+		}
+		// A bounded session that has lost the ability to measure itself stops
+		// here rather than at the end. Carrying on would be spending against a
+		// number nothing is comparing anything to, and the operator would find
+		// out in the morning — from a field on a schedule this session does not
+		// return until it is over.
+		if s.Budget > 0 && schedule.SpendProblem != "" {
+			schedule.Stopped = ScheduleSpendUnreadable
 			break
 		}
 		if ctx.Err() != nil {
@@ -305,12 +546,22 @@ pulling:
 		}
 		pull, err := s.Open(ctx)
 		if err == nil {
-			err = pull.validate()
+			err = pull.validate(pullNeeds{waits: s.Watching, bounded: s.Budget > 0})
 		}
 		if err != nil {
 			failure = fmt.Errorf("open a pull: %w", err)
 			schedule.Stopped = ScheduleUnreadable
 			break
+		}
+		spend = pull.Spend
+		// The brake is applied before the hold is read, so the reading that
+		// follows is what stops the choosing whether the operator held intake or
+		// this session did. Nothing else in the loop knows the difference, which
+		// is the point: a brake that stopped the line by its own separate path
+		// would be a second account of a rule that already has one.
+		if s.Watching && blockedInARow > 0 && pull.BlockedRunsBeforeIntakeHold > 0 && blockedInARow >= pull.BlockedRunsBeforeIntakeHold {
+			s.brake(&schedule, pull, blockedInARow)
+			blockedInARow = 0
 		}
 		// The intake hold is read before anything is chosen, because choosing is
 		// the whole of what it holds. It is asked again on every pull rather than
@@ -325,9 +576,21 @@ pulling:
 		}
 		if held {
 			schedule.IntakeHeld = &hold
-			schedule.Stopped = ScheduleIntakeHeld
-			break
+			if !s.Watching {
+				schedule.Stopped = ScheduleIntakeHeld
+				break
+			}
+			// A held intake is a brake rather than a stop: the session keeps
+			// polling and chooses nothing, and resumes in place when it is
+			// released. That is what makes holding intake something an operator
+			// can do to a session they are not sitting at.
+			if !wait(pull, runstate.WatchBraked, brakedReason(schedule.Braked != nil, hold)) {
+				schedule.Stopped = ScheduleCancelled
+				break
+			}
+			continue
 		}
+		schedule.IntakeHeld = nil
 
 		occupied, err := occupiedItems(pull.Runs)
 		if err != nil {
@@ -342,23 +605,31 @@ pulling:
 		schedule.Occupied = len(occupied)
 		free := pull.Capacity - len(occupied)
 		if free < 1 {
-			if running == 0 {
+			if running > 0 {
+				if !collect() {
+					schedule.Stopped = ScheduleCancelled
+					break
+				}
+				continue
+			}
+			if !s.Watching {
 				schedule.Stopped = ScheduleCapacityFull
 				break
 			}
-			if !collect() {
+			if !wait(pull, runstate.WatchIdle, "every developer slot is held by a run this session did not start") {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
 			continue
 		}
 
-		queue, err := pull.queue(ctx)
+		read, err := pull.queue(ctx)
 		if err != nil {
 			failure = err
 			schedule.Stopped = ScheduleUnreadable
 			break
 		}
+		queue := read.queue
 		schedule.Admitted = len(queue.Entries)
 		schedule.Pullable = queue.Ready()
 		schedule.BacklogRead = true
@@ -375,7 +646,7 @@ pulling:
 			if s.Limit > 0 && len(schedule.Started) >= s.Limit {
 				break
 			}
-			if !entry.Ready || tried[entry.ID] {
+			if !entry.Ready || s.cooling(tried, read.items[entry.ID]) {
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
@@ -391,14 +662,23 @@ pulling:
 				schedule.Stopped = ScheduleUnreadable
 				break pulling
 			}
-			tried[entry.ID] = true
 			if len(pausing) > 0 {
-				schedule.Deferred = append(schedule.Deferred, Deferred{
-					WorkItemID: entry.ID,
-					Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
-				})
+				// The directive is re-read at every pull rather than remembered,
+				// because what clears it is a person and the whole point of a pass
+				// that outlives them answering is that it notices. What is
+				// remembered is only that this was said: an item paused all night
+				// is one line in the report rather than one per poll.
+				if !deferred[entry.ID] {
+					deferred[entry.ID] = true
+					schedule.Deferred = append(schedule.Deferred, Deferred{
+						WorkItemID: entry.ID,
+						Reason:     "an unresolved directive pauses it: " + pausing[0].Summary(),
+					})
+				}
 				continue
 			}
+			delete(deferred, entry.ID)
+			tried[entry.ID] = fingerprint(read.items[entry.ID])
 
 			index := len(schedule.Started)
 			selection := runstate.Selection{
@@ -415,17 +695,18 @@ pulling:
 			}(entry.ID)
 		}
 		if started > 0 {
+			session.resume(fmt.Sprintf("%d item(s) pulled from a backlog of %d admitted, %d of them ready", started, len(queue.Entries), queue.Ready()))
 			continue
 		}
 		// Nothing was startable this pull. With runs of ours still going, one of
 		// them finishing changes the answer — it frees a slot, and it may close the
 		// item something else was waiting on — so the pass waits rather than
 		// concluding the queue is empty.
-		if running == 0 {
+		if running == 0 && !s.Watching {
 			schedule.Stopped = ScheduleDrained
 			break
 		}
-		if !collect() {
+		if !wait(pull, runstate.WatchIdle, idleReason(queue)) {
 			schedule.Stopped = ScheduleCancelled
 			break
 		}
@@ -439,9 +720,255 @@ pulling:
 	for running > 0 {
 		done := <-completions
 		running--
-		schedule.Started[done.index].record(done)
+		settle(done)
 	}
+	session.enter(runstate.WatchStopped, stopping(schedule))
 	return schedule, failure
+}
+
+// stopping is what the session's last recorded line says: why it stopped, and
+// the detail behind it where the reason alone would not be actionable. A session
+// that stopped because it could not price itself is read in a channel rather
+// than in this process's terminal, so the run nothing could price has to travel
+// with the reason rather than staying on a schedule nobody there sees.
+func stopping(schedule Schedule) string {
+	if schedule.Stopped == ScheduleSpendUnreadable && schedule.SpendProblem != "" {
+		return schedule.Stopped + ": " + schedule.SpendProblem
+	}
+	return schedule.Stopped
+}
+
+// cooling reports an item this pass has already started and should not start
+// again. A drain never starts one twice at all. A watch starts one again when
+// the item itself has changed, and not otherwise: what a failed start leaves
+// behind is an item exactly as it was, and re-reading it will produce exactly
+// the same failure until somebody edits the work, reprioritizes it, or unblocks
+// what it depends on.
+//
+// It covers every item the session has started rather than only the starts that
+// failed, and that is deliberate. The case it must not miss is the one that
+// leaves an item pullable and unclaimed with nothing recorded anywhere — a run
+// the operator's hold stopped before it claimed anything — where starting again
+// produces the same non-result immediately and with no wait in between. Narrowed
+// to failed starts, that case spins.
+func (s Scheduler) cooling(tried map[string]string, item beads.WorkItem) bool {
+	recorded, attempted := tried[item.ID]
+	if !attempted {
+		return false
+	}
+	return !s.Watching || recorded == fingerprint(item)
+}
+
+// fingerprint is what "something about the item changed" means: every part of
+// the item a person steers with — what the work says, what it is for, where it
+// sits in the queue, what it waits on — and the notes, which is where the
+// harness records what became of a run.
+//
+// The notes are the half that is not obvious, and they are what makes the
+// ordinary recovery work. A run that stops on a blocker takes the item out of
+// the ready queue and writes the blocker into its notes; a development manager
+// who then unblocks it without editing anything leaves every other field exactly
+// as this session first read it, and a fingerprint that ignored the notes would
+// have the session refusing to pull work somebody had just deliberately
+// released. Reading them costs the guard nothing, because the one case it exists
+// for — a start that fails before a run claims anything — writes to the tracker
+// not at all: the harness only ever appends to the notes of an item it has
+// claimed, blocked, or closed, and none of those is an item still sitting
+// pullable in the queue. A change that made the harness write to a pullable
+// item's notes would put that spin back.
+func fingerprint(item beads.WorkItem) string {
+	parts := []string{
+		item.Status,
+		fmt.Sprint(item.Priority),
+		item.Title,
+		item.Description,
+		item.Design,
+		item.AcceptanceCriteria,
+		item.Notes,
+		item.Assignee,
+		item.Parent,
+	}
+	// A dependency is named rather than counted, because one swapped for another
+	// is a different piece of work with the same arithmetic.
+	for _, dependency := range item.Dependencies {
+		parts = append(parts, dependency.ID, dependency.Type)
+	}
+	return strings.Join(parts, "\x00")
+}
+
+// brake holds intake because runs kept blocking with nothing landing between
+// them. What it places is the operator's own switch, which is deliberate: an
+// operator arriving at a stopped line finds one thing to understand and one
+// thing to lift, rather than a second mechanism that stops work in a way only
+// this package knows how to undo.
+func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
+	reason := fmt.Sprintf(
+		"the harness held intake: %d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d. Nothing further is chosen until this is released; runs already going carry on.",
+		blocked, pull.BlockedRunsBeforeIntakeHold)
+	if pull.Brake == nil {
+		schedule.BrakeProblem = "runs kept blocking and nothing was wired to hold intake, so the line was left choosing work: " + reason
+		return
+	}
+	held, err := pull.Brake.Hold(reason, s.now())
+	if err != nil {
+		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
+		return
+	}
+	schedule.Braked = &held
+}
+
+// priceRun is what one finished run cost, from the recorded evidence. A run that
+// never got as far as a record is priced at nothing because there is nothing to
+// price, which is the truth about a start that failed before it began; evidence
+// that exists and cannot be read is reported rather than assumed to be free, and
+// under a budget that report is what stops the session.
+//
+// A pass with nothing to price with reaches here only when nothing is bounded,
+// because a budget without a way to measure it is refused at the pull. So the
+// nil is silence about a pass nobody asked to bound rather than a bound quietly
+// dropped.
+func priceRun(spend ScheduleSpend, outcome Outcome) (float64, string) {
+	if spend == nil || strings.TrimSpace(outcome.RunID) == "" {
+		return 0, ""
+	}
+	price, err := spend.Price(outcome.WorkItemID)
+	if err != nil {
+		return 0, fmt.Sprintf("what run %s cost could not be read, so the session's spend is a floor rather than a total: %v", outcome.RunID, err)
+	}
+	for _, run := range price.Runs {
+		if run.RunID != outcome.RunID {
+			continue
+		}
+		if !run.Known() {
+			return 0, fmt.Sprintf("run %s left no evidence to price, so the session's spend is a floor rather than a total: %s", run.RunID, run.Unknown)
+		}
+		return run.CostUSD, ""
+	}
+	return 0, fmt.Sprintf("run %s is not among the recorded runs of %s, so the session's spend is a floor rather than a total", outcome.RunID, outcome.WorkItemID)
+}
+
+// blockedRun reports a run that ended without getting its work anywhere: it
+// failed outright, or it stopped on a durable blocker. Both are the storm the
+// brake counts, and neither is a run somebody is owed a continuation of.
+func (s Started) blockedRun() bool {
+	return s.Failure != "" || s.Outcome.Blocked
+}
+
+// idleReason says why a poll started nothing, in the terms the counts already
+// report: an empty backlog and a backlog entirely blocked are the same silence
+// and completely different problems.
+func idleReason(queue backlog.Queue) string {
+	if len(queue.Entries) == 0 {
+		return "the backlog is empty"
+	}
+	if queue.Ready() == 0 {
+		return fmt.Sprintf("none of the %d admitted item(s) is ready to pull", len(queue.Entries))
+	}
+	return fmt.Sprintf("nothing among the %d ready item(s) is startable that this session has not already tried", queue.Ready())
+}
+
+// brakedReason says which brake stopped the line, because what an operator does
+// about it depends entirely on which one it was.
+func brakedReason(ownBrake bool, hold runstate.IntakeHold) string {
+	if ownBrake {
+		return "the harness held intake after runs kept blocking; the session polls and chooses nothing until it is released"
+	}
+	reason := strings.TrimSpace(hold.Reason)
+	if reason == "" {
+		return "the operator is holding intake; the session polls and chooses nothing until it is released"
+	}
+	return "the operator is holding intake: " + reason
+}
+
+// opening says what the session was started to do, which is the first thing its
+// log holds and the only line a session that dies immediately will ever write.
+func (s Scheduler) opening() string {
+	if !s.Watching {
+		return "draining what is ready"
+	}
+	opening := "watching the backlog until stopped"
+	if s.Limit > 0 {
+		opening += fmt.Sprintf(", stopping after %d run(s)", s.Limit)
+	}
+	if s.Budget > 0 {
+		opening += fmt.Sprintf(", within a budget of $%.2f", s.Budget)
+	}
+	return opening
+}
+
+// sleep waits out one interval between readings of the queue.
+func (s Scheduler) sleep(ctx context.Context, interval time.Duration) bool {
+	if s.Sleep != nil {
+		return s.Sleep(ctx, interval)
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s Scheduler) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now().UTC()
+}
+
+// session records what the pass is doing, once per change rather than once per
+// poll. A session idling all night writes one line, which is what makes the log
+// worth reading and what makes a line appearing in it mean something.
+//
+// A drain records nothing at all: it is a command somebody is waiting on the
+// return of, and the schedule it returns is the account of it.
+func (s Scheduler) session(schedule *Schedule) *watchSession {
+	if !s.Watching || s.Sessions == nil {
+		return &watchSession{}
+	}
+	return &watchSession{to: s.Sessions, now: s.now, schedule: schedule}
+}
+
+type watchSession struct {
+	to       WatchSessions
+	now      func() time.Time
+	schedule *Schedule
+	state    runstate.WatchState
+	reason   string
+}
+
+// enter records the session arriving in a state. The same state with the same
+// reason is the session still being in it, which is not news.
+func (w *watchSession) enter(state runstate.WatchState, reason string) {
+	if w.to == nil || (w.state == state && w.reason == reason) {
+		return
+	}
+	w.state, w.reason = state, reason
+	w.record(state, reason)
+}
+
+// resume records the session choosing work again after a wait. It leaves the
+// session in the watching state rather than a resumed one, so a queue that goes
+// quiet and busy all day reads as alternating rather than as a session
+// restarting every hour.
+func (w *watchSession) resume(reason string) {
+	if w.to == nil || w.state == runstate.WatchWatching {
+		return
+	}
+	w.state, w.reason = runstate.WatchWatching, reason
+	w.record(runstate.WatchResumed, reason)
+}
+
+// record writes one transition. A transition that cannot be written costs the
+// session its visibility and not its work: what is reported is a session nobody
+// can see, which is worth saying out loud and is not worth stopping the work
+// for.
+func (w *watchSession) record(state runstate.WatchState, reason string) {
+	if err := w.to.Record(state, w.now(), reason); err != nil && w.schedule.SessionProblem == "" {
+		w.schedule.SessionProblem = fmt.Sprintf("the session could not record that it was %s, so what it is doing is not readable from anywhere but here: %v", state, err)
+	}
 }
 
 // completed is one finished run on its way back to the scheduling goroutine.
@@ -488,28 +1015,42 @@ func occupiedItems(runs ScheduleRuns) (map[string]struct{}, error) {
 	return occupied, nil
 }
 
+// pulled is one reading of the queue: the admitted work in the product
+// manager's order, and the items it was assembled from. The items are kept
+// because the order alone does not carry what the work says, and a watch has to
+// be able to tell an item that has changed since it was tried from one that has
+// not.
+type pulled struct {
+	queue backlog.Queue
+	items map[string]beads.WorkItem
+}
+
 // queue assembles the admitted work into the product manager's order. It is the
 // same assembly a conversation's backlog uses and the same one a development
 // manager reads, built from the tracker every pull rather than stored, so what
 // the scheduler pulls can never drift from the priorities actually set.
-func (p Pull) queue(ctx context.Context) (backlog.Queue, error) {
+func (p Pull) queue(ctx context.Context) (pulled, error) {
 	var admitted []beads.WorkItem
 	for _, status := range scheduledStatuses {
 		items, err := p.Tracker.List(ctx, status)
 		if err != nil {
-			return backlog.Queue{}, fmt.Errorf("list %s work items: %w", status, err)
+			return pulled{}, fmt.Errorf("list %s work items: %w", status, err)
 		}
 		admitted = append(admitted, items...)
 	}
 	ready, err := p.Tracker.Ready(ctx)
 	if err != nil {
-		return backlog.Queue{}, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
+		return pulled{}, fmt.Errorf("list the work items the tracker reports as ready: %w", err)
 	}
 	pullable := make([]string, 0, len(ready))
 	for _, item := range ready {
 		pullable = append(pullable, item.ID)
 	}
-	return backlog.Order(admitted, pullable), nil
+	items := make(map[string]beads.WorkItem, len(admitted))
+	for _, item := range admitted {
+		items[item.ID] = item
+	}
+	return pulled{queue: backlog.Order(admitted, pullable), items: items}, nil
 }
 
 // stale reads what changed upstream of the admitted work after it was admitted,
@@ -599,6 +1140,31 @@ func (s Schedule) Render() string {
 			fmt.Fprintf(&rendered, ": %s", reason)
 		}
 		rendered.WriteString("\n")
+	}
+	// A session that waited says how long it was alive for, because the whole
+	// point of watching is that nothing happening is not the same as nothing
+	// running.
+	if s.Watched && s.Polls > 0 {
+		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
+	}
+	if s.Braked != nil {
+		fmt.Fprintf(&rendered, "the harness held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
+	}
+	if s.BrakeProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)
+	}
+	if s.SpentUSD > 0 || s.Budget > 0 {
+		fmt.Fprintf(&rendered, "spent $%.2f", s.SpentUSD)
+		if s.Budget > 0 {
+			fmt.Fprintf(&rendered, " of the $%.2f this session was given", s.Budget)
+		}
+		rendered.WriteString("\n")
+	}
+	if s.SpendProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.SpendProblem)
+	}
+	if s.SessionProblem != "" {
+		fmt.Fprintf(&rendered, "%s\n", s.SessionProblem)
 	}
 	if s.StalenessProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.StalenessProblem)

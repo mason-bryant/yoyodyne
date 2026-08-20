@@ -200,6 +200,8 @@ func newResolution() *resolution {
 				UsageLimitUnknownResetPause:       defaultUsageLimitUnknownResetPause,
 				ServerOverloadPause:               defaultServerOverloadPause,
 				CheckTimeout:                      defaultCheckTimeout,
+				WorkPoll:                          defaultWorkPoll,
+				BlockedRunsBeforeIntakeHold:       defaultBlockedRunsBeforeIntakeHold,
 			},
 			// The repair grant is deliberately absent here. It is derived from
 			// the effective repair budget once every layer has been applied, so
@@ -248,6 +250,8 @@ func newResolution() *resolution {
 			"execution.usage_limit_max_pause":                     OriginDefault,
 			"execution.usage_limit_in_process_pause":              OriginDefault,
 			"execution.check_timeout":                             OriginDefault,
+			"execution.work_poll":                                 OriginDefault,
+			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
 		},
@@ -281,6 +285,8 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "execution.usage_limit_unknown_reset_pause", execution.UsageLimitUnknownResetPause, &r.config.Execution.UsageLimitUnknownResetPause, applied.origin)
 		setValue(r.origins, "execution.server_overload_pause", execution.ServerOverloadPause, &r.config.Execution.ServerOverloadPause, applied.origin)
 		setValue(r.origins, "execution.check_timeout", execution.CheckTimeout, &r.config.Execution.CheckTimeout, applied.origin)
+		setValue(r.origins, "execution.work_poll", execution.WorkPoll, &r.config.Execution.WorkPoll, applied.origin)
+		setValue(r.origins, "execution.blocked_runs_before_intake_hold", execution.BlockedRunsBeforeIntakeHold, &r.config.Execution.BlockedRunsBeforeIntakeHold, applied.origin)
 	}
 	if triage := document.Triage; triage != nil {
 		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)

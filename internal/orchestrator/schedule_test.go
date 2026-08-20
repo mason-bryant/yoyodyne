@@ -702,6 +702,499 @@ func TestSchedulerRefusesAnIncompletePull(t *testing.T) {
 	}
 }
 
+// --- watching ------------------------------------------------------------------
+
+// The whole of what watching is: an empty queue does not end the pass. The
+// session waits out its interval, reads the queue again, and starts work that
+// was admitted while it was waiting — with nothing between the readings but the
+// wait, because nothing about the queue is cached.
+func TestWatchingPullsWorkAdmittedWhileItWasWaiting(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness()
+	sessions := &recordedSessions{}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			h.admit(readyItems("yoyodyne-late")...)
+		}
+		// The second wait is the queue empty again with the late item run, which
+		// is where the operator stops the session.
+		return sleeps < 2
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-late" {
+		t.Fatalf("started = %#v, want the item admitted between polls pulled", schedule.Started)
+	}
+	if !schedule.Watched || schedule.Polls != 2 {
+		t.Fatalf("schedule = watched %v after %d poll(s), want a session that waited twice", schedule.Watched, schedule.Polls)
+	}
+	// A drain would have stopped at the first empty queue and said so. The stop
+	// reason a watch ends on is the operator, never an empty queue.
+	if schedule.Stopped != ScheduleCancelled {
+		t.Fatalf("stopped = %q, want the session ended by its operator rather than by an empty queue", schedule.Stopped)
+	}
+	// Idle is said once and stopping is said at the end, so a session that waited
+	// twice over one quiet queue does not write two lines about it.
+	want := []runstate.WatchState{runstate.WatchWatching, runstate.WatchIdle, runstate.WatchResumed, runstate.WatchIdle, runstate.WatchStopped}
+	if got := sessions.states(); !sameStates(got, want) {
+		t.Fatalf("recorded states = %v, want %v", got, want)
+	}
+	if reason := sessions.said(runstate.WatchIdle); !strings.Contains(reason, "backlog is empty") {
+		t.Fatalf("idle reason = %q, want it to say what the session found", reason)
+	}
+}
+
+// The intake hold is a brake rather than a stop for a session that is watching:
+// it polls, chooses nothing, and resumes in place when the operator releases it.
+// A drain still returns, because a drain is a command somebody is waiting on.
+func TestWatchingBrakesOnHeldIntakeAndResumesWhenItIsReleased(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.held = &runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        time.Now().UTC(),
+		Reason:        "the queue is being reordered",
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			h.release()
+		}
+		return sleeps < 2
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-one" {
+		t.Fatalf("started = %#v, want the released session to pull the item that was waiting", schedule.Started)
+	}
+	want := []runstate.WatchState{runstate.WatchWatching, runstate.WatchBraked, runstate.WatchResumed, runstate.WatchIdle, runstate.WatchStopped}
+	if got := sessions.states(); !sameStates(got, want) {
+		t.Fatalf("recorded states = %v, want %v", got, want)
+	}
+	if reason := sessions.said(runstate.WatchBraked); !strings.Contains(reason, "the queue is being reordered") {
+		t.Fatalf("braked reason = %q, want the operator's own reason carried into it", reason)
+	}
+}
+
+// The guard the day's own history asked for. A run that fails before it starts
+// leaves the item exactly as ready as it was, so a loop with no memory would
+// pull it again every interval forever. It is left alone until something about
+// the item changes, and tried again as soon as something does.
+func TestWatchingLeavesAFailedStartAloneUntilTheItemChanges(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-preflight")...)
+	// The brake is out of the way here: what this is about is one item failing
+	// repeatedly, which is exactly the case the brake is not for.
+	harness.blockedRuns = 0
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// Nothing is claimed and nothing is recorded: the item is left where it
+		// was, which is what makes it ready again at the next reading.
+		return Outcome{WorkItemID: id}, errors.New("validate work item context: acceptance criteria are required")
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		switch sleeps {
+		case 3:
+			// Three quiet polls in, the development manager rewrites the item.
+			h.amend("yoyodyne-preflight", "now with acceptance criteria")
+		case 6:
+			return false
+		}
+		return true
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if starts := len(harness.pullOrder()); starts != 2 {
+		t.Fatalf("the item was started %d time(s) over six polls, want once before it was amended and once after: %v",
+			starts, harness.pullOrder())
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want the two attempts accounted for", schedule.Started)
+	}
+	for _, started := range schedule.Started {
+		if started.Failure == "" {
+			t.Fatalf("%s = %#v, want the failed start recorded as failed", started.WorkItemID, started)
+		}
+	}
+}
+
+// What pauses an item for a directive is a person, and the whole point of a
+// session that outlives them answering is that it notices. The directive is
+// re-read at every pull, so an item deferred all night is pulled at the poll
+// after it is resolved — and named once in the report rather than once a minute.
+func TestWatchingPullsAnItemOnceItsDirectiveIsResolved(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-directed")...)
+	harness.pausing["yoyodyne-directed"] = []directive.Directive{{
+		ID:         "directive-1",
+		Kind:       directive.KindArtifact,
+		Text:       "the goal is being rewritten",
+		Unresolved: "which goal this item now serves",
+	}}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 2 {
+			h.mu.Lock()
+			delete(h.pausing, "yoyodyne-directed")
+			h.mu.Unlock()
+		}
+		return sleeps < 4
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != "yoyodyne-directed" {
+		t.Fatalf("started = %#v, want the item pulled once its directive was resolved", schedule.Started)
+	}
+	// Deferred is a report rather than a decision, and an item paused across four
+	// polls is one line in it.
+	if len(schedule.Deferred) != 1 {
+		t.Fatalf("deferred = %#v, want the pause said once rather than once per poll", schedule.Deferred)
+	}
+}
+
+// A drain is unchanged by any of this: it tries an item once and stops when
+// nothing is left, whatever the item does afterwards.
+func TestDrainingStillStopsWhenNothingMoreIsReady(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// The item stays ready, which is what would make a watch look at it
+		// again. A drain never does.
+		return Outcome{WorkItemID: id}, errors.New("the run could not be started")
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want a drain to end on an empty queue", schedule.Stopped)
+	}
+	if starts := len(harness.pullOrder()); starts != 1 {
+		t.Fatalf("the item was started %d time(s), want a drain to try it once", starts)
+	}
+	if schedule.Watched || schedule.Polls != 0 {
+		t.Fatalf("schedule = watched %v after %d poll(s), want a drain that waited for nothing", schedule.Watched, schedule.Polls)
+	}
+}
+
+// The failure-storm brake: runs blocking one after another with nothing landing
+// between them holds intake, and it stays held. What it places is the operator's
+// own switch, so what an operator arriving at a stopped line finds is one thing
+// to understand and one thing to lift.
+func TestWatchingHoldsIntakeWhenRunsKeepBlocking(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three", "yoyodyne-four")...)
+	harness.blockedRuns = 3
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// A blocked run leaves the tracker with the item blocked, which is what
+		// takes it out of the ready queue.
+		h.retire(id)
+		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Braked == nil {
+		t.Fatalf("schedule = %#v, want the brake to have held intake", schedule)
+	}
+	if schedule.BlockedInARow < 3 {
+		t.Fatalf("blocked in a row = %d, want the storm that tripped the brake counted", schedule.BlockedInARow)
+	}
+	// The fourth item is what says the line actually stopped: three runs blocked,
+	// and the brake held intake before the queue got to it.
+	if len(schedule.Started) != 3 {
+		t.Fatalf("started = %d run(s), want the brake to have stopped the line at three: %s", len(schedule.Started), schedule.Render())
+	}
+	if _, held, _ := harness.Held(); !held {
+		t.Fatal("intake is not held, want the brake to have placed the operator's own switch")
+	}
+	if reason := sessions.said(runstate.WatchBraked); !strings.Contains(reason, "blocking") {
+		t.Fatalf("braked reason = %q, want it to say the harness held intake after runs kept blocking", reason)
+	}
+}
+
+// One item failing is not a storm. A run that blocks between runs that land
+// leaves the count where it started, because what the brake is for is a broken
+// machine rather than a broken item.
+func TestWatchingDoesNotBrakeOnBlockedRunsThatAreNotConsecutive(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.blockedRuns = 2
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.retire(id)
+		if id == "yoyodyne-two" {
+			return Outcome{WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+		}
+		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Braked != nil {
+		t.Fatalf("schedule braked on %#v, want a run that landed to have cleared the count", schedule.Braked)
+	}
+	if len(schedule.Started) != 3 {
+		t.Fatalf("started = %d run(s), want every item pulled: %s", len(schedule.Started), schedule.Render())
+	}
+}
+
+// A session given a budget stops when the runs it started have spent it. Nothing
+// in flight is interrupted for money: the spend is already made, and what
+// stopping a run would lose is the work it bought.
+func TestASessionStopsWhenItHasSpentItsBudget(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.prices["yoyodyne-one"] = 1.25
+	harness.prices["yoyodyne-two"] = 1.25
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.close(id)
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Budget: 2}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBudgetSpent {
+		t.Fatalf("stopped = %q, want the session ended on its budget: %s", schedule.Stopped, schedule.Render())
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %d run(s), want the third left unstarted once the budget was spent", len(schedule.Started))
+	}
+	if schedule.SpentUSD != 2.5 || schedule.Budget != 2 {
+		t.Fatalf("spent $%.2f of $%.2f, want what the two runs actually cost against what the session was given", schedule.SpentUSD, schedule.Budget)
+	}
+}
+
+// A bounded session that cannot tell what it spent stops, rather than carrying
+// on inside a bound it has lost the ability to hold. It is the difference
+// between a budget and the appearance of one: an unpriceable run left running is
+// a session spending against a number nothing is comparing anything to, and the
+// operator would find that out from a schedule this session does not return
+// until it is over.
+func TestABoundedSessionStopsWhenItCannotTellWhatItSpent(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.close(id)
+		// A run whose price is not among the recorded runs of its item is
+		// evidence that went missing rather than a run that was free.
+		return Outcome{RunID: "run-elsewhere", WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+	harness.prices["yoyodyne-one"] = 1
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions, Budget: 100}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleSpendUnreadable {
+		t.Fatalf("stopped = %q, want the session stopped rather than left unbounded: %s", schedule.Stopped, schedule.Render())
+	}
+	// The budget is nowhere near spent, so nothing but the unreadable evidence
+	// could have stopped this, and it stopped before the queue was drained.
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %d run(s), want the session to stop at the first run it could not price", len(schedule.Started))
+	}
+	if !strings.Contains(schedule.SpendProblem, "run-elsewhere") {
+		t.Fatalf("spend problem = %q, want the unpriceable run named", schedule.SpendProblem)
+	}
+	// And it says so where somebody who is not at this terminal reads it, which
+	// is the whole reason a session that stops has to stop loudly.
+	said := sessions.said(runstate.WatchStopped)
+	if !strings.Contains(said, "budget") || !strings.Contains(said, "run-elsewhere") {
+		t.Fatalf("recorded stop = %q, want the budget and the run it could not price both carried into it", said)
+	}
+}
+
+// An unbounded pass is unaffected by the same evidence: nothing there was
+// spending against a number, so the unpriceable run costs the report a sentence
+// and the pass nothing at all.
+func TestAnUnboundedPassReportsSpendItCouldNotReadAndCarriesOn(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.close(id)
+		return Outcome{RunID: "run-elsewhere", WorkItemID: id, Status: runstate.StatusSucceeded, WorkItemClosed: true}, nil
+	}
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 2 || schedule.Stopped != ScheduleDrained {
+		t.Fatalf("schedule = %s, want every item run and the pass drained", schedule.Render())
+	}
+	if !strings.Contains(schedule.SpendProblem, "run-elsewhere") {
+		t.Fatalf("spend problem = %q, want the unpriceable run named", schedule.SpendProblem)
+	}
+}
+
+// A budget with nothing to measure it against is refused before anything is
+// started. The operator asked for a bound; a pass that ran anyway would be
+// reporting one it never had.
+func TestASessionGivenABudgetIsRefusedWithNoWayToPriceItself(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	unpriced := func(ctx context.Context) (Pull, error) {
+		pull, err := harness.open(ctx)
+		pull.Spend = nil
+		return pull, err
+	}
+
+	schedule, err := (Scheduler{Open: unpriced, Budget: 20}).Schedule(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "price what it has spent") {
+		t.Fatalf("Schedule() error = %v, want a budget nothing can measure refused", err)
+	}
+	if schedule.Stopped != ScheduleUnreadable {
+		t.Fatalf("stopped = %q, want the unusable pull named", schedule.Stopped)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing run under a bound that was never held", schedule.Started)
+	}
+	// The same pull is fine unbounded: nothing there is spending against a
+	// number, so nothing needs to price it.
+	if _, err := (Scheduler{Open: unpriced}).Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v, want an unbounded pass unaffected", err)
+	}
+}
+
+// The ordinary recovery a development manager makes: a run stops on a blocker,
+// they release the item without editing anything else, and the session pulls it
+// again. The blocker the harness wrote into the item's notes is what says the
+// item is not the one this session already tried.
+func TestWatchingPullsAnItemAgainAfterItsBlockerIsReleased(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-blocked")...)
+	harness.blockedRuns = 0
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// What a blocked run does to the tracker: the item leaves the ready
+		// queue, and the blocker is appended to its notes.
+		h.block(id, "the replay conflicted and was left for a person")
+		return Outcome{RunID: "run-" + id, WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 2 {
+			// The development manager unblocks it and changes nothing else.
+			h.unblock("yoyodyne-blocked")
+		}
+		return sleeps < 4
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if starts := len(harness.pullOrder()); starts != 2 {
+		t.Fatalf("the item was started %d time(s), want it pulled again once somebody released it: %v", starts, harness.pullOrder())
+	}
+	if len(schedule.Started) != 2 {
+		t.Fatalf("started = %#v, want both attempts accounted for", schedule.Started)
+	}
+}
+
+// A session nobody can read the state of still does its work, and says that
+// nobody can read it. The alternative is a session that stops working because
+// it could not be observed, which is the wrong way round.
+func TestASessionThatCannotRecordItselfStillWorks(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	sessions := &recordedSessions{failure: errors.New("the watch log is not writable")}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 {
+		t.Fatalf("started = %#v, want the work done anyway", schedule.Started)
+	}
+	if !strings.Contains(schedule.SessionProblem, "the watch log is not writable") {
+		t.Fatalf("session problem = %q, want the unwritable log reported", schedule.SessionProblem)
+	}
+}
+
+// A watching pull with no interval is refused rather than read again as fast as
+// the machine allows.
+func TestWatchingRefusesAPullWithNoInterval(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	open := func(ctx context.Context) (Pull, error) {
+		pull, err := harness.open(ctx)
+		pull.Poll = 0
+		return pull, err
+	}
+	schedule, err := (Scheduler{Open: open, Watching: true, Sleep: harness.sleep}).Schedule(context.Background())
+	if err == nil {
+		t.Fatal("Schedule() error = nil, want a watch with no interval refused")
+	}
+	if schedule.Stopped != ScheduleUnreadable {
+		t.Fatalf("stopped = %q, want the unusable pull named", schedule.Stopped)
+	}
+	// The same pull drains perfectly well: a pass that never waits never reads
+	// the interval.
+	if _, err := (Scheduler{Open: open}).Schedule(context.Background()); err != nil {
+		t.Fatalf("Schedule() error = %v, want a drain unaffected by an interval it never uses", err)
+	}
+}
+
+func sameStates(got, want []runstate.WatchState) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for index := range got {
+		if got[index] != want[index] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- the fake harness the tests above pull from -------------------------------
 
 // scheduleHarness is a whole harness for one scheduler to pull from: the
@@ -720,6 +1213,16 @@ type scheduleHarness struct {
 	held     *runstate.IntakeHold
 	capacity int
 	openErr  error
+	// blockedRuns is the brake bound each pull reports, and prices is what each
+	// run this harness ran cost. Both are per pull for the reason capacity is:
+	// the scheduler re-reads them, and a test changes them under it.
+	blockedRuns int
+	prices      map[string]float64
+	// sleeps counts the intervals a watching scheduler waited out, and onSleep is
+	// how a test changes the world between polls. It reports whether the session
+	// carries on, so returning false is the operator stopping it.
+	sleeps  int
+	onSleep func(*scheduleHarness, int) bool
 	// onPull runs at the start of every pull with the number of pulls already
 	// made, which is how a test changes the configuration under a running
 	// scheduler.
@@ -748,6 +1251,7 @@ func newScheduleHarness(items ...beads.WorkItem) *scheduleHarness {
 		inFlight:   map[string]runstate.State{},
 		pausing:    map[string][]directive.Directive{},
 		selections: map[string]runstate.Selection{},
+		prices:     map[string]float64{},
 		capacity:   1,
 		gate:       make(chan struct{}),
 	}
@@ -815,10 +1319,170 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	if openErr != nil {
 		return Pull{}, openErr
 	}
+	h.mu.Lock()
+	blockedRuns := h.blockedRuns
+	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
 		Capacity: capacity, Start: h.start,
+		// A minute is the shipped interval, and no test spends one: the sleep is
+		// the harness's own, so this is only what a watching pull is validated
+		// against.
+		Poll:                        time.Minute,
+		BlockedRunsBeforeIntakeHold: blockedRuns,
+		Brake:                       h,
+		Spend:                       h,
 	}, nil
+}
+
+// sleep stands in for waiting out a poll interval. It spends no time at all: a
+// test that wants a session to end says so by returning false, which is the
+// operator stopping it.
+func (h *scheduleHarness) sleep(context.Context, time.Duration) bool {
+	h.mu.Lock()
+	h.sleeps++
+	sleeps, onSleep := h.sleeps, h.onSleep
+	h.mu.Unlock()
+	if onSleep == nil {
+		return false
+	}
+	return onSleep(h, sleeps)
+}
+
+// Hold is the brake placing the operator's own switch. Nothing in the scheduler
+// releases one, so this harness only ever has to place it.
+func (h *scheduleHarness) Hold(reason string, at time.Time) (runstate.IntakeHold, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held != nil {
+		return *h.held, nil
+	}
+	held := runstate.IntakeHold{
+		SchemaVersion: runstate.IntakeHoldSchemaVersion,
+		ProductID:     "yoyodyne",
+		HeldAt:        at,
+		Reason:        reason,
+	}
+	h.held = &held
+	return held, nil
+}
+
+// Price is what the runs of one item cost, as the recorded evidence would say.
+func (h *scheduleHarness) Price(workItemID string) (runstate.ItemPrice, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	cost, priced := h.prices[workItemID]
+	if !priced {
+		return runstate.ItemPrice{WorkItemID: workItemID}, nil
+	}
+	return runstate.ItemPrice{
+		WorkItemID: workItemID,
+		Runs:       []runstate.RunPrice{{RunID: "run-" + workItemID, WorkItemID: workItemID, CostUSD: cost}},
+		TotalUSD:   cost,
+	}, nil
+}
+
+// admit puts work in the backlog, ready to pull. It is what a product manager
+// admitting something while a session watches looks like from the queue's side.
+func (h *scheduleHarness) admit(items ...beads.WorkItem) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.items = append(h.items, items...)
+	for _, item := range items {
+		h.ready[item.ID] = true
+	}
+}
+
+// block is what a run that stopped on a blocker does to the tracker: the item's
+// status moves out of the ready queue and the reason is appended to its notes,
+// which is exactly what beads.Client.Block does.
+func (h *scheduleHarness) block(workItemID, reason string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.ready, workItemID)
+	for index := range h.items {
+		if h.items[index].ID == workItemID {
+			h.items[index].Status = "blocked"
+			h.items[index].Notes = strings.TrimSpace(h.items[index].Notes + "\n" + reason)
+		}
+	}
+}
+
+// unblock is the development manager releasing that item and changing nothing
+// else about it, which is the recovery a session has to notice.
+func (h *scheduleHarness) unblock(workItemID string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.ready[workItemID] = true
+	for index := range h.items {
+		if h.items[index].ID == workItemID {
+			h.items[index].Status = "open"
+		}
+	}
+}
+
+// amend changes what an item says, which is what a development manager
+// replanning stopped work does to it.
+func (h *scheduleHarness) amend(workItemID, description string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for index := range h.items {
+		if h.items[index].ID == workItemID {
+			h.items[index].Description = description
+		}
+	}
+}
+
+// release lifts the intake hold, which is the operator letting a braked session
+// carry on.
+func (h *scheduleHarness) release() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.held = nil
+}
+
+// recordedSessions is the durable account a watch session writes about itself,
+// as a test reads it back.
+type recordedSessions struct {
+	mu          sync.Mutex
+	transitions []recordedTransition
+	failure     error
+}
+
+type recordedTransition struct {
+	state  runstate.WatchState
+	reason string
+}
+
+func (r *recordedSessions) Record(state runstate.WatchState, _ time.Time, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.failure != nil {
+		return r.failure
+	}
+	r.transitions = append(r.transitions, recordedTransition{state: state, reason: reason})
+	return nil
+}
+
+func (r *recordedSessions) states() []runstate.WatchState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	states := make([]runstate.WatchState, 0, len(r.transitions))
+	for _, transition := range r.transitions {
+		states = append(states, transition.state)
+	}
+	return states
+}
+
+func (r *recordedSessions) said(state runstate.WatchState) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, transition := range r.transitions {
+		if transition.state == state {
+			return transition.reason
+		}
+	}
+	return ""
 }
 
 func (h *scheduleHarness) List(_ context.Context, status string) ([]beads.WorkItem, error) {

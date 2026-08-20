@@ -105,7 +105,12 @@ type components struct {
 	// itself. It is built under the product rather than on the state root,
 	// because unlike the hold above it is about one backlog: holding what a
 	// development manager may pull from this product must leave another alone.
-	intake       *runstate.IntakeHoldStore
+	intake *runstate.IntakeHoldStore
+	// watch is what a session that stays open says it is doing. It is built
+	// under the product beside the intake hold, because what it watches is one
+	// backlog and because the two are read together: a session that is choosing
+	// nothing and a hold that says why are one story to whoever reads them.
+	watch        *runstate.WatchStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -172,6 +177,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	watch, err := runstate.NewWatchStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -195,6 +204,7 @@ func buildComponents(configPath string) (components, error) {
 		directives:    directives,
 		holds:         holds,
 		intake:        intake,
+		watch:         watch,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil

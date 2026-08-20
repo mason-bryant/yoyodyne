@@ -209,6 +209,42 @@ func IntakeReleased(at time.Time) Notification {
 	return productNotification(KindIntakeReleased, at, Detail{})
 }
 
+// FromWatch says what a watch session changed to. It is addressed to the
+// product for the same reason the holds are — a session is about the whole line
+// rather than any one item — and spoken by the harness, because choosing work is
+// not a role's judgement and no persona should be made to narrate it.
+//
+// A state nothing has a line for is refused rather than posted as something
+// nobody wrote words for, which is the same refusal an unrecognized kind gets:
+// a log written by a newer harness than the sink is one the sink reads past
+// rather than mistranslates.
+func FromWatch(transition runstate.WatchTransition) (Notification, error) {
+	kind, ok := watchKinds[transition.State]
+	if !ok {
+		return Notification{}, fmt.Errorf("address watch session %s: %q is not a state anything says", transition.SessionID, transition.State)
+	}
+	// A braked session is the one an operator has to do something about: the
+	// line has stopped and it stays stopped until intake is released.
+	severity := report.SeverityNote
+	if kind == KindWatchBraked {
+		severity = report.SeverityWarning
+	}
+	notification := productNotification(kind, transition.At, Detail{Reason: transition.Reason})
+	notification.Event.Severity = severity
+	return notification, nil
+}
+
+// watchKinds is what each recorded state is said as. It is a table rather than a
+// switch because the states and the kinds are two vocabularies that have to
+// agree, and a table is where a disagreement is visible.
+var watchKinds = map[runstate.WatchState]Kind{
+	runstate.WatchWatching: KindWatchStarted,
+	runstate.WatchIdle:     KindWatchIdle,
+	runstate.WatchBraked:   KindWatchBraked,
+	runstate.WatchResumed:  KindWatchResumed,
+	runstate.WatchStopped:  KindWatchStopped,
+}
+
 func FromOperatorHold(hold runstate.OperatorHold) Notification {
 	return productNotification(KindHoldPlaced, hold.HeldAt, Detail{})
 }

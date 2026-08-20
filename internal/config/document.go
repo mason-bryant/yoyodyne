@@ -56,6 +56,8 @@ type executionDocument struct {
 	UsageLimitUnknownResetPause            *Duration `yaml:"usage_limit_unknown_reset_pause"`
 	ServerOverloadPause                    *Duration `yaml:"server_overload_pause"`
 	CheckTimeout                           *Duration `yaml:"check_timeout"`
+	WorkPoll                               *Duration `yaml:"work_poll"`
+	BlockedRunsBeforeIntakeHold            *int      `yaml:"blocked_runs_before_intake_hold"`
 }
 
 type triageDocument struct {

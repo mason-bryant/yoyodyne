@@ -125,6 +125,10 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 	if err != nil {
 		return nil, "", err
 	}
+	watch, err := runstate.NewWatchStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	store, err := slack.NewStore(stateRoot, productID)
 	if err != nil {
 		return nil, "", err
@@ -156,6 +160,7 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 			Proposals:     proposals,
 			Intake:        intake,
 			Holds:         holds,
+			Watch:         watch,
 			Log:           log,
 		},
 		Poll: poll,

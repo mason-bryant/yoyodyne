@@ -675,6 +675,61 @@ func TestTheOperatorsSwitchesAreAddressedToTheWholeLine(t *testing.T) {
 	}
 }
 
+// A watch session is about the whole line rather than any one item, so it is
+// addressed and spoken exactly as the operator's switches are — and the one
+// state somebody has to act on is the one said as a warning.
+func TestAWatchSessionIsAddressedToTheWholeLine(t *testing.T) {
+	states := map[runstate.WatchState]Kind{
+		runstate.WatchWatching: KindWatchStarted,
+		runstate.WatchIdle:     KindWatchIdle,
+		runstate.WatchBraked:   KindWatchBraked,
+		runstate.WatchResumed:  KindWatchResumed,
+		runstate.WatchStopped:  KindWatchStopped,
+	}
+	for state, kind := range states {
+		notification, err := FromWatch(watchTransition(state, "the backlog is empty"))
+		if err != nil {
+			t.Fatalf("address a %s session: %v", state, err)
+		}
+		if notification.Event.Kind != kind {
+			t.Fatalf("%s was said as %q, want %q", state, notification.Event.Kind, kind)
+		}
+		if notification.Topic.Kind != TopicProduct || !notification.Speaker.IsHarness() {
+			t.Fatalf("%s addressed to %q and spoken by %q", state, notification.Topic.Key(), notification.Speaker.Key())
+		}
+		message, err := Render(notification.Topic, notification.Speaker, notification.Event)
+		if err != nil {
+			t.Fatalf("render %s: %v", state, err)
+		}
+		if !strings.Contains(message.Body, "the backlog is empty") {
+			t.Fatalf("body %q does not carry what the session said about itself", message.Body)
+		}
+		wantSeverity := report.SeverityNote
+		if state == runstate.WatchBraked {
+			wantSeverity = report.SeverityWarning
+		}
+		if notification.Event.Severity != wantSeverity {
+			t.Fatalf("%s said at %q, want %q", state, notification.Event.Severity, wantSeverity)
+		}
+	}
+	// A state nothing has words for is refused rather than posted as something
+	// nobody wrote a line for.
+	if _, err := FromWatch(watchTransition(runstate.WatchState("pondering"), "")); err == nil {
+		t.Fatal("FromWatch() error = nil, want a state nothing says refused")
+	}
+}
+
+func watchTransition(state runstate.WatchState, reason string) runstate.WatchTransition {
+	return runstate.WatchTransition{
+		SchemaVersion: runstate.WatchSchemaVersion,
+		ProductID:     "yoyodyne",
+		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		State:         state,
+		At:            moment,
+		Reason:        reason,
+	}
+}
+
 // recorder is a poster that keeps what it was handed, so a test can check that
 // the notifier renders before it posts rather than after.
 type recorder struct {
