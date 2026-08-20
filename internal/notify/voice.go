@@ -387,12 +387,15 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 		SchemaVersion: SchemaVersion,
 		Kind:          event.Kind,
 		Topic:         topic.Key(),
-		Speaker:       speaker.Key(),
-		Identity:      speaker.Identity(),
-		Severity:      event.Severity,
-		Body:          bound(severityMark(event.Severity)+said, event.Refs),
-		Refs:          event.Refs,
-		At:            event.At.UTC(),
+		// The title is bounded here as well as where a producer sets it, so what
+		// the envelope carries is a header line whichever way the topic was built.
+		TopicTitle: boundTitle(topic.Title),
+		Speaker:    speaker.Key(),
+		Identity:   speaker.Identity(),
+		Severity:   event.Severity,
+		Body:       bound(severityMark(event.Severity)+said, event.Refs),
+		Refs:       event.Refs,
+		At:         event.At.UTC(),
 	}
 	if err := message.Validate(); err != nil {
 		return Message{}, err

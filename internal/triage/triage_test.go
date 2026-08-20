@@ -203,6 +203,24 @@ func TestARenderedEntryCarriesTheEvidenceSomebodyDecidesOn(t *testing.T) {
 	}
 }
 
+// An entry outlives the run that produced it, so a reader who finds one has the
+// identifier and whatever the entry says in words. It says what the item is
+// called where the run recorded it, and the identifier alone where it did not.
+func TestARenderedEntryNamesTheItemInWordsWhereTheRunRecordedThem(t *testing.T) {
+	t.Parallel()
+
+	entry := stoppedRunEntry()
+	entry.WorkItemTitle = "Slack thread headers carry the item's title"
+	rendered := entry.Render()
+	if !strings.Contains(rendered, "yoyodyne-task — Slack thread headers carry the item's title") {
+		t.Fatalf("rendered entry does not name the item in words:\n%s", rendered)
+	}
+	untitled := stoppedRunEntry().Render()
+	if !strings.Contains(untitled, "on yoyodyne-task (") {
+		t.Fatalf("an entry with no recorded title does not name the item alone:\n%s", untitled)
+	}
+}
+
 // An artifact the harness already removed is named as removed rather than
 // omitted: a development manager sent after a worktree that is gone finds that
 // out by going there, which is the errand the docket exists to remove.

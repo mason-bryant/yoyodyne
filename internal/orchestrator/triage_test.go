@@ -64,6 +64,7 @@ func (r recordedRuns) ReviewRounds(workItemID string) (int, error) {
 const (
 	docketedRunID = "run-0123456789abcdef0123456789abcdef"
 	docketedItem  = "yoyodyne-task"
+	docketedTitle = "Slack thread headers carry the item's title"
 )
 
 var docketedNow = time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
@@ -97,6 +98,7 @@ func stoppedState() runstate.State {
 		ProductID:            "yoyodyne",
 		RepositoryID:         "yoyodyne",
 		WorkItemID:           docketedItem,
+		WorkItemTitle:        docketedTitle,
 		Backend:              "claude-code",
 		Status:               runstate.StatusFailed,
 		Phase:                runstate.PhaseReviewing,
@@ -158,6 +160,12 @@ func TestARunThatStoppedOnABlockerIsDocketedWithItsEvidence(t *testing.T) {
 	entry := docket.entries[0]
 	if entry.Class != triage.ClassStoppedRun || entry.WorkItemID != docketedItem {
 		t.Fatalf("entry = %#v", entry)
+	}
+	// An entry outlives the run it came from, so what the item is called travels
+	// with it: a development manager reading the docket afterwards has the entry
+	// and not the run record it was built from.
+	if entry.WorkItemTitle != docketedTitle {
+		t.Fatalf("title = %q, want what the run recorded the item as", entry.WorkItemTitle)
 	}
 	if entry.Blocker != stoppedState().Blocker {
 		t.Fatalf("blocker = %q, want the words it was recorded in", entry.Blocker)

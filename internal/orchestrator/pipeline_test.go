@@ -121,6 +121,35 @@ func TestPipelineEndToEndWithFakeBackend(t *testing.T) {
 	}
 }
 
+// The run record says what the item is called and not only which item it is.
+// Everything that reports on a run afterwards reads the durable record and never
+// the tracker, so a title nothing wrote down while the item was in hand is a
+// title no surface can name the work by.
+func TestARunRecordsWhatTheItemIsCalled(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:     "yoyodyne-task",
+		Title:  "Slack thread headers carry the item's title, not just its slug",
+		Status: "open",
+	}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.WorkItemTitle != "Slack thread headers carry the item's title, not just its slug" {
+		t.Fatalf("recorded title = %q, want what the tracker called the item", state.WorkItemTitle)
+	}
+}
+
 func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	t.Parallel()
 

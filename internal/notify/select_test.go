@@ -84,6 +84,28 @@ func TestARunStartingCarriesWhyItWasSelected(t *testing.T) {
 	}
 }
 
+// The record says what the item is called, so every message a run produces is
+// addressed to a topic that can be named in words. The sink reads durable
+// records and never the tracker, so a title the run did not write down is a
+// title nothing downstream can recover.
+func TestARunAddressesItsTopicByWhatTheRecordCallsTheItem(t *testing.T) {
+	state := running()
+	state.WorkItemTitle = "Slack thread headers carry the item's title, not just its slug"
+	_, notifications := crossed(t, runstate.State{}, state)
+	started := notifications[0]
+	if started.Topic.Key() != "work-item:yoyodyne-ifd.68.2" {
+		t.Fatalf("addressed to %q, want the identifier to stay the key", started.Topic.Key())
+	}
+	if started.Topic.Title != state.WorkItemTitle {
+		t.Fatalf("topic title = %q, want %q", started.Topic.Title, state.WorkItemTitle)
+	}
+	// A run recorded before titles were written is addressed exactly as it was.
+	_, older := crossed(t, runstate.State{}, running())
+	if older[0].Topic.Title != "" {
+		t.Fatalf("topic title = %q, want nothing where the record carried nothing", older[0].Topic.Title)
+	}
+}
+
 func TestARunStartingIsSpokenByTheSelectorTheRecordNames(t *testing.T) {
 	// The development manager speaks only for the work its own triage chose. The
 	// operator is not a persona and the scheduler is not a role, so a run either

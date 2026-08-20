@@ -192,7 +192,13 @@ type Entry struct {
 	ProductID     domain.ProductID `json:"product_id"`
 	RunID         string           `json:"run_id"`
 	WorkItemID    string           `json:"work_item_id"`
-	RecordedAt    time.Time        `json:"recorded_at"`
+	// WorkItemTitle is what the item is called, carried from the run record that
+	// wrote it down at claim time. An entry outlives that run, so a reader who
+	// finds it has the identifier and nothing else to say what stopped unless the
+	// entry says it in words. Absent means the run recorded no title, which is
+	// what every run docketed before titles were carried did.
+	WorkItemTitle string    `json:"work_item_title,omitempty"`
+	RecordedAt    time.Time `json:"recorded_at"`
 	// Blocker is the durable blocker exactly as it was recorded on the work
 	// item. On a publication entry it is empty: nothing blocked the item, the
 	// change is integrated, and only its publication is unfinished.
@@ -327,7 +333,7 @@ func (e Entry) Validate() error {
 func (e Entry) Render() string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "  [%s] %s on %s (%s)\n",
-		e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.WorkItemID, e.RunID)
+		e.Class.Title(), e.RecordedAt.UTC().Format(time.RFC3339), e.item(), e.RunID)
 	if e.Blocker != "" {
 		rendered.WriteString(indented("Blocker", e.Blocker))
 	}
@@ -353,6 +359,17 @@ func (e Entry) Render() string {
 		e.Counters.ReviewRounds, e.Counters.ReviewRoundsCap, exhaustedNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
 	return rendered.String()
+}
+
+// item names the work an entry is about: the identifier, which is what the
+// development manager acts on, and what the item is called, which is what tells
+// them what stopped without their going to the tracker for it. An entry whose
+// run recorded no title names the identifier alone.
+func (e Entry) item() string {
+	if title := strings.TrimSpace(e.WorkItemTitle); title != "" {
+		return e.WorkItemID + " — " + title
+	}
+	return e.WorkItemID
 }
 
 func (e Entry) renderArtifacts() string {

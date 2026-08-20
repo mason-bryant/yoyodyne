@@ -360,6 +360,9 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	if err != nil {
 		return err
 	}
+	// The key says which thread; what the topic is called travels beside it,
+	// because a header is read by somebody who has not read the tracker.
+	topic = topic.WithTitle(message.TopicTitle)
 
 	p.reached = true
 	threadTS := ""
@@ -407,15 +410,18 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // openThread posts the message a topic's thread hangs from. It names the topic
 // and nothing else: the thread's first reply is the first thing that actually
 // happened, and a header that summarized it would be a summary written before
-// the events it summarizes. It is opened by the harness rather than by whichever
-// persona happened to speak first, because opening a thread is not anybody's
-// account of anything.
+// the events it summarizes. Naming it is the identifier and what the record
+// calls the topic, because a channel is read by people and an identifier on its
+// own is a name somebody has to go and resolve before they know what the thread
+// is about. It is opened by the harness rather than by whichever persona
+// happened to speak first, because opening a thread is not anybody's account of
+// anything.
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
 	identity := s.avatars.Identity(notify.Harness())
 	emoji, url := icon(identity.Avatar)
 	ts, err := s.api.Post(ctx, Message{
 		Channel:   s.channel,
-		Text:      fmt.Sprintf("*%s*", label(topic)),
+		Text:      fmt.Sprintf("*%s*", header(topic)),
 		Username:  identity.Name,
 		IconEmoji: emoji,
 		IconURL:   url,
@@ -438,9 +444,23 @@ func icon(avatar string) (emoji, url string) {
 	return trimmed, ""
 }
 
-// label names a topic the way a thread header does: the item's own identifier,
-// because that is what somebody scanning a channel is looking for, and an
-// exchange said as one so a thread of questions is not mistaken for an item.
+// header names a topic the way the message a thread hangs from does: the
+// identifier first, because that is what somebody scanning a channel matches
+// against and what a reply has to quote, and then what the record calls the
+// topic, which is what tells a reader what the thread is for without their
+// resolving anything. A topic whose record carried no title is headed by the
+// identifier alone, exactly as every thread was before titles were carried.
+func header(topic notify.Topic) string {
+	named := label(topic)
+	if topic.Title == "" {
+		return named
+	}
+	return named + " — " + topic.Title
+}
+
+// label names a topic in the sink's own log and inside a header: the item's own
+// identifier, and an exchange said as one so a thread of questions is not
+// mistaken for an item.
 func label(topic notify.Topic) string {
 	switch topic.Kind {
 	case notify.TopicExchange:

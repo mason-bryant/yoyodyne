@@ -96,6 +96,14 @@ func TestAdmittedWorkIsSaidByTheRoleThatAdmittedItWithItsGoal(t *testing.T) {
 	if !strings.Contains(message.Body, "Report what conversations do to the backlog") {
 		t.Fatalf("body %q does not say what was admitted", message.Body)
 	}
+	// An admission is usually the first thing said about an item, so it is where
+	// most threads get the name their header carries.
+	if notification.Topic.Title != "Report what conversations do to the backlog" {
+		t.Fatalf("topic title = %q, want what the item is called", notification.Topic.Title)
+	}
+	if message.TopicTitle != notification.Topic.Title {
+		t.Fatalf("envelope carried %q, want the topic's own title", message.TopicTitle)
+	}
 }
 
 func TestACreationUnderAParentIsDecompositionRatherThanAdmission(t *testing.T) {

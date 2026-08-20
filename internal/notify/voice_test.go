@@ -314,6 +314,46 @@ func TestABodyTooLongIsCutWithTheRecordThatHoldsTheWhole(t *testing.T) {
 	}
 }
 
+// The envelope carries what the topic is called beside the key it is addressed
+// by, so whatever posts the message can head a thread in words a reader knows
+// without ever asking the tracker what an identifier means.
+func TestTheEnvelopeCarriesWhatTheTopicIsCalled(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.5")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	message, err := Render(topic.WithTitle("Slack run-started messages speak as the selector"),
+		Harness(), fullyRecorded(KindRunStarted))
+	if err != nil {
+		t.Fatalf("render a titled topic: %v", err)
+	}
+	if message.Topic != topic.Key() {
+		t.Fatalf("addressed to %q, want the key alone: %q", message.Topic, topic.Key())
+	}
+	if message.TopicTitle != "Slack run-started messages speak as the selector" {
+		t.Fatalf("topic title = %q, want what the record calls the item", message.TopicTitle)
+	}
+	// A topic built by hand rather than through WithTitle is bounded here, so
+	// what the envelope carries is a header line whichever way it was assembled.
+	overlong, err := Render(Topic{Kind: TopicWorkItem, ID: "yoyodyne-ifd.118", Title: strings.Repeat("long ", 200)},
+		Harness(), fullyRecorded(KindRunStarted))
+	if err != nil {
+		t.Fatalf("render an oversized title: %v", err)
+	}
+	if len(overlong.TopicTitle) > MaxTopicTitleBytes {
+		t.Fatalf("topic title is %d bytes, limit is %d", len(overlong.TopicTitle), MaxTopicTitleBytes)
+	}
+	// A record with no title says nothing about one rather than heading a thread
+	// with a blank.
+	plain, err := Render(topic, Harness(), fullyRecorded(KindRunStarted))
+	if err != nil {
+		t.Fatalf("render an untitled topic: %v", err)
+	}
+	if plain.TopicTitle != "" {
+		t.Fatalf("topic title = %q, want nothing where the record carried nothing", plain.TopicTitle)
+	}
+}
+
 func TestRenderRefusesWhatItHasNoWordsFor(t *testing.T) {
 	topic, err := WorkItem("yoyodyne-ifd.68.2")
 	if err != nil {
