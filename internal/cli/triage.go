@@ -89,6 +89,10 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 		// the same tracker the fresh run starts on, so what refuses here is exactly
 		// what would otherwise have refused past the claim.
 		Items: parts.tracker(),
+		// The same limit the reservation enforces, read before the claim so a full
+		// harness leaves the decision standing rather than spending the stoppage's
+		// re-run on a run that would find no slot.
+		Capacity: parts.config.Execution.MaxConcurrentDevelopers,
 		// What the stopped run preserved is retired through the same manager that
 		// created it, which is what keeps the removal inside the ownership rules
 		// every other removal here is held to.
@@ -126,8 +130,16 @@ func reportRerun(stdout, stderr io.Writer, jsonOutput bool, result orchestrator.
 		return 0
 	}
 	if !result.Started {
-		if result.IntakeHeld != nil {
+		// A hold and a full harness are both states the carry-out is waiting on
+		// rather than failures: nothing was claimed, and the decision stands to be
+		// carried out by asking again. A record that could not be written while
+		// waiting is a failure, because the stoppage has then paid for a wait that
+		// was meant to cost it nothing.
+		if result.IntakeHeld != nil || result.CapacityFull != nil {
 			fmt.Fprint(stdout, result.Render())
+			if result.RecordProblem != "" {
+				return 1
+			}
 			return 0
 		}
 		// Nothing was started and intake is not held, so the action refused, and
@@ -156,6 +168,11 @@ Everything that refuses is asked before the stoppage's one re-run is claimed, so
 a refusal costs nothing and asking again once it no longer applies carries out
 the same decision. The item has to be one a run may start on, which for a run
 that stopped on a blocker means putting the item back first.
+
+A harness with no free developer is not a refusal at all: nothing is claimed, the
+decision stands, and asking again once a slot frees carries out the same one. The
+item is open work the scheduler pulls from meanwhile, so it can reach a developer
+without this being asked again.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

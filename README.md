@@ -1287,6 +1287,18 @@ once for the status, and refused again by the once-only guard for a run that
 never happened. Put the item back and ask again, and the same decision is
 carried out.
 
+**A harness with no free developer refuses nothing at all.** Two developers
+happening to be busy at that second is not an argument about the work, and it
+stops being true on its own, so a carry-out that meets it waits rather than
+failing: it says what it is waiting on, claims nothing, and leaves the
+authorization standing until it is carried out or the development manager
+withdraws it. Ask again once a slot frees and the same decision runs — and
+meanwhile the item is open work [the scheduler pulls
+from](#letting-the-harness-choose-the-work), so the work can reach a developer
+without this being asked again. The last slot can also go between the reading
+and the reservation; a claim taken for a run the reservation then refused is
+given back, because that run provably never started.
+
 What that stopped run preserved is kept until the fresh run integrates and
 retired explicitly then — removed, and the removal written onto the stopped run's
 own record so `/status` and the docket stop advertising a branch and a worktree

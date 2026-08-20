@@ -1953,6 +1953,22 @@ opposite order holds past the claim, deliberately: the claim is taken before the
 run is started, so a process that dies between the two has spent a re-run nobody
 took rather than taken one nobody recorded.
 
+**A full harness is a state rather than a refusal.** `execution.max_concurrent_developers`
+is read before the claim, from the same runs in flight the reservation counts, and
+every slot being taken neither refuses the carry-out nor fails it: nothing is
+claimed, the decision stands until it is carried out or the development manager
+withdraws it, and asking again once a slot frees carries out the same one. The
+item is meanwhile the open work the scheduler pulls from, which is the other way
+it reaches a developer, and the two agree because this claimed nothing. The last
+slot can also go between that reading and the reservation; a claim taken for a
+run the reservation then refused for capacity is **given back**, because that run
+provably never started — a reservation refused for capacity creates no run
+record, claims no work item and runs no agent. It is the one thing that gives a
+claim back, and a claim carrying a run is refused rather than removed. A
+withdrawal the harness could not write is reported rather than swallowed: the
+stoppage has then spent its re-run on a run that never started, which is a thing
+to go and correct.
+
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
 run preserved. Its branch and worktree are **kept** while the fresh run has not
@@ -1961,7 +1977,9 @@ what to cherry-pick — and **retired** explicitly once it has. Anything that co
 not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
-deletes the record, for the reason nothing deletes a counter file.
+deletes the record, for the reason nothing deletes a counter file — save the one
+withdrawal above, which removes a claim whose run was refused a developer slot
+and so never existed.
 
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say
