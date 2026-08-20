@@ -17,6 +17,10 @@ approvals:
       by: operator
       at: 2026-08-19T00:43:34.14703Z
       reason: Approved by the operator in conversation on 2026-08-17, before anything could record it; written down here by yoyodyne-ifd.1.8, which exists for that gap. The prose approved is what this revision carries.
+    - revision: 1
+      by: operator
+      at: 2026-08-20T20:12:20.136706Z
+      reason: 'Approved by the operator on 2026-08-20, asked as one decision with amend and hold as alternatives: the operations bullet joins the brief as post-v1 intent, gating nothing in v1.'
 ---
 
 # Product brief

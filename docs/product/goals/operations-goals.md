@@ -10,6 +10,11 @@ revisions:
       by: product-manager
       at: 2026-08-20T20:00:52Z
       reason: post-v1 operations intent, drafted by the product manager and approved by the operator as drafted on 2026-08-20; recorded now so work that arrives ahead of it is designed knowing where it leads
+approvals:
+    - revision: 0
+      by: operator
+      at: 2026-08-20T20:12:20.146916Z
+      reason: 'Approved by the operator on 2026-08-20 as drafted by the product manager: post-v1 operations outcomes recorded so work arriving ahead of them is designed knowing where it leads.'
 ---
 
 # Operations goals
