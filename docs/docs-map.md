@@ -59,18 +59,29 @@ link to the canonical home. Never renamed, never deleted, even when the content
 under it has moved. An anchor is Tier 1 when it is cited by something this
 repository cannot rewrite:
 
-- **Shipped artifacts.** A URL compiled into the binary or written into a user's
-  generated `.yoyodyne/config.yaml` is on disks we do not control, in files their
-  owners edit. Today that is exactly one anchor,
-  `docs/configuration.md#checks` — `internal/config/scaffold.go:360`, asserted by
-  `internal/cli/init_test.go:214`. Every config file `yoyo init` has ever
-  generated points at it.
+- **Shipped artifacts**, which are on disks we do not control or in text already
+  published. Two today:
+  - `docs/configuration.md#checks` — `internal/config/scaffold.go:360`, asserted
+    by `internal/cli/init_test.go:214`. Every `.yoyodyne/config.yaml` that
+    `yoyo init` has ever generated points at it, in a file its owner edits.
+  - `README.md#getting-started` — `.github/release-notes-preamble.md:28`, as the
+    repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`,
+    which `.github/workflows/release.yml:55` passes to `gh release create
+    --notes-file`. It is in the notes of every release already published, and
+    published release notes cannot be corrected by a change to this repository.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,
   and no developer rewrites an item to chase a link. Today that is
   `docs/configuration.md#product-specifications`, cited by yoyodyne-ifd.20.2 and
   yoyodyne-ifd.21 — both closed, so the cost of dangling would be archaeological
   rather than live, but the rule holds on who may rewrite the citation rather
   than on how much it would hurt.
+- **Protected artifact homes** — `docs/product/`, `docs/designs/`,
+  `docs/decisions/`, and `.yoyodyne/`. A developer on this effort may not edit a
+  file in one, so an anchor cited from inside one is Tier 1 by construction: the
+  only alternative is a proposal to an owner who may decline it, which would
+  leave the link dangling in the meantime. Today that is
+  `docs/configuration.md#product-specifications` again, cited by
+  `docs/designs/v1-harness-design.md:243` and `docs/product/goals/README.md:11`.
 
 **Tier 2 — updated in the same change.** The anchor is cited only by files in
 this repository, so the run that moves the section rewrites every citation in
@@ -96,10 +107,16 @@ right one in a click.
 
 ## Every anchor citation, and where it goes
 
-Every citation of a `docs/configuration.md` anchor in this repository, with the
-document it moves to and its tier. Verified against the tree at the time of
-drafting; the executing run re-derives it rather than trusting this table,
-because anything landed between then and now adds rows.
+Four sets, and all four are enumerated: citations of `docs/configuration.md`
+anchors, citations of `README.md` anchors, and the links each of the two
+documents makes into itself. Nothing is scoped out. The method that produced
+them is stated with each set so the executing run can re-derive rather than
+trust, because anything landed between drafting and execution adds rows.
+
+### Citations of `docs/configuration.md` anchors
+
+With the document each moves to and its tier. Verified against the tree at the
+time of drafting.
 
 | Anchor | Cited by | New home |
 |---|---|---|
@@ -120,33 +137,93 @@ because anything landed between then and now adds rows.
 | `#avatars` | `docs/slack/setup.md:139` | `configuration/agents.md` |
 | `#approving-a-document` | `README.md:1895` | `configuration/artifacts.md` |
 
-The README also links into itself 38 times across 26 distinct anchors. Six of
-those stay put — `#install`, `#getting-started`, the three numbered step
-headings, and `#optional-publishing-and-auto-merge` — because their sections
-stay in the README. The other 20 become relative links into the new documents,
-resolved from the disposition table below. One citation runs the other way:
-`docs/configuration.md:178` links to `README.md#talking-to-the-other-agents`,
-which becomes `conversation.md#talking-to-the-other-agents`.
+### Citations of `README.md` anchors
 
-Two citations live in files this effort's developers may not edit —
-`docs/designs/v1-harness-design.md` and `docs/product/goals/README.md`, both in
-protected artifact homes. Both cite `#product-specifications`, which is Tier 1
-and frozen precisely so those citations keep resolving with no edit to a
-protected file. That is not a coincidence: **an anchor cited from a protected
-artifact home is Tier 1 by construction**, because the only alternative is a
-proposal to an owner who may decline it.
+Twenty-two README sections move out to seven new documents, so this set has to
+be established rather than assumed. It was swept three ways: every
+`README.md#…` reference in any case anywhere in the tree; every GitHub URL for
+this repository carrying a fragment, which is how a link to the README's
+rendered root is written; and every README slug whose section moves, searched
+literally as `#slug` across the working tree and the tracker's current export.
+
+The result is small, and worth stating flatly because the map's later claim that
+the README keeps four things and needs no stub of its own depends on it:
+
+| Anchor | Cited by | Tier | New home |
+|---|---|---|---|
+| `#talking-to-the-other-agents` | `docs/configuration.md:178` | 2 | `conversation.md#talking-to-the-other-agents` |
+| `#getting-started` | `.github/release-notes-preamble.md:28` | **1** | stays in the README — see below |
+
+**Those two rows are the whole set.** No work item, design, `docs/product/`,
+`docs/slack/`, or Go source file cites a README anchor at all, and the only
+external citation of a README anchor whose section *moves* is
+`docs/configuration.md:178`, which is Tier 2 and rewritten in the same change.
+`#getting-started` is the sole Tier 1 README anchor, and the section it names
+stays — so the README acquires no stub.
+
+Two near-misses the sweep turned up, recorded so a re-derivation does not
+re-litigate them. Four intra-file links in `docs/configuration.md` match README
+slugs as prefixes — `#artifact-identity-and-metadata` (:315, :340),
+`#architectural-invariants` (:417), `#what-a-change-upstream-leaves-stale`
+(:1312) — but each resolves against `configuration.md`'s own headings at :396,
+:1053 and :998, so they belong to the set below rather than to this one. And
+yoyodyne-ifd.54 and yoyodyne-ifd.1.2 mention README anchors in the recorded
+prose of closed review findings, not as links anything resolves.
+
+That ifd.54 note is worth reading, because it is this policy's precedent: it
+records that a link "to `#releasing-a-usage-limit-wait-early` or
+`#waiting-out-a-provider-usage-limit` is now dead" after a README rename, and
+tells a later run to grep for both old anchors. README anchors have been broken
+by a rename here before, and were found by hand afterwards rather than by a
+check.
+
+### Links each document makes into itself
+
+An intra-file `](#slug)` link survives a split only if its target lands in the
+same new document. Both sources have many, and they are the largest category by
+count in this effort — 67 links — so they are the likeliest thing for an
+execution run to miss.
+
+**The README links into itself 38 times across 26 anchors.** Six anchors stay
+put — `#install`, `#getting-started`, the three numbered step headings, and
+`#optional-publishing-and-auto-merge` — because their sections stay. The other
+20 become relative links into the new documents, resolved from the disposition
+table below.
+
+**`docs/configuration.md` links into itself 29 times across 21 anchors**, and
+after the split most cross a document boundary. Resolve each against the
+configuration disposition table: a link whose target lands in the same new
+document stays a bare `#slug`; one whose target lands elsewhere becomes a
+relative link. The anchors are `#who-may-change-an-artifact` (×3),
+`#proposing-a-change-to-a-document-you-do-not-own` (×3), `#what-reaches-the-queue`
+(×2), `#artifact-identity-and-metadata` (×2), `#approving-a-document` (×2),
+`#what-one-work-item-has-been-given` (×2), and one each of
+`#extending-a-built-in-bundle`, `#what-init-proposes-for-checks`,
+`#what-fails-closed`, `#protected-paths-in-a-developers-change`, `#personas`,
+`#architectural-invariants`, `#product-specifications`,
+`#traceability-references-and-orphans`, `#goals-and-the-work-attributed-to-them`,
+`#watching-instead-of-draining`, `#what-a-change-upstream-leaves-stale`,
+`#how-long-a-check-may-take`, `#relaunching-a-run-the-provider-killed`,
+`#losing-a-race-for-the-target-branch`, and `#operators`.
 
 ## What the README becomes
 
 The README keeps four things and links out for everything else: the value
 proposition, the testimonials, everything a newcomer needs to reach a working
-first run, and the index.
+first run, and the index. It keeps **nothing extra to service a link** — no
+Tier 1 stub of its own — and that is a result of the sweep above rather than an
+assumption: nothing outside the README cites a README anchor whose section moves.
 
-Install and Getting started **stay in the README**. This is the one place the
-map spends its size budget deliberately, and it is worth being explicit about
-why: the goal is that a newcomer reaches a working first run *using the readme
-alone*. A README that sends someone to another document between installing and
-running fails that goal in its own words, however brief it reads. So the README
+Install and Getting started **stay in the README**, for two independent reasons.
+The first is the goal: a newcomer reaches a working first run *using the readme
+alone*, and a README that sends someone to another document between installing
+and running fails that goal in its own words, however brief it reads. The second
+is that `#getting-started` is Tier 1 — every published release's notes link to
+it — so that section is pinned where it is whatever the first argument decides.
+A later restructure that finds the goal argument unpersuasive still may not move
+it without leaving a stub.
+
+This is the one place the map spends its size budget deliberately: the README
 lands at roughly 500 lines rather than the 150 a pure landing page would be, and
 the sections below the quick start are what carry the weight of the reduction.
 
@@ -323,9 +400,15 @@ checked-in document rather than as a decision recorded in a conversation.
 **Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
 makes "every link resolves" its definition of done, and the only thing standing
 behind that today is a reviewer reading a diff — which is exactly the check that
-does not catch a silently-ignored fragment. A link checker over the repository's
-Markdown, wired into `make check`, is the durable form of the policy above.
-It is named here and in the summary as work to admit, not queued.
+does not catch a silently-ignored fragment. This has already happened once at a
+much smaller scale: yoyodyne-ifd.54 records two README anchors left dead by a
+rename, found by hand afterwards and repaired by asking a later run to grep for
+the old names. This effort moves 22 README sections and 30 configuration
+sections at once, and 67 intra-document links with them. A link checker over the repository's Markdown — resolving both
+relative paths and fragments, and covering `.github/` — wired into `make check`
+is the durable form of the whole policy above, and it is what would let a
+reviewer verify the tables here instead of re-deriving them. It is named here
+and in the summary as work to admit, not queued.
 
 ## What the architect is being asked
 
