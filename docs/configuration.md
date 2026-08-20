@@ -1619,9 +1619,10 @@ triage:
 
 **These are read by the triage docket**, which is where work that has stopped
 moving is collected and delivered to the development manager: `stuck_merge_age`
-decides when an unmerged publication is docketed, and the two budgets are
-carried on every entry so a decision about one is made against what the item is
-allowed to spend rather than against the evidence alone. Deciding what becomes
+decides when an unmerged publication is docketed, and the item's budgets —
+rounds spent, repair grants, re-runs, merge re-arms — are carried on every
+entry so a decision about one is made against what the item is allowed to
+spend rather than against the evidence alone. Deciding what becomes
 of a docketed item is the development manager's; the caps are what refuse a
 decision that would spend more than the item is allowed.
 
@@ -1737,8 +1738,8 @@ Which threshold refuses which action:
 | Action | Refused by |
 | --- | --- |
 | another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
-| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state, which the action carries and this counter does not |
-| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the action, which repeats only the identical already-authorized forge request under the harness's own lease |
+| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; the run itself is started by the re-run action (unbuilt today), which is what must carry both |
+| re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the once-per-publication budget; performing the re-arm is that action's |
 
 The first two buy review rounds, so the round cap bounds them, and a grant is
 **truncated** rather than refused where some rounds remain: at the defaults an

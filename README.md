@@ -1158,10 +1158,11 @@ reasoning beside the evidence rather than deciding it a second time.
 Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
-escalating instead. Triage takes each of those once per item: a second is an
-escalation rather than a larger budget, and past the [review-round
-cap](docs/configuration.md#what-one-work-item-has-been-given) even the first is
-refused. **An escalation is a durable blocker on the item and a report at
+escalating instead. A repair and a re-run are each once per item, and past the
+[review-round cap](docs/configuration.md#what-one-work-item-has-been-given) even
+the first is refused; a merge re-arm is once per publication, bounded by the
+integration-retry budget rather than the rounds, because it buys no round at
+all. A second of any of them is an escalation rather than a larger budget. **An escalation is a durable blocker on the item and a report at
 `warning` severity or above**, in the same reply: the item itself says it is
 waiting on a person, and the report reaches [the pile you
 read](#what-agents-report-and-where-it-reaches-you). Prose alone is not an escalation, and the
