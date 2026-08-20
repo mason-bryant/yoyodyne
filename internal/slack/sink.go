@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -70,6 +71,13 @@ type Options struct {
 	// window onto a process that otherwise runs silently, and it is never given
 	// a token to print.
 	Log func(format string, args ...any)
+	// Identity is what this process records about itself while it is running, so
+	// something other than the sink can tell a sink that is merely alive from one
+	// that is the right build, reading the right configuration, launched with
+	// this project's secrets. The sink fills in what only it knows -- its pid,
+	// the channel, the workspace -- so a caller supplies the rest. It carries no
+	// credential; see Presence.
+	Identity Presence
 	// Inbound is what to do with a message that arrives on the connection.
 	// Nothing today: the inbound half maps a reply onto the existing directive
 	// record, and until it exists a reply is acknowledged and no more.
@@ -91,6 +99,8 @@ type Sink struct {
 	api     *API
 	feed    Feed
 	poll    time.Duration
+	// identity is what this sink records about itself while it runs.
+	identity Presence
 	// refusal is how long to wait after a refusal only a person can clear. It is
 	// a field only so a test can drive that path without spending the wait;
 	// every sink the harness builds gets refusalBackoff.
@@ -136,15 +146,16 @@ func New(options Options) (*Sink, error) {
 		poll = DefaultPollInterval
 	}
 	return &Sink{
-		channel: strings.TrimSpace(options.Channel),
-		avatars: options.Avatars,
-		store:   options.Store,
-		api:     options.API,
-		feed:    options.Feed,
-		poll:    poll,
-		refusal: refusalBackoff,
-		now:     options.Now,
-		log:     log,
+		channel:  strings.TrimSpace(options.Channel),
+		avatars:  options.Avatars,
+		store:    options.Store,
+		api:      options.API,
+		feed:     options.Feed,
+		poll:     poll,
+		identity: options.Identity,
+		refusal:  refusalBackoff,
+		now:      options.Now,
+		log:      log,
 		connection: &connection{
 			api:    options.API,
 			dial:   options.Dial,
@@ -168,13 +179,30 @@ func (s *Sink) Run(ctx context.Context) error {
 	}
 	defer release()
 
+	presence := s.identity
+	presence.PID = os.Getpid()
+	presence.Channel = s.channel
+	presence.StartedAt = s.clock().UTC()
 	if identity, err := s.api.Identify(ctx); err != nil {
 		// A workspace that will not say who this is may still accept posts, and
 		// reporting is never a gate, so this is said and not obeyed.
 		s.log("Slack did not confirm this app's identity: %v", err)
 	} else {
+		presence.Team, presence.TeamID = identity.Team, identity.TeamID
 		s.log("reporting to %s as %s in workspace %s", s.channel, identity.User, identity.Team)
 	}
+	// What this sink is is recorded for whoever asks later, and a sink that could
+	// not record it still reports: the record is a diagnostic, and refusing to
+	// post because a diagnostic could not be written would make reporting a gate
+	// on its own bookkeeping.
+	if err := s.store.SavePresence(presence); err != nil {
+		s.log("this sink could not record what it is running as, so `yoyo doctor` will not see it: %v", err)
+	}
+	defer func() {
+		if err := s.store.ClearPresence(); err != nil {
+			s.log("this sink could not forget what it was running as: %v", err)
+		}
+	}()
 
 	connected := make(chan struct{})
 	go func() {

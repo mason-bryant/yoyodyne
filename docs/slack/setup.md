@@ -165,15 +165,56 @@ mapping, including the other grant and the namespaces you can bind.
 > accepted there any more, and a configuration that still has it is refused when
 > it loads, with a message naming the entry to write instead.
 
-## 5. Start the sink
+## 5. Store the two tokens under this project's names
 
-The two tokens go in this process's environment and nowhere else:
+They go in the sink process's environment and nowhere else, and they are read
+into it from somewhere only its own launch looks. On macOS that is the keychain,
+which keeps them encrypted at rest:
 
 ```sh
-export SLACK_BOT_TOKEN=xoxb-...
-export SLACK_APP_TOKEN=xapp-...
-yoyo slack
+# once, with <product id> as the `product.id` in .yoyodyne/config.yaml:
+security add-generic-password -s yoyo-slack-bot.<product id> -a yoyo -w
+security add-generic-password -s yoyo-slack-app.<product id> -a yoyo -w
 ```
+
+`-w` with no value makes the keychain prompt for the token, so it never reaches
+your shell history. Elsewhere, a `chmod 600` file this project's launch sources
+does the same job in plaintext at rest — write the two `export` lines into
+`~/.config/yoyo/<product id>/slack.env`.
+
+**The names carry the product deliberately.** A generic pair is
+indistinguishable between projects, and indistinguishable is how a sink ends up
+posting one project's work into another project's channel: running more than one
+harness on a machine is the ordinary case, not the exotic one, and under a shared
+name every check of the form "a Slack token exists" passes for all of them while
+at most one of them is right. Under these names, `yoyo doctor` can ask whether
+*this project's* secrets are stored.
+
+## 6. Start the sink
+
+The launcher reads this project's pair into exactly one process:
+
+```sh
+#!/bin/sh
+# ~/bin/yoyo-slack-<product id> — the assignments are on the exec line, so the
+# tokens exist only in the sink's environment and never in your shell's.
+SLACK_BOT_TOKEN="$(security find-generic-password -s yoyo-slack-bot.<product id> -a yoyo -w)" \
+SLACK_APP_TOKEN="$(security find-generic-password -s yoyo-slack-app.<product id> -a yoyo -w)" \
+YOYO_SLACK_SECRET_NAMESPACE=<product id> \
+exec yoyo slack "$@"
+```
+
+With the environment file instead, the subshell does the same:
+
+```sh
+(set -a; . ~/.config/yoyo/<product id>/slack.env; YOYO_SLACK_SECRET_NAMESPACE=<product id> exec yoyo slack)
+```
+
+`YOYO_SLACK_SECRET_NAMESPACE` is not a credential and is not read as one. It is
+how the sink records whose secrets it was launched with, so something other than
+the sink can tell one that is merely running from one that is running for this
+project. Leave it out and reporting works exactly as before; what is lost is
+anything being able to notice when it is wrong.
 
 It prints the workspace and channel it connected to, and then stays open until
 you stop it with Ctrl-C. Leave it running in a terminal, a `tmux` window, or
@@ -186,6 +227,26 @@ yoyo slack --once
 ```
 
 That posts whatever is due and exits.
+
+## 7. Ask whether it is actually reporting
+
+```sh
+yoyo doctor
+```
+
+A sink fails quietly — a channel that says nothing and a harness with nothing to
+report look identical — so this is the verb that asks the questions the channel
+cannot answer: are this project's secrets stored under the names above, is a sink
+actually holding this product's lease or is there only the record of one that
+died, is the sink that is running **this build**, and was it launched with **this
+project's** secrets. Every finding it makes carries the command that fixes it.
+
+The build question is the one that catches an installation that was working and
+stopped. The sink is a long-lived process started from a binary that keeps moving
+underneath it, so the build that is reporting and the build that is installed
+drift apart with no event between them: nothing fails, nothing is logged, and the
+milestones added since it started are simply never posted. In the channel that
+reads as a quiet week.
 
 **It reports what happens from the first time you ever start it.** A product
 with two hundred runs behind it does not get two hundred threads on the day
@@ -331,7 +392,7 @@ this channel and changes nothing about your setup.
 
 | What you see | What it means |
 | --- | --- |
-| `SLACK_BOT_TOKEN is not set` | The tokens are read from this process's environment only. Export them in the shell you start `yoyo slack` from. |
+| `SLACK_BOT_TOKEN is not set` | The tokens are read from this process's environment only, and the launcher in step 6 is what puts them there. Check that the store in step 5 has this product's pair. |
 | `slack refused chat.postMessage: not_in_channel` | The app was never invited to the channel. `/invite @yoyodyne` in it. |
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
@@ -341,6 +402,21 @@ this channel and changes nothing about your setup.
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
+
+Every row above is something you saw. What a stopped, stale, or misdirected sink
+gives you is silence, so those are asked for rather than watched for:
+
+```sh
+yoyo doctor
+```
+
+| What it says | What it means |
+| --- | --- |
+| `this project's Slack secrets are not stored` | No pair under this product's names. The remedy is the two `security add-generic-password` lines, filled in for you. A generic pair, or a sibling project's, does not count and deliberately does not pass. |
+| `no sink is running for this product, so nothing is being reported` | Nobody holds this product's lease. If a sink recorded itself here before, the line names which build it was and when it started, because a sink that died and a quiet week are otherwise the same silence. |
+| `the running sink is an older build than the installed one` | The binary moved and the process did not. It is still posting what its own build knew how to post and dropping everything added since. The remedy stops it by the pid it recorded and starts the right one. |
+| `the running sink holds <other>'s secrets, not <this>'s` | It was launched from a shell carrying another project's pair, and is posting this project's work through that project's Slack app. The workspace it actually authenticated into is named beside it. |
+| `the running sink was started from a shell rather than from this project's launcher` | It may well be right; nothing recorded whose tokens it holds, so nothing can say. Restart it through the launcher in step 6. |
 
 ## Where the tokens must not go
 
@@ -352,34 +428,21 @@ has one in its environment. Exporting the tokens globally would hand them to
 every subprocess the harness starts, which is the one thing this arrangement
 exists to prevent.
 
-Where they should go instead: somewhere only the sink's own launch reads. Two
-recipes, best first.
+Steps 5 and 6 above are where they should go instead: a store only the sink's own
+launch reads, under names that carry the product. The launcher form matters as
+much as the store — the assignments are on the `exec` line, and the environment
+file is sourced inside a subshell, so the tokens exist in the sink's environment
+and never in the shell you started it from. Your shells stay clean, runs stay
+clean, and exactly one process ever sees the credentials.
 
-**A keychain-backed launcher** (macOS) keeps the tokens encrypted at rest and
-decrypts them into exactly one process:
+The plain `export SLACK_BOT_TOKEN=…` form works and is the wrong thing to leave
+running. What it costs is not only the exposure: everything started from that
+shell inherits the pair, so the second harness on the same machine gets whichever
+project's tokens that shell happened to have, and posts one project's work into
+another project's channel while looking entirely healthy.
 
-```sh
-# once:
-security add-generic-password -s yoyo-slack-bot -a yoyo -w 'xoxb-…'
-security add-generic-password -s yoyo-slack-app -a yoyo -w 'xapp-…'
-```
-
-```sh
-#!/bin/sh
-# ~/bin/yoyo-slack — the env assignments are on the exec line, so the tokens
-# exist only in the sink's environment, never in your shell's.
-SLACK_BOT_TOKEN="$(security find-generic-password -s yoyo-slack-bot -w)" \
-SLACK_APP_TOKEN="$(security find-generic-password -s yoyo-slack-app -w)" \
-exec yoyo slack "$@"
-```
-
-**A `chmod 600` env file sourced only at launch** is simpler and plaintext at
-rest — write the two `export` lines into `~/.config/yoyo/slack.env`, then:
-
-```sh
-(set -a; . ~/.config/yoyo/slack.env; exec yoyo slack)
-```
-
-The subshell keeps them out of your interactive environment. Either way, the
-property the design depends on holds: your shells stay clean, runs stay clean,
-and exactly one process ever sees the credentials.
+Nothing else on your machine ever reads these secrets. `yoyo doctor` asks whether
+they are *stored*, in the form that answers without producing the value — the
+keychain is queried for the item rather than for its password — because a
+diagnostic that helpfully printed a token would put it in a terminal, a
+scrollback, and whatever collects them.

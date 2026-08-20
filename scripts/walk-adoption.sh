@@ -12,7 +12,7 @@
 # claims those three make.
 #
 #   scripts/walk-adoption.sh                 walk every step that needs no provider
-#   WALK_PROVIDER=1 scripts/walk-adoption.sh also invoke the provider on step 11
+#   WALK_PROVIDER=1 scripts/walk-adoption.sh also invoke the provider on step 12
 #
 # The provider step is opt-in because it spends real capacity: it hands an item
 # to a developer agent. Everything before it is free and deterministic.
@@ -393,7 +393,38 @@ validate="$(cd src/nested && "$yoyo" config validate 2>&1)"
 contains "$validate" "configuration valid" "configuration is discovered from a subdirectory"
 rm -rf src
 
-step "7. write down what the product is for"
+step "7. doctor checks the whole installation, not only the file"
+# The README pairs `config validate` with `yoyo doctor` here: one is about a
+# document loading, the other about whether work can actually run. What is
+# asserted is the promise doctor makes -- every finding that is not healthy
+# carries a command -- and that the parts this walk has just set up are the
+# parts it calls healthy. It is not asserted to pass overall: this scratch
+# project runs a `yoyo` that is deliberately not on PATH, and may run without an
+# authenticated provider, both of which doctor is right to report.
+diagnosis="$("$yoyo" doctor --json 2>&1 || true)"
+if python3 - "$diagnosis" <<'PY'
+import json, sys
+
+report = json.loads(sys.argv[1])
+if report.get("schema_version") != 1:
+    raise SystemExit("doctor --json reported schema_version %r" % report.get("schema_version"))
+findings = {finding["check"]: finding for finding in report["findings"]}
+for check in ("configuration", "repository", "tracker", "checks"):
+    if check not in findings:
+        raise SystemExit("doctor never checked %s" % check)
+    if findings[check]["status"] != "ok":
+        raise SystemExit("doctor reports %s as %s: %s" % (check, findings[check]["status"], findings[check]["summary"]))
+for finding in report["findings"]:
+    if finding["status"] != "ok" and not finding.get("remedy", "").strip():
+        raise SystemExit("doctor reported %s as %s with no remedy" % (finding["check"], finding["status"]))
+PY
+then
+  pass "doctor calls this project's configuration, repository, tracker, and checks healthy, and carries a remedy for everything it does not"
+else
+  fail "doctor's report is not what the README describes -- got: $diagnosis"
+fi
+
+step "8. write down what the product is for"
 mkdir -p docs/product
 cat > docs/product/calc.md <<'MD'
 # Calc
@@ -407,7 +438,7 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 MD
 pass "wrote a specification with an introduction and goals"
 
-step "8. a run refuses an uncommitted primary checkout, and names the files"
+step "9. a run refuses an uncommitted primary checkout, and names the files"
 refusal="$("$yoyo" run "$item" 2>&1 || true)"
 contains "$refusal" "uncommitted changes" "the run refuses an uncommitted primary checkout"
 contains "$refusal" ".yoyodyne/config.yaml" "the refusal names the file that is dirty"
@@ -424,7 +455,7 @@ git add -A
 git commit -qm "adopt yoyo"
 pass "committed the adoption"
 
-step "9. the commands the README points a new project at"
+step "10. the commands the README points a new project at"
 reconcile="$("$yoyo" reconcile 2>&1)"
 contains "$reconcile" "no runs need reconciliation" "yoyo reconcile reports nothing outstanding"
 invariants="$("$yoyo" invariant list 2>&1)"
@@ -433,7 +464,7 @@ origins="$("$yoyo" config show --origins 2>&1)"
 contains "$origins" "$project/.yoyodyne/config.yaml" "config show --origins names the project file"
 missing "$origins" "builtin:v1" "nothing is inherited from the built-in bundle"
 
-step "10. following a run or a conversation"
+step "11. following a run or a conversation"
 # yoyo-status resolves the state directory the same way the harness does, which
 # is what makes the temporary state root above enough to keep this off an
 # operator's real runs. Both spellings are exercised. What it reports about
@@ -454,7 +485,7 @@ if ! command -v jq >/dev/null 2>&1; then
   contains "$cost" "needs jq" "yoyo-status -c says it needs jq when jq is absent"
 fi
 
-step "11. drive it from the conversation"
+step "12. drive it from the conversation"
 if [ "${WALK_PROVIDER:-0}" = "1" ]; then
   # Everything up to here is free. This is the step that spends capacity, so it
   # only runs when it was asked for. What is asserted is that the harness got
