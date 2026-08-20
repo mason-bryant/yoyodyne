@@ -1150,3 +1150,74 @@ An introduction.
 		t.Fatalf("link reason = %q: the brief states no goals and was read fine; a goals document failing to read must not be pinned on the brief", reason)
 	}
 }
+
+// A goal carries the operator's approval of the document stating it, because
+// that is now what decides whether work serving it reaches the queue without a
+// person. An approval given against an earlier revision is deliberately not
+// carried forward: the approval still stands for what it was given for, and the
+// goal as the document now reads is not what anybody saw.
+func TestAGoalCarriesWhetherTheOperatorApprovedTheDocumentStatingIt(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	write(t, root, "docs/product/goals/v1-goals.md", `---
+id: v1-goals
+---
+
+# V1 goals
+
+## Goals
+
+- Run development nearly autonomously.
+`)
+	approved := recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")
+	approved.Revisions = []artifact.Revision{{}}
+	approved.Approvals = []artifact.Approval{{Revision: 0}}
+
+	set := Collect(root, setOf(approved))
+	if len(set.Goals) != 1 || !set.Goals[0].Approved() {
+		t.Fatalf("goals = %#v", set.Goals)
+	}
+	if gap := set.Attribute("Run development nearly autonomously.").ApprovalGap(); gap != "" {
+		t.Fatalf("an approved goal reports a gap: %q", gap)
+	}
+
+	// The same document with a revision recorded after the approval.
+	amended := approved
+	amended.Revisions = []artifact.Revision{{}, {}}
+	amendedSet := Collect(root, setOf(amended))
+	if len(amendedSet.Goals) != 1 || amendedSet.Goals[0].Approved() {
+		t.Fatalf("an amended document still reads as approved: %#v", amendedSet.Goals)
+	}
+	if gap := amendedSet.Attribute("Run development nearly autonomously.").ApprovalGap(); !strings.Contains(gap, "amended since") {
+		t.Fatalf("gap = %q, want it to say the document moved since the approval", gap)
+	}
+
+	// And one nobody ever approved.
+	unapproved := recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")
+	unapprovedSet := Collect(root, setOf(unapproved))
+	if len(unapprovedSet.Goals) != 1 || unapprovedSet.Goals[0].Approved() {
+		t.Fatalf("an unapproved document reads as approved: %#v", unapprovedSet.Goals)
+	}
+	gap := unapprovedSet.Attribute("Run development nearly autonomously.").ApprovalGap()
+	if !strings.Contains(gap, "records no approval") || !strings.Contains(gap, "v1-goals") {
+		t.Fatalf("gap = %q, want it to name the unapproved document", gap)
+	}
+}
+
+// An attribution that does not resolve reports the gap it already reports, in
+// the same words the rest of the harness reports it in. There is no second
+// vocabulary for the same failure.
+func TestAnUnresolvedAttributionReportsItsOwnReasonAsTheApprovalGap(t *testing.T) {
+	t.Parallel()
+
+	for _, attribution := range []Attribution{
+		{State: StateUnattributed, Reason: "it names no goal"},
+		{State: StateUnresolved, Named: "Grow the ecosystem.", Reason: "no goal recorded in v1-goals is stated in those words"},
+		{State: StateUncheckable, Named: "Anything.", Reason: "the repository records no goals artifact"},
+	} {
+		if gap := attribution.ApprovalGap(); gap != attribution.Reason {
+			t.Fatalf("%s gap = %q, want %q", attribution.State, gap, attribution.Reason)
+		}
+	}
+}

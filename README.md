@@ -65,7 +65,9 @@ to an agent's good behavior:
 **You drive it from one conversation.** `yoyo chat` opens it: you talk to a
 product manager that has read your product's own written intent and the work
 already tracked against it, approve as many of the work items it proposes as you
-like in a single answer, and say `/work <id>` when you want one of them run. The
+like in a single answer — or hand that decision to your goals and watch the work
+that serves them go into the queue by itself — and say `/work <id>` when you want
+one of them run. The
 run happens in the background while the conversation stays a conversation — an
 isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
@@ -384,8 +386,11 @@ goals are what work is admitted against, and a product manager with no goals to
 name will stop and ask you for one.
 
 **Then drive the work from the same conversation.** Talk about what you want and
-approve the work items it proposes, as many as you like in one answer. You can
-also file one by hand if you would rather have something to run immediately:
+approve the work items it proposes, as many as you like in one answer. Once you
+trust it, `approvals.work_items: automatic` hands that decision to your goals:
+approve them with `yoyo artifact approve v1-goals`, and work that serves them
+reaches the queue without asking you. You can also file one by hand if you would
+rather have something to run immediately:
 
 ```sh
 bd create --title="Add a subtract function" \
@@ -599,14 +604,26 @@ and what could not be read is said.
 ### Proposals, and deciding them in batches
 
 The product manager can propose a Beads work item instead of creating one, when
-the decision is yours rather than its. Each proposal is shown to you as a
-numbered card with its reasoning, and the harness creates an item only after an
-answer that approves it by name. Nothing you did not approve is created, a
-proposal you left undecided is named when the conversation ends, and a created
-item records the conversation, the turn, and the rationale it came from. A
-proposal the harness cannot read is reported and the conversation carries on;
+the decision is yours rather than its. What becomes of a proposal is
+[`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to decide,
+and until you say otherwise every one of them is put to you: shown as a numbered
+card with its reasoning, and created only after an answer that approves it by
+name. A proposal you left undecided is named when the conversation ends, and a
+created item records the conversation, the turn, and the rationale it came from.
+A proposal the harness cannot read is reported and the conversation carries on;
 `--message` has nobody to ask, so it reports what was proposed and creates
 nothing.
+
+**Set `work_items: automatic` to move that approval up to your goals** — approve
+what the product should do, then watch it happen. Work that traces to a goal you
+approved then goes into the queue without asking you, and you are told afterwards
+what went in, with the goal that let it through. It holds only where the goal
+actually resolves and the document stating it is approved as it now stands, so a
+project that has just opted in still asks about everything until its first
+`yoyo artifact approve`. Everything short of that is still put to you, with why
+you are being asked printed on the card. A created item records which of the two
+it was, because an item claiming an approval you never gave is the one record
+this arrangement cannot afford.
 
 A turn that proposes five things is not five questions in a row. One answer
 decides as many of them as you like:

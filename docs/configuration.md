@@ -138,6 +138,7 @@ approvals:
   brief: human
   goals: human
   designs: automatic
+  work_items: human
   integration: human
   publishing: human
 
@@ -234,15 +235,20 @@ Up to three layers produce the effective configuration, later ones winning:
    `execution.check_timeout` (`30m`),
    `triage.stuck_merge_age` (`2h`),
    `triage.review_rounds_cap` (4),
-   `approvals.publishing` (`human`), and an agent's `instances` (1).
+   `approvals.publishing` (`human`), `approvals.work_items` (`human`), and an
+   agent's `instances` (1).
    `triage.repair_grant_attempts` is filled in too, but as a derivation rather
    than a fixed default: it takes the size of the effective
    `execution.repair_attempts_before_replan`, read after every layer has been
    applied, and is floored at 1 for a project that repairs nothing routinely.
-   `approvals.publishing` is the only approval with a harness default, because
-   it was added after configurations existed: a file written before it keeps the
-   behavior it was written for — the harness publishes nothing — rather than
-   failing to load for not mentioning a key that did not exist yet.
+   `approvals.publishing` and `approvals.work_items` are the only approvals with
+   a harness default, because they are the ones added after configurations
+   existed: a file written before either keeps the behavior it was written for —
+   the harness publishes nothing, and you are asked about every work item —
+   rather than failing to load for not mentioning a key that did not exist yet.
+   The bundle states both at the same value the default holds, so extending it
+   inherits neither and upgrading the executable moves neither. Both are opt-ins,
+   and an opt-in that arrived by inheritance would not be one.
 2. **The built-in bundle**, named by `extends`, and present only if a project
    asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
    `approvals`, and the five default agents. It deliberately supplies no
@@ -514,18 +520,74 @@ and `approvals.goals` are `human` by default and `approvals.designs` is
 `automatic`, deliberately rather than by inheritance: the brief and the goals are
 what you state and what everything else traces back to, while a design serving an
 approved goal is the architect's judgement about how, and approving each one is
-the per-change gate autonomy is the absence of. `approvals.goals` covers the
+the per-change gate autonomy is the absence of. Approving the goals is the one
+approval that then carries weight elsewhere, because it is what work is admitted
+against. `approvals.goals` covers the
 non-goals with the goals, because a bound on intent nobody approved is as much
 unapproved intent as a goal is. A decision record is the architect's account of
 how something was decided rather than a statement of what the product should do,
 and no setting asks you to approve one.
 
-**Recording an approval moves no gate.** An unapproved document still loads, still
-governs what is downstream of it, and stops nothing; an amendment after approval
-changes what is reported about the document rather than what is allowed. What
-`human` buys you is that the difference is visible — in the document, in the
-listings, and in `--json`, where each artifact's `state` is `approved`,
-`amended`, or `unapproved`.
+**Recording an approval gates one thing: what reaches the work queue.** An
+unapproved document still loads, still governs what is downstream of it, and
+stops nothing that reads it. What your approval of the goals decides is whether
+work serving them is admitted without asking you — see
+[what reaches the queue](#what-reaches-the-queue) below. Everywhere else, an
+amendment after approval changes what is reported about the document rather than
+what is allowed, and what `human` buys you is that the difference is visible — in
+the document, in the listings, and in `--json`, where each artifact's `state` is
+`approved`, `amended`, or `unapproved`.
+
+### What reaches the queue
+
+**`approvals.work_items` decides whether you are asked about every work item.**
+It is `human` until you say otherwise: every item is put to you before it is
+admitted to the queue. Set it to `automatic` to move that approval up to your
+goals, which is what it exists for — work that traces to a goal you approved is
+then admitted without a further prompt, and you are told afterwards what went in.
+
+**It is opted in to rather than inherited**, for the reason `integration` and
+`publishing` are: this is the setting that lets work reach the queue with no
+person in the loop, and autonomy is something you turn on once you have the gates
+to justify it rather than something a repository acquires by extending a bundle
+or by upgrading the executable. The bundle states `human` at the same value the
+harness default holds, so no existing project's approval posture moves when
+Yoyodyne does.
+
+**Approval moved up a level; it did not disappear.** Three things still stop and
+ask, and they are exactly what the product manager escalates rather than
+proposes: work it can attach to no goal, work it says would cut against one, and
+work that fits the goals and that it judges to be against what the product is
+for. A change to the goals themselves is yours and reaches the queue through
+nothing at all — the product manager argues for one in prose and cannot make one.
+
+**Nothing is admitted without asking until a goal is actually approved.** The
+attribution has to resolve to a goal a document in force states, and that
+document has to be approved as it now stands. A goals document nobody approved,
+one amended since you approved it, and a repository with no goals to check
+against all put the work to you instead, with the reason on the proposal. So
+turning it on gets you a second ramp for free: a project that has opted in still
+asks about everything until its first `yoyo artifact approve`. It is also why
+`work_items: automatic` requires `approvals.goals` to be `human`: admitting work
+rests on the goal it serves having been approved, and a project approving no
+goals has nothing for it to rest on, so the combination is refused rather than
+left to be discovered as a queue that never fills. That refusal only ever names a
+key you wrote, because `automatic` is never inherited.
+
+**Both ways work reaches the queue are governed by it.** The product manager can
+admit work to the backlog directly as well as propose it, and `human` refuses the
+direct admission with a pointer at the proposal it should have made instead — a
+setting that governed proposals while work arrived through the other door would
+say one thing and do another. Decomposition is not admission: a role that may
+only create underneath work you already admitted is building structure under a
+decision that was made, and it is unaffected by either setting.
+
+**What was admitted without asking is reported where a decision would have been.**
+Each item is named with the goal that let it through, in the conversation and in
+`yoyo chat --message ... --json` under `admitted`, and the item's own notes record
+that the harness admitted it under an approved goal rather than that you approved
+it. The conversation's event log records an admission as its own event, so work
+nobody was asked about is never readable as work somebody approved.
 
 **Approving writes nothing but the approval.** The prose, the title, what the
 document supports, and its status are untouched, so an approval can never become

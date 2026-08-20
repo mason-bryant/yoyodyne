@@ -24,9 +24,12 @@ package cli
 // write. An approval is the operator's, the operator is who runs a command, and
 // what it records is a fact about them rather than prose about the product — so
 // unlike an amendment it needs no answer to how a document gets written, and
-// unlike a role's mutation it is nobody else's to make. It moves no gate:
-// nothing refuses an unapproved document, and amending an approved one changes
-// what is reported about it rather than what is allowed.
+// unlike a role's mutation it is nobody else's to make. Nothing here refuses an
+// unapproved document and nothing stops loading one, and the one thing that
+// turns on the record lives elsewhere: work is admitted to the queue without the
+// operator being asked where it traces to a goal an approved goals document
+// states, so approving the goals is what a project running that way is doing
+// when it runs this.
 
 import (
 	"flag"
@@ -425,9 +428,12 @@ default to human, approvals.designs to automatic, and a decision record is the
 architect's account of a decision rather than a statement of intent, so nothing
 asks you to approve one.
 
-Recording an approval moves no gate. An unapproved document still loads, still
-governs what is downstream of it, and stops nothing; approving writes nothing but
-the approval, and the document itself stays the owning role's to change.
+An unapproved document still loads, still governs what is downstream of it, and
+stops nothing that reads it; approving writes nothing but the approval, and the
+document itself stays the owning role's to change. What your approval of the
+goals decides is what reaches the work queue: under approvals.work_items:
+automatic, work that traces to a goal an approved goals document states is
+admitted without asking you, and anything else is still put to you.
 
   list [--kind <kind>]   list the recorded artifacts, and name what is not one
   show <id>              print one artifact and its recorded revisions

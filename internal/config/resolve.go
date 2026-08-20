@@ -209,12 +209,18 @@ func newResolution() *resolution {
 				StuckMergeAge:   defaultStuckMergeAge,
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
-			// Publishing is the one approval with a harness default, because it is
-			// the one that was added after configurations existed. A file written
-			// before it keeps the behavior it was written for — the harness
-			// publishes nothing — rather than failing to load for not mentioning a
-			// key that did not exist when it was written.
-			Approvals: Approvals{Publishing: domain.ApprovalHuman},
+			// Publishing and work_items are the approvals with a harness default,
+			// because they are the ones added after configurations existed. A file
+			// written before either keeps the behavior it was written for — the
+			// harness publishes nothing, and the operator is asked about every work
+			// item — rather than failing to load for not mentioning a key that did
+			// not exist when it was written.
+			//
+			// The bundle states both, at the same value these defaults hold, so a
+			// project that extends it inherits nothing it did not already have and
+			// upgrading the executable moves neither. Both are opt-ins, and an
+			// opt-in that arrived by inheritance would not be one.
+			Approvals: Approvals{Publishing: domain.ApprovalHuman, WorkItems: domain.ApprovalHuman},
 		},
 		origins: map[string]string{
 			"product.specifications":                              OriginDefault,
@@ -222,6 +228,7 @@ func newResolution() *resolution {
 			"product.designs":                                     OriginDefault,
 			"product.decisions":                                   OriginDefault,
 			"approvals.publishing":                                OriginDefault,
+			"approvals.work_items":                                OriginDefault,
 			"execution.max_concurrent_developers":                 OriginDefault,
 			"execution.repair_attempts_before_replan":             OriginDefault,
 			"execution.integration_retries_before_reconciliation": OriginDefault,
@@ -274,6 +281,7 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
 		setValue(r.origins, "approvals.goals", approvals.Goals, &r.config.Approvals.Goals, applied.origin)
 		setValue(r.origins, "approvals.designs", approvals.Designs, &r.config.Approvals.Designs, applied.origin)
+		setValue(r.origins, "approvals.work_items", approvals.WorkItems, &r.config.Approvals.WorkItems, applied.origin)
 		setValue(r.origins, "approvals.integration", approvals.Integration, &r.config.Approvals.Integration, applied.origin)
 		setValue(r.origins, "approvals.publishing", approvals.Publishing, &r.config.Approvals.Publishing, applied.origin)
 	}

@@ -329,9 +329,36 @@ type Approvals struct {
 	// the other way — a design that serves an approved goal is the architect's
 	// judgement about how, and asking a person to approve each one is the
 	// per-change gate autonomy is the absence of.
-	Brief       domain.ApprovalMode `yaml:"brief" json:"brief"`
-	Goals       domain.ApprovalMode `yaml:"goals" json:"goals"`
-	Designs     domain.ApprovalMode `yaml:"designs" json:"designs"`
+	Brief   domain.ApprovalMode `yaml:"brief" json:"brief"`
+	Goals   domain.ApprovalMode `yaml:"goals" json:"goals"`
+	Designs domain.ApprovalMode `yaml:"designs" json:"designs"`
+	// WorkItems decides whether the operator is asked about every work item
+	// before it reaches the queue. It is the one approval that gates rather than
+	// records: `human` is the per-item gate the harness started with, where the
+	// product manager proposes and nothing exists until the operator says so,
+	// and `automatic` moves that decision up to the goals — work that traces to
+	// a goal the operator approved is admitted without a further prompt, and
+	// everything else is still put to them.
+	//
+	// "Everything else" is not a residue. Work that traces to no goal, work that
+	// would cut against one, and work the product manager judges to be against
+	// what the product is for are exactly the cases it escalates rather than
+	// proposes, and a change to the goals themselves is the operator's and
+	// reaches the queue through nothing. Approval moved up a level; it did not
+	// disappear.
+	//
+	// `automatic` requires the operator to be approving goals at all, which is
+	// checked below: the whole weight of admitting work without asking rests on
+	// the goal it serves having been approved, and a project recording no goal
+	// approvals has nothing for it to rest on. That refusal only ever names a key
+	// its author wrote, because `automatic` is never inherited — see below.
+	//
+	// Both the harness default and the shipped bundle say `human`, deliberately
+	// and at the same value: this is the setting that lets work reach the queue
+	// with no person in the loop, so a project turns it on rather than acquiring
+	// it by extending a bundle or by upgrading the executable. That is the same
+	// rule integration and publishing are held to, and for the same reason.
+	WorkItems   domain.ApprovalMode `yaml:"work_items" json:"work_items"`
 	Integration domain.ApprovalMode `yaml:"integration" json:"integration"`
 	// Publishing decides whether the harness pushes a run's branch and opens the
 	// pull request its reviewer's verdict merges. It sits beside integration
@@ -480,6 +507,7 @@ func (c Config) Validate() error {
 		{name: "brief", mode: c.Approvals.Brief},
 		{name: "goals", mode: c.Approvals.Goals},
 		{name: "designs", mode: c.Approvals.Designs},
+		{name: "work_items", mode: c.Approvals.WorkItems},
 		{name: "integration", mode: c.Approvals.Integration},
 		{name: "publishing", mode: c.Approvals.Publishing},
 	}
@@ -551,6 +579,15 @@ func (c Config) Validate() error {
 		if strings.TrimSpace(check) == "" {
 			problems = append(problems, fmt.Sprintf("check %d cannot be empty", index))
 		}
+	}
+	// Admitting work without asking rests entirely on the operator's approval of
+	// the goal that work serves, so a project that records no goal approvals has
+	// nothing for it to rest on: the setting would read as autonomy and mean
+	// nothing, because no goal would ever be approved for work to trace to. It is
+	// refused here rather than left to be discovered as a queue that never fills,
+	// which is the same choice automatic integration makes about its own gates.
+	if c.Approvals.WorkItems == domain.ApprovalAutomatic && c.Approvals.Goals != domain.ApprovalHuman {
+		problems = append(problems, fmt.Sprintf("automatic work_items requires approvals.goals to be %q; work is admitted without asking on the strength of the goal it serves having been approved", domain.ApprovalHuman))
 	}
 	if c.Approvals.Integration == domain.ApprovalAutomatic {
 		if len(c.Checks) == 0 {

@@ -40,8 +40,9 @@ const (
 const proposalFence = "```yoyodyne-proposal"
 
 // Proposal is one Beads work item the product manager suggests. It carries no
-// authority: it is a recommendation, and nothing exists until the operator
-// approves it.
+// authority: it is a recommendation, and what becomes of it is the harness's to
+// decide against the project's admission policy — either the operator is asked,
+// or it is admitted because it serves a goal they already approved.
 type Proposal struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
@@ -72,6 +73,18 @@ type PendingProposal struct {
 	ConversationID string   `json:"conversation_id"`
 	Turn           int      `json:"turn"`
 	Proposal       Proposal `json:"proposal"`
+	// Asking is what about this proposal kept the harness from admitting it in a
+	// project that admits work itself: the goal it names resolved to nothing, or
+	// to a document nobody approved, or to one amended since. It is empty where
+	// the answer is not about the proposal at all — a project that asks about
+	// every work item, and a proposal that was admitted — because a reason
+	// recorded there would be the policy repeated on every card rather than
+	// anything about the work.
+	//
+	// It is recorded with the proposal rather than worked out again at the
+	// prompt: the answer depends on the goals as they stood when the proposal was
+	// made, and the goals move.
+	Asking string `json:"asking,omitempty"`
 }
 
 // CreatedItem is one work item the harness created from an approved proposal.
@@ -414,6 +427,13 @@ func (p PendingProposal) body() []string {
 	if dependencies := p.Proposal.dependencies(); len(dependencies) > 0 {
 		lines = append(lines, "depends on: "+strings.Join(dependencies, ", "))
 	}
+	// Why this one is being decided rather than admitted, in a project that
+	// admits work that traces to an approved goal. The operator is being asked
+	// about it precisely because something did not hold, and being asked without
+	// being told what would leave them deciding blind.
+	if asking := strings.TrimSpace(p.Asking); asking != "" {
+		lines = append(lines, "asking you because "+asking)
+	}
 	return lines
 }
 
@@ -423,10 +443,17 @@ func (p PendingProposal) body() []string {
 // reasoning is not in the description. So does the goal: an item in the queue
 // that does not say what it is for is exactly the work nobody can later decide
 // to stop doing.
-func (p PendingProposal) provenanceNotes() string {
+//
+// authority says what put it in the queue, and it is a parameter because there
+// are now two answers and they must never be written down as one. An item the
+// operator approved says so; an item admitted on the strength of an approved
+// goal says that instead, and says which document. An item claiming an approval
+// nobody gave would be the record of the one thing this arrangement has to be
+// able to prove it did not do.
+func (p PendingProposal) provenanceNotes(authority string) string {
 	return fmt.Sprintf(
-		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and approved by the operator.\n\n%s\n\nRationale: %s",
-		p.ConversationID, p.Turn, p.ID, goal.Note(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
+		"Proposed by the product manager in conversation %s, turn %d, proposal %s, and %s.\n\n%s\n\nRationale: %s",
+		p.ConversationID, p.Turn, p.ID, authority, goal.Note(p.Proposal.Goal), strings.TrimSpace(p.Proposal.Rationale),
 	)
 }
 
