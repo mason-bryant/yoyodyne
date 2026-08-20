@@ -119,20 +119,31 @@ A project that enables reporting without naming a channel is refused when the
 configuration loads, before any work is claimed. A project that says nothing
 about Slack reports nothing, which is every project until it opts in.
 
-There is a third setting, `operators`, and it does nothing yet:
+Who may steer the harness from a thread is not part of this block. It comes from
+the top-level `operators` mapping, which is where the project says which humans
+it recognizes — and a human is bound there by all of their identifiers rather
+than by their Slack one:
 
 ```yaml
-slack:
-  enabled: true
-  channel: C0123456789
-  operators:
-    - U01234567   # your Slack user id, from your profile → "Copy member ID"
+operators:
+  your-name:
+    git_email: you@example.com
+    slack_member_id: U01234567   # your profile → "Copy member ID"
+    grants:
+      - direct-work
 ```
 
-It is the allow-list of people whose thread replies the harness will act on once
-the inbound half exists. It is empty by default, and it lives in the
-configuration rather than in the environment because a user id is identity
-rather than a secret. Adding yourself now changes nothing today.
+The allow-list is then derived: the humans granted `direct-work` who have bound
+a member id, and nobody else. Nothing acts on a reply yet, so adding yourself
+changes nothing today — but it is the entry the inbound half will read, and the
+member id lives in the configuration rather than in the environment because it
+is identity rather than a secret.
+[`docs/configuration.md`](../configuration.md#operators) has the rest of the
+mapping, including the other grant and the namespaces you can bind.
+
+> **Moved:** this used to be `operators` *inside* the `slack` block. It is not
+> accepted there any more, and a configuration that still has it is refused when
+> it loads, with a message naming the entry to write instead.
 
 ## 5. Start the sink
 

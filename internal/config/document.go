@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -24,7 +25,13 @@ type configDocument struct {
 	Approvals *approvalsDocument       `yaml:"approvals"`
 	Checks    *[]string                `yaml:"checks"`
 	Agents    map[string]agentDocument `yaml:"agents"`
-	Slack     *slackDocument           `yaml:"slack"`
+	// Operators replaces an inherited mapping entirely rather than merging into
+	// it, for the reason the check list does and the allow-list it absorbed did:
+	// who may act is a decision, and a mapping silently assembled from two layers
+	// is not the mapping either layer wrote. It decodes straight into the
+	// effective type because there is no per-field override to distinguish.
+	Operators *map[string]Operator `yaml:"operators"`
+	Slack     *slackDocument       `yaml:"slack"`
 }
 
 type productDocument struct {
@@ -70,14 +77,13 @@ type approvalsDocument struct {
 	Publishing  *domain.ApprovalMode `yaml:"publishing"`
 }
 
+// slackDocument deliberately has no operators key. A file that still carries one
+// is refused by the decoder, which names the key and the line it is on, because
+// who may steer the harness now lives in the top-level operators mapping — and
+// an allow-list left under `slack` would be an authority decision nothing reads.
 type slackDocument struct {
 	Enabled *bool   `yaml:"enabled"`
 	Channel *string `yaml:"channel"`
-	// Operators replaces an inherited allow-list entirely rather than adding to
-	// it, for the reason the check list does: an allow-list is a decision about
-	// who may steer the harness, and one silently concatenated from two layers
-	// is not the list either layer wrote.
-	Operators *[]string `yaml:"operators"`
 }
 
 type agentDocument struct {
@@ -107,13 +113,22 @@ type personaDocument struct {
 }
 
 func decodeDocument(reader io.Reader) (configDocument, error) {
-	decoder := yaml.NewDecoder(reader)
+	// The source is held rather than streamed so a file that fails the strict
+	// decode can be read a second time to tell an unknown key from a retired one.
+	source, err := io.ReadAll(reader)
+	if err != nil {
+		return configDocument{}, fmt.Errorf("decode config: %w", err)
+	}
+	decoder := yaml.NewDecoder(bytes.NewReader(source))
 	decoder.KnownFields(true)
 
 	var document configDocument
 	if err := decoder.Decode(&document); err != nil {
 		if errors.Is(err, io.EOF) {
 			return configDocument{}, errors.New("decode config: configuration is empty")
+		}
+		if migration := retiredSlackOperators(source); migration != "" {
+			return configDocument{}, errors.New(migration)
 		}
 		return configDocument{}, fmt.Errorf("decode config: %w", err)
 	}
@@ -127,3 +142,41 @@ func decodeDocument(reader io.Reader) (configDocument, error) {
 	}
 	return document, nil
 }
+
+// retiredSlackOperators reports the migration a file still carrying the old
+// allow-list needs, and the empty string for a file that failed to decode for
+// any other reason. The decoder's own answer for the key is "field operators not
+// found", which is true and useless: somebody who wrote that key wrote a
+// decision about who may steer the harness, so the refusal says where that
+// decision lives now rather than leaving them to find it.
+//
+// It runs only after the strict decode has already failed, and it is lenient
+// about everything else in the file, because the only question left is whether
+// the reason is worth a better answer.
+func retiredSlackOperators(source []byte) string {
+	var retired struct {
+		Slack *struct {
+			Operators *[]string `yaml:"operators"`
+		} `yaml:"slack"`
+	}
+	if err := yaml.Unmarshal(source, &retired); err != nil {
+		return ""
+	}
+	if retired.Slack == nil || retired.Slack.Operators == nil {
+		return ""
+	}
+	return fmt.Sprintf(`decode config: slack.operators has moved to the top-level operators mapping, `+
+		`where each human binds their identifier namespaces and the grants attach to the human rather than to any one of them. `+
+		`The Slack allow-list is derived from it now — the humans granted %q who bound a slack_member_id — so delete the key and write, beside "slack":
+
+operators:
+  <your-name>:
+    slack_member_id: %s
+    grants:
+      - %s
+`, GrantDirectWork, exampleSlackMemberID, GrantDirectWork)
+}
+
+// exampleSlackMemberID is the shape of a member id, for a refusal that shows the
+// entry to write rather than describing it.
+const exampleSlackMemberID = "U0123456789"
