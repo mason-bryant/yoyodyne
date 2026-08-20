@@ -214,9 +214,12 @@ func newResolution() *resolution {
 			// written before either keeps the behavior it was written for — the
 			// harness publishes nothing, and the operator is asked about every work
 			// item — rather than failing to load for not mentioning a key that did
-			// not exist when it was written. The shipped bundle overrides work_items
-			// to automatic, so a new project gets the gate at its goals and an
-			// existing one keeps the gate it has until it says otherwise.
+			// not exist when it was written.
+			//
+			// The bundle states both, at the same value these defaults hold, so a
+			// project that extends it inherits nothing it did not already have and
+			// upgrading the executable moves neither. Both are opt-ins, and an
+			// opt-in that arrived by inheritance would not be one.
 			Approvals: Approvals{Publishing: domain.ApprovalHuman, WorkItems: domain.ApprovalHuman},
 		},
 		origins: map[string]string{

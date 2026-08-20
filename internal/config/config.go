@@ -329,11 +329,14 @@ type Approvals struct {
 	// `automatic` requires the operator to be approving goals at all, which is
 	// checked below: the whole weight of admitting work without asking rests on
 	// the goal it serves having been approved, and a project recording no goal
-	// approvals has nothing for it to rest on.
+	// approvals has nothing for it to rest on. That refusal only ever names a key
+	// its author wrote, because `automatic` is never inherited — see below.
 	//
-	// The shipped bundle says `automatic` deliberately, and the harness default
-	// is `human` for a configuration written before this key existed, which is
-	// the behavior such a file was written for.
+	// Both the harness default and the shipped bundle say `human`, deliberately
+	// and at the same value: this is the setting that lets work reach the queue
+	// with no person in the loop, so a project turns it on rather than acquiring
+	// it by extending a bundle or by upgrading the executable. That is the same
+	// rule integration and publishing are held to, and for the same reason.
 	WorkItems   domain.ApprovalMode `yaml:"work_items" json:"work_items"`
 	Integration domain.ApprovalMode `yaml:"integration" json:"integration"`
 	// Publishing decides whether the harness pushes a run's branch and opens the

@@ -5,8 +5,11 @@ package chat
 // The harness began by asking about every work item, because there was nothing
 // else it could honestly do: the product manager proposed items directly, and
 // the operator was the only thing standing between a proposal and the tracker.
-// That is the gate this moves. What the operator approves is a goal, and work
-// that traces to a goal they approved is admitted without a further prompt.
+// That is still what a project gets until it says otherwise, and it is the gate
+// this can move: a project that sets `approvals.work_items` to automatic has the
+// operator approve a goal instead, and work that traces to one they approved is
+// admitted without a further prompt. Which of the two is in force is the
+// project's to say, and this file holds to whichever it said.
 //
 // Approval moved up a level; it did not disappear, and three things still stop
 // and ask. Work that traces to no goal and work that would cut against one are

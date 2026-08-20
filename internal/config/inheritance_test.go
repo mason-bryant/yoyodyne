@@ -794,31 +794,33 @@ func TestRemoteMustBeAPlainRemoteName(t *testing.T) {
 	}
 }
 
-// The default for a new project is stated where a new project can read it: the
-// bundle says work_items, `yoyo init` writes it out, and a project that took the
-// bundle gets the gate at its goals rather than at every item. That is a
-// decision this repository made deliberately, so it is checked rather than left
-// to be noticed when the behavior changes under somebody.
-func TestANewProjectAdmitsWorkTracingToAnApprovedGoalByDefault(t *testing.T) {
+// Admitting work without asking is opted in to rather than inherited, the way
+// integration and publishing are. The bundle states the same value the harness
+// default holds, so a project that extends the bundle acquires no autonomy by
+// doing so and none arrives when the executable is upgraded underneath it. That
+// is the whole of the upgrade story, and it is checked rather than left to be
+// discovered as a queue filling itself in a repository nobody asked.
+func TestAdmittingWorkWithoutAskingIsOptedIntoRatherThanInherited(t *testing.T) {
 	t.Parallel()
 
 	inherited := loadProject(t, minimalProjectConfig, nil)
-	if inherited.Config.Approvals.WorkItems != domain.ApprovalAutomatic {
-		t.Fatalf("inherited work_items = %q, want %q", inherited.Config.Approvals.WorkItems, domain.ApprovalAutomatic)
+	if inherited.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("inherited work_items = %q, want %q", inherited.Config.Approvals.WorkItems, domain.ApprovalHuman)
 	}
+	// Stated by the bundle rather than left to the harness default, so what a
+	// new project gets is a decision somebody wrote down and `yoyo init` copies
+	// into a file the operator can read.
 	if origin := inherited.Origins["approvals.work_items"]; origin != BuiltinV1 {
 		t.Errorf("work_items origin = %q, want the bundle that states it", origin)
 	}
-	// And it can be turned back on, which is the whole point of it being a
-	// policy: the trust that suits an established product does not suit its
-	// first week.
-	perItem := loadProject(t, minimalProjectConfig+"approvals:\n  work_items: human\n", nil)
-	if perItem.Config.Approvals.WorkItems != domain.ApprovalHuman {
-		t.Fatalf("work_items = %q, want the project override", perItem.Config.Approvals.WorkItems)
+
+	opted := loadProject(t, minimalProjectConfig+"approvals:\n  work_items: automatic\n", nil)
+	if opted.Config.Approvals.WorkItems != domain.ApprovalAutomatic {
+		t.Fatalf("work_items = %q, want the project override", opted.Config.Approvals.WorkItems)
 	}
 	// A sparse override must not lose the approvals it does not name.
-	if perItem.Config.Approvals.Goals != domain.ApprovalHuman || perItem.Config.Approvals.Integration != domain.ApprovalHuman {
-		t.Fatalf("approvals = %#v, want the inherited values kept", perItem.Config.Approvals)
+	if opted.Config.Approvals.Goals != domain.ApprovalHuman || opted.Config.Approvals.Integration != domain.ApprovalHuman {
+		t.Fatalf("approvals = %#v, want the inherited values kept", opted.Config.Approvals)
 	}
 }
 
@@ -876,5 +878,15 @@ func TestAutomaticWorkItemsRequiresTheOperatorToBeApprovingGoals(t *testing.T) {
 	perItem := loadProject(t, minimalProjectConfig+"approvals:\n  goals: automatic\n  work_items: human\n", nil)
 	if perItem.Config.Approvals.WorkItems != domain.ApprovalHuman {
 		t.Fatalf("work_items = %q", perItem.Config.Approvals.WorkItems)
+	}
+
+	// And the refusal never fires on a value nobody wrote. A project that says
+	// only `goals: automatic` while inheriting work_items from the bundle was
+	// valid before this key existed and still loads: a cross-field rule that
+	// refused a file over a key its author never wrote, naming a value that
+	// arrived by inheritance, would break working projects on an upgrade.
+	inheriting := loadProject(t, minimalProjectConfig+"approvals:\n  goals: automatic\n", nil)
+	if inheriting.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("inherited work_items = %q, want the bundle's %q", inheriting.Config.Approvals.WorkItems, domain.ApprovalHuman)
 	}
 }

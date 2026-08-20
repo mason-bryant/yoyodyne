@@ -241,14 +241,15 @@ triage:
 # goal is the architect's judgement about how.
 #
 # work_items is the one approval that gates rather than records, and it is where
-# you say how much of this you want to watch. "automatic" means you approve goals
-# rather than every work item: work that traces to a goal you approved is
-# admitted to the queue without asking you, and you are told afterwards what went
-# in. Work that traces to no goal, work that would cut against one, and a change
-# to the goals themselves still stop and ask. "human" puts every item to you
-# before it is admitted. Either way nothing is admitted without asking until you
-# have actually approved a goal, so a new project asks about everything until
-# your first "yoyo artifact approve".
+# you say how much of this you want to watch. "human" puts every work item to you
+# before it is admitted to the queue, which is what you get until you say
+# otherwise. "automatic" moves that approval up to your goals: work that traces
+# to a goal you approved is then admitted without asking you, and you are told
+# afterwards what went in. Work that traces to no goal, work that would cut
+# against one, and a change to the goals themselves still stop and ask either
+# way. Turning it on gets you a second ramp for free -- nothing is admitted
+# without asking until you have actually approved a goal, so it still asks about
+# everything until your first "yoyo artifact approve".
 #
 # Integration and publishing are opted in to separately. Automatic integration is
 # refused unless it is actually gated by the checks below and a reviewer agent,

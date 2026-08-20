@@ -138,7 +138,7 @@ approvals:
   brief: human
   goals: human
   designs: automatic
-  work_items: automatic
+  work_items: human
   integration: human
   publishing: human
 
@@ -246,9 +246,9 @@ Up to three layers produce the effective configuration, later ones winning:
    existed: a file written before either keeps the behavior it was written for —
    the harness publishes nothing, and you are asked about every work item —
    rather than failing to load for not mentioning a key that did not exist yet.
-   The bundle overrides `work_items` to `automatic`, so a new project gets the
-   gate at its goals and an existing file keeps the gate it has until it says
-   otherwise.
+   The bundle states both at the same value the default holds, so extending it
+   inherits neither and upgrading the executable moves neither. Both are opt-ins,
+   and an opt-in that arrived by inheritance would not be one.
 2. **The built-in bundle**, named by `extends`, and present only if a project
    asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
    `approvals`, and the five default agents. It deliberately supplies no
@@ -541,11 +541,18 @@ the document, in the listings, and in `--json`, where each artifact's `state` is
 ### What reaches the queue
 
 **`approvals.work_items` decides whether you are asked about every work item.**
-It is `automatic` in the shipped bundle, which says you approve goals rather than
-items: work that traces to a goal you approved is admitted to the queue without a
-further prompt, and you are told afterwards what went in. Set it to `human` to
-have every item put to you before it is admitted, which is what a project wants
-while it is still deciding how far to trust the arrangement.
+It is `human` until you say otherwise: every item is put to you before it is
+admitted to the queue. Set it to `automatic` to move that approval up to your
+goals, which is what it exists for — work that traces to a goal you approved is
+then admitted without a further prompt, and you are told afterwards what went in.
+
+**It is opted in to rather than inherited**, for the reason `integration` and
+`publishing` are: this is the setting that lets work reach the queue with no
+person in the loop, and autonomy is something you turn on once you have the gates
+to justify it rather than something a repository acquires by extending a bundle
+or by upgrading the executable. The bundle states `human` at the same value the
+harness default holds, so no existing project's approval posture moves when
+Yoyodyne does.
 
 **Approval moved up a level; it did not disappear.** Three things still stop and
 ask, and they are exactly what the product manager escalates rather than
@@ -558,13 +565,14 @@ nothing at all — the product manager argues for one in prose and cannot make o
 attribution has to resolve to a goal a document in force states, and that
 document has to be approved as it now stands. A goals document nobody approved,
 one amended since you approved it, and a repository with no goals to check
-against all put the work to you instead, with the reason on the proposal. So a
-new project asks about everything until its first `yoyo artifact approve` — the
-trust ramp is in the mechanism rather than in the default. It is also why
+against all put the work to you instead, with the reason on the proposal. So
+turning it on gets you a second ramp for free: a project that has opted in still
+asks about everything until its first `yoyo artifact approve`. It is also why
 `work_items: automatic` requires `approvals.goals` to be `human`: admitting work
 rests on the goal it serves having been approved, and a project approving no
 goals has nothing for it to rest on, so the combination is refused rather than
-left to be discovered as a queue that never fills.
+left to be discovered as a queue that never fills. That refusal only ever names a
+key you wrote, because `automatic` is never inherited.
 
 **Both ways work reaches the queue are governed by it.** The product manager can
 admit work to the backlog directly as well as propose it, and `human` refuses the
