@@ -279,6 +279,47 @@ var watchKinds = map[runstate.WatchState]Kind{
 	runstate.WatchStopped:  KindWatchStopped,
 }
 
+// Line is a product's line with nothing being chosen from it: what stopped the
+// choosing, when it became that way, and how much admitted work the tracker
+// reports as ready behind it.
+//
+// It is the one thing selection says that is not a crossing. Everything else
+// here compares two readings of a record and reports the difference, which says
+// a state once and is right to: a thread is a narrative. A line that is held or
+// idle over ready work is not news that happened, it is a condition that
+// persists, and the reader who needs it is the one who was told once at midnight
+// and has heard nothing since. So the state is said again while it stands, and
+// how often is the sink's to decide — this only says it.
+type Line struct {
+	// Stopped is what has stopped the choosing, in the words whoever read the
+	// record would use: the operator's hold, a held intake and why it was held,
+	// a session that found nothing it could start, no session at all.
+	Stopped string
+	// Since is when the line became that way, which is what makes the message
+	// worth repeating: the state does not change and its age does.
+	Since time.Time
+	// Ready is how much admitted work the tracker itself calls ready. It is what
+	// separates a line waiting on somebody from an honestly quiet one, so a line
+	// with nothing ready is never said at all.
+	Ready int
+}
+
+// FromLine says that nothing is being chosen while work is ready to be chosen.
+// It is addressed to the product and spoken by the harness for the same reason
+// the holds and the watch sessions are: a line is about every item rather than
+// any one of them, and what stopped it is nobody's judgement to narrate.
+//
+// The moment is the reading rather than the state's own start, because that is
+// what it is: an account of what was true when somebody looked, whose whole
+// point is that it is being looked at again.
+func FromLine(line Line, at time.Time) Notification {
+	return productNotification(KindLineWaiting, at, Detail{
+		Stopped: strings.TrimSpace(line.Stopped),
+		Since:   line.Since,
+		Ready:   line.Ready,
+	})
+}
+
 func FromOperatorHold(hold runstate.OperatorHold) Notification {
 	return productNotification(KindHoldPlaced, hold.HeldAt, Detail{})
 }

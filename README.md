@@ -1711,6 +1711,9 @@ silence.
 `--budget <usd>` caps what one session spends, and fails closed: a pass that
 cannot price itself is refused before it starts, and a session that meets a run
 whose evidence will not price stops and names it rather than counting it as free.
+A session that stops that way is a stopped line like any other: with work still
+ready, [the Slack sink](#reporting-into-slack) says so again every hour until
+somebody starts one, rather than saying it once at the moment nobody was reading.
 
 The default is still the drain, and `--until-drained` says so out loud. What
 changes when you watch is what bounds the spend: a drain is bounded by the queue
@@ -2661,6 +2664,18 @@ export SLACK_BOT_TOKEN=xoxb-...   # this process's environment, and nowhere else
 export SLACK_APP_TOKEN=xapp-...
 ./bin/yoyo slack                  # or --once to make a single pass and exit
 ```
+
+One message there is a state rather than an event, and it is the one an overnight
+asked for. A line that is **choosing nothing while work is ready** — intake held,
+everything held, the watch session idle, or no session running — says so again
+every `--heartbeat`, an hour by default, naming what stopped it, how long that has
+been true, and how much the tracker calls ready behind it. Everything else is a
+transition and is said once, which is right for a thread and wrong for a night:
+"intake is held" posted at 00:02 is ten hours stale by the time anybody reads it,
+and the silence after it is indistinguishable from a healthy queue or a dead sink.
+It stops the moment the state clears, says nothing while a run is in flight, and
+stays completely silent on an idle line with nothing ready — silence has to keep
+meaning nothing to do, which is what makes the times it does not worth reading.
 
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest

@@ -131,15 +131,18 @@ func (m *ThreadMap) Record(topic string, thread Thread) {
 	m.Threads[topic] = thread
 }
 
-// Cursor is how far the sink has read one durable stream, and the three streams
-// are read three ways because they are three shapes.
+// Cursor is how far the sink has read one durable stream, and the streams are
+// read four ways because they are four shapes.
 //
 // A log advances by position. The operator's switches are a fixed pair of facts
 // about one subject, and what has been said about them is recorded by name,
 // because nothing records a hold being lifted — the lift is knowable only by
 // having said the hold. A run is neither: what is worth saying about it is the
 // difference between two readings of its record, so the reading already reported
-// is kept and the next pass is a comparison against it.
+// is kept and the next pass is a comparison against it. And the line's own state
+// is none of the three: it is not a record at all but a condition derived from
+// several, said again while it stands rather than once when it began, so what is
+// kept is which state is standing and when it was last said.
 type Cursor struct {
 	Position  uint64   `json:"position,omitempty"`
 	Delivered []string `json:"delivered,omitempty"`
@@ -152,6 +155,16 @@ type Cursor struct {
 	// dropped because nothing more can cross. Without it the sink would carry a
 	// copy of every run a product ever made.
 	Closed bool `json:"closed,omitempty"`
+	// Standing and Said are the fourth shape, and they are the only one that is a
+	// state rather than a history: what the line is currently stopped by, and when
+	// the clock on saying it again was last set — which is the moment the state was
+	// first seen as well as the moment it was last said, because the first sighting
+	// is what starts the interval rather than something to announce.
+	//
+	// A state that clears forgets both, so the next one to stand is armed afresh
+	// rather than inheriting an interval that has already run out.
+	Standing string    `json:"standing,omitempty"`
+	Said     time.Time `json:"said,omitempty"`
 }
 
 // Has reports whether one named milestone has already been posted.

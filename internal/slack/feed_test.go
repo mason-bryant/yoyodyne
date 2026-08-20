@@ -396,7 +396,10 @@ type testHarness struct {
 	// since is the product's watermark, which rides on the cursors rather than on
 	// the feed: it is one durable moment for the product rather than one per
 	// process, which is what makes downtime a gap the sink reads across.
-	since   time.Time
+	since time.Time
+	// now is when the feed thinks it is. It moves, because what the sink says
+	// about a state rather than an event depends on how long that state has stood.
+	now     time.Time
 	feed    *HarnessFeed
 	runs    *runstate.Store
 	chats   *runstate.ConversationStore
@@ -443,19 +446,9 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	if err != nil {
 		t.Fatalf("NewUsageLimitStore() error = %v", err)
 	}
-	return &testHarness{
-		since: since,
-		feed: &HarnessFeed{
-			Runs:          runs,
-			Conversations: chats,
-			Reports:       reports,
-			Proposals:     amend,
-			Intake:        intake,
-			Holds:         holds,
-			Watch:         watch,
-			UsageLimits:   limits,
-			Now:           func() time.Time { return moment.Add(time.Hour) },
-		},
+	harness := &testHarness{
+		since:   since,
+		now:     moment.Add(time.Hour),
 		runs:    runs,
 		chats:   chats,
 		reports: reports,
@@ -465,6 +458,18 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		watch:   watch,
 		limits:  limits,
 	}
+	harness.feed = &HarnessFeed{
+		Runs:          runs,
+		Conversations: chats,
+		Reports:       reports,
+		Proposals:     amend,
+		Intake:        intake,
+		Holds:         holds,
+		Watch:         watch,
+		UsageLimits:   limits,
+		Now:           func() time.Time { return harness.now },
+	}
+	return harness
 }
 
 // poll makes one pass, checks it said exactly what was expected, and returns the
@@ -586,10 +591,17 @@ func (h *testHarness) fileAs(t *testing.T, id, workItemID string, severity repor
 
 func (h *testHarness) watched(t *testing.T, state runstate.WatchState, reason string, at time.Time) {
 	t.Helper()
+	h.watchedAs(t, "watch-0123456789abcdef0123456789abcdef", state, reason, at)
+}
+
+// watchedAs records a transition of one named session, so a test can put two
+// sessions in one log — which is what the product's log actually holds.
+func (h *testHarness) watchedAs(t *testing.T, sessionID string, state runstate.WatchState, reason string, at time.Time) {
+	t.Helper()
 	if err := h.watch.Record(runstate.WatchTransition{
 		SchemaVersion: runstate.WatchSchemaVersion,
 		ProductID:     "yoyodyne",
-		SessionID:     "watch-0123456789abcdef0123456789abcdef",
+		SessionID:     sessionID,
 		State:         state,
 		At:            at,
 		Reason:        reason,

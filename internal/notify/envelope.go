@@ -98,6 +98,12 @@ const (
 	KindWatchBraked  Kind = "watch.braked"
 	KindWatchResumed Kind = "watch.resumed"
 	KindWatchStopped Kind = "watch.stopped"
+	// A line that is choosing nothing while work is ready to be chosen. Every
+	// kind above is a transition said once; this one is a state said again while
+	// it stands, because the fact somebody needs is not that it began but that it
+	// is still true hours later. Silence has to mean nothing to do, so a state
+	// that means waiting-on-you says so periodically until it clears.
+	KindLineWaiting Kind = "line.waiting"
 )
 
 // Kinds is the whole reportable set, in the order work reaches them: the queue
@@ -138,6 +144,7 @@ func Kinds() []Kind {
 		KindWatchBraked,
 		KindWatchResumed,
 		KindWatchStopped,
+		KindLineWaiting,
 	}
 }
 
@@ -154,7 +161,8 @@ func (k Kind) Valid() bool {
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
-		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped:
+		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
+		KindLineWaiting:
 		return true
 	default:
 		return false
@@ -460,6 +468,15 @@ type Detail struct {
 	// KindItemReprioritized. It is negative where the record did not say, because
 	// zero is the highest priority rather than an unstated one.
 	Priority int `json:"priority,omitempty"`
+	// Stopped, Since, and Ready are read by KindLineWaiting: what has stopped the
+	// harness choosing work, when it became that way, and how much admitted work
+	// the tracker calls ready behind it. The age is rendered from Since against
+	// the event's own moment rather than carried as a phrase, because a state
+	// that is said again every hour has a different age every time it is said and
+	// a timestamp a reader has to subtract from is not the fact they need.
+	Stopped string    `json:"stopped,omitempty"`
+	Since   time.Time `json:"since,omitempty"`
+	Ready   int       `json:"ready,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; and why proposed work
 	// was turned down, read by KindWorkDeclined. An operator who holds in a hurry

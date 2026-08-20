@@ -37,6 +37,7 @@ const (
 	productStream    = "product"
 	watchStream      = "watch"
 	usageLimitStream = "usage-limits"
+	heartbeatStream  = "heartbeat"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -110,9 +111,21 @@ type HarnessFeed struct {
 	// is the only account there is of those refusals — a run says its own by
 	// parking, and nothing else says anything at all.
 	UsageLimits *runstate.UsageLimitStore
-	// Now is read for the moment a hold was seen to have lifted, which is the one
-	// thing here no record holds: what lifts a hold is its absence. It is
-	// injected so a test can say when that was.
+	// Backlog is how much admitted work the tracker calls ready, and it is read
+	// for one purpose: telling a line that is waiting on somebody from one that is
+	// honestly quiet. It is optional, and a feed assembled without one says
+	// everything else and never says the line is waiting — which is silence over a
+	// held queue, so every sink the harness builds is given one.
+	Backlog Backlog
+	// Heartbeat is how often a line that is choosing nothing over ready work says
+	// so again. Zero takes DefaultHeartbeat. It is a cadence rather than a switch:
+	// there is deliberately no way to turn it off, because what it would buy is
+	// silence that means waiting-on-you, which is the state it exists to end.
+	Heartbeat time.Duration
+	// Now is read for the moment a hold was seen to have lifted, and for the age a
+	// heartbeat says a state has stood. Both are things no record holds — what
+	// lifts a hold is its absence, and what makes a state worth saying again is how
+	// long ago it began — so it is injected and a test can say when they were.
 	Now func() time.Time
 	// Log is where a record that cannot be addressed at all is said out loud
 	// before it is read past. It is the sink's own log, and it is never given a
@@ -141,9 +154,17 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the recorded runs: %w", err)
 	}
+	// What is still in flight is counted from the same reading the crossings are
+	// selected from, rather than asked for a second time: a run is in flight or it
+	// is not, and two readings of the same files a moment apart could disagree
+	// about it.
+	inFlight := 0
 	for _, state := range states {
 		if err := ctx.Err(); err != nil {
 			return Batch{}, err
+		}
+		if !state.Status.Terminal() {
+			inFlight++
 		}
 		stream := runStream(state.RunID)
 		batch.Streams[stream] = struct{}{}
@@ -189,7 +210,15 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, raised...)
 
-	watched, err := f.watchDeliveries(cursors, batch.Streams)
+	// The watch log is read once and used twice: for what each session said it was
+	// doing, and for whether any session is still doing it. Reading it twice would
+	// let one pass post a session stopping and then derive a line from a log that
+	// had moved underneath it.
+	sessions, err := f.sessions()
+	if err != nil {
+		return Batch{}, err
+	}
+	watched, err := f.watchDeliveries(cursors, batch.Streams, sessions)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -201,12 +230,57 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, refused...)
 
-	switches, err := f.holdDeliveries(cursors.Streams[productStream])
+	// The operator's two switches are read once and used twice: for the messages
+	// that say they were placed and lifted, and for what has stopped the line when
+	// the heartbeat below asks. Reading them apart would let one pass post a hold
+	// and derive a line nothing is holding.
+	held, err := f.switches()
 	if err != nil {
 		return Batch{}, err
 	}
-	batch.Deliveries = append(batch.Deliveries, switches...)
+	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
+
+	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, beat...)
 	return batch, nil
+}
+
+// sessions reads what the watch sessions did, in the order they did it. A
+// product nobody has watched has no log rather than a broken one, and a feed
+// assembled without a watch store reads none.
+func (f *HarnessFeed) sessions() ([]runstate.WatchTransition, error) {
+	if f.Watch == nil {
+		return nil, nil
+	}
+	transitions, err := f.Watch.List()
+	if err != nil {
+		return nil, fmt.Errorf("read what the watch sessions did: %w", err)
+	}
+	return transitions, nil
+}
+
+// switches reads the operator's two holds. Neither absence is a failure: not
+// holding anything is the ordinary state of both, and a record that cannot be
+// read is an error rather than an absence, because a hold nobody can read must
+// never be treated as one that was never placed.
+func (f *HarnessFeed) switches() (switches, error) {
+	intake, intakeHeld, err := f.Intake.Held()
+	if err != nil {
+		return switches{}, fmt.Errorf("read the intake hold: %w", err)
+	}
+	operator, operatorHeld, err := f.Holds.Held()
+	if err != nil {
+		return switches{}, fmt.Errorf("read the operator hold: %w", err)
+	}
+	return switches{
+		intake:       intake,
+		intakeHeld:   intakeHeld,
+		operator:     operator,
+		operatorHeld: operatorHeld,
+	}, nil
 }
 
 // watchDeliveries says what the sessions that choose work have been doing. It is
@@ -214,15 +288,11 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 // stream of its own rather than part of the product's marks because it is a
 // history rather than a switch that is on or off: a session that idled all night
 // and one that stopped at midnight are both things somebody reads afterwards.
-func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) watchDeliveries(cursors Cursors, streams map[string]struct{}, transitions []runstate.WatchTransition) ([]Delivery, error) {
 	if f.Watch == nil {
 		return nil, nil
 	}
 	streams[watchStream] = struct{}{}
-	transitions, err := f.Watch.List()
-	if err != nil {
-		return nil, fmt.Errorf("read what the watch sessions did: %w", err)
-	}
 	return f.logDeliveries(watchStream, cursors.Streams[watchStream], len(transitions), cursors.Since,
 		func(index int) (time.Time, notify.Notification, error) {
 			notification, err := notify.FromWatch(transitions[index])
@@ -405,14 +475,11 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 // against a mark saying it was once there. The pair is forgotten once both have
 // been said, so the product's cursor does not grow a line for every afternoon
 // somebody was away.
-func (f *HarnessFeed) holdDeliveries(cursor Cursor) ([]Delivery, error) {
+func (f *HarnessFeed) holdDeliveries(cursor Cursor, read switches) []Delivery {
 	var deliveries []Delivery
 	advanced := cursor
 
-	intake, held, err := f.Intake.Held()
-	if err != nil {
-		return nil, fmt.Errorf("read the intake hold: %w", err)
-	}
+	intake, held := read.intake, read.intakeHeld
 	if held {
 		if mark := intakeMark + stamp(intake.HeldAt); !advanced.Has(mark) {
 			advanced = advanced.With(mark)
@@ -431,10 +498,7 @@ func (f *HarnessFeed) holdDeliveries(cursor Cursor) ([]Delivery, error) {
 		})
 	}
 
-	operator, held, err := f.Holds.Held()
-	if err != nil {
-		return nil, fmt.Errorf("read the operator hold: %w", err)
-	}
+	operator, held := read.operator, read.operatorHeld
 	if held {
 		if mark := holdMark + stamp(operator.HeldAt); !advanced.Has(mark) {
 			advanced = advanced.With(mark)
@@ -452,7 +516,7 @@ func (f *HarnessFeed) holdDeliveries(cursor Cursor) ([]Delivery, error) {
 			Notification: notify.HoldLifted(f.now()),
 		})
 	}
-	return deliveries, nil
+	return deliveries
 }
 
 func (f *HarnessFeed) say(format string, args ...any) {

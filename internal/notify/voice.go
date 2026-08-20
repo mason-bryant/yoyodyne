@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -144,6 +145,7 @@ var harnessVoice = voice{
 		KindWatchBraked:         "The watch session is choosing nothing while intake is held: {why}",
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
+		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.",
 	},
 }
 
@@ -185,6 +187,7 @@ var developerVoice = voice{
 		KindWatchBraked:         "Nothing is being handed to me while intake is held: {why}",
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
+		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.",
 	},
 }
 
@@ -226,6 +229,7 @@ var reviewerVoice = voice{
 		KindWatchBraked:         "Nothing new is being started while intake is held, so nothing is coming for a verdict: {why}",
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
+		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.",
 	},
 }
 
@@ -266,6 +270,7 @@ var developmentManagerVoice = voice{
 		KindWatchBraked:         "I'm pulling nothing while intake is held, and what was already running finishes: {why}",
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
+		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.",
 	},
 }
 
@@ -307,6 +312,7 @@ var productManagerVoice = voice{
 		KindWatchBraked:         "Spending has stopped while intake is held, and what is in the backlog keeps its place: {why}",
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
+		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.",
 	},
 }
 
@@ -348,6 +354,7 @@ var architectVoice = voice{
 		KindWatchBraked:         "Selection is stopped by the intake hold, which is the brake working rather than failing: {why}",
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
+		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.",
 	},
 }
 
@@ -474,6 +481,9 @@ func (e Event) fields(topic Topic) map[string]string {
 		"goal":     stated(detail.Goal, "no goal the record names"),
 		"parent":   stated(detail.Parent, "an item the record does not name"),
 		"priority": priorityOf(detail),
+		"stopped":  stated(detail.Stopped, "nothing the record names has stopped it"),
+		"age":      ageOf(detail.Since, e.At),
+		"ready":    countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
 	}
 }
 
@@ -553,6 +563,33 @@ func roundsOf(detail Detail) string {
 		return "round " + strconv.Itoa(detail.Round)
 	default:
 		return "round " + strconv.Itoa(detail.Round) + " of " + strconv.Itoa(detail.Rounds)
+	}
+}
+
+// ageOf says how long a state has stood, as somebody would say it out loud: the
+// largest unit that still says it honestly, and no more precision than that. A
+// state said again every hour is read for how long it has been rather than for
+// how many minutes, and "10 hours" is what makes an overnight stall obvious
+// where "10h03m17s" is a number to parse.
+//
+// It is measured against the moment the message dates itself to rather than a
+// clock of its own, so a message says the age it had when it was said however
+// long afterwards it is read.
+func ageOf(since, at time.Time) string {
+	if since.IsZero() || at.IsZero() || !at.After(since) {
+		return "an unrecorded length of time"
+	}
+	stood := at.Sub(since)
+	unrecorded := "an unrecorded length of time"
+	switch {
+	case stood >= 24*time.Hour:
+		return countOf(int(stood/(24*time.Hour)), "day", "days", unrecorded)
+	case stood >= time.Hour:
+		return countOf(int(stood/time.Hour), "hour", "hours", unrecorded)
+	case stood >= time.Minute:
+		return countOf(int(stood/time.Minute), "minute", "minutes", unrecorded)
+	default:
+		return "under a minute"
 	}
 }
 
