@@ -1,0 +1,842 @@
+// Package doctor answers one question about an installation of Yoyodyne: can
+// work actually run here, and if not, what exactly would put it right.
+//
+// The discipline of the package is that the second half is never optional.
+// Every finding that is not already healthy carries a remedy, and a remedy is a
+// command somebody can paste into a shell rather than a description of a
+// direction to head in. A state this package can describe but not route out of
+// is a defect here rather than a fact about the state: an operator told what is
+// wrong and not what to do about it is barely better off than one told nothing,
+// and an agent reading the same findings is no better off at all.
+//
+// It is read-only about everything except its own diagnosis. Nothing here
+// installs, authenticates, restarts, edits a configuration, or touches a lease
+// it did not create -- what it does with the sink's lease is take it and drop it
+// again, which is how it finds out whether anybody else has it. The one thing it
+// creates is the state root, which every other command creates too and which
+// existing is the whole of what "created" means for it.
+//
+// Nothing here reads a credential. Whether a secret is present is asked of the
+// store that holds it in the form that answers without producing the value, and
+// what a running sink says about its own tokens is a namespace name and a
+// workspace id -- addressing, not secrets. A diagnostic that helpfully printed a
+// token would put it in a terminal, a scrollback, and whatever collects them.
+package doctor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
+)
+
+// SchemaVersion versions the machine-readable report. It is its own number
+// because the report is consumed by things that are not this executable -- the
+// setup skill reads it to decide what to repair -- and those have to be able to
+// tell a report they understand from one they do not.
+const SchemaVersion = 1
+
+// Status is what one check found. Three values rather than two, because "this
+// will not work" and "this works and something about it is worth knowing" ask
+// different things of an operator and a report that ran them together would be
+// one nobody reads twice.
+//
+// The line between the last two is one question and not a judgement of how much
+// something matters: would this stop work running. An unauthenticated provider
+// refuses every invocation, so it is a problem. A sink nobody started reports
+// nothing while every run proceeds exactly as it would have, so it is a warning
+// however badly the operator wants to know — reporting is an observation and
+// never a gate, and a status that disagreed with that would put `yoyo doctor`'s
+// exit code at odds with the rest of the harness.
+type Status string
+
+const (
+	StatusOK      Status = "ok"
+	StatusWarning Status = "warning"
+	StatusProblem Status = "problem"
+)
+
+// worseThan orders the statuses, which is how a report takes the worst of its
+// findings as its own.
+func (s Status) worseThan(other Status) bool { return rank(s) > rank(other) }
+
+func rank(s Status) int {
+	switch s {
+	case StatusProblem:
+		return 2
+	case StatusWarning:
+		return 1
+	default:
+		return 0
+	}
+}
+
+// Finding is one check and what became of it.
+type Finding struct {
+	// Check names what was looked at, stably, so a caller can key on it. The
+	// names are fixed strings rather than prose, and the ones that are about a
+	// particular thing carry it after a colon -- `provider:claude-code`.
+	Check   string `json:"check"`
+	Status  Status `json:"status"`
+	Summary string `json:"summary"`
+	// Detail carries what was actually observed: the error a tool returned, the
+	// two versions that disagreed, the path that was not there. It is separate
+	// from the summary so a listing stays readable and nothing is lost.
+	Detail string `json:"detail,omitempty"`
+	// Remedy is a command. It is present on every finding that is not ok, which
+	// is the promise this package makes and which its tests hold it to. A remedy
+	// with a placeholder in it is still a command: the operator fills the
+	// placeholder in, and what they run afterwards is the thing that fixes it.
+	Remedy string `json:"remedy,omitempty"`
+}
+
+// Report is the whole diagnosis.
+type Report struct {
+	SchemaVersion int `json:"schema_version"`
+	// Product and Config are what was being diagnosed, and are empty when no
+	// configuration was found -- which is itself the first finding.
+	Product string `json:"product,omitempty"`
+	Config  string `json:"config,omitempty"`
+	// Status is the worst of the findings, so a caller that wants one answer has
+	// one without re-deriving it.
+	Status   Status    `json:"status"`
+	Findings []Finding `json:"findings"`
+}
+
+// Healthy reports whether anything would stop work running here. A warning does
+// not: it is something worth knowing about an installation that works.
+func (r Report) Healthy() bool { return r.Status != StatusProblem }
+
+// Counts summarizes the findings by status, which is what a one-line verdict is
+// rendered from.
+func (r Report) Counts() (ok, warnings, problems int) {
+	for _, finding := range r.Findings {
+		switch finding.Status {
+		case StatusProblem:
+			problems++
+		case StatusWarning:
+			warnings++
+		default:
+			ok++
+		}
+	}
+	return ok, warnings, problems
+}
+
+// Environment is everything a diagnosis reads the machine through. Every field
+// is a seam rather than a direct call so that the whole matrix of broken
+// installations is reachable from a test: the states worth being complete over
+// are exactly the ones that are inconvenient to arrange for real.
+type Environment struct {
+	// Runner runs the tools being asked about -- git, bd, claude, gh, security.
+	Runner execution.ProcessRunner
+	// LookPath resolves a program the way a shell would.
+	LookPath func(string) (string, error)
+	// Getenv reads the environment, which is where the state root and the
+	// operator's own overrides come from.
+	Getenv func(string) string
+	// UserHomeDir is the other half of resolving the state root and the
+	// namespaced environment file.
+	UserHomeDir func() (string, error)
+	// GOOS is the platform, which decides how a secret store is asked and which
+	// install command a remedy names.
+	GOOS string
+	// Version is the build making the diagnosis. It is compared against the
+	// build on PATH and against the build a running sink recorded, which is the
+	// pair of comparisons a stale installation hides in.
+	Version string
+	// Load resolves the project's configuration, and returns the same error the
+	// operator would see from `yoyo config validate`.
+	Load func() (config.Resolved, error)
+	// Timeout bounds each tool invocation. Nothing here is long-running by
+	// design, so a tool that hangs is itself the finding.
+	Timeout time.Duration
+	// Now is when the diagnosis is being made, used only for reading a recorded
+	// time back as an age.
+	Now func() time.Time
+}
+
+// defaultTimeout is what each probe gets when nothing says. It is generous for
+// commands that answer immediately because the ones that do not are the
+// interesting case: `bd` starts a database engine on its first invocation in a
+// project, and `gh auth status` reaches the network.
+const defaultTimeout = 30 * time.Second
+
+// Diagnose runs every check and returns what it found, in a fixed order: the
+// tools, then the project, then the things the project turns on. The order is
+// the order somebody would fix them in, because the first problem in the list is
+// usually why the ones under it are problems too.
+func Diagnose(ctx context.Context, env Environment) Report {
+	diagnosis := &diagnosis{env: env}
+	if diagnosis.env.Timeout <= 0 {
+		diagnosis.env.Timeout = defaultTimeout
+	}
+	if diagnosis.env.Now == nil {
+		diagnosis.env.Now = time.Now
+	}
+
+	report := Report{SchemaVersion: SchemaVersion}
+
+	// The executable itself, before anything it would run: an operator whose
+	// `yoyo` is not the one they think it is has been reading the wrong answers
+	// from every other command too.
+	installed, findings := diagnosis.checkInstallation(ctx)
+	report.Findings = append(report.Findings, findings...)
+	report.Findings = append(report.Findings, diagnosis.checkGit(ctx))
+
+	resolved, err := diagnosis.load()
+	if err != nil {
+		report.Findings = append(report.Findings, Finding{
+			Check:   "configuration",
+			Status:  StatusProblem,
+			Summary: "this directory has no usable Yoyodyne configuration",
+			Detail:  err.Error(),
+			Remedy:  "yoyo init",
+		})
+		// Everything below reads the configuration, so there is nothing further
+		// to say that would not be invented. The tracker is still asked about,
+		// because `yoyo init` in a project whose tracker is not there yet is the
+		// next thing to fail and saying so now saves a round trip.
+		report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, ""))
+		report.Status = worst(report.Findings)
+		return report
+	}
+	report.Config = resolved.Path
+	report.Product = string(resolved.Config.Product.ID)
+	report.Findings = append(report.Findings, Finding{
+		Check:   "configuration",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("the configuration for %s is valid", resolved.Config.Product.ID),
+		Detail:  resolved.Path,
+	})
+
+	project := config.ProjectDirectory(resolved.Path)
+	repository := repositoryPath(project, resolved.Config.Product.Repository)
+	report.Findings = append(report.Findings, diagnosis.checkRepository(ctx, repository))
+	report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, repository))
+	report.Findings = append(report.Findings, diagnosis.checkStateRoot())
+	report.Findings = append(report.Findings, diagnosis.checkChecks(resolved, repository)...)
+	report.Findings = append(report.Findings, diagnosis.checkProviders(ctx, resolved)...)
+	report.Findings = append(report.Findings, diagnosis.checkForge(ctx, resolved, repository))
+	report.Findings = append(report.Findings, diagnosis.checkSlack(ctx, resolved, installed)...)
+
+	report.Status = worst(report.Findings)
+	return report
+}
+
+func worst(findings []Finding) Status {
+	status := StatusOK
+	for _, finding := range findings {
+		if finding.Status.worseThan(status) {
+			status = finding.Status
+		}
+	}
+	return status
+}
+
+// diagnosis is one run of the checks. It exists so the probes can share the
+// environment without threading it through every signature.
+type diagnosis struct {
+	env Environment
+}
+
+func (d *diagnosis) load() (config.Resolved, error) {
+	if d.env.Load == nil {
+		return config.Resolved{}, errors.New("no configuration loader was wired")
+	}
+	return d.env.Load()
+}
+
+func (d *diagnosis) lookPath(program string) (string, error) {
+	if d.env.LookPath == nil {
+		return exec.LookPath(program)
+	}
+	return d.env.LookPath(program)
+}
+
+func (d *diagnosis) getenv(name string) string {
+	if d.env.Getenv == nil {
+		return os.Getenv(name)
+	}
+	return d.env.Getenv(name)
+}
+
+func (d *diagnosis) homeDir() (string, error) {
+	if d.env.UserHomeDir == nil {
+		return os.UserHomeDir()
+	}
+	return d.env.UserHomeDir()
+}
+
+// run invokes one tool and reports what it said. A tool that could not be
+// started at all is distinguished from one that ran and refused, because those
+// are two different remedies.
+func (d *diagnosis) run(ctx context.Context, directory, name string, args ...string) (execution.ProcessResult, error) {
+	if d.env.Runner == nil {
+		return execution.ProcessResult{}, errors.New("no process runner was wired")
+	}
+	return d.env.Runner.Run(ctx, execution.Command{
+		Name:    name,
+		Args:    args,
+		Dir:     directory,
+		Timeout: d.env.Timeout,
+	}, nil)
+}
+
+// checkInstallation asks whether `yoyo` is on PATH and whether the one there is
+// the build answering this question. It returns the version PATH would give,
+// because that is the build a remedy which restarts something would produce.
+func (d *diagnosis) checkInstallation(ctx context.Context) (string, []Finding) {
+	path, err := d.lookPath("yoyo")
+	if err != nil {
+		return d.env.Version, []Finding{{
+			Check:   "path",
+			Status:  StatusProblem,
+			Summary: "`yoyo` is not on PATH, so nothing that shells out to it will find it",
+			Detail:  err.Error(),
+			Remedy:  `export PATH="$PATH:$(go env GOPATH)/bin"`,
+		}}
+	}
+	findings := []Finding{{
+		Check:   "path",
+		Status:  StatusOK,
+		Summary: "`yoyo` is on PATH",
+		Detail:  path,
+	}}
+
+	// `yoyo version` prints the bare version and nothing else, which is pinned by
+	// a test in the cli package because two other things compare those bytes
+	// literally. This depends on the same property, and internal/cli holds a test
+	// that runs that command's real output through this comparison: a warning on
+	// every healthy installation is the kind of finding operators learn to skip
+	// past, which would cost this command more than the drift it catches.
+	result, err := d.run(ctx, "", path, "version")
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		findings = append(findings, Finding{
+			Check:   "binary",
+			Status:  StatusProblem,
+			Summary: "the `yoyo` on PATH could not say which build it is",
+			Detail:  describeFailure(result, err),
+			Remedy:  "go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest",
+		})
+		return d.env.Version, findings
+	}
+	installed := firstLine(result.Stdout)
+	if installed != d.env.Version {
+		// This is not pedantry about a version string. Every other answer in this
+		// report is about the machine as the running build understands it, while
+		// everything an operator types afterwards runs the build on PATH, and the
+		// two diverging is how an installation drifts without anybody deciding to.
+		findings = append(findings, Finding{
+			Check:   "binary",
+			Status:  StatusWarning,
+			Summary: "the `yoyo` on PATH is a different build from the one running this check",
+			Detail:  fmt.Sprintf("on PATH: %s; running: %s", installed, d.env.Version),
+			Remedy:  "go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest",
+		})
+		return installed, findings
+	}
+	findings = append(findings, Finding{
+		Check:   "binary",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("the `yoyo` on PATH is this build, %s", installed),
+	})
+	return installed, findings
+}
+
+func (d *diagnosis) checkGit(ctx context.Context) Finding {
+	if _, err := d.lookPath("git"); err != nil {
+		return Finding{
+			Check:   "git",
+			Status:  StatusProblem,
+			Summary: "git is not installed, and every run works in a Git worktree",
+			Detail:  err.Error(),
+			Remedy:  d.installCommand("git"),
+		}
+	}
+	result, err := d.run(ctx, "", "git", "--version")
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		return Finding{
+			Check:   "git",
+			Status:  StatusProblem,
+			Summary: "git is on PATH but would not run",
+			Detail:  describeFailure(result, err),
+			Remedy:  d.installCommand("git"),
+		}
+	}
+	return Finding{Check: "git", Status: StatusOK, Summary: firstLine(result.Stdout)}
+}
+
+// checkRepository asks the two things a project has to be before a run can
+// branch from it: a repository, with something to branch from.
+func (d *diagnosis) checkRepository(ctx context.Context, repository string) Finding {
+	result, err := d.run(ctx, repository, "git", "rev-parse", "--git-dir")
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		return Finding{
+			Check:   "repository",
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("%s is not a Git repository", repository),
+			Detail:  describeFailure(result, err),
+			Remedy:  fmt.Sprintf("git -C %s init", shellQuote(repository)),
+		}
+	}
+	head, err := d.run(ctx, repository, "git", "rev-parse", "HEAD")
+	if err != nil || head.Status != execution.ProcessSucceeded {
+		return Finding{
+			Check:  "repository",
+			Status: StatusProblem,
+			// A run branches from the target branch, and a repository with no
+			// commits has no branch to branch from -- which the harness discovers
+			// when it makes the worktree rather than when it claims the item.
+			Summary: fmt.Sprintf("%s has no commits, so there is nothing for a run to branch from", repository),
+			Detail:  describeFailure(head, err),
+			Remedy:  fmt.Sprintf("git -C %s commit --allow-empty -m 'initial commit'", shellQuote(repository)),
+		}
+	}
+	return Finding{
+		Check:   "repository",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("the repository at %s has commits to branch from", repository),
+	}
+}
+
+// checkTracker asks whether bd is there and whether it answers in this project.
+// Those are two failures with two remedies: an uninstalled tracker and an
+// uninitialized one look identical from a channel that has gone quiet.
+func (d *diagnosis) checkTracker(ctx context.Context, repository string) Finding {
+	if _, err := d.lookPath("bd"); err != nil {
+		return Finding{
+			Check:   "tracker",
+			Status:  StatusProblem,
+			Summary: "bd is not installed, and every role reads and writes the tracker",
+			Detail:  err.Error(),
+			Remedy:  "go install github.com/gastownhall/beads/cmd/bd@latest",
+		}
+	}
+	// `bd stats` opens the project's database and reports on it, which is the
+	// cheapest question that proves the tracker is actually usable here rather
+	// than merely installed.
+	result, err := d.run(ctx, repository, "bd", "stats")
+	if err != nil || result.Status != execution.ProcessSucceeded {
+		return Finding{
+			Check:   "tracker",
+			Status:  StatusProblem,
+			Summary: "bd is installed but could not read this project's issues",
+			Detail:  describeFailure(result, err),
+			Remedy:  fmt.Sprintf("bd init%s", inDirectory(repository)),
+		}
+	}
+	return Finding{Check: "tracker", Status: StatusOK, Summary: "bd answers in this project"}
+}
+
+// checkStateRoot asks whether the harness can keep its durable records. It is
+// the one check that writes: the root is created if it is missing, which is what
+// every other command does with it and what makes "missing" not a failure.
+func (d *diagnosis) checkStateRoot() Finding {
+	root, err := runstate.DefaultRoot(d.getenv, d.homeDir, d.env.GOOS)
+	if err != nil {
+		return Finding{
+			Check:   "state",
+			Status:  StatusProblem,
+			Summary: "the state root could not be resolved, so nothing can be recorded",
+			Detail:  err.Error(),
+			Remedy:  "export YOYODYNE_STATE_HOME=$HOME/.local/state/yoyodyne",
+		}
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return Finding{
+			Check:   "state",
+			Status:  StatusProblem,
+			Summary: "the state root could not be created, so nothing can be recorded",
+			Detail:  err.Error(),
+			Remedy:  fmt.Sprintf("mkdir -p %s && chmod 700 %s", shellQuote(root), shellQuote(root)),
+		}
+	}
+	return Finding{Check: "state", Status: StatusOK, Summary: "the durable records live in " + root}
+}
+
+// checkChecks asks whether the project has deterministic checks and whether this
+// machine could run them. A configuration that names a command nothing here can
+// resolve fails every run at the same point, after the model has been paid for.
+func (d *diagnosis) checkChecks(resolved config.Resolved, repository string) []Finding {
+	if len(resolved.Config.Checks) == 0 {
+		return []Finding{{
+			Check:   "checks",
+			Status:  StatusProblem,
+			Summary: "no deterministic checks are configured, so nothing verifies a change before it is reviewed",
+			Detail:  "checks is empty in " + resolved.Path,
+			Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(resolved.Path)),
+		}}
+	}
+	var missing []string
+	for _, command := range resolved.Config.Checks {
+		program := programOf(command)
+		if program == "" || shellBuiltin(program) {
+			continue
+		}
+		if strings.ContainsRune(program, filepath.Separator) {
+			// A check runs in the run's worktree rather than wherever this was
+			// typed, so a relative script is resolved against the repository. The
+			// alternative reports a perfectly good check as missing whenever
+			// somebody runs this from a subdirectory.
+			resolvedProgram := program
+			if !filepath.IsAbs(resolvedProgram) {
+				resolvedProgram = filepath.Join(repository, resolvedProgram)
+			}
+			if info, err := os.Stat(resolvedProgram); err != nil || info.IsDir() {
+				missing = append(missing, program)
+			}
+			continue
+		}
+		if _, err := d.lookPath(program); err != nil {
+			missing = append(missing, program)
+		}
+	}
+	if len(missing) > 0 {
+		return []Finding{{
+			Check:   "checks",
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("the configured checks need %s, which this machine cannot run", strings.Join(missing, ", ")),
+			Detail:  fmt.Sprintf("checks in %s: %s", resolved.Path, strings.Join(resolved.Config.Checks, "; ")),
+			// The remedy is the configuration rather than an install command
+			// because nothing here knows how this machine installs an arbitrary
+			// program, and a check this machine cannot run is as validly fixed by
+			// changing the check as by installing the tool.
+			Remedy: fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(resolved.Path)),
+		}}
+	}
+	return []Finding{{
+		Check:   "checks",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("%s configured, and every command resolves here", countOf(len(resolved.Config.Checks), "check")),
+		Detail:  strings.Join(resolved.Config.Checks, "; "),
+	}}
+}
+
+// checkProviders asks, for each backend the project's agents actually name,
+// whether it is installed and authenticated. Both are the provider's own to
+// hold: the harness reports on them and manages neither.
+func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved) []Finding {
+	seen := map[domain.Backend]struct{}{}
+	var backends []domain.Backend
+	for _, agent := range resolved.Config.Agents {
+		if _, already := seen[agent.Backend]; already {
+			continue
+		}
+		seen[agent.Backend] = struct{}{}
+		backends = append(backends, agent.Backend)
+	}
+	sort.Slice(backends, func(i, j int) bool { return backends[i] < backends[j] })
+
+	findings := make([]Finding, 0, len(backends))
+	for _, named := range backends {
+		findings = append(findings, d.checkProvider(ctx, named, resolved.Path))
+	}
+	return findings
+}
+
+func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, configPath string) Finding {
+	check := "provider:" + string(named)
+	binary := providerBinary(named)
+	if binary == "" {
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("the agents name backend %q, which this build has no adapter for", named),
+			// The remedy is the configuration for the reason the checks probe's
+			// is: nothing can be installed that would make this build grow an
+			// adapter, so what has to change is the backend the agents name.
+			Remedy: fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(configPath)),
+		}
+	}
+	if _, err := d.lookPath(binary); err != nil {
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("%s is not installed, and it executes every agent that names this backend", binary),
+			Detail:  err.Error(),
+			Remedy:  providerInstallCommand(named),
+		}
+	}
+	if named != domain.BackendClaudeCode {
+		// Only Claude Code has an adapter that can be asked about its own
+		// authentication. Saying so is better than reporting an unauthenticated
+		// provider as healthy because nothing here could tell -- and the remedy
+		// is the login rather than a second diagnostic, because what an operator
+		// can act on here is making the answer yes, not asking again.
+		return Finding{
+			Check:   check,
+			Status:  StatusWarning,
+			Summary: fmt.Sprintf("%s is installed, and this build has no adapter that can ask whether it is authenticated", binary),
+			Detail:  "an unauthenticated provider would refuse every agent invocation, so this is worth confirming by hand",
+			Remedy:  providerLoginCommand(named),
+		}
+	}
+	availability, err := (claudecode.Backend{Runner: d.env.Runner}).CheckAvailability(ctx)
+	if err != nil {
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("%s would not say whether it is authenticated", binary),
+			Detail:  err.Error(),
+			Remedy:  providerLoginCommand(named),
+		}
+	}
+	return providerFinding(check, binary, named, availability)
+}
+
+func providerFinding(check, binary string, named domain.Backend, availability backend.Availability) Finding {
+	switch {
+	case !availability.Installed:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("%s is on PATH but did not run", binary),
+			Remedy:  providerInstallCommand(named),
+		}
+	case !availability.Authenticated:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("%s is installed but not authenticated, so every agent invocation would be refused", binary),
+			Detail:  availability.Version,
+			Remedy:  providerLoginCommand(named),
+		}
+	}
+	return Finding{
+		Check:   check,
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("%s is installed and authenticated", binary),
+		Detail:  strings.TrimSpace(availability.Version + " " + availability.AuthMethod),
+	}
+}
+
+// checkForge asks about the forge only when the harness would actually use one.
+// A project it never publishes for needs no `gh` and no remote, and reporting a
+// missing one as a problem would be reporting a decision as a defect.
+func (d *diagnosis) checkForge(ctx context.Context, resolved config.Resolved, repository string) Finding {
+	if !HarnessPublishes(resolved.Config.Approvals.Publishing) {
+		return Finding{
+			Check:  "forge",
+			Status: StatusOK,
+			// Said as a fact about the harness rather than about the project,
+			// because they are not the same claim: under `human` the operator may
+			// well push and open pull requests themselves, and whether they keep a
+			// forge CLI for that is theirs rather than something to diagnose.
+			Summary: "the harness publishes nothing for this project, so it needs no forge access",
+			Detail:  fmt.Sprintf("approvals.publishing is %s", resolved.Config.Approvals.Publishing),
+		}
+	}
+	remote := resolved.Config.Execution.Remote
+	if result, err := d.run(ctx, repository, "git", "remote", "get-url", remote); err != nil || result.Status != execution.ProcessSucceeded {
+		return Finding{
+			Check:   "forge",
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("this project publishes to the Git remote %q, which this repository does not have", remote),
+			Detail:  describeFailure(result, err),
+			Remedy:  fmt.Sprintf("git -C %s remote add %s <url>", shellQuote(repository), remote),
+		}
+	}
+	availability, err := (publish.GitHub{Runner: d.env.Runner, Dir: repository, Remote: remote}).Availability(ctx)
+	if err != nil {
+		return Finding{
+			Check:   "forge",
+			Status:  StatusProblem,
+			Summary: "gh would not say whether it is authenticated",
+			Detail:  err.Error(),
+			Remedy:  "gh auth login",
+		}
+	}
+	switch {
+	case !availability.Installed:
+		return Finding{
+			Check:   "forge",
+			Status:  StatusProblem,
+			Summary: "this project publishes, and gh is not installed",
+			Remedy:  d.installCommand("gh"),
+		}
+	case !availability.Authenticated:
+		return Finding{
+			Check:   "forge",
+			Status:  StatusProblem,
+			Summary: "gh is installed but not authenticated, so no pull request can be opened",
+			Detail:  availability.Version,
+			Remedy:  "gh auth login",
+		}
+	}
+	return Finding{
+		Check:   "forge",
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("gh is authenticated and %s is where this project publishes", remote),
+		Detail:  availability.Version,
+	}
+}
+
+// HarnessPublishes decides whether a run would ever reach the forge, and it has
+// to agree with orchestrator.Pipeline.publishes(), which is the predicate that
+// actually decides it. It is exported for one reason: so the pipeline's own test
+// can hold the two together, because a diagnosis gated differently from the
+// behavior it diagnoses reports a healthy installation as broken or a broken one
+// as healthy, and neither failure would show up in this package's tests.
+//
+// `human` is the off switch here rather than an approval gate, which is the one
+// thing about this setting worth being explicit about: it does not mean "a
+// person authorizes the push the harness then makes", the way `integration:
+// human` means a person authorizes a promotion. The design's publishing matrix
+// gives both `human` publishing rows as "purely local -- nothing is pushed", the
+// setting's own documentation says it "leaves pushing and pull requests to the
+// operator", and resolvePublishing returns before the publisher is consulted at
+// all. So a project on `human` reaches no forge, and requiring `gh` for it would
+// fail an installation that is complete.
+func HarnessPublishes(publishing domain.ApprovalMode) bool {
+	return publishing == domain.ApprovalAutomatic
+}
+
+func repositoryPath(project, repository string) string {
+	if strings.TrimSpace(repository) == "" {
+		return project
+	}
+	if filepath.IsAbs(repository) {
+		return filepath.Clean(repository)
+	}
+	return filepath.Clean(filepath.Join(project, repository))
+}
+
+// providerBinary maps a configured backend onto the command that executes it.
+// An unmapped backend is not defaulted: guessing a binary name would report a
+// provider that does not exist as one that is merely not installed.
+func providerBinary(named domain.Backend) string {
+	switch named {
+	case domain.BackendClaudeCode:
+		return "claude"
+	case domain.BackendCodex:
+		return "codex"
+	default:
+		return ""
+	}
+}
+
+func providerInstallCommand(named domain.Backend) string {
+	switch named {
+	case domain.BackendCodex:
+		return "npm install -g @openai/codex"
+	default:
+		return "npm install -g @anthropic-ai/claude-code"
+	}
+}
+
+func providerLoginCommand(named domain.Backend) string {
+	switch named {
+	case domain.BackendCodex:
+		return "codex login"
+	default:
+		return "claude auth login"
+	}
+}
+
+// installCommand names how this platform installs one of the ordinary tools.
+// It is a guess about the operator's package manager, which is why it is only
+// used for tools whose install is otherwise unsayable; a guess that is wrong is
+// still a command that names what to install.
+func (d *diagnosis) installCommand(tool string) string {
+	if d.env.GOOS == "darwin" {
+		return "brew install " + tool
+	}
+	return "sudo apt-get install -y " + tool
+}
+
+// inDirectory renders the `-C`-style suffix for a command that has to be run
+// somewhere in particular, and nothing when it does not.
+func inDirectory(directory string) string {
+	if strings.TrimSpace(directory) == "" {
+		return ""
+	}
+	return "   # in " + directory
+}
+
+// programOf finds the command a check line would actually execute: the first
+// word, past any leading environment assignments. It is deliberately simple --
+// this is a resolvability probe rather than a shell -- and anything it cannot
+// read confidently it declines to judge.
+func programOf(command string) string {
+	for _, field := range strings.Fields(command) {
+		if strings.ContainsRune(field, '=') && !strings.ContainsRune(field, '/') {
+			continue
+		}
+		return strings.Trim(field, `"'`)
+	}
+	return ""
+}
+
+// shellBuiltin is the small set a check line plausibly starts with that no PATH
+// lookup would ever find. A builtin is not evidence of anything, so it is passed
+// over rather than reported as missing.
+func shellBuiltin(program string) bool {
+	switch program {
+	case "cd", "echo", "export", "set", "test", "[", "true", "false", "eval", "exec", "if", "for", "while":
+		return true
+	}
+	return false
+}
+
+// shellQuote makes a path safe to paste into a remedy. Remedies are commands, so
+// a path with a space in it has to survive being one.
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if !strings.ContainsAny(value, " \t\n\"'\\$`*?[]{}()|&;<>#~!") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
+
+// describeFailure says what a tool did, whichever way it failed: refusing to
+// start and running and refusing are different facts and the remedy differs
+// between them, so neither is folded into the other.
+func describeFailure(result execution.ProcessResult, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if message := firstLine(firstNonEmpty(result.Stderr, result.Stdout)); message != "" {
+		return fmt.Sprintf("%s (exit %d)", message, result.ExitCode)
+	}
+	return fmt.Sprintf("%s (exit %d)", result.Status, result.ExitCode)
+}
+
+func firstLine(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if index := strings.IndexRune(trimmed, '\n'); index >= 0 {
+		return strings.TrimSpace(trimmed[:index])
+	}
+	return trimmed
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func countOf(count int, noun string) string {
+	if count == 1 {
+		return "1 " + noun
+	}
+	return fmt.Sprintf("%d %ss", count, noun)
+}
