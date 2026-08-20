@@ -37,10 +37,14 @@ type startedRun struct {
 // rerunHarness is the durable state a re-run acts on, held together so a test
 // can drive one decision without rebuilding four stores.
 type rerunHarness struct {
-	docket  *memoryDocket
-	runs    *runstate.Store
-	intake  *runstate.IntakeHoldStore
-	reruns  *runstate.RerunStore
+	docket *memoryDocket
+	runs   *runstate.Store
+	intake *runstate.IntakeHoldStore
+	reruns *runstate.RerunStore
+	// item is the work item as the tracker has it, which is what says whether a
+	// fresh run may start on it, and itemErr a tracker that could not be asked.
+	item    beads.WorkItem
+	itemErr error
 	started []startedRun
 	// outcome is what the starter reports, and failure what it returns. A test
 	// that cares about what the action does after a run sets them.
@@ -58,6 +62,13 @@ func (h *rerunHarness) RetirePreserved(context.Context, gitworktree.Worktree, st
 	return h.retirement, h.retireErr
 }
 
+// Show is the tracker's answer about the item, read and never written. A harness
+// leaves the item open; the sequences that are about the item's own state are the
+// ones that move it.
+func (h *rerunHarness) Show(context.Context, string) (beads.WorkItem, error) {
+	return h.item, h.itemErr
+}
+
 func (h *rerunHarness) rerunner() Rerunner {
 	return Rerunner{
 		Docket:    h.docket,
@@ -65,6 +76,7 @@ func (h *rerunHarness) rerunner() Rerunner {
 		Intake:    h.intake,
 		Reruns:    h.reruns,
 		Decisions: h.runs.Triage(),
+		Items:     h,
 		Preserved: h,
 		Clock:     docketClock{},
 		Start: func(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
@@ -103,6 +115,10 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 		runs:   runs,
 		intake: intake,
 		reruns: runs.Reruns(),
+		// The item has been put back to something a run may start on, which is
+		// what a development manager deciding a re-run of a blocked item does
+		// before the harness is asked to carry the decision out.
+		item: beads.WorkItem{ID: state.WorkItemID, Title: state.WorkItemTitle, Status: "open"},
 		outcome: Outcome{
 			RunID:      "run-fedcba9876543210fedcba9876543210",
 			WorkItemID: state.WorkItemID,
@@ -354,6 +370,80 @@ func TestARerunIsRefusedWhileTheItemHasARunInFlight(t *testing.T) {
 	}
 	if len(harness.started) != 0 {
 		t.Fatalf("started = %#v, want nothing started", harness.started)
+	}
+}
+
+// The item a fresh run would start on is read before anything is claimed. A run
+// that stopped on a durable blocker blocked its item, so this is the ordinary
+// state of a docketed stoppage — and a refusal here that spent the stoppage's one
+// re-run would make the decision self-defeating on exactly the items it is for.
+func TestARerunOfAnItemNoRunCanStartOnIsRefusedAndSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	for _, refusal := range []struct {
+		name string
+		item beads.WorkItem
+		want string
+	}{
+		{
+			// The 102.5 seam: stopping the run blocked the item, and a fresh run
+			// starts on an open one.
+			name: "the item is blocked",
+			item: beads.WorkItem{ID: docketedItem, Status: "blocked"},
+			want: `status is "blocked", want open`,
+		},
+		{
+			name: "the item is closed",
+			item: beads.WorkItem{ID: docketedItem, Status: "closed"},
+			want: `status is "closed", want open`,
+		},
+		{
+			name: "something the item depends on is not done",
+			item: beads.WorkItem{
+				ID:           docketedItem,
+				Status:       "open",
+				Dependencies: []beads.Dependency{{ID: "yoyodyne-ifd.102.5", Type: "blocks", Status: "open"}},
+			},
+			want: "blocked by: yoyodyne-ifd.102.5",
+		},
+	} {
+		t.Run(refusal.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newRerunHarness(t, stoppedState())
+			harness.item = refusal.item
+			_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+			if err == nil || !strings.Contains(err.Error(), refusal.want) {
+				t.Fatalf("Rerun() error = %v, want a refusal naming %q", err, refusal.want)
+			}
+			// The refusal is only free if it says what would make it stop refusing.
+			if !strings.Contains(err.Error(), "keeps its re-run") {
+				t.Fatalf("refusal %q does not say the stoppage keeps its re-run", err)
+			}
+			if len(harness.started) != 0 {
+				t.Fatalf("started = %#v, want nothing started", harness.started)
+			}
+			if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+				t.Fatalf("a re-run refused on the item's own state spent the stoppage's claim")
+			}
+		})
+	}
+}
+
+// A tracker that could not be asked refuses the re-run rather than claiming
+// through the silence: an item nobody could read is not an item somebody proved
+// a run may start on.
+func TestARerunIsRefusedWhenTheItemCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	harness.itemErr = errors.New("bd show failed")
+	_, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "bd show failed") {
+		t.Fatalf("Rerun() error = %v, want a refusal naming what could not be read", err)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a re-run refused for an unreadable item spent the stoppage's claim")
 	}
 }
 
@@ -617,6 +707,44 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	}
 }
 
+// The sequence that was worked around by hand on yoyodyne-ifd.125.1, replayed
+// over the real pipeline: the stopped run had blocked its item, so the first
+// carry-out is refused — and because the refusal is made before anything is
+// claimed, the same decision launches on the first attempt that is not refused,
+// with nobody having had to remember to reopen the item beforehand.
+func TestARerunRefusedOnABlockedItemLaunchesOnTheNextAttempt(t *testing.T) {
+	t.Parallel()
+
+	pipelined := newPipelinedRerun(t, nil)
+	// What stopping the run did to the item, which is the state a docketed
+	// stoppage is ordinarily found in.
+	pipelined.tracker.item.Status = "blocked"
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err == nil || !strings.Contains(err.Error(), `status is "blocked", want open`) {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the item's status", err)
+	}
+	if result.Started {
+		t.Fatalf("result = %#v, want nothing started", result)
+	}
+	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+		t.Fatalf("developer invocations = %d, want none behind a refusal", invocations)
+	}
+	if _, claimed, err := pipelined.reruns.Find(triage.Key(triage.ClassStoppedRun, priorRunID)); err != nil || claimed {
+		t.Fatalf("claimed = %t, error = %v, want the stoppage to keep its re-run", claimed, err)
+	}
+
+	// The item is put back, and the same decision is carried out — rather than
+	// being refused by the once-only guard for a run that never happened.
+	pipelined.tracker.item.Status = "open"
+	rerun, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() after the item was put back error = %v", err)
+	}
+	if !rerun.Started || rerun.Outcome.Integration == nil {
+		t.Fatalf("result = %#v, want the fresh run started and landed", rerun)
+	}
+}
+
 // pipelinedRerun is the re-run action over the real pipeline: one repository,
 // one state root, and one intake hold record read by both the action and the
 // run it starts.
@@ -625,6 +753,10 @@ type pipelinedRerun struct {
 	runs     *runstate.Store
 	intake   *runstate.IntakeHoldStore
 	provider *fakeBackend
+	// tracker is the one work item both readings ask about: the action's, before
+	// it claims anything, and the pipeline's, where it would start the work.
+	tracker *fakeTracker
+	reruns  *runstate.RerunStore
 }
 
 // newPipelinedRerun builds it over a stopped, docketed, decided-about run.
@@ -680,12 +812,18 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 		runs:     store,
 		intake:   intake,
 		provider: provider,
+		tracker:  tracker,
+		reruns:   reruns,
 		rerunner: Rerunner{
 			Docket:    docket,
 			Runs:      store,
 			Intake:    intake,
 			Reruns:    reruns,
 			Decisions: store.Triage(),
+			// One tracker for both readings, for the reason there is one intake
+			// record: a test that wired the action to a different item from the one
+			// the pipeline starts on would prove nothing about either.
+			Items: tracker,
 			Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 				if beforeStart != nil {
 					beforeStart()
@@ -779,6 +917,7 @@ func TestARerunNobodyDecidedIsRefused(t *testing.T) {
 	started := 0
 	rerunner := Rerunner{
 		Docket: docket, Runs: runs, Intake: intake, Reruns: runs.Reruns(), Decisions: runs.Triage(),
+		Items: openWorkItem(docketedItem),
 		Start: func(context.Context, string, runstate.Selection) (Outcome, error) {
 			started++
 			return Outcome{}, nil
@@ -817,6 +956,14 @@ func TestTheRecordedReasonSeparatesTheDecisionFromTheProseItWasGiven(t *testing.
 	}
 }
 
+// openWorkItem is a tracker reporting one item in a state a fresh run may start
+// on, for the sequences whose subject is something other than the item itself.
+type openWorkItem string
+
+func (id openWorkItem) Show(context.Context, string) (beads.WorkItem, error) {
+	return beads.WorkItem{ID: string(id), Status: "open"}, nil
+}
+
 // unwritableRuns reads exactly as the store does, including taking the stopped
 // run's lease, and cannot write the removal back onto it.
 type unwritableRuns struct {
@@ -845,7 +992,7 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("Rerun() with nothing wired did not refuse")
 	}
-	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "start a run"} {
+	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "work item", "start a run"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal is missing %q: %v", want, err)
 		}

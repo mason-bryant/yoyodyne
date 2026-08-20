@@ -10,8 +10,25 @@ package orchestrator
 // The decision is still not this package's. What reaches here is a decision a
 // development manager already recorded on the work item, with the reasoning it
 // gave, and everything here is the harness acting on it: reading whether it may
-// start work at all, proving the stoppage is really over, claiming the one re-run
-// that stoppage gets, and starting the run.
+// start work at all, proving the stoppage is really over, reading that the item
+// is one a run may start on, claiming the one re-run that stoppage gets, and
+// starting the run.
+//
+// # Why everything that refuses is asked before the claim
+//
+// The budget a re-run spends is one per docketed stoppage, and it is spent by
+// claiming it rather than by running anything. So a condition that would refuse
+// the fresh run and is asked after the claim spends the very budget it refuses:
+// that is what a re-run of a blocked item did, where the pipeline refused the
+// item's status past the claim and the next attempt was then refused by the
+// once-only guard, for a run that had never happened.
+//
+// The item's own state is the one such condition the harness does not hold in
+// its own records, so it is read here from the tracker, and what refuses it is
+// the pipeline's own condition rather than a second rendering of it. Everything
+// past the claim keeps the opposite order deliberately: a claim taken before the
+// run means a process that dies between the two has spent a re-run nobody took
+// rather than taken one nobody recorded.
 //
 // # Why the hold applies
 //
@@ -47,6 +64,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -104,6 +122,22 @@ type RerunRecords interface {
 	Claimed(workItemID string) ([]runstate.Rerun, error)
 }
 
+// RerunItems is the work item the stoppage is about. It is read and never
+// written: what becomes of an item is the fresh run's to record, and a re-run
+// that reopened what it wanted to run would be deciding the thing it is here to
+// carry out somebody else's decision about.
+//
+// It is the one condition a re-run asks outside the harness's own records, and
+// it is asked because a fresh run starts on the item itself. The pipeline reads
+// the same tracker where it would claim the item, which is the enforcement; this
+// reading is what keeps an item the pipeline would refuse from spending the
+// stoppage's only claim on a run that would then decline to start.
+//
+// It is satisfied by beads.Client.
+type RerunItems interface {
+	Show(ctx context.Context, id string) (beads.WorkItem, error)
+}
+
 // PreservedRetirer retires what the stopped run left behind, once the fresh run
 // has integrated and what it held has stopped being worth keeping. It is
 // optional: an action wired without one starts exactly the same run and records
@@ -114,10 +148,10 @@ type PreservedRetirer interface {
 	RetirePreserved(ctx context.Context, worktree gitworktree.Worktree, targetBranch string) (gitworktree.Retirement, error)
 }
 
-// Rerunner starts a fresh run of an item triage decided to run again. It has no
-// tracker and no forge access, and it decides nothing about the work: what it
-// does is check that a decision somebody else made may be carried out, and then
-// carry it out.
+// Rerunner starts a fresh run of an item triage decided to run again. It reads
+// the work item and writes nothing to it, it has no forge access, and it decides
+// nothing about the work: what it does is check that a decision somebody else
+// made may be carried out, and then carry it out.
 type Rerunner struct {
 	Docket RerunDocket
 	Runs   RerunRuns
@@ -128,6 +162,10 @@ type Rerunner struct {
 	// nobody's decision would record the development manager as having chosen
 	// work it never looked at.
 	Decisions RerunDecisions
+	// Items is the work item the fresh run would start on. Required: the pipeline
+	// asks the same question past the claim, so a re-run that could not ask it
+	// here would go on spending the stoppage's one re-run to find out.
+	Items RerunItems
 	// Preserved retires the stopped run's branch and worktree once the fresh run
 	// integrates. Optional; see PreservedRetirer.
 	Preserved PreservedRetirer
@@ -225,6 +263,12 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 		return result, err
 	}
 	result.Reason = rerunReason(entry, decided, taken, reasoning)
+	// The item is read before the claim, for the reason the hold below is: a fresh
+	// run starts on the item itself, so an item the pipeline would refuse must not
+	// spend the stoppage's one re-run on finding that out.
+	if err := r.itemCanBeRun(ctx, entry.WorkItemID); err != nil {
+		return result, err
+	}
 	// The hold is read before the claim, so a held harness leaves the stoppage its
 	// one re-run rather than spending it on a run that would decline to start.
 	hold, held, err := r.Intake.Held()
@@ -347,6 +391,27 @@ func (r Rerunner) decided(entry triage.Entry) (decided, taken int, err error) {
 			counters.Reruns, entry.WorkItemID, len(claimed))
 	}
 	return counters.Reruns, len(claimed), nil
+}
+
+// itemCanBeRun reports the work item being in a state a fresh run may start on,
+// which for a docketed stoppage ordinarily means somebody has put it back: a run
+// that stopped on a durable blocker blocked its item, and a blocked item is not
+// one the pipeline starts work on.
+//
+// What it asks is the pipeline's own condition rather than a second rendering of
+// it, so this refusal and the one the fresh run would make can never drift apart.
+// The refusal says what has to become true, because that is the whole of what
+// this being free is worth: the stoppage keeps its re-run, so the same decision
+// is carried out by asking again once the item has been put back.
+func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
+	item, err := r.Items.Show(ctx, workItemID)
+	if err != nil {
+		return fmt.Errorf("read the work item the stoppage is about: %w", err)
+	}
+	if err := validateReadyItem(item, workItemID); err != nil {
+		return fmt.Errorf("%w, which is what a fresh run of it would start from; nothing was claimed, so the stoppage keeps its re-run — put the item back in a state a run may start on and ask again to carry out the same decision", err)
+	}
+	return nil
 }
 
 // noRunInFlight refuses a re-run of an item something is already running. The
@@ -546,6 +611,9 @@ func (r Rerunner) validate() error {
 	}
 	if r.Decisions == nil {
 		problems = append(problems, errors.New("a re-run requires the item's triage record, which is what says the development manager decided one"))
+	}
+	if r.Items == nil {
+		problems = append(problems, errors.New("a re-run requires the work item, because a fresh run starts on it and a re-run that cannot read it would spend the stoppage's claim to find that out"))
 	}
 	if r.Start == nil {
 		problems = append(problems, errors.New("a re-run requires a way to start a run"))
