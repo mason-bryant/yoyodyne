@@ -643,6 +643,16 @@ The practical consequence: **a grant written into the notes silently does not
 count.** A run refused despite an item that plainly names the path is usually
 this. Both the refusal and the blocker name the fields a grant is read from.
 
+**What a grant does not do.** It admits the path; it does not decide what is
+written into it. The legitimate use of the exception is recording a change
+somebody already decided — an approved amendment, an operator's decision — never
+delegating the deciding, so a grant should name that decision, and the reviewer
+is instructed to look for it: a granted path whose item names no decided change
+behind the grant is a finding at major severity or higher. The gate is a string
+comparison and cannot ask this question; the reviewer can, which is why the two
+halves sit where they do. A branch review is not asked it at all, because it
+reads commits rather than the items their grants live in.
+
 Nothing any agent produces during a run grants a path. A developer that
 genuinely needs one says so in its summary and
 [proposes the change](#proposing-a-change-to-a-document-you-do-not-own); the
