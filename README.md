@@ -610,9 +610,30 @@ and until you say otherwise every one of them is put to you: shown as a numbered
 card with its reasoning, and created only after an answer that approves it by
 name. A proposal you left undecided is named when the conversation ends, and a
 created item records the conversation, the turn, and the rationale it came from.
-A proposal the harness cannot read is reported and the conversation carries on;
-`--message` has nobody to ask, so it reports what was proposed and creates
-nothing.
+A proposal the harness cannot read is reported and the conversation carries on.
+
+**A single message decides a proposal too, and it is the same decision.** A
+`--message` invocation has nobody standing at a prompt, so it creates nothing and
+prints what is awaiting you, named by its own identifier; the next message
+decides it. `yoyo chat --message "approve 3.1"` creates the item, and
+`yoyo chat --message "decline 3.1 <reason>"` turns it down with your words kept
+as the reason. A bare `y` works where exactly one proposal is waiting, which is
+the same rule a prompt answers by.
+
+**Two shapes decide, and everything else is speech.** A message decides when it
+names a proposal by its identifier — `approve 3.1`, `decline 3.1 too vague` —
+or when it is nothing but decision words: `y`, `no`, `decline all`, `approve 1,3`.
+Anything else is said to the product manager and leaves every proposal exactly
+where it was, including a reply that happens to open with one of those words:
+`no, let's look at the resolver instead` is a sentence, not a decline. That is
+narrower than the prompt, deliberately. A prompt has just asked you, so the words
+after your verb can only be about the question; a message has not, and the
+proposal it would decide may be hours and several messages old. `decline 2 too
+vague` is speech for the same reason — a bare number is a position in a listing
+rather than a name, so name the proposal to decline it with a reason. An
+undecided proposal outlives the process that proposed it, so the invocation that
+made it and the one that decides it are two different commands, hours apart if
+you like.
 
 **Set `work_items: automatic` to move that approval up to your goals** — approve
 what the product should do, then watch it happen. Work that traces to a goal you
@@ -624,6 +645,19 @@ project that has just opted in still asks about everything until its first
 you are being asked printed on the card. A created item records which of the two
 it was, because an item claiming an approval you never gave is the one record
 this arrangement cannot afford.
+
+**Or keep the gate and carve one class out of it.**
+[`approvals.work_item_exemptions`](docs/configuration.md#what-reaches-the-queue)
+lists classes of work the per-item gate is not asking about, and there is one:
+`diagnosis`, work that only reads what is already there and produces findings
+rather than a change. It is empty until you write it, the product manager is told
+about a class only where you have exempted it, and work admitted under one still
+names a goal the repository records. It is for the operator who wants to be asked
+before the product changes and does not want to be asked before something counts
+what is already in the repository. It narrows that per-item question and nothing
+else: under `work_items: automatic` there is no per-item question left to narrow,
+so an exempt class is admitted on the approved goal every other item is admitted
+on.
 
 A turn that proposes five things is not five questions in a row. One answer
 decides as many of them as you like:

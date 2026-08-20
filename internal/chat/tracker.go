@@ -130,7 +130,7 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class"},
 	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note"},
 	actionReparent:     {"parent"},
@@ -176,6 +176,10 @@ type TrackerAction struct {
 	// DependsOn names the item a link or unlink is about: the item the action's
 	// subject waits for.
 	DependsOn string `json:"depends_on,omitempty"`
+	// Class is the kind of work a creation admits, where a project treats a kind
+	// of work differently at admission. It is taken by a creation and by nothing
+	// else, and it is optional there: work that claims no class is ordinary work.
+	Class domain.WorkItemClass `json:"class,omitempty"`
 	// Note is text appended to the item's notes, which is how the product
 	// manager writes on an item without replacing what is already there.
 	Note string `json:"note,omitempty"`
@@ -396,6 +400,12 @@ func (a TrackerAction) validateArguments() []error {
 			boundTrackerText("description", a.Description, maxTrackerTextBytes, true),
 		)
 		problems = append(problems, a.goalProblems()...)
+		// A class the harness does not recognize claims an exemption that does not
+		// exist, so the creation is refused rather than run as ordinary work under a
+		// word nothing reads.
+		if a.Class != "" && !a.Class.Valid() {
+			problems = append(problems, fmt.Errorf("class %q is not one the harness recognizes; the classes there are: %s", a.Class, namedWorkItemClasses()))
+		}
 	case actionAttribute:
 		problems = append(problems, a.goalProblems()...)
 	case actionUpdate:
@@ -480,6 +490,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.DependsOn) != "" {
 		carried = append(carried, "depends_on")
+	}
+	if strings.TrimSpace(string(a.Class)) != "" {
+		carried = append(carried, "class")
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
@@ -636,13 +649,30 @@ func (s *Session) admissionRefusal(action TrackerAction) string {
 	if action.Action != actionCreate || s.authority().ParentRequired {
 		return ""
 	}
-	if s.options.Admission.PerItemApproval() {
-		return perItemApprovalReason + ", so admitting work directly is refused; propose it instead and the operator decides"
-	}
 	// The goal is judged from the action itself rather than taken from the
 	// caller, so a creation that somehow carried none is refused by a gate that
 	// had something to judge rather than waved through by one that had nothing.
 	attribution := s.options.Goals.Attribute(action.Goal)
+	// Work of a class the operator carved out stands the per-item question down,
+	// which is the whole of what the carve-out is — and the whole of what it
+	// touches. The same predicate answers here as on the proposal path, so the
+	// two doors the product manager reaches cannot come to differ: an exemption
+	// narrows nothing where there is no per-item question, and the approved-goal
+	// gate below then judges an exempt creation like any other.
+	//
+	// What it still asks for is a resolved goal. An unresolved one is refused
+	// before this runs; a goal the repository has nothing to check against is
+	// not, and admitting on it would be admitting on a claim nobody could check.
+	if s.exemptsFromPerItemApproval(action.Class) {
+		if attribution.Resolved() {
+			return ""
+		}
+		return fmt.Sprintf("it names the goal %q, and %s; %s-class work is admitted without asking only where it serves a goal the repository records, so raise it as a concern or propose it and let them decide",
+			singleLine(attribution.Named, maxTrackerFailureBytes), attribution.Reason, action.Class)
+	}
+	if s.options.Admission.PerItemApproval() {
+		return perItemApprovalReason + ", so admitting work directly is refused; propose it instead and the operator decides"
+	}
 	gap := attribution.ApprovalGap()
 	if gap == "" {
 		return ""
@@ -766,7 +796,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// The goal is written onto the item rather than only checked as it goes
 			// past, because an item in the queue that does not say what it is for is
 			// exactly the work nobody can later decide to stop doing.
-			Notes:    s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal),
+			Notes:    s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class),
 			Parent:   action.parent(),
 			Priority: action.Priority,
 		})

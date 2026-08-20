@@ -385,8 +385,27 @@ type Approvals struct {
 	// with no person in the loop, so a project turns it on rather than acquiring
 	// it by extending a bundle or by upgrading the executable. That is the same
 	// rule integration and publishing are held to, and for the same reason.
-	WorkItems   domain.ApprovalMode `yaml:"work_items" json:"work_items"`
-	Integration domain.ApprovalMode `yaml:"integration" json:"integration"`
+	WorkItems domain.ApprovalMode `yaml:"work_items" json:"work_items"`
+	// WorkItemExemptions are the classes of work this project admits without
+	// asking, whatever WorkItems says. It exists because the per-item gate turned
+	// out to be coarser than the operators who keep it actually mean: an operator
+	// who wants to be asked about every change to the product does not
+	// necessarily want to be asked before something reads the repository and
+	// writes down what it found, and with no way to say so the policy they
+	// recorded stays a sentence nothing enforces.
+	//
+	// It is empty by default, which is the gate exactly as it stands: an
+	// exemption is an operator handing over a decision, and one that arrived by
+	// inheritance or by upgrading the executable would not be that. Each class is
+	// stated rather than derived, and the harness recognizes only the classes it
+	// names — a project naming anything else is refused rather than quietly
+	// exempting nothing.
+	//
+	// What it does not move is the goal. Work admitted under an exemption still
+	// names a goal the repository records, because an exemption is about who is
+	// asked and never about whether the work is for anything.
+	WorkItemExemptions []domain.WorkItemClass `yaml:"work_item_exemptions" json:"work_item_exemptions,omitempty"`
+	Integration        domain.ApprovalMode    `yaml:"integration" json:"integration"`
 	// Publishing decides whether the harness pushes a run's branch and opens the
 	// pull request its reviewer's verdict merges. It sits beside integration
 	// because publishing has the wider blast radius of the two: integration moves
@@ -555,6 +574,22 @@ func (c Config) Validate() error {
 			problems = append(problems, fmt.Sprintf("approval %s must be %q or %q", approval.name, domain.ApprovalHuman, domain.ApprovalAutomatic))
 		}
 	}
+	// A class the harness does not recognize exempts nothing, so a file naming one
+	// is refused rather than loaded with a policy its author believes is in force.
+	// A duplicate is refused for the same reason: it is a file saying something
+	// twice, which is the shape a merge that went wrong leaves behind.
+	exempted := make(map[domain.WorkItemClass]struct{}, len(c.Approvals.WorkItemExemptions))
+	for _, class := range c.Approvals.WorkItemExemptions {
+		if !class.Valid() {
+			problems = append(problems, fmt.Sprintf("approvals.work_item_exemptions names %q, which is not a class the harness recognizes; the classes there are: %s", class, namedWorkItemClasses()))
+			continue
+		}
+		if _, duplicate := exempted[class]; duplicate {
+			problems = append(problems, fmt.Sprintf("approvals.work_item_exemptions names %q twice", class))
+			continue
+		}
+		exempted[class] = struct{}{}
+	}
 
 	if len(c.Agents) == 0 {
 		problems = append(problems, "at least one agent is required")
@@ -644,6 +679,16 @@ func (c Config) Validate() error {
 		return ValidationError{Problems: problems}
 	}
 	return nil
+}
+
+// namedWorkItemClasses lists the classes a project may exempt, so a refusal
+// names what was actually available rather than only what was wrong.
+func namedWorkItemClasses() string {
+	named := make([]string, 0, len(domain.WorkItemClasses))
+	for _, class := range domain.WorkItemClasses {
+		named = append(named, fmt.Sprintf("%q", class))
+	}
+	return strings.Join(named, ", ")
 }
 
 // slackChannelPattern keeps a configured channel a channel: an id, or a name

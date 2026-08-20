@@ -298,11 +298,50 @@ func admissionClause(authority Authority, admission Admission) string {
 		return ""
 	}
 	if admission.PerItemApproval() {
-		return `This project asks the operator about every work item before it is admitted. "create" is refused for as long as that is so: propose the work instead, and the operator decides on each item. Say that is what you are doing rather than describing work as admitted.`
+		return `This project asks the operator about every work item before it is admitted. "create" is refused for as long as that is so: propose the work instead, and the operator decides on each item. Say that is what you are doing rather than describing work as admitted.` +
+			exemptionClause(admission)
 	}
 	return `This project admits work that traces to a goal the operator approved, without asking them again. Both blocks below reach the queue on that basis: "create" admits directly, and a proposal the harness can place under an approved goal is admitted rather than put to them. The operator is told afterwards what went in.
 
 That rests entirely on the goal, so it holds only where the goal actually resolves and the document stating it is approved as it now stands. Work naming a goal that resolves to nothing, to a document nobody approved, or to one amended since it was approved is refused on "create" and put to the operator as a proposal — and the three cases you escalate rather than propose are unchanged, because approval moved up a level and did not disappear.`
+}
+
+// exemptionClause states the classes of work this project has carved out of its
+// per-item gate, and is empty for a project that has carved out none — which is
+// every project until its operator says otherwise. It is stated only where it is
+// in force, deliberately: telling a role about a class the harness will ignore
+// is an invitation to claim one, and a claim that changes nothing is a claim
+// nobody checks.
+//
+// That is also why it is sent under the per-item gate alone. What an exemption
+// narrows is the question the operator is asked about each item, so a project
+// that has already moved that approval up to its goals has nothing for it to
+// narrow: the class would change nothing there, and a role told about one would
+// be told it mattered.
+func exemptionClause(admission Admission) string {
+	exempt := admission.ExemptClasses()
+	if len(exempt) == 0 || !admission.PerItemApproval() {
+		return ""
+	}
+	var stated strings.Builder
+	stated.WriteString("\n\nThis project exempts some classes of work from that, and admits them without asking. A proposal and a \"create\" action may each carry one further argument, \"class\", naming one of the classes below; nothing else takes it, and it is not in the example blocks because it is accepted only where a project has exempted something. Work that names no class is ordinary work, held to everything above. The classes this project exempts are:\n")
+	for _, class := range exempt {
+		stated.WriteString("\n- " + string(class) + ": " + exemptClassMeaning(class))
+	}
+	stated.WriteString("\n\nThe class is a claim you make about your own work, and it is the operator's trust rather than a way past the gate: claim it only where the work genuinely is that, and where you are not sure, do not claim it and let them decide. Work admitted under a class still names a goal the repository records, exactly as all other work does, and the item says which class let it in.")
+	return stated.String()
+}
+
+// exemptClassMeaning is what a class means, in the words the role is held to. It
+// is the definition rather than a description of one, because a class an agent
+// applies loosely is a gate that came down without anybody deciding to lower it.
+func exemptClassMeaning(class domain.WorkItemClass) string {
+	switch class {
+	case domain.WorkItemClassDiagnosis:
+		return "work that only looks. It reads what is already there, says up front what it will read and stops there, and produces findings rather than a change. Work that would alter the product, the repository, or the queue is not diagnosis however small the alteration is, and neither is work whose findings are a pretext for the change that follows."
+	default:
+		return "a class the harness recognizes and this contract does not describe; do not claim it."
+	}
 }
 
 // conversationGround is the part of every contract that is the same whichever

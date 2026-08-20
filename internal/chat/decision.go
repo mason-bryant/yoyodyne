@@ -65,6 +65,147 @@ type decision struct {
 	reason string
 }
 
+// DecisionOutcome is what became of one proposal the operator decided. It is
+// what a decision made outside a conversation is reported by, where there is no
+// prompt to print underneath: the same decision, said once, in a shape a script
+// can read.
+type DecisionOutcome struct {
+	ProposalID string `json:"proposal_id"`
+	// Title is the work the decision was about, taken from the created item where
+	// there is one and from the proposal where there is not.
+	Title    string `json:"title"`
+	Approved bool   `json:"approved"`
+	// WorkItemID is the item an approval created. It is empty on a decline, and
+	// on an approval the tracker would not carry out.
+	WorkItemID string `json:"work_item_id,omitempty"`
+	// Reason is why a declined proposal was turned down, in the operator's own
+	// words where they gave any.
+	Reason string `json:"reason,omitempty"`
+	// Problem is what stopped the decision landing whole. An approval carries one
+	// where nothing was created and where the item exists but is incomplete, and
+	// those are different situations, which is what Undecided says.
+	Problem string `json:"problem,omitempty"`
+	// Undecided says the approval created nothing, so the proposal is still
+	// awaiting a decision and can be approved again once whatever refused it
+	// answers.
+	Undecided bool `json:"undecided,omitempty"`
+}
+
+// Render describes one decision for an operator reading what their message did.
+// It leads with the proposal, because that is what they named, and says the
+// item's identifier where there is one to say.
+func (d DecisionOutcome) Render() string {
+	switch {
+	case !d.Approved:
+		return fmt.Sprintf("[%s] declined: %s\n", d.ProposalID, strings.TrimSpace(d.Title)) +
+			indent("because: "+d.Reason)
+	case d.Undecided:
+		return fmt.Sprintf("[%s] not created: %s\n", d.ProposalID, strings.TrimSpace(d.Title)) +
+			indent(d.Problem) +
+			indent("it is still awaiting a decision; approve it again once the tracker answers")
+	case d.Problem != "":
+		return fmt.Sprintf("[%s] created %s: %s\n", d.ProposalID, d.WorkItemID, strings.TrimSpace(d.Title)) +
+			indent("the item is incomplete: "+d.Problem)
+	default:
+		return fmt.Sprintf("[%s] created %s: %s\n", d.ProposalID, d.WorkItemID, strings.TrimSpace(d.Title))
+	}
+}
+
+// namesAProposal reports an answer that decides a proposal by name, and which
+// one it names first. It exists for the case where nothing is awaiting a
+// decision at all, which is the one case the grammar above cannot be asked:
+// there are no cards to resolve a selector against, and the difference between
+// somebody deciding and somebody talking has to be read from the answer itself.
+//
+// The rule is a decision verb followed by a proposal's own identifier. Both
+// halves matter. Without the verb, an answer that merely mentions a number is
+// prose; without the identifier, a bare "yes" with nothing on the table names no
+// proposal and cannot be treated as deciding one. A card number deliberately
+// does not count either: a number means a position in a listing, the listing it
+// meant is gone, and "no 2 of those are worth doing" is a sentence.
+func namesAProposal(answer string) (string, bool) {
+	verb, rest := nextWord(strings.TrimSpace(answer))
+	if !matches(verb, approveWords) && !matches(verb, declineWords) {
+		return "", false
+	}
+	for _, word := range strings.Fields(rest) {
+		for _, part := range splitSelectors(word) {
+			if isProposalID(part) {
+				return part, true
+			}
+		}
+	}
+	return "", false
+}
+
+// decidesAsAMessage reports an answer that decides proposals when nobody has
+// just asked a question. It is the whole of the difference between a prompt and
+// a single message, and it exists because the grammar below is written for a
+// prompt: there, the operator is answering "create 3.1?" and the words after
+// their verb can only be about that, so a clause that trails off into prose is
+// safely read as a decline with the prose kept as the reason.
+//
+// A message is not that. The proposals it would decide may be hours and several
+// messages old, and the operator is usually talking rather than answering. So an
+// ordinary reply that happens to open with a decision word — "no, let's look at
+// the resolver instead", "yes, and can you also check X" — must reach the agent
+// as what it is, rather than quietly turning down work nobody mentioned.
+//
+// Two shapes are decisions here, and both are shapes prose does not take:
+//
+//   - the answer names a proposal by its own identifier, as "approve 3.1" or
+//     "decline 3.1 too vague" — the identifier is what the harness prints and
+//     what nobody writes by accident, so the words after it are a reason;
+//   - the answer is nothing but decision vocabulary, as "y", "decline all", or
+//     "approve 1,3" — there is no prose in it to lose.
+//
+// Everything else is speech, including "decline 2 too vague": a bare number is a
+// position in a listing rather than a name, and that ambiguity is the one this
+// package already resolves toward the reason. Deciding it from a message would
+// resolve it toward a proposal the operator may not have been looking at.
+func decidesAsAMessage(answer string) bool {
+	if _, names := namesAProposal(answer); names {
+		return true
+	}
+	return onlyDecisionWords(answer)
+}
+
+// onlyDecisionWords reports an answer with no prose in it at all: a decision
+// verb, and after it nothing but more verbs, the words that join them, and the
+// proposals they name.
+func onlyDecisionWords(answer string) bool {
+	words := strings.Fields(strings.TrimSpace(answer))
+	if len(words) == 0 || !isDecisionVerb(words[0]) {
+		return false
+	}
+	for _, word := range words[1:] {
+		trimmed := strings.Trim(word, ",;")
+		switch {
+		case trimmed == "":
+			// Punctuation the operator separated selectors with, as in "1 , 3".
+		case isDecisionVerb(trimmed) || matches(trimmed, connectorWords):
+		case isSelectorList(trimmed):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isDecisionVerb(word string) bool {
+	return matches(word, approveWords) || matches(word, declineWords)
+}
+
+// declineReason is what the record keeps about why a proposal was turned down.
+// An operator who declined it without saying anything still declined it, so the
+// record says that rather than recording no reason at all.
+func declineReason(reason string) string {
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		return trimmed
+	}
+	return "the operator declined it without giving a reason"
+}
+
 // errNotADecision reports an answer that is not a decision at all: it names no
 // proposal and begins with nothing the harness recognizes. It is separate from
 // every other failure here because it is the one the contract already decides —

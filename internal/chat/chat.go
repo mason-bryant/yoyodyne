@@ -45,9 +45,12 @@ const MaxOperatorMessageBytes = 32 << 10
 
 // maxPendingNotices and maxNoticeBytes bound the account of harness activity
 // one turn carries. The product manager is told what the operator did, not
-// handed an unbounded log of it.
+// handed an unbounded log of it. The count is the bound the durable record holds
+// itself to, taken from there rather than restated: the notices waiting in this
+// process are written into that record between turns, and two numbers that
+// drifted apart would be a conversation whose own state file it refused to save.
 const (
-	maxPendingNotices = 20
+	maxPendingNotices = runstate.MaxPendingNotices
 	maxNoticeBytes    = 512
 )
 
@@ -428,6 +431,21 @@ func Open(options Options) (*Session, error) {
 			for _, id := range existing.DeliveredAmendmentIDs {
 				session.deliveredAmendments[id] = true
 			}
+			// What the operator has not decided yet is put back on the table. A
+			// conversation resumed by a later process — which is every `--message`
+			// invocation after the one that proposed — otherwise had nothing an
+			// approval could name, so the approval was said to the agent as ordinary
+			// speech and the work never reached the queue.
+			for _, pending := range existing.PendingProposals {
+				session.proposals = append(session.proposals, &proposalRecord{
+					pending: restoredProposal(existing.ConversationID, pending),
+				})
+			}
+			// The same for what the agent has not been told: it acted, the process
+			// that watched it act has gone, and the account of what happened is owed
+			// to its next turn wherever that turn is taken.
+			session.notices = existing.PendingNotices
+			session.noticesDropped = existing.PendingNoticesDropped
 			return session, nil
 		}
 	case errors.Is(err, runstate.ErrNoConversation):
@@ -985,10 +1003,7 @@ func (s *Session) Reject(proposalID, reason string) error {
 	if err != nil {
 		return err
 	}
-	trimmed := strings.TrimSpace(reason)
-	if trimmed == "" {
-		trimmed = "the operator declined it without giving a reason"
-	}
+	trimmed := declineReason(reason)
 	if len(trimmed) > MaxOperatorMessageBytes {
 		return fmt.Errorf("rejection reason is %d bytes, limit is %d", len(trimmed), MaxOperatorMessageBytes)
 	}
@@ -1028,7 +1043,7 @@ func (s *Session) recordProposals(proposals []Proposal) ([]PendingProposal, erro
 			// that asks about every item the answer is the policy rather than
 			// anything about the work, and repeating it on every card would say
 			// nothing.
-			Asking: s.proposalAdmissionGap(proposal.Goal),
+			Asking: s.proposalAdmissionGap(proposal.Goal, proposal.Class),
 		}}
 		if err := s.emit(execution.EventProposalRecorded, record.pending); err != nil {
 			return pending, fmt.Errorf("record work item proposal: %w", err)
@@ -1036,37 +1051,49 @@ func (s *Session) recordProposals(proposals []Proposal) ([]PendingProposal, erro
 		s.proposals = append(s.proposals, record)
 		pending = append(pending, record.pending)
 	}
+	// What is now awaiting a decision is written into the record before the
+	// operator is shown any of it. A proposal that lived only in this process was
+	// undecidable the moment the process exited, which for a single message is
+	// immediately: the operator's approval then arrived at a conversation that had
+	// never heard of what they were approving.
+	if len(pending) > 0 {
+		if err := s.record(); err != nil {
+			return pending, err
+		}
+	}
 	return pending, nil
 }
 
 // proposalAdmissionGap is the gap worth writing on the proposal itself: what
 // about this work kept it out of a queue it would otherwise have gone into.
-func (s *Session) proposalAdmissionGap(named string) string {
-	if s.options.Admission.PerItemApproval() {
+//
+// Work of a class the project exempts is judged whatever the setting says,
+// because for that work the setting is not the answer: it would have gone into
+// the queue, so whatever kept it out is about the proposal.
+func (s *Session) proposalAdmissionGap(named string, class domain.WorkItemClass) string {
+	if s.options.Admission.PerItemApproval() && !s.options.Admission.Exempts(class) {
 		return ""
 	}
-	return s.admissionGap(named)
+	return s.admissionGap(named, class)
 }
 
-// admit puts into the queue every proposal that traces to a goal the operator
-// approved, and leaves the rest for them to decide. It runs before the operator
-// is asked anything, which is the whole point: the gate is at the goals now, and
-// work that passed it is not put to them a second time.
+// admit puts into the queue every proposal the harness may admit itself — one
+// that traces to a goal the operator approved, or one of a class they carved out
+// of being asked about — and leaves the rest for them to decide. It runs before
+// the operator is asked anything, which is the whole point: work that passed
+// whichever gate this project has is not put to them a second time.
 //
 // A proposal the tracker refused is left awaiting a decision rather than failed.
 // Nothing was created, so the operator can still approve it once the tracker
 // answers, and the alternative — losing the work to a tracker that was briefly
 // unavailable — is the one outcome nobody could act on.
 func (s *Session) admit(ctx context.Context, pending []PendingProposal) ([]AdmittedItem, []PendingProposal) {
-	if s.options.Admission.PerItemApproval() {
-		return nil, pending
-	}
 	var (
 		items     []AdmittedItem
 		undecided []PendingProposal
 	)
 	for _, proposal := range pending {
-		if proposal.Asking != "" {
+		if !s.admissible(proposal) {
 			undecided = append(undecided, proposal)
 			continue
 		}
@@ -1093,6 +1120,21 @@ func (s *Session) admit(ctx context.Context, pending []PendingProposal) ([]Admit
 	return items, undecided
 }
 
+// admissible reports a proposal the harness may put in the queue itself. There
+// are two ways one is: the project admits work that traces to an approved goal
+// and this work does, or the project exempts this class of work from being
+// asked about at all. Either way something about the proposal already stopped it
+// where Asking says so, and that answer stands.
+func (s *Session) admissible(proposal PendingProposal) bool {
+	if proposal.Asking != "" {
+		return false
+	}
+	if s.options.Admission.Exempts(proposal.Proposal.Class) {
+		return true
+	}
+	return !s.options.Admission.PerItemApproval()
+}
+
 // admitOne puts one proposal in the queue without asking. It is the harness
 // acting on the operator's approval of a goal rather than on an approval of
 // this item, and everything it writes says so: the event that records it, the
@@ -1106,30 +1148,32 @@ func (s *Session) admitOne(ctx context.Context, proposalID string) (AdmittedItem
 		return AdmittedItem{}, errors.New("no work tracker is configured; work cannot be admitted")
 	}
 	named := record.pending.Proposal.Goal
+	class := record.pending.Proposal.Class
 	// The goal is judged again here rather than trusted from the check above, for
 	// the reason the approval path judges it again: this is the moment the item
 	// comes into existence, and it is the only moment refusing costs nothing.
-	if gap := s.admissionGap(named); gap != "" {
+	if gap := s.admissionGap(named, class); gap != "" {
 		return AdmittedItem{}, fmt.Errorf("it serves %q, and %s", strings.TrimSpace(named), gap)
 	}
-	attribution := s.options.Goals.Attribute(named)
+	basis, note := s.admissionAuthority(named, class)
 	if err := s.emit(execution.EventProposalAdmitted, admitted{
 		PendingProposal: record.pending,
-		Reason:          admissionReason(strings.TrimSpace(named)),
+		Reason:          admissionReason(basis),
 	}); err != nil {
 		return AdmittedItem{}, fmt.Errorf("record proposal admission: %w", err)
 	}
-	created, err := s.createFromProposal(ctx, record, approvedGoalNote(attribution))
+	created, err := s.createFromProposal(ctx, record, note)
 	if created.WorkItemID == "" {
 		return AdmittedItem{}, err
 	}
-	s.notice("the harness admitted proposal %s to the backlog as work item %s without asking the operator, because it serves the approved goal %q: %s",
-		record.pending.ID, created.WorkItemID, strings.TrimSpace(named), created.Title)
+	s.notice("the harness admitted proposal %s to the backlog as work item %s without asking the operator, because %s: %s",
+		record.pending.ID, created.WorkItemID, basis, created.Title)
 	return AdmittedItem{
 		ProposalID: created.ProposalID,
 		WorkItemID: created.WorkItemID,
 		Title:      created.Title,
 		Goal:       strings.TrimSpace(named),
+		Basis:      basis,
 	}, err
 }
 
@@ -1234,6 +1278,16 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 	// thing, because it is something the operator asked for and has to act on
 	// rather than part of the conversation.
 	harness := s.theme.Harness(screen)
+	// A proposal nobody decided outlives the process that made it, so a
+	// conversation that opens with one waiting puts it to the operator before
+	// anything else. Without this it would be named as undecided when this
+	// conversation ended too, having been put to nobody in either of them.
+	if waiting := s.Proposals(); len(waiting) > 0 {
+		fmt.Fprintf(out, "%s\n", s.theme.Proposal("Proposals from earlier in this conversation are still waiting on you."))
+		if err := s.decide(ctx, waiting, screen); err != nil {
+			return err
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -1451,7 +1505,7 @@ func (s *Session) reportAdmitted(out io.Writer, reply Reply) {
 	// Undressed, like the tracker actions above it and unlike a proposal. The
 	// colour a proposal is dressed in means "waiting on you", and wearing it
 	// would say the opposite of what this is.
-	fmt.Fprintf(out, "%d work item(s) were admitted to the queue without asking you, because they serve goals you approved:\n", len(reply.Admitted))
+	fmt.Fprintf(out, "%d work item(s) were admitted to the queue without asking you, and each one says why:\n", len(reply.Admitted))
 	for _, item := range reply.Admitted {
 		fmt.Fprint(out, item.Render())
 	}
@@ -1603,39 +1657,193 @@ func (s *Session) isDecided(proposalID string) bool {
 // recorded for each of them is identical either way. A proposal the tracker
 // would not create is added to refused, which is what keeps it from being put
 // again on the next round.
+//
+// Each decision is saved as it is made, for the reason Decide saves: what the
+// conversation's state carries is the proposals still awaiting a decision, and
+// Approve and Reject only mark the record decided in memory. An operator who
+// approves the proposal a resumed conversation put to them and then leaves
+// without taking a turn would otherwise exit with the state file still listing
+// it, and the next process would put an item that already exists back on the
+// table to be created a second time. That the proposals became durable at all is
+// what made this reachable — nothing needed saving here while they lived only in
+// the process that proposed them.
 func (s *Session) applyDecisions(ctx context.Context, out io.Writer, decisions []decision, refused map[string]bool) error {
 	for _, made := range decisions {
-		if !made.approve {
-			if err := s.Reject(made.proposalID, made.reason); err != nil {
-				return err
-			}
-			fmt.Fprintf(out, "declined %s; the decision is recorded.\n\n", made.proposalID)
-			continue
+		outcome, err := s.decideOne(ctx, made)
+		saved := s.record()
+		if err != nil {
+			return errors.Join(err, saved)
 		}
-		// A tracker that fails is reported and the conversation continues. The
-		// proposal is still awaiting a decision, so it is named as undecided when
-		// the conversation ends and an operator who wanted the item can ask for it
-		// again once the tracker answers — but it is not offered again here, where
-		// a tracker that is still down would leave them answering the same prompt
-		// for as long as they had the patience for it.
-		created, err := s.Approve(ctx, made.proposalID)
+		if saved != nil {
+			return saved
+		}
 		switch {
-		case err != nil && created.WorkItemID == "":
-			refused[made.proposalID] = true
-			fmt.Fprintf(out, "%s was not created: %v\nit is left undecided rather than asked about again; ask for it once the tracker answers.\n\n", made.proposalID, err)
-		case err != nil:
-			fmt.Fprintf(out, "created %s: %s\nthe item is incomplete: %v\n\n", created.WorkItemID, created.Title, err)
+		case !outcome.Approved:
+			fmt.Fprintf(out, "declined %s; the decision is recorded.\n\n", outcome.ProposalID)
+		case outcome.Undecided:
+			// A tracker that fails is reported and the conversation continues. The
+			// proposal is still awaiting a decision, so it is named as undecided when
+			// the conversation ends and an operator who wanted the item can ask for it
+			// again once the tracker answers — but it is not offered again here, where
+			// a tracker that is still down would leave them answering the same prompt
+			// for as long as they had the patience for it.
+			refused[outcome.ProposalID] = true
+			fmt.Fprintf(out, "%s was not created: %s\nit is left undecided rather than asked about again; ask for it once the tracker answers.\n\n", outcome.ProposalID, outcome.Problem)
+		case outcome.Problem != "":
+			fmt.Fprintf(out, "created %s: %s\nthe item is incomplete: %s\n\n", outcome.WorkItemID, outcome.Title, outcome.Problem)
 		default:
-			fmt.Fprintf(out, "created %s: %s\n", created.WorkItemID, created.Title)
+			fmt.Fprintf(out, "created %s: %s\n", outcome.WorkItemID, outcome.Title)
 			// The item exists but nothing is working on it, so the next step is
 			// named here rather than left for the operator to remember.
 			if s.options.Work != nil {
-				fmt.Fprintf(out, "run it with /work %s when you want it started.\n", created.WorkItemID)
+				fmt.Fprintf(out, "run it with /work %s when you want it started.\n", outcome.WorkItemID)
 			}
 			fmt.Fprintln(out)
 		}
 	}
 	return nil
+}
+
+// decideOne carries out one decision and says what became of it. It is the one
+// place a proposal is approved or declined, whether the operator answered a
+// prompt inside a conversation or sent the decision as a single message: the two
+// differ in how the answer arrived and in nothing that is recorded.
+//
+// The error it returns is the one kind that ends a conversation — a decision the
+// harness could not record at all. A tracker that would not create an approved
+// item is not that: the item does not exist, the proposal is still awaiting a
+// decision, and both are said in the outcome rather than raised as a failure of
+// the conversation.
+func (s *Session) decideOne(ctx context.Context, made decision) (DecisionOutcome, error) {
+	outcome := DecisionOutcome{ProposalID: made.proposalID, Approved: made.approve}
+	if record, err := s.awaitingDecision(made.proposalID); err == nil {
+		outcome.Title = strings.TrimSpace(record.pending.Proposal.Title)
+	}
+	if !made.approve {
+		outcome.Reason = declineReason(made.reason)
+		if err := s.Reject(made.proposalID, made.reason); err != nil {
+			return outcome, err
+		}
+		return outcome, nil
+	}
+	created, err := s.Approve(ctx, made.proposalID)
+	outcome.WorkItemID = created.WorkItemID
+	if created.Title != "" {
+		outcome.Title = created.Title
+	}
+	if err != nil {
+		outcome.Problem = err.Error()
+		outcome.Undecided = created.WorkItemID == ""
+	}
+	return outcome, nil
+}
+
+// Decide applies one operator answer to the proposals this conversation is
+// still waiting on, and reports whether the answer was a decision at all. It is
+// what makes an approval sent as a single message decide the same proposal the
+// same answer decides at a prompt: the grammar is the one the prompt uses, and
+// every decision goes through the same Approve and Reject.
+//
+// What it does not carry over is the prompt's own rule that anything unrecognized
+// declines, and more than that: it does not carry over the prompt's licence to
+// read prose after a verb as the reason. Both belong to the question. An operator
+// answering "create 3.1?" has just been asked, so whatever they say is about
+// that; an operator sending a message was asked nothing, and the proposals they
+// would be deciding may be hours and several messages old. Reading "no, let's
+// look at the resolver instead" as a decline would turn down work they never
+// mentioned and spend the message doing it. decidesAsAMessage draws that line:
+// an answer that names a proposal or carries no prose at all is a decision, and
+// everything else is speech the caller says to the agent exactly as it would
+// have.
+//
+// An answer that is a decision the harness cannot read against what is waiting
+// is reported as a decision that failed rather than passed on as speech: a
+// proposal named by an approval that has already been decided, or that this
+// conversation no longer holds, is said out loud rather than quietly becoming a
+// sentence the agent is asked to interpret. That holds when there is nothing
+// left on the table at all, which is the case it most needs to hold in — an
+// operator approving a proposal that was decided by another process, or that
+// aged out of the record, is exactly the operator whose approval went missing
+// before, and answering them with a turn spent on the agent would be the same
+// failure wearing a different coat.
+//
+// Reading the answer is all-or-nothing; carrying it out is not, and cannot be.
+// An answer the harness cannot resolve whole decides nothing at all, because
+// nothing has happened yet. Once the decisions are being made each is its own
+// durable event — that is what makes one auditable — so a batch whose second
+// decline fails to record leaves the first decision made and returns the
+// failure. The outcomes returned alongside it say exactly which those were.
+//
+// Each decision is saved as it is made rather than the batch being saved at the
+// end, because what the conversation's state carries is the proposals still
+// awaiting a decision. A batch that failed halfway and saved nothing would leave
+// the record listing proposals this process had already decided, and a later
+// process reading it would put a created item's proposal back on the table for
+// the operator to approve a second time — which is the failure this whole path
+// exists to end, arrived at from the other side.
+func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome, bool, error) {
+	// Bounded exactly as a message is, and before it is read rather than after: a
+	// decline keeps what the operator said as the reason, so an answer too large
+	// to be said is too large to be recorded as one.
+	trimmed := strings.TrimSpace(answer)
+	if len(trimmed) > MaxOperatorMessageBytes {
+		return nil, false, nil
+	}
+	if !decidesAsAMessage(trimmed) {
+		return nil, false, nil
+	}
+	cards := s.pendingCards()
+	if len(cards) == 0 {
+		// The answer decides something and there is nothing here to decide. Only an
+		// answer naming a proposal can say which, and it is refused out loud rather
+		// than said to the agent: the proposal it names was decided already, or is
+		// no longer one this conversation holds, and either answer is the
+		// operator's to hear. A bare yes names nothing, so it is somebody talking.
+		if named, names := namesAProposal(trimmed); names {
+			return nil, true, fmt.Errorf("no proposal %s is awaiting a decision in this conversation; it was decided already, or this conversation no longer holds it. Nothing was decided, and nothing was said to the %s",
+				named, RoleTitle(s.state.Role))
+		}
+		return nil, false, nil
+	}
+	decisions, err := readDecisions(trimmed, cards)
+	switch {
+	case errors.Is(err, errNotADecision):
+		return nil, false, nil
+	case err != nil:
+		return nil, true, fmt.Errorf("%w; nothing was decided, and all of it is still waiting on you", err)
+	}
+	outcomes := make([]DecisionOutcome, 0, len(decisions))
+	for _, made := range decisions {
+		outcome, err := s.decideOne(ctx, made)
+		// Saved after each decision rather than once at the end, and on the way
+		// out of a failure as well as through it: what the state carries is the
+		// proposals still awaiting a decision, and a proposal this process has
+		// already decided must never be left listed as awaiting one.
+		saved := s.record()
+		if err != nil {
+			return outcomes, true, errors.Join(err, saved)
+		}
+		outcomes = append(outcomes, outcome)
+		if saved != nil {
+			return outcomes, true, saved
+		}
+	}
+	return outcomes, true, nil
+}
+
+// pendingCards is every proposal this conversation is still waiting on, in the
+// order they were proposed. The numbers run over that whole set rather than over
+// one turn's proposals, because a message deciding them is answering the
+// conversation rather than a turn: an operator who was shown three undecided
+// proposals names the third by saying 3, and each one's own identifier names it
+// whatever else is on the table.
+func (s *Session) pendingCards() []card {
+	pending := s.Proposals()
+	cards := make([]card, 0, len(pending))
+	for index, proposal := range pending {
+		cards = append(cards, card{number: index + 1, proposal: proposal})
+	}
+	return cards
 }
 
 // turnPrompt carries the product context on the first turn only. Every later
@@ -1711,13 +1919,37 @@ func (s *Session) notice(format string, args ...any) {
 	}
 }
 
-// record persists the conversation as it now stands.
+// record persists the conversation as it now stands. What is still waiting on
+// somebody is written down with it rather than beside it, so the record and this
+// process can never come to disagree about what is undecided or about what the
+// agent has not been told.
 func (s *Session) record() error {
 	s.state.UpdatedAt = s.options.clock().Now()
+	s.state.PendingProposals = s.undecidedProposals()
+	s.state.PendingNotices = s.notices
+	s.state.PendingNoticesDropped = s.noticesDropped
 	if err := s.options.Store.Save(s.state); err != nil {
 		return fmt.Errorf("record conversation turn: %w", err)
 	}
 	return nil
+}
+
+// undecidedProposals is what a later process may still be asked to decide. It
+// is bounded where it is written rather than where proposals are made: the
+// oldest go first, because a conversation that has left that many proposals
+// undecided has moved on from the earliest of them.
+func (s *Session) undecidedProposals() []runstate.PendingProposal {
+	var pending []runstate.PendingProposal
+	for _, record := range s.proposals {
+		if record.decided {
+			continue
+		}
+		pending = append(pending, record.pending.recorded())
+	}
+	if len(pending) > runstate.MaxPendingProposals {
+		pending = pending[len(pending)-runstate.MaxPendingProposals:]
+	}
+	return pending
 }
 
 func (o Options) validate() error {

@@ -66,6 +66,39 @@ const (
 	ApprovalAutomatic ApprovalMode = "automatic"
 )
 
+// WorkItemClass names a kind of work a project may treat differently at
+// admission. It exists because "ask about every work item" turned out to be
+// coarser than the operators who set it actually meant: work that only reads and
+// reports is not the work a per-item gate was put up against, and a policy that
+// cannot say so is one an operator either abandons or works around.
+//
+// There is one class, deliberately. A class is an exemption from a gate the
+// operator put up, so each of them has to be worth the operator's trust on its
+// own, and a list that grew by convenience would be the gate coming down by
+// instalments.
+type WorkItemClass string
+
+// WorkItemClassDiagnosis is work that only looks: it reads what is already
+// there, is bounded in what it reads, and produces findings rather than a
+// change. Nothing it admits alters the product, which is why an operator can
+// hand it over without handing over what the gate was for.
+const WorkItemClassDiagnosis WorkItemClass = "diagnosis"
+
+// WorkItemClasses lists every class there is, in the order a refusal names them.
+var WorkItemClasses = []WorkItemClass{WorkItemClassDiagnosis}
+
+// Valid reports a class the harness recognizes. The empty class is not one: work
+// that names no class is ordinary work, and asking whether that is valid is
+// asking the wrong question.
+func (c WorkItemClass) Valid() bool {
+	for _, known := range WorkItemClasses {
+		if c == known {
+			return true
+		}
+	}
+	return false
+}
+
 var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
 func ValidateIdentifier(kind, value string) error {
