@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -1035,3 +1036,105 @@ func TestAssembleProductBoundsTheDocketAndSaysWhatItCutOut(t *testing.T) {
 		t.Fatalf("the docket kept the oldest entries rather than the newest:\n%s", bundle.Text)
 	}
 }
+
+// repositoryRoot is this checkout, reached from the package directory the tests
+// run in. The two tests below are about this repository's own documentation
+// rather than about a synthesized one, so they read the real files.
+const repositoryRoot = "../.."
+
+// notCarriedFromTheReadme is every document the README links that
+// shippedDocumentation deliberately does not carry, with the reason. A README
+// link is the signal that a document is operator-facing, so anything linked and
+// not carried is a decision rather than an oversight, and it is recorded here so
+// the test below can tell the two apart.
+var notCarriedFromTheReadme = map[string]string{
+	"docs/designs/v1-harness-design.md": "the design document, which says how the product is built and is what this set has always excluded",
+	"docs/developing-yoyo.md":           "the build, the checks, and what a release is: how the product is made rather than what it ships",
+	"docs/slack/setup.md":               "a setup procedure for an optional integration rather than a description of the product, and not carried before the README was split either",
+}
+
+// The README stopped being one document in yoyodyne-ifd.121.2: what it used to
+// describe moved into the documents beside it, and README.md,
+// docs/conversation.md, and docs/configuration.md each now tell a reader that
+// the product manager is given those documents too. This list is the only thing
+// that makes those three sentences true. Checking it against a copy of itself
+// would prove nothing, so it is checked against the README's own links: a
+// document that splits out of the README and is never added here fails, which is
+// the accident ifd.20's narrowing already cost this project once.
+func TestShippedDocumentationCarriesTheOperatorDocumentationTheReadmeLinks(t *testing.T) {
+	t.Parallel()
+
+	readme, err := os.ReadFile(filepath.Join(repositoryRoot, "README.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	carried := make(map[string]bool, len(shippedDocumentation))
+	for _, documentPath := range shippedDocumentation {
+		carried[documentPath] = true
+	}
+
+	linked := markdownDocumentsLinkedBy(string(readme))
+	if len(linked) == 0 {
+		t.Fatal("no documents were found linked from the README, so this test proves nothing")
+	}
+	for _, documentPath := range linked {
+		if carried[documentPath] {
+			continue
+		}
+		if reason, deliberate := notCarriedFromTheReadme[documentPath]; deliberate {
+			t.Logf("%s is linked and not carried: %s", documentPath, reason)
+			continue
+		}
+		t.Errorf("the README links %s and shippedDocumentation does not carry it; add it, or record in notCarriedFromTheReadme why the product manager should not be given it", documentPath)
+	}
+}
+
+// A path here that names nothing is carried as nothing at all: readShippedDocumentation
+// treats os.ErrNotExist as "this project did not write that one", which is right
+// for another repository and silent for this one. So a rename in this checkout
+// would empty part of the product manager's context with every other check still
+// passing, and the documents that promise it would keep promising it.
+func TestShippedDocumentationNamesFilesThisRepositoryHas(t *testing.T) {
+	t.Parallel()
+
+	for _, documentPath := range shippedDocumentation {
+		if _, err := os.Stat(filepath.Join(repositoryRoot, filepath.FromSlash(documentPath))); err != nil {
+			t.Errorf("shippedDocumentation names %s, which this repository does not have: %v", documentPath, err)
+		}
+	}
+	for documentPath := range notCarriedFromTheReadme {
+		if _, err := os.Stat(filepath.Join(repositoryRoot, filepath.FromSlash(documentPath))); err != nil {
+			t.Errorf("notCarriedFromTheReadme names %s, which no longer exists, so its exclusion is stale: %v", documentPath, err)
+		}
+	}
+}
+
+// markdownDocumentsLinkedBy returns every Markdown file under docs/ that a
+// document links, without fragments and without duplicates. Fenced blocks are
+// skipped: the README quotes configuration and shell, and a path inside one is
+// an example rather than a link.
+func markdownDocumentsLinkedBy(document string) []string {
+	var found []string
+	seen := make(map[string]bool)
+	fenced := false
+	for _, line := range strings.Split(document, "\n") {
+		if strings.HasPrefix(line, "```") {
+			fenced = !fenced
+			continue
+		}
+		if fenced {
+			continue
+		}
+		for _, match := range markdownLink.FindAllStringSubmatch(line, -1) {
+			target, _, _ := strings.Cut(match[1], "#")
+			if !strings.HasPrefix(target, "docs/") || !strings.HasSuffix(target, ".md") || seen[target] {
+				continue
+			}
+			seen[target] = true
+			found = append(found, target)
+		}
+	}
+	return found
+}
+
+var markdownLink = regexp.MustCompile(`\]\(([^)\s]+)\)`)

@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist
+.PHONY: build test race vet fmt fmtcheck check walk dist dist-verify clean-dist
 .NOTPARALLEL: check
 
 build:
@@ -41,6 +41,22 @@ fmtcheck:
 	fi
 
 check: fmtcheck test race vet
+
+# The adoption walkthrough executes the README's install and getting-started
+# claims against a throwaway project that is not this one. It is the only check
+# that reads those claims the way a stranger would; every other check reads the
+# code, so a README that promises something the product stopped doing passes all
+# of them. It must run before a change to the README's install or first-run path
+# lands -- see docs/developing-yoyo.md.
+#
+# It is not folded into `check` for one reason only: it requires `bd` on PATH and
+# exits 2 without one, and the CI runner installs no `bd`, so `check` would fail
+# every run rather than gate anything. That is an unmet dependency in CI rather
+# than a judgement that this is optional. Making it a real gate needs `bd`
+# installed in .github/workflows/ci.yml and `make walk` added to the checks list
+# in .yoyodyne/config.yaml, which is the list a run actually integrates behind.
+walk:
+	scripts/walk-adoption.sh
 
 clean-dist:
 	rm -rf $(DIST)

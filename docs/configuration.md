@@ -174,9 +174,9 @@ the role is allowed to do. The set of role names is fixed for the same reason �
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](#what-fails-closed). The README's
-[Talking to the other agents](../README.md#talking-to-the-other-agents) states
-the table itself.
+[refused when the configuration loads](#what-fails-closed).
+[Talking to the other agents](conversation.md#talking-to-the-other-agents)
+states the table itself.
 
 ## Discovery
 
@@ -352,10 +352,11 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is `README.md`, this file, and the help
-every command prints — carried in a section of its own, labeled as description
-of the implementation as built and never as authority about intent. No source,
-no design document, and no way to run a command.
+product ships today.** That last part is `README.md` and the operator
+documentation it links, this file, and the help every command prints — carried in
+a section of its own, labeled as description of the implementation as built and
+never as authority about intent. No source, no design document, and no way to
+run a command.
 
 The label is the whole of the arrangement, so it is worth reading twice. The
 specifications are the only statement of what the product is for; nothing in the
@@ -1050,6 +1051,10 @@ A tracker that cannot be read costs the work half of the report rather than all
 of it: the documents still report, and the report says the queue was not read
 instead of rendering it as one nothing has moved under.
 
+[What a change upstream leaves stale](artifacts.md#what-a-change-upstream-leaves-stale)
+carries the same name in the operator's documentation, and is the narrative this
+section is the reference for.
+
 ## Architectural invariants
 
 The architect's durable constraints live in a second configured directory:
@@ -1111,6 +1116,10 @@ handled and deliberately so: half a constraint is not one a developer can be hel
 to. `yoyo invariant list` names it on stderr, the gap is stated in the prompts
 the harness builds, and it is recorded on the work item, so a set that is missing
 something never looks complete.
+
+[Architectural invariants](artifacts.md#architectural-invariants) carries the
+same name in the operator's documentation, and is the narrative this section is
+the reference for.
 
 ## Checks
 
@@ -1678,7 +1687,9 @@ operator rather than a clock, and time spent held is accounted separately from
 shares is this bound on how long a single process will stay open waiting, and
 the durable park behind it: a run held past the bound exits with the park
 recorded, and `yoyo run` on the same item continues it once `yoyo resume` has
-lifted the pause. See the README for the whole of that behavior.
+lifted the pause. See
+[Pausing everything, and resuming it](operations.md#pausing-everything-and-resuming-it)
+for the whole of that behavior.
 
 The bound is on how long one process stays open for a run, so it counts every
 probe that process has already slept rather than each probe separately. Applying
@@ -1731,7 +1742,8 @@ what it is a claim about. It never stops the run: a process asleep on the wait
 acts on the release within seconds, and the run keeps its claim, its branch, its
 worktree, and its developer session. If the provider still refuses, the run
 records the new report and waits again, so a premature release costs one refused
-request. See the README for the whole of that behavior.
+request. See [Releasing a wait early](operations.md#releasing-a-wait-early) for
+the whole of that behavior.
 
 ## Relaunching a run the provider killed
 
