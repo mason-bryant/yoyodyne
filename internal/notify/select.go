@@ -244,10 +244,6 @@ func topicForItem(workItemID string) (Topic, error) {
 	return WorkItem(workItemID)
 }
 
-// selectionDetail carries the recorded account of why the harness is running
-// this item. A run recorded before selections existed carries none, and the
-// absence is stated rather than rendered as a blank — an unaccounted run is
-// exactly what recording the reason exists to make visible.
 // selectionSpeaker is whose account the start of a run is. The development
 // manager speaks where its triage chose the item, because that choice is its own
 // judgment; everything else is the harness, which is the same rule the whole
@@ -263,6 +259,10 @@ func selectionSpeaker(selection *runstate.Selection) Speaker {
 	return Persona(domain.RoleDevelopmentManager, "")
 }
 
+// selectionDetail carries the recorded account of why the harness is running
+// this item. A run recorded before selections existed carries none, and the
+// absence is stated rather than rendered as a blank — an unaccounted run is
+// exactly what recording the reason exists to make visible.
 func selectionDetail(selection *runstate.Selection) Detail {
 	if selection == nil {
 		return Detail{}
