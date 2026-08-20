@@ -666,7 +666,7 @@ func (r *recorder) Post(_ context.Context, message Message) error {
 
 func TestTheNotifierRendersEachEventBeforeItIsPosted(t *testing.T) {
 	posted := &recorder{}
-	notifier := New(posted)
+	notifier := New(posted, nil)
 	_, notifications := crossed(t, runstate.State{}, running())
 	for _, notification := range notifications {
 		if err := notification.Notify(context.Background(), notifier); err != nil {
@@ -687,7 +687,7 @@ func TestTheNotifierRendersEachEventBeforeItIsPosted(t *testing.T) {
 
 func TestAnUnsayableEventNeverReachesThePoster(t *testing.T) {
 	posted := &recorder{}
-	err := New(posted).Notify(context.Background(), Product(), Harness(), Event{Kind: "run.exploded", At: moment, Severity: report.SeverityNote})
+	err := New(posted, nil).Notify(context.Background(), Product(), Harness(), Event{Kind: "run.exploded", At: moment, Severity: report.SeverityNote})
 	if err == nil {
 		t.Fatal("notified an event nobody wrote words for")
 	}

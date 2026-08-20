@@ -36,10 +36,12 @@ import (
 // app is a workspace where the voice is the only thing telling them apart.
 type Identity struct {
 	Name string `json:"name"`
-	// Avatar is an emoji shortcode. It is decoration in the strict sense:
-	// everything it distinguishes is already distinguished by the name beside it
-	// and the voice below it, so a reader whose client will not render it loses
-	// nothing but the picture.
+	// Avatar is an emoji shortcode, or the URL of an image where a project
+	// configured one. It is decoration in the strict sense: everything it
+	// distinguishes is already distinguished by the name beside it and the voice
+	// below it, so a reader whose client will not render it loses nothing but the
+	// picture. Which of the two it is, and how a surface carries each, is that
+	// surface's business rather than this table's.
 	Avatar string `json:"avatar"`
 }
 
@@ -68,6 +70,28 @@ func (s Speaker) Identity() Identity {
 		name += " (" + agent + ")"
 	}
 	return Identity{Name: name, Avatar: spoken.avatar}
+}
+
+// Avatars is a project's override of the picture beside a speaker's name, keyed
+// exactly as an envelope names a speaker: a role, or the harness.
+//
+// It is the only part of an identity configuration may move, and that boundary
+// is the point. The name a message appears under, and whose account it is, stay
+// the voice table's: who speaks is a claim about who did the work, and a project
+// that could rewrite it could attribute a promotion to a developer. The avatar
+// is what the design calls strict decoration, so it is the part that can be a
+// preference without any of that riding on it.
+type Avatars map[string]string
+
+// Identity is how a speaker appears once this project's overrides are applied.
+// An entry that is absent or blank leaves the shipped default, so configuring
+// one persona's avatar does not quietly un-decorate the rest.
+func (a Avatars) Identity(speaker Speaker) Identity {
+	identity := speaker.Identity()
+	if override := strings.TrimSpace(a[speaker.Key()]); override != "" {
+		identity.Avatar = override
+	}
+	return identity
 }
 
 // voice is one persona's own way of saying what the record holds: how it

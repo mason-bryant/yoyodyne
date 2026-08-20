@@ -280,6 +280,20 @@ func (r *resolution) apply(applied layer) error {
 	if slack := document.Slack; slack != nil {
 		setValue(r.origins, "slack.enabled", slack.Enabled, &r.config.Slack.Enabled, applied.origin)
 		setValue(r.origins, "slack.channel", slack.Channel, &r.config.Slack.Channel, applied.origin)
+		// Avatars are merged entry by entry rather than replaced wholesale, the
+		// way agents are and unlike the check list or the operators: each entry is
+		// one speaker's decoration and independent of every other, so a layer that
+		// changed the developer's picture said nothing about the reviewer's and
+		// should not have to restate it to keep it.
+		if slack.Avatars != nil {
+			if r.config.Slack.Avatars == nil {
+				r.config.Slack.Avatars = map[string]string{}
+			}
+			for speaker, avatar := range *slack.Avatars {
+				r.config.Slack.Avatars[speaker] = avatar
+				r.origins["slack.avatars."+speaker] = applied.origin
+			}
+		}
 	}
 	// A supplied operators mapping replaces the inherited one entirely, for the
 	// reason the check list below does and with more riding on it: it says who may

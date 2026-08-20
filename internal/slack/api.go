@@ -108,16 +108,22 @@ func (a *API) Identify(ctx context.Context) (Identity, error) {
 	return response.Identity, nil
 }
 
-// Message is one post. Username and IconEmoji are the per-message display
-// identity that lets each persona speak under its own name in one channel,
-// which is how a reader tells the speakers apart without every message having
-// to name itself.
+// Message is one post. Username and the two icon fields are the per-message
+// display identity that lets each persona speak under its own name in one
+// channel, which is how a reader tells the speakers apart without every message
+// having to name itself.
+//
+// The icon is two fields because Slack takes it as two: a shortcode goes in
+// icon_emoji and an image goes in icon_url, and a call that sets both is a call
+// that has said the same thing twice. Exactly one of them is set for any
+// message; which one is decided where an avatar is turned into a post.
 type Message struct {
 	Channel   string
 	Text      string
 	ThreadTS  string
 	Username  string
 	IconEmoji string
+	IconURL   string
 }
 
 // postRequest is the wire shape of chat.postMessage. The fields are omitted
@@ -129,6 +135,7 @@ type postRequest struct {
 	ThreadTS  string `json:"thread_ts,omitempty"`
 	Username  string `json:"username,omitempty"`
 	IconEmoji string `json:"icon_emoji,omitempty"`
+	IconURL   string `json:"icon_url,omitempty"`
 }
 
 // Post sends one message and reports the timestamp Slack gave it. That
@@ -151,6 +158,7 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 		ThreadTS:  message.ThreadTS,
 		Username:  message.Username,
 		IconEmoji: message.IconEmoji,
+		IconURL:   message.IconURL,
 	}
 	if err := a.call(ctx, "chat.postMessage", a.botToken, request, &response); err != nil {
 		return "", err

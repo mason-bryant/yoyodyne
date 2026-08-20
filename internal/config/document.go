@@ -82,8 +82,9 @@ type approvalsDocument struct {
 // who may steer the harness now lives in the top-level operators mapping — and
 // an allow-list left under `slack` would be an authority decision nothing reads.
 type slackDocument struct {
-	Enabled *bool   `yaml:"enabled"`
-	Channel *string `yaml:"channel"`
+	Enabled *bool              `yaml:"enabled"`
+	Channel *string            `yaml:"channel"`
+	Avatars *map[string]string `yaml:"avatars"`
 }
 
 type agentDocument struct {

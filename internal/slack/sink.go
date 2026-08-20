@@ -54,6 +54,10 @@ const (
 type Options struct {
 	// Channel is where threads are opened.
 	Channel string
+	// Avatars is the project's per-speaker override of the picture beside a name.
+	// It is optional, and a sink given none posts every persona under the avatar
+	// the harness ships.
+	Avatars notify.Avatars
 	// Store holds the thread map and the cursors.
 	Store *Store
 	// API posts.
@@ -82,6 +86,7 @@ type Options struct {
 // Sink is the long-running reporting process for one product.
 type Sink struct {
 	channel string
+	avatars notify.Avatars
 	store   *Store
 	api     *API
 	feed    Feed
@@ -132,6 +137,7 @@ func New(options Options) (*Sink, error) {
 	}
 	return &Sink{
 		channel: strings.TrimSpace(options.Channel),
+		avatars: options.Avatars,
 		store:   options.Store,
 		api:     options.API,
 		feed:    options.Feed,
@@ -286,7 +292,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
 	into := &poster{sink: s, threads: &threads}
-	notifier := notify.New(into)
+	notifier := notify.New(into, s.avatars)
 
 	for _, delivery := range batch.Deliveries {
 		if err := ctx.Err(); err != nil {
@@ -379,12 +385,14 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 		threadTS = thread.ThreadTS
 	}
 
+	emoji, url := icon(message.Identity.Avatar)
 	if _, err := sink.api.Post(ctx, Message{
 		Channel:   sink.channel,
 		Text:      renderText(message),
 		ThreadTS:  threadTS,
 		Username:  message.Identity.Name,
-		IconEmoji: message.Identity.Avatar,
+		IconEmoji: emoji,
+		IconURL:   url,
 	}); err != nil {
 		return err
 	}
@@ -403,17 +411,31 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // persona happened to speak first, because opening a thread is not anybody's
 // account of anything.
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
-	identity := notify.Harness().Identity()
+	identity := s.avatars.Identity(notify.Harness())
+	emoji, url := icon(identity.Avatar)
 	ts, err := s.api.Post(ctx, Message{
 		Channel:   s.channel,
 		Text:      fmt.Sprintf("*%s*", label(topic)),
 		Username:  identity.Name,
-		IconEmoji: identity.Avatar,
+		IconEmoji: emoji,
+		IconURL:   url,
 	})
 	if err != nil {
 		return Thread{}, fmt.Errorf("open the thread for %s: %w", topic.Key(), err)
 	}
 	return Thread{Channel: s.channel, ThreadTS: ts, OpenedAt: time.Now().UTC()}, nil
+}
+
+// icon splits one avatar into the two fields Slack takes for it: a shortcode
+// into icon_emoji, an image into icon_url. The split is here rather than in the
+// notifier because it is Slack's shape and not the persona's — nothing about
+// which field carries the picture is a fact about who is speaking.
+func icon(avatar string) (emoji, url string) {
+	trimmed := strings.TrimSpace(avatar)
+	if strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "http://") {
+		return "", trimmed
+	}
+	return trimmed, ""
 }
 
 // label names a topic the way a thread header does: the item's own identifier,

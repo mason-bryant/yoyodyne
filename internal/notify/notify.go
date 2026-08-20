@@ -54,12 +54,18 @@ type Poster interface {
 // hands the message to the poster. Rendering happens here rather than in the
 // poster so that what a message says is decided once, by this package, whatever
 // ends up carrying it.
-func New(poster Poster) Notifier {
-	return notifier{poster: poster}
+//
+// The avatars are the project's overrides of the picture beside each name, and
+// are nil for a project that configured none. They are applied here rather than
+// inside Render because what the voice table says is what the harness ships: a
+// default a configuration happens to sit in front of is still the default.
+func New(poster Poster, avatars Avatars) Notifier {
+	return notifier{poster: poster, avatars: avatars}
 }
 
 type notifier struct {
-	poster Poster
+	poster  Poster
+	avatars Avatars
 }
 
 func (n notifier) Notify(ctx context.Context, topic Topic, speaker Speaker, event Event) error {
@@ -67,6 +73,7 @@ func (n notifier) Notify(ctx context.Context, topic Topic, speaker Speaker, even
 	if err != nil {
 		return err
 	}
+	message.Identity = n.avatars.Identity(speaker)
 	if n.poster == nil {
 		return nil
 	}

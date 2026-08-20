@@ -1887,9 +1887,11 @@ These are all errors, reported before any work is claimed:
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;
-- `slack.enabled` with no `slack.channel`, or a channel that is not a channel id
-  or name — checked whether or not reporting is switched on, so a typo is found
-  now rather than on the day somebody turns it on;
+- `slack.enabled` with no `slack.channel`, a channel that is not a channel id
+  or name, or an entry under `slack.avatars` keyed by something that is not a
+  role or `harness` or valued as something that is neither an emoji shortcode
+  nor an https image URL — all checked whether or not reporting is switched on,
+  so a typo is found now rather than on the day somebody turns it on;
 - an `operators` entry that binds no namespace at all, binds one that is not an
   address, a forge account, or a Slack member id, names a grant the harness does
   not have, or binds an identifier a second human already bound — and two humans
@@ -1971,8 +1973,8 @@ command.
 
 `yoyo slack` reports what the harness is doing into a Slack channel: one thread
 per work item, one message per milestone, and every report an agent filed at the
-severity it was filed under. The project says where to report; nothing else
-about reporting is configurable here.
+severity it was filed under. The project says where to report and what each
+speaker looks like; nothing else about reporting is configurable here.
 
 ```yaml
 slack:
@@ -1983,6 +1985,46 @@ slack:
 The whole block is optional, and a project that omits it reports nothing — which
 is every project until it opts in. `channel` takes a channel id or a name;
 an id is worth preferring because renaming the channel does not break it.
+
+### Avatars
+
+Each speaker posts under its own name and picture, and the picture is the
+project's to choose:
+
+```yaml
+slack:
+  enabled: true
+  channel: C0123456789
+  avatars:
+    harness: ":gear:"
+    developer: ":ship-it:"                              # a custom emoji works
+    reviewer: https://example.com/faces/reviewer.png
+```
+
+Keys are roles — `product-manager`, `architect`, `development-manager`,
+`developer`, `reviewer` — or `harness` for what no persona did. A value is
+either an **emoji shortcode**, including a custom emoji this workspace added
+itself, or the **https URL of an image** Slack fetches. Both shapes need the
+`chat:write.customize` scope the [app manifest](slack/manifest.yaml) already
+declares, so neither costs a reinstall.
+
+The mapping is optional and so is every entry in it. A speaker with no entry
+keeps the avatar the harness ships, so naming one persona's picture does not
+blank the rest. An avatar that is neither shape is refused when the
+configuration loads, whether or not reporting is switched on — Slack accepts an
+unknown shortcode or an unreachable image without complaint and quietly shows
+the app's own icon, so nothing downstream would ever say so.
+
+Entries **merge across layers** rather than replacing each other, the way agents
+do: a project that extends a bundle and changes the developer's picture keeps
+every other one it inherited.
+
+**Only the picture is configurable.** The name a message appears under, and
+whose account it is, are not here and are not meant to be — who speaks is a
+claim about who did the work, and a project that could rewrite it could
+attribute a promotion to a developer. The avatar carries none of that:
+everything it distinguishes is already distinguished by the name beside it and
+the voice below it, so a reader whose client renders no picture loses nothing.
 
 **Who may steer the harness from a thread is not configured here.** The
 allow-list is derived from [`operators`](#operators): the humans granted

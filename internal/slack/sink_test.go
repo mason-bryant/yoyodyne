@@ -101,6 +101,76 @@ func TestEachPersonaPostsUnderItsOwnDisplayIdentity(t *testing.T) {
 	}
 }
 
+// A project may choose the picture beside each name, and Slack takes the two
+// shapes in two different fields. A shortcode goes in one and an image in the
+// other, never both on one post, or the call has said the same thing twice.
+func TestAConfiguredAvatarIsPostedInTheFieldItsShapeBelongsIn(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream: reportStream,
+		Cursor: Cursor{Position: 1},
+		Notification: notify.Notification{
+			Topic:   workItemTopic(t, "yoyodyne-ifd.68.6"),
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: report.SeverityNote,
+				Text:     "the avatar is the picture and nothing else",
+			},
+		},
+	}}}, posts)
+	// The harness gets an image and the developer a shortcode, so one pass
+	// exercises both fields — the thread header is the harness's own post.
+	sink.avatars = notify.Avatars{
+		notify.HarnessSpeaker:        "https://example.invalid/faces/harness.png",
+		string(domain.RoleDeveloper): ":ship-it:",
+	}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread and the report in it", len(posts.requests))
+	}
+	opened := posts.requests[0]
+	if opened.IconURL != "https://example.invalid/faces/harness.png" || opened.IconEmoji != "" {
+		t.Errorf("thread opened as %#v, want the configured image in icon_url alone", opened)
+	}
+	filed := posts.requests[1]
+	if filed.IconEmoji != ":ship-it:" || filed.IconURL != "" {
+		t.Errorf("report posted as %#v, want the configured shortcode in icon_emoji alone", filed)
+	}
+	// The picture moved and nothing else did: the name is still the developer's.
+	if filed.Username != notify.Persona(domain.RoleDeveloper, "").Identity().Name {
+		t.Errorf("report posted as %q, want it still under the developer's own name", filed.Username)
+	}
+}
+
+// A speaker nothing was configured for keeps the avatar the harness ships, so a
+// project that named one persona's picture has not blanked the rest.
+func TestASpeakerWithNoConfiguredAvatarKeepsTheShippedOne(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		milestone(1, notify.KindRunStarted),
+	}}, posts)
+	sink.avatars = notify.Avatars{string(domain.RoleDeveloper): ":ship-it:"}
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	shipped := notify.Harness().Identity().Avatar
+	for _, post := range posts.requests {
+		if post.IconEmoji != shipped || post.IconURL != "" {
+			t.Errorf("post = %#v, want the harness's shipped avatar %q", post, shipped)
+		}
+	}
+}
+
 // A message is posted and then its cursor advances, so a sink that dies between
 // the two repeats a message rather than losing one. The durable record is
 // authoritative and this is a view of it, so a repetition is the right side of
