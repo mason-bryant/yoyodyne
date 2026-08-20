@@ -45,8 +45,10 @@ type agentReport struct {
 	// Conversation is the durable record, absent when this agent has never been
 	// spoken to.
 	Conversation *conversationReport `json:"conversation,omitempty"`
-	// InUse reports that another process is holding this agent's conversation
-	// right now, which is why a second one cannot be opened.
+	// InUse reports that another process has this agent's conversation right
+	// now, which is why a second one cannot be opened. An interactive
+	// conversation puts it down between turns, so an operator sitting at a
+	// prompt is not what this reports: what it reports is somebody mid-turn.
 	InUse bool `json:"in_use,omitempty"`
 	// Problem is why the durable state could not be read, when it could not.
 	Problem string `json:"problem,omitempty"`
@@ -329,11 +331,16 @@ func readAgents(parts components) ([]agentReport, error) {
 	return reports, nil
 }
 
-// conversationInUse reports whether another process is holding this role's
+// conversationInUse reports whether another process has this role's
 // conversation, and why the question could not be answered when it could not.
 // It answers by taking the same lease a conversation would and letting it go
 // again immediately: an advisory lock is the only thing that actually decides
 // this, so asking it is the only answer that is not a guess.
+//
+// The lock is held for a turn rather than for a window, so what this answers is
+// "is somebody mid-turn with this agent" rather than "is somebody's chat open".
+// That is the more useful of the two: an idle console is one anybody may talk
+// past, and it is the only one this could ever have told apart anyway.
 //
 // A failure to ask is not an answer. Reporting one as "in use" would tell the
 // operator that every agent at once was mid-conversation whenever the state
@@ -446,7 +453,7 @@ func renderAgent(report agentReport) string {
 		}
 	}
 	if report.InUse {
-		fmt.Fprintln(&rendered, "  in use by another process right now")
+		fmt.Fprintln(&rendered, "  another process is mid-turn with it right now")
 	}
 	if report.Problem != "" {
 		fmt.Fprintf(&rendered, "  durable state could not be read: %s\n", report.Problem)

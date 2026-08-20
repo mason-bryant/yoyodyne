@@ -1132,10 +1132,25 @@ one conversation record per agent, with its own provider session, its own turn
 count, and its own picture of the repository. Talking to the architect never
 resumes what the product manager was told, and where two agents fill one role
 neither resumes the other: they are two identities with two sessions, and the
-lease that stops a second process talking to one of them leaves the other free.
+lease that stops a second process taking a turn with one of them leaves the
+other free.
 `yoyo agent list` reads all of it without starting a provider — including
-whether another process is holding a conversation right now, which is why a
-second one would be refused.
+whether another process has a conversation right now, which is why a second one
+would be refused.
+
+**What is exclusive is a turn, not your window.** An open `yoyo chat` spends
+nearly all of its life waiting for you to type, and while it waits it puts the
+conversation down: `yoyo chat --message` in another terminal, or anything else
+the harness runs, reaches the same product manager without you closing anything.
+It takes the conversation back when you press enter, waits there if something
+else is mid-turn and says so if the wait is long enough to notice, and re-reads
+the record before it answers — so a turn taken elsewhere while you were typing is
+one your next turn continues from rather than one it overwrites. The exception is
+a run you started from the conversation with [`/work`](#steering-the-work-from-the-conversation):
+that run reports itself into the conversation from under the prompt, so the
+conversation is yours until it ends. And the one thing it will not do is carry on
+through a conversation replaced underneath it: `yoyo chat --new` somewhere else
+ends the open one, saying so, and both records survive.
 
 An agent is conventionally named for its role, and `yoyo init` names every one
 of them that way, so a project that has never configured two agents on a role has

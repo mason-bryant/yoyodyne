@@ -56,6 +56,12 @@ const (
 
 const defaultTurnTimeout = 15 * time.Minute
 
+// quietHoldWait is how long taking the conversation back may take before the
+// operator is told what is holding it up. Below it the wait is shorter than the
+// prompt already is and a line about it would be noise on every message;
+// above it, silence is the conversation appearing to have hung.
+const quietHoldWait = 250 * time.Millisecond
+
 // Backend is the narrow provider capability a conversation needs. It is the
 // conversation-side view of backend.Backend, so nothing here depends on which
 // provider is answering.
@@ -69,6 +75,19 @@ type Store interface {
 	Load(identity runstate.ConversationIdentity) (runstate.Conversation, error)
 	Save(conversation runstate.Conversation) error
 	AppendEvent(event execution.Event) error
+}
+
+// Hold is this process's claim on the conversation, which it can put down while
+// nobody is talking to the agent and take up again around a turn. It is
+// satisfied by runstate.ConversationHold.
+//
+// It exists because an operator's console is idle nearly all of the time, and a
+// conversation an idle console never lets go of is one nothing else can reach:
+// the harness could not relay to the product manager, and neither could the
+// operator's own assistant, until the operator closed their window.
+type Hold interface {
+	Release() error
+	Retake(ctx context.Context) error
 }
 
 // Tracker is the narrow work-item capability a conversation acts through. It is
@@ -105,6 +124,14 @@ type Options struct {
 	Role    domain.AgentRole
 	Backend Backend
 	Store   Store
+	// Hold is this process's claim on the conversation, already taken by the
+	// caller. It is optional, and a conversation without one is held by whoever
+	// opened it for as long as they keep it: that is what a single message is,
+	// and it is what every conversation was before an interactive one learned to
+	// put itself down at the prompt. A conversation with one puts it down while
+	// the operator is typing and takes it up again for each turn, re-reading the
+	// durable record whenever it had let go of it.
+	Hold Hold
 	// Tracker is the work tracker this conversation acts on: the items the
 	// operator approves, and the ones the product manager manages itself. It is
 	// optional: a conversation without one still discusses the product, and an
@@ -430,30 +457,8 @@ func Open(options Options) (*Session, error) {
 	switch {
 	case err == nil:
 		if !options.Fresh && existing.ProviderSessionID != "" {
-			session.state = existing
-			// A record written before the agent was part of the identity acquires
-			// it here, so the conversation an operator resumes today is recorded
-			// tomorrow as the agent's rather than only as the role's.
-			session.state.Agent = options.Agent
+			session.adopt(existing)
 			session.resumed = true
-			for _, id := range existing.DeliveredAmendmentIDs {
-				session.deliveredAmendments[id] = true
-			}
-			// What the operator has not decided yet is put back on the table. A
-			// conversation resumed by a later process — which is every `--message`
-			// invocation after the one that proposed — otherwise had nothing an
-			// approval could name, so the approval was said to the agent as ordinary
-			// speech and the work never reached the queue.
-			for _, pending := range existing.PendingProposals {
-				session.proposals = append(session.proposals, &proposalRecord{
-					pending: restoredProposal(existing.ConversationID, pending),
-				})
-			}
-			// The same for what the agent has not been told: it acted, the process
-			// that watched it act has gone, and the account of what happened is owed
-			// to its next turn wherever that turn is taken.
-			session.notices = existing.PendingNotices
-			session.noticesDropped = existing.PendingNoticesDropped
 			return session, nil
 		}
 	case errors.Is(err, runstate.ErrNoConversation):
@@ -483,6 +488,94 @@ func Open(options Options) (*Session, error) {
 		return nil, fmt.Errorf("record new conversation: %w", err)
 	}
 	return session, nil
+}
+
+// adopt takes one durable record as this session's own. It is everything about
+// a conversation that outlives the process holding it, and nothing else: what
+// only ever lived in this process — the concerns raised here, the run it
+// started, the picture it is carrying, what it has spent — is untouched,
+// because no other process wrote any of it.
+func (s *Session) adopt(existing runstate.Conversation) {
+	s.state = existing
+	// A record written before the agent was part of the identity acquires it
+	// here, so the conversation an operator resumes today is recorded tomorrow
+	// as the agent's rather than only as the role's.
+	s.state.Agent = s.options.Agent
+	s.deliveredAmendments = map[string]bool{}
+	for _, id := range existing.DeliveredAmendmentIDs {
+		s.deliveredAmendments[id] = true
+	}
+	// What the operator has not decided yet is put back on the table. A
+	// conversation resumed by a later process — which is every `--message`
+	// invocation after the one that proposed — otherwise had nothing an approval
+	// could name, so the approval was said to the agent as ordinary speech and
+	// the work never reached the queue. What was decided is not carried across:
+	// a decision drops the proposal from the record, and a proposal this session
+	// has no record of is already treated as one it cannot decide.
+	s.proposals = nil
+	for _, pending := range existing.PendingProposals {
+		s.proposals = append(s.proposals, &proposalRecord{
+			pending: restoredProposal(existing.ConversationID, pending),
+		})
+	}
+	// The same for what the agent has not been told: it acted, the process that
+	// watched it act has gone, and the account of what happened is owed to its
+	// next turn wherever that turn is taken.
+	s.notices = existing.PendingNotices
+	s.noticesDropped = existing.PendingNoticesDropped
+}
+
+// reload re-reads the durable record after the conversation was put down at the
+// prompt. Whatever this process was not holding, something else may have
+// written: another process may have taken a turn, decided a proposal, or left
+// the agent something to be told, and carrying on from a stale copy would
+// overwrite all of it — including the provider session, which would put this
+// conversation back onto a session the agent has already moved past.
+//
+// A conversation that was never put down needs none of this, and does none of
+// it: nothing else could have written while it was held.
+func (s *Session) reload() error {
+	if s.options.Hold == nil {
+		return nil
+	}
+	existing, err := s.options.Store.Load(s.options.identity())
+	if errors.Is(err, runstate.ErrNoConversation) {
+		// The record is written before the first turn and nothing removes it, so
+		// there is nothing to take up and what this process holds is still the
+		// whole truth of the conversation.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("re-read the recorded conversation: %w", err)
+	}
+	// A different conversation under this agent is `--new` somewhere else. This
+	// process's session is still real, and it no longer has anywhere to be
+	// recorded: saving would replace the record of a conversation somebody is
+	// currently having. Ending here is what leaves both of them intact.
+	if existing.ConversationID != s.state.ConversationID {
+		return fmt.Errorf("this agent's recorded conversation is now %s rather than %s: another process started a new one, and carrying on here would overwrite it",
+			existing.ConversationID, s.state.ConversationID)
+	}
+	s.adopt(existing)
+	return nil
+}
+
+// releaseHold puts the conversation down while nobody is talking to the agent.
+func (s *Session) releaseHold() error {
+	if s.options.Hold == nil {
+		return nil
+	}
+	return s.options.Hold.Release()
+}
+
+// retakeHold takes the conversation back for a turn, waiting for whoever has
+// it. Nothing is read from the record until this returns, because until it does
+// somebody else may still be writing to it.
+func (s *Session) retakeHold(ctx context.Context) error {
+	if s.options.Hold == nil {
+		return nil
+	}
+	return s.options.Hold.Retake(ctx)
 }
 
 // Resumed reports whether this session continued a recorded conversation.
@@ -1271,7 +1364,9 @@ func (s *Session) Converse(ctx context.Context, screen console.Console) error {
 	err := s.converse(ctx, screen)
 	// A run this conversation started cannot outlive the process that owns it,
 	// so ending the conversation stops it deliberately rather than leaving an
-	// interruption for somebody to discover later.
+	// interruption for somebody to discover later. Stopping it records, and the
+	// conversation is still held here to record with: a conversation with a run
+	// is one that never put itself down at the prompt.
 	s.finishActiveRun(ctx, s.theme.Harness(screen))
 	// A window title outlives the process that set it. A conversation that
 	// renamed the operator's terminal to report a finished run puts the name
@@ -1306,14 +1401,13 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		line, err := s.ask(ctx, screen, operatorPrompt)
+		message, err := s.awaitOperator(ctx, screen, harness)
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("read operator message: %w", err)
+			return err
 		}
-		message := strings.TrimSpace(line)
 		if message == "" {
 			continue
 		}
@@ -1465,6 +1559,74 @@ func (s *Session) reportSpend(screen console.Console) {
 // a conversation costs to the nearest interesting digit; fewer would report
 // most turns as free.
 func money(amount float64) string { return fmt.Sprintf("$%.4f", amount) }
+
+// awaitOperator waits at the prompt without the conversation, and comes back
+// with it. The wait is nearly the whole life of an interactive conversation and
+// nobody is talking to the agent for any of it, so this is where the harness and
+// the operator's own assistant get their chance to reach the product manager:
+// what is exclusive is a turn, not the window the operator left open.
+//
+// The record is re-read before anything is done with what they typed, because
+// whatever was taken while this was put down is now what the conversation is.
+//
+// It is put down only while this process has nothing of its own in flight. A run
+// started from here reports itself into the conversation the moment it crosses a
+// phase or ends, and it does that from underneath this prompt: a conversation
+// that had let go would be writing to a record somebody else now owns. Only
+// `/work` starts one, and that runs with the conversation held, so a conversation
+// with a run is one that never put itself down — the ending can stop that run
+// without taking anything back.
+func (s *Session) awaitOperator(ctx context.Context, screen console.Console, harness io.Writer) (string, error) {
+	putDown := s.options.Hold != nil && s.active == nil
+	if putDown {
+		// Everything this process knows goes on disk before it lets go, so what is
+		// re-read afterwards is never older than what was replaced. A turn records
+		// itself, but what followed it may not have: work admitted without asking
+		// leaves the product manager a notice, and a notice that lived only here
+		// would be dropped by the very re-read that keeps this safe.
+		if err := s.record(); err != nil {
+			return "", err
+		}
+		if err := s.releaseHold(); err != nil {
+			return "", err
+		}
+	}
+	line, err := s.ask(ctx, screen, operatorPrompt)
+	if errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if err != nil {
+		return "", fmt.Errorf("read operator message: %w", err)
+	}
+	if !putDown {
+		return strings.TrimSpace(line), nil
+	}
+	if err := s.takeConversationBack(ctx, harness); err != nil {
+		return "", err
+	}
+	if err := s.reload(); err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+// takeConversationBack waits for the conversation the operator has just typed
+// into. Somebody else mid-turn is a wait rather than a failure, and it is said
+// out loud once it lasts long enough to notice: a prompt that swallowed a line
+// and then sat there is indistinguishable from one that has hung. A wait too
+// short to read is not worth a line, which is every one of them where nothing
+// else is talking to the agent.
+func (s *Session) takeConversationBack(ctx context.Context, harness io.Writer) error {
+	taken := make(chan error, 1)
+	go func() { taken <- s.retakeHold(ctx) }()
+	select {
+	case err := <-taken:
+		return err
+	case <-time.After(quietHoldWait):
+	}
+	fmt.Fprintf(harness, "another process is mid-turn with the %s; waiting for it to finish.\n", RoleTitle(s.state.Role))
+	return <-taken
+}
 
 // ask puts one question to the operator and waits for their answer. A run that
 // finishes while they are typing is reported the moment it does, rather than
