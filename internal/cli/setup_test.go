@@ -34,6 +34,12 @@ func TestSetupWalksABlankProjectToAnInstallationThatCanRunWork(t *testing.T) {
 	if step := world.step(report, stepConfiguration); step.Status != setupDone {
 		t.Fatalf("configuration step = %s (%s), want it written", step.Status, step.Summary)
 	}
+	if step := world.step(report, stepTrackerRemote); step.Status != setupDone {
+		t.Fatalf("tracker-remote step = %s (%s), want it pointed at the project's Git remote", step.Status, step.Summary)
+	}
+	if world.trackerRemote != "file:///origin.git" {
+		t.Errorf("the tracker syncs through %q, want this project's own Git remote", world.trackerRemote)
+	}
 	if !world.runner.ran("bd init") {
 		t.Fatal("setup never initialized the tracker")
 	}
@@ -75,7 +81,7 @@ func TestSetupRunAgainReportsWhatIsAlreadyTrueAndChangesNothing(t *testing.T) {
 	world.runner.commands = nil
 	report := world.walk()
 
-	for _, name := range []string{stepTracker, stepConfiguration} {
+	for _, name := range []string{stepTracker, stepConfiguration, stepTrackerRemote} {
 		if step := world.step(report, name); step.Status != setupAlready {
 			t.Errorf("%s step = %s (%s), want it left alone", name, step.Status, step.Summary)
 		}
@@ -92,6 +98,53 @@ func TestSetupRunAgainReportsWhatIsAlreadyTrueAndChangesNothing(t *testing.T) {
 	}
 	if !report.Diagnosis.Healthy() {
 		t.Fatalf("the second walk left the installation broken:%s", renderSetupReport(report))
+	}
+}
+
+// The ordinary way a second machine arrives at a configured project:
+// `.yoyodyne/config.yaml` is a committed file, so it is cloned rather than
+// written, and nothing about that clone carries the tracker's own database or
+// the remote it syncs through. A walk that only pointed the tracker somewhere
+// while writing a configuration would never reach this case at all, which is
+// what makes it a step of its own rather than something the write does on its
+// way past.
+func TestSetupPointsTheTrackerAtTheGitRemoteOnAProjectThatIsAlreadyConfigured(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.trackerReady = false
+	world.answers = "\n\n"
+	world.walk()
+
+	// The clone: the configuration is there and committed, and this machine's
+	// tracker has neither a database nor a remote.
+	world.trackerReady = false
+	world.trackerRemote = ""
+	world.runner.commands = nil
+	world.answers = "\n" // only the tracker has anything to ask about
+
+	report := world.walk()
+
+	if step := world.step(report, stepConfiguration); step.Status != setupAlready {
+		t.Fatalf("configuration step = %s (%s), want the cloned one left alone", step.Status, step.Summary)
+	}
+	if step := world.step(report, stepTrackerRemote); step.Status != setupDone {
+		t.Fatalf("tracker-remote step = %s (%s), want it converged on an already-configured project", step.Status, step.Summary)
+	}
+	if world.trackerRemote != "file:///origin.git" {
+		t.Fatalf("the tracker syncs through %q, so this machine's backlog is its own", world.trackerRemote)
+	}
+
+	// And converged means converged: a third walk finds it done rather than
+	// doing it again.
+	world.answers = ""
+	world.runner.commands = nil
+	again := world.walk()
+	if step := world.step(again, stepTrackerRemote); step.Status != setupAlready {
+		t.Fatalf("tracker-remote step = %s (%s) on a third walk, want it left alone", step.Status, step.Summary)
+	}
+	if world.runner.ran("dolt remote add") {
+		t.Error("setup configured a sync remote the tracker already held")
 	}
 }
 
@@ -320,6 +373,14 @@ func unfinishedSetups() map[string]func(*setupWorld) {
 		"the operator declines the configuration": func(w *setupWorld) {
 			w.answers = "n\n"
 		},
+		"the project has no Git remote for the tracker to sync through": func(w *setupWorld) {
+			w.gitRemote = ""
+			w.answers = "\n"
+		},
+		"bd will not say where the tracker syncs": func(w *setupWorld) {
+			w.runner.refuse("dolt remote list")
+			w.answers = "\n"
+		},
 		"reporting is wanted and the Slack app does not exist yet": func(w *setupWorld) {
 			w.answers = "\ny\nn\n"
 		},
@@ -451,17 +512,19 @@ func TestRenderSlackSectionWritesOrEditsTheBlockInPlace(t *testing.T) {
 // setupWorld is one machine a walk happens on: a project directory, the tools
 // this machine has, and what the operator types.
 type setupWorld struct {
-	t            *testing.T
-	project      string
-	stateRoot    string
-	goos         string
-	runner       *setupRunner
-	missing      map[string]bool
-	trackerReady bool
-	slackChannel string
-	defaults     bool
-	answers      string
-	out          bytes.Buffer
+	t             *testing.T
+	project       string
+	stateRoot     string
+	goos          string
+	runner        *setupRunner
+	missing       map[string]bool
+	trackerReady  bool
+	trackerRemote string
+	gitRemote     string
+	slackChannel  string
+	defaults      bool
+	answers       string
+	out           bytes.Buffer
 }
 
 func newSetupWorld(t *testing.T) *setupWorld {
@@ -486,6 +549,7 @@ func newSetupWorld(t *testing.T) *setupWorld {
 		goos:         "darwin",
 		missing:      map[string]bool{},
 		trackerReady: true,
+		gitRemote:    "file:///origin.git",
 	}
 	world.runner = &setupRunner{world: world, keychain: map[string]bool{}, refusals: map[string]bool{}}
 	return world
@@ -581,11 +645,20 @@ func (r *setupRunner) Run(_ context.Context, command execution.Command, _ execut
 	case joined == "bd init":
 		r.world.trackerReady = true
 	case strings.HasPrefix(joined, "bd dolt remote list"):
-		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"}, nil
-	case strings.HasPrefix(joined, "bd dolt remote"):
-		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: `{"name":"origin","url":"file:///origin.git"}`}, nil
+		if r.world.trackerRemote == "" {
+			return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]"}, nil
+		}
+		return execution.ProcessResult{
+			Status: execution.ProcessSucceeded,
+			Stdout: `[{"name":"origin","url":"` + r.world.trackerRemote + `"}]`,
+		}, nil
+	case strings.HasPrefix(joined, "bd dolt remote add"):
+		r.world.trackerRemote = invocation[len(invocation)-1]
 	case strings.Contains(joined, "remote get-url"):
-		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "file:///origin.git"}, nil
+		if r.world.gitRemote == "" {
+			return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 2, Stderr: "error: No such remote 'origin'"}, nil
+		}
+		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: r.world.gitRemote}, nil
 	case joined == "yoyo version":
 		return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "test"}, nil
 	case joined == "claude --version":

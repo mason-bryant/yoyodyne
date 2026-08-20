@@ -58,6 +58,7 @@ const setupSchemaVersion = 1
 const (
 	stepTracker       = "tracker"
 	stepConfiguration = "configuration"
+	stepTrackerRemote = "tracker-remote"
 	stepSlack         = "slack"
 	stepSlackSecrets  = "slack-secrets"
 )
@@ -218,12 +219,19 @@ type setup struct {
 const setupCommandTimeout = 3 * time.Minute
 
 func (s *setup) converge(ctx context.Context) setupReport {
-	// The tracker first, and before the configuration: `yoyo init` points the
-	// tracker at this project's Git remote as it writes the configuration, and a
-	// tracker that is not there yet when that happens is left syncing nowhere
-	// with nothing later to put it right.
-	s.record(s.ensureTracker(ctx))
+	// The tracker first, because everything under it is asked of the tracker or
+	// of a configuration that names where the tracker lives.
+	tracker := s.ensureTracker(ctx)
+	s.record(tracker)
 	s.record(s.ensureConfiguration(ctx))
+	// Where the tracker syncs is its own step rather than something the
+	// configuration step does on its way past. `.yoyodyne/config.yaml` is a
+	// committed file, so the ordinary way a machine arrives at a configured
+	// project is by cloning one -- and a project whose configuration is already
+	// there is exactly the case a remote configured only while writing that file
+	// would never reach. As a step it is read first and converged on every run,
+	// like everything else here.
+	s.record(s.ensureTrackerRemote(ctx, tracker))
 
 	// Everything below is what the project turns on, so it is only asked about
 	// once there is a project configuration to read. A configuration that does
@@ -414,15 +422,79 @@ func (s *setup) ensureConfiguration(ctx context.Context) setupStep {
 			Remedy:  fmt.Sprintf("yoyo init --directory %s", shellQuote(s.directory)),
 		}
 	}
-	tracker := configureTrackerRemote(ctx, filepath.Dir(filepath.Dir(written[0])), "", s.runner)
 	return setupStep{
 		Step:    stepConfiguration,
 		Status:  setupDone,
 		Summary: fmt.Sprintf("wrote %s and the personas beside it", written[0]),
-		// What the operator still owes on the checks, and where the tracker
-		// ended up syncing, are the two things about a fresh configuration that
-		// are not visible in the file itself.
-		Detail: describeDetection(detection, written[0]) + "; " + describeTrackerRemote(tracker),
+		// What the operator still owes on the checks is the one thing about a
+		// fresh configuration that is not visible in the file itself.
+		Detail: describeDetection(detection, written[0]),
+	}
+}
+
+// ensureTrackerRemote points the tracker at the URL it should sync through,
+// which is this project's own Git remote: bd moves its data over an ordinary
+// Git remote under refs of Dolt's own, so one repository and one permission
+// model carry both.
+//
+// It never replaces a remote the tracker already holds. A project that
+// deliberately syncs its tracker somewhere else -- a repository of its own,
+// which bd supports with any Git URL -- must not have that decision undone by
+// something that ran to set up a machine, so an `origin` that is already there
+// is reported and left. That is also why this asks nothing: the only thing it
+// can do is fill in a remote that is unset, which is what `yoyo init` has always
+// done, and the alternative to filling it in is a backlog that silently differs
+// on every machine.
+func (s *setup) ensureTrackerRemote(ctx context.Context, tracker setupStep) setupStep {
+	if tracker.Status != setupAlready && tracker.Status != setupDone {
+		// Reading or setting where the tracker syncs is asking the tracker, and
+		// the step above has already said why it cannot be asked. The remedy is
+		// that step's, because what has to happen first is that.
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupHandedOff,
+			Summary: "where the tracker syncs could not be read, because the tracker does not answer here yet",
+			Detail:  tracker.Summary,
+			Remedy:  tracker.Remedy,
+		}
+	}
+	repository := s.repository()
+	remote := configureTrackerRemote(ctx, repository, "", s.runner)
+	switch remote.Status {
+	case trackerRemoteConfigured:
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupDone,
+			Summary: fmt.Sprintf("the tracker now syncs through %s: %s", remote.Name, remote.URL),
+			Detail:  "the backlog is shared over this project's own Git remote rather than one per machine",
+		}
+	case trackerRemoteUnchanged:
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupAlready,
+			Summary: fmt.Sprintf("the tracker already syncs through %s: %s", remote.Name, remote.URL),
+			Detail:  "setup leaves a remote the tracker already holds exactly as it is",
+		}
+	case trackerRemoteSkipped:
+		// Nothing is wrong with this project; it has nowhere to sync to yet.
+		// It is still said, and still carries the command, because a per-machine
+		// backlog is discovered at the first divergence otherwise.
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupSkipped,
+			Summary: "the tracker syncs nowhere, so this machine's backlog is its own",
+			Detail:  singleLine(remote.Reason),
+			Remedy: fmt.Sprintf("git -C %s remote add %s <url> && %s",
+				shellQuote(repository), trackerRemoteName, s.setupCommand()),
+		}
+	default:
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupHandedOff,
+			Summary: "bd would not say where the tracker syncs, so it was left as it is",
+			Detail:  singleLine(remote.Reason),
+			Remedy:  fmt.Sprintf("bd dolt remote add %s <url>%s", trackerRemoteName, inDirectoryNote(repository)),
+		}
 	}
 }
 
@@ -959,17 +1031,19 @@ Usage: yoyo setup [options]
 Walk this project from a binary on PATH to an installation that can run work,
 asking before each step. It initializes the tracker, writes the project its own
 configuration and personas with its checks proposed from what the repository
-already declares, points the tracker at this project's Git remote, and then
-offers reporting into Slack -- which is optional, because an installation
-without it runs work exactly as one with it does.
+already declares, points the tracker at this project's Git remote so the backlog
+is not one per machine, and then offers reporting into Slack -- which is
+optional, because an installation without it runs work exactly as one with it
+does.
 
 Nothing here is remembered between runs, which is what makes it safe to run
 again: every step looks at the installation first, a step that is already true
 is reported as already true, and an interrupted setup is resumed by running it
 again. Nothing already there is overwritten. A configuration that does not load
-is handed back with the command to edit it, and a Slack token already in the
-keychain is left alone -- one person running several harnesses is the ordinary
-case, and the names carry the product so a second install keeps its own pair.
+is handed back with the command to edit it, a sync remote the tracker already
+holds is left pointing where it points, and a Slack token already in the keychain
+is left alone -- one person running several harnesses is the ordinary case, and
+the names carry the product so a second install keeps its own pair.
 
 The tokens are typed at the keychain's own prompt, so no token reaches this
 program, its arguments, or your shell history -- which is also why `+"`--json`"+` leaves
@@ -987,5 +1061,8 @@ Options:
   --slack-channel <id>      the channel reporting goes into, which also answers
                             the optional Slack walk without being asked
   --yes                     answer every question with the answer setup proposes
-  --json                    emit machine-readable JSON, asking nothing`))
+  --json                    emit machine-readable JSON. On its own it asks
+                            nothing and changes nothing, reporting what is
+                            already true and what is still to be done; with
+                            --yes it carries the walk out and reports it`))
 }

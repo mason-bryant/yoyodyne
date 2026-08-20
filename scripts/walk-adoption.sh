@@ -453,6 +453,7 @@ mkdir -p "$asked"
   && git init -q -b main . \
   && git config user.email walk@example.invalid \
   && git config user.name "Adoption Walk" \
+  && git remote add origin "$scratch/origin.git" \
   && printf 'check:\n\techo ok\n' > Makefile \
   && git add -A && git commit -qm "a project with a Makefile" )
 setup_stderr="$scratch/setup.stderr"
@@ -469,10 +470,14 @@ report = json.loads(sys.argv[1])
 if report.get("schema_version") != 1:
     raise SystemExit("setup --json reported schema_version %r" % report.get("schema_version"))
 steps = {step["step"]: step for step in report["steps"]}
-for name in ("tracker", "configuration"):
+for name in ("tracker", "configuration", "tracker-remote"):
     if name not in steps:
         raise SystemExit("setup never reached the %s step" % name)
-    if steps[name]["status"] != "done":
+    # The tracker's sync remote is the one step recent bd versions may have
+    # settled themselves at `bd init`, which setup reports as already true
+    # rather than doing again; both outcomes are the README's claim.
+    settled = ("done",) if name != "tracker-remote" else ("done", "already")
+    if steps[name]["status"] not in settled:
         raise SystemExit("setup reports %s as %s: %s" % (name, steps[name]["status"], steps[name]["summary"]))
 # Every step it did not finish has to name a command, which is the promise it
 # shares with doctor: a step that says what is undone and not what to do about
@@ -503,7 +508,7 @@ if [ -f "$asked/.yoyodyne/config.yaml" ]; then
 import json, sys
 
 steps = {step["step"]: step for step in json.loads(sys.argv[1])["steps"]}
-for name in ("tracker", "configuration"):
+for name in ("tracker", "configuration", "tracker-remote"):
     if steps.get(name, {}).get("status") != "already":
         raise SystemExit("a second setup reports %s as %r, not as already true" % (name, steps.get(name, {}).get("status")))
 ASSERT

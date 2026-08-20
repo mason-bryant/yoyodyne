@@ -220,12 +220,17 @@ yoyo setup
 Everything it does is something you could have typed, and it asks before each
 one, so read step 2 below if you would rather know what you are saying yes to.
 It changes nothing that is already there — a configuration that does not load is
-handed back rather than regenerated, and a Slack token already stored is left
-alone — and it keeps no record of its own, which is what makes running it again
+handed back rather than regenerated, a sync remote the tracker already holds
+keeps pointing where it points, and a Slack token already stored is left alone —
+and it keeps no record of its own, which is what makes running it again
 safe: every step looks at your installation first, says what was already true,
 and resumes an interrupted setup where it actually got to rather than where a
-record claims. `--yes` answers every question with the answer it proposes, and
-`--json` reports the same walk machine-readably and asks nothing at all.
+record claims. `--yes` answers every question with the answer it proposes, which
+is what carries the walk out with nobody at the terminal. `--json` on its own
+asks nothing and *changes* nothing: it reports the same steps machine-readably,
+saying what is already true and what would still have to be done, so reading the
+report is never consent to alter the machine. `yoyo setup --yes --json` is the
+pair that both carries the walk out and reports it.
 
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
