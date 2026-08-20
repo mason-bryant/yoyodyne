@@ -59,8 +59,17 @@ func TestAssembleSkipsMissingImplicitMarkdownDeliverables(t *testing.T) {
 	if len(bundle.References) != 0 {
 		t.Fatalf("references = %#v, want no missing implicit deliverables", bundle.References)
 	}
+	// Nor is it stated as omitted: the file is the work, and reporting it as
+	// something this context could not carry would read as a document that went
+	// missing rather than as one nobody has written yet.
+	if strings.Contains(bundle.Text, "docs/new-guide.md (omitted)") {
+		t.Fatalf("bundle stated a deliverable as omitted: %s", bundle.Text)
+	}
 }
 
+// A reference the caller asked for is its own required input rather than
+// something a work item accumulated, so it is still refused. Only what an item's
+// own text named is stated as left out, because only that text is append-only.
 func TestAssembleRejectsMissingAndEscapingReferences(t *testing.T) {
 	t.Parallel()
 
@@ -86,6 +95,70 @@ func TestAssembleRejectsMissingAndEscapingReferences(t *testing.T) {
 			_, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, References: []string{test.reference}, MaxBytes: 4096})
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("Assemble() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+// TestAssembleStatesAnUnresolvableItemReference is the case that wedged an item:
+// append-only notes quoting a reviewer's citation of a path this repository does
+// not hold. The reference is stated as left out, the run's context still
+// assembles, and what the item named that does resolve is still carried.
+func TestAssembleStatesAnUnresolvableItemReference(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "docs", "guide.md"), "guide content\n")
+	outside := filepath.Join(t.TempDir(), "outside.md")
+	writeFile(t, outside, "outside content\n")
+	if err := os.Symlink(outside, filepath.Join(root, "escape.md")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := os.Symlink(filepath.Join(root, "gone.md"), filepath.Join(root, "broken.md")); err != nil {
+		t.Fatalf("Symlink() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "directory.md"), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	const maxBytes = 8 << 10
+
+	for _, test := range []struct {
+		name      string
+		reference string
+	}{
+		{name: "outside the repository", reference: "../README.md"},
+		{name: "symlink out of the repository", reference: "escape.md"},
+		{name: "symlink to nothing", reference: "broken.md"},
+		{name: "not a file", reference: "directory.md"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			item := beads.WorkItem{
+				ID:          "yoyodyne-1",
+				Title:       "Repair the documentation",
+				Status:      "open",
+				Description: "Repair what docs/guide.md describes.",
+				Notes:       "Triage recorded that a reviewer cited " + test.reference + " here.",
+			}
+			bundle, err := Assemble(Request{RepositoryRoot: root, WorkItem: item, MaxBytes: maxBytes})
+			if err != nil {
+				t.Fatalf("Assemble() error = %v, want an assembled context", err)
+			}
+			for _, want := range []string{
+				"## Referenced file: " + test.reference + " (omitted)",
+				test.reference + " was named by this work item but does not resolve to a file in this repository",
+				"## Referenced file: docs/guide.md",
+				"guide content",
+			} {
+				if !strings.Contains(bundle.Text, want) {
+					t.Fatalf("bundle omitted %q: %s", want, bundle.Text)
+				}
+			}
+			if len(bundle.References) != 1 || bundle.References[0].Path != "docs/guide.md" {
+				t.Fatalf("references = %#v, want only what resolved", bundle.References)
+			}
+			if len(bundle.Text) > maxBytes {
+				t.Fatalf("bundle is %d bytes, exceeding the %d it was budgeted", len(bundle.Text), maxBytes)
 			}
 		})
 	}

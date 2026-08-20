@@ -34,6 +34,12 @@ const minExcerptBytes = 512
 // discovered once they are rendered.
 const maxElisionBytes = 96
 
+// maxOmissionCauseBytes bounds the reason a reference that did not resolve is
+// stated with. The path came from prose and the reason came from the
+// filesystem, and a statement about a file that is not here must not spend the
+// budget the files that are here need.
+const maxOmissionCauseBytes = 160
+
 // minTermBytes is how short a word is dropped from what a work item is about.
 // There is no stopword list behind it: what makes a common word harmless is that
 // it appears in every section, and the weighting below already discounts a term
@@ -97,12 +103,11 @@ func Assemble(request Request) (Bundle, error) {
 	}
 
 	referencePaths := append([]string(nil), request.References...)
-	implicitReferences, err := existingImplicitReferences(root, ExtractMarkdownReferences(request.WorkItem))
+	referencePaths = append(referencePaths, implicitReferenceCandidates(root, ExtractMarkdownReferences(request.WorkItem))...)
+	plans, err := planReferences(root, uniqueSorted(referencePaths), request.References)
 	if err != nil {
 		return Bundle{}, err
 	}
-	referencePaths = append(referencePaths, implicitReferences...)
-	referencePaths = uniqueSorted(referencePaths)
 
 	base := renderWorkItem(request.WorkItem)
 	if len(base) > maxBytes {
@@ -117,13 +122,18 @@ func Assemble(request Request) (Bundle, error) {
 	// filled the budget would be the one whose omission there was no room left to
 	// state, which is the one thing this context must never be silent about.
 	pendingNotes := 0
-	for _, referencePath := range referencePaths {
-		pendingNotes += len(renderOmittedReference(referencePath))
+	for _, plan := range plans {
+		pendingNotes += len(plan.note())
 	}
 
-	for _, referencePath := range referencePaths {
-		pendingNotes -= len(renderOmittedReference(referencePath))
-		section, reference, err := referenceSection(root, referencePath, request.WorkItem, maxBytes-bundle.Bytes-pendingNotes)
+	for _, plan := range plans {
+		pendingNotes -= len(plan.note())
+		if plan.omission != "" {
+			output.WriteString(plan.omission)
+			bundle.Bytes += len(plan.omission)
+			continue
+		}
+		section, reference, err := referenceSection(plan.resolved, plan.path, request.WorkItem, maxBytes-bundle.Bytes-pendingNotes)
 		if err != nil {
 			return Bundle{}, err
 		}
@@ -154,25 +164,84 @@ func ExtractMarkdownReferences(item beads.WorkItem) []string {
 	return uniqueSorted(references)
 }
 
-func existingImplicitReferences(root string, referencePaths []string) ([]string, error) {
-	existing := make([]string, 0, len(referencePaths))
+// implicitReferenceCandidates narrows what a work item's own prose named to what
+// this context has anything to say about. A path that names no file at all is
+// dropped: work-item prose names Markdown deliverables that do not exist yet, and
+// stating each of those as omitted would report the work still to be done as
+// something missing. Everything else is kept, including a path that is not a
+// repository reference — planReferences states those as left out, which is what
+// tells the developer their item named something this context could not carry.
+func implicitReferenceCandidates(root string, referencePaths []string) []string {
+	candidates := make([]string, 0, len(referencePaths))
 	for _, referencePath := range referencePaths {
 		clean, err := validateReferencePath(referencePath)
 		if err != nil {
-			return nil, err
-		}
-		_, err = os.Lstat(filepath.Join(root, clean))
-		if errors.Is(err, os.ErrNotExist) {
-			// Work-item prose can name a Markdown deliverable that does not
-			// exist yet. Only explicit Request.References are required inputs.
+			candidates = append(candidates, referencePath)
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("inspect implicit reference %q: %w", referencePath, err)
+		if _, err := os.Lstat(filepath.Join(root, clean)); errors.Is(err, os.ErrNotExist) {
+			continue
 		}
-		existing = append(existing, referencePath)
+		candidates = append(candidates, referencePath)
 	}
-	return existing, nil
+	return candidates
+}
+
+// plannedReference is one reference decided before any of the budget is spent:
+// either a file this context can read, or the statement that stands in for one
+// it cannot. Deciding it up front is what lets an omission be charged against
+// the budget before the references that do fit have spent it.
+type plannedReference struct {
+	// path is the reference as it was written, which is what an omission names:
+	// that is what a developer will look for in the worktree.
+	path     string
+	resolved resolvedReference
+	// omission is what is carried in place of a reference that did not resolve,
+	// and is empty for one that did.
+	omission string
+}
+
+// note is what this reference may still cost the bundle after it is decided: the
+// statement of its omission, whether that omission was settled here or is
+// decided later by what the budget has left.
+func (p plannedReference) note() string {
+	if p.omission != "" {
+		return p.omission
+	}
+	return renderOmittedReference(p.path)
+}
+
+// planReferences resolves every reference before any of them is read.
+//
+// A reference the work item's own text named is never a failure. That text is
+// append-only — a triage note quoting a reviewer's citation of a path outside
+// the repository cannot be edited back out again — so an item naming a reference
+// that cannot be resolved would otherwise be an item no run could ever start,
+// and no human could unwedge. It is stated as left out instead, which is the
+// same answer size already gets: the developer reads what was named and that
+// this context does not hold it.
+//
+// An explicit request reference is the caller's own required input rather than
+// anything an item accumulated, so it still fails here. Nothing appended to a
+// work item can add one, so there is nothing for a run to be wedged by.
+func planReferences(root string, referencePaths, required []string) ([]plannedReference, error) {
+	requiredPaths := make(map[string]struct{}, len(required))
+	for _, referencePath := range required {
+		requiredPaths[referencePath] = struct{}{}
+	}
+	plans := make([]plannedReference, 0, len(referencePaths))
+	for _, referencePath := range referencePaths {
+		resolved, err := resolveReference(root, referencePath)
+		if err != nil {
+			if _, isRequired := requiredPaths[referencePath]; isRequired {
+				return nil, err
+			}
+			plans = append(plans, plannedReference{path: referencePath, omission: renderUnresolvedReference(referencePath, err)})
+			continue
+		}
+		plans = append(plans, plannedReference{path: referencePath, resolved: resolved})
+	}
+	return plans, nil
 }
 
 func readReference(root, referencePath string, remainingBytes int) (Reference, error) {
@@ -260,11 +329,7 @@ func readBounded(reference resolvedReference, referencePath string, limitBytes i
 // budget, which is not something the item can be edited out of.
 //
 // The returned Reference has no path when nothing of the file was carried.
-func referenceSection(root, referencePath string, item beads.WorkItem, available int) (string, Reference, error) {
-	resolved, err := resolveReference(root, referencePath)
-	if err != nil {
-		return "", Reference{}, err
-	}
+func referenceSection(resolved resolvedReference, referencePath string, item beads.WorkItem, available int) (string, Reference, error) {
 	header := fmt.Sprintf("\n## Referenced file: %s\n\n", resolved.path)
 	// The trailing newline the section is terminated with is part of what it
 	// costs, so it is charged here rather than discovered afterwards.
@@ -332,6 +397,19 @@ func renderOmittedReference(referencePath string) string {
 
 %s was referenced but exceeds the context budget; consult it in the worktree.
 `, referencePath, referencePath)
+}
+
+// renderUnresolvedReference states a reference that named no file this
+// repository holds. It says what was named and why nothing was read for it, so
+// the developer reads a gap they can act on rather than a document they never
+// learn was named at all.
+func renderUnresolvedReference(referencePath string, cause error) string {
+	return fmt.Sprintf(`
+## Referenced file: %s (omitted)
+
+%s was named by this work item but does not resolve to a file in this repository
+(%s), so nothing was read for it. Treat it as unread rather than as absent.
+`, referencePath, referencePath, singleLine(cause.Error(), maxOmissionCauseBytes))
 }
 
 // tooLargeError reports a reference that did not fit in the remaining budget.
