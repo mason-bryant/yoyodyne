@@ -221,9 +221,10 @@ func (a AdmittedItem) Render() string {
 }
 
 // admitted is what the record keeps about work the harness admitted itself: the
-// proposal it came from and the goal that let it through. The reason is written
-// down rather than left to be inferred from the policy in force at the time,
-// because the policy is a file that changes and the record is not.
+// proposal it came from and what let it through, which is the approved goal it
+// serves or the class the operator exempted. The reason is written down rather
+// than left to be inferred from the policy in force at the time, because the
+// policy is a file that changes and the record is not.
 type admitted struct {
 	PendingProposal
 	Reason string `json:"reason"`

@@ -308,6 +308,85 @@ func TestADecisionNamingAProposalThatIsNotThereSaysSoRatherThanBeingSaidToThePro
 	}
 }
 
+// The same holds when nothing is awaiting a decision at all, which is the case
+// it most needs to hold in: an operator approving a proposal that a second
+// process decided while they were away is exactly the operator whose approval
+// went missing before. Their message names a proposal, so it is answered here
+// rather than bought as a turn from a product manager who cannot act on it.
+func TestAnApprovalOfAnAlreadyDecidedProposalIsRefusedRatherThanSaidToTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &recordingChatTracker{created: beads.WorkItem{ID: "yoyodyne-ifd.200"}}
+	proposing := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: proposalReply}}
+	var stdout, stderr bytes.Buffer
+	proposed := openTestChatSession(t, root, proposing, tracker)
+	if code := runChatMessage(context.Background(), proposed, domain.RoleProductManager, "what about usage limits?", false, &stdout, &stderr); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	// Somebody else decides it, and the operator does not see that happen.
+	deciding := openTestChatSession(t, root, &recordingChatBackend{}, tracker)
+	var swallowed, quiet bytes.Buffer
+	if code := runChatMessage(context.Background(), deciding, domain.RoleProductManager, "y", false, &swallowed, &quiet); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, quiet.String())
+	}
+
+	late := &recordingChatBackend{}
+	stale := openTestChatSession(t, root, late, tracker)
+	var out, aside bytes.Buffer
+	code := runChatMessage(context.Background(), stale, domain.RoleProductManager, "approve 1.1", false, &out, &aside)
+	if code != 1 {
+		t.Fatalf("runChatMessage() code = %d, want 1; stderr = %q", code, aside.String())
+	}
+	if late.turns != 0 {
+		t.Fatalf("an approval of a decided proposal was said to the product manager %d time(s)", late.turns)
+	}
+	if !strings.Contains(aside.String(), "1.1") {
+		t.Fatalf("stderr = %q, want it to name the proposal that is no longer awaiting a decision", aside.String())
+	}
+	if len(tracker.creations) != 1 {
+		t.Fatalf("%d item(s) were created, want the approval spent exactly once", len(tracker.creations))
+	}
+}
+
+// An approval the tracker will not carry out reports that nothing was created
+// and that the proposal is still waiting, which is what tells the operator to
+// try again rather than that the item exists.
+func TestAnApprovalTheTrackerRefusesIsReportedAsCreatingNothing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	proposing := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: proposalReply}}
+	var stdout, stderr bytes.Buffer
+	proposed := openTestChatSession(t, root, proposing, &recordingChatTracker{})
+	if code := runChatMessage(context.Background(), proposed, domain.RoleProductManager, "what about usage limits?", false, &stdout, &stderr); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	unreachable := &recordingChatTracker{createErr: errors.New("bd is unreachable")}
+	resumed := openTestChatSession(t, root, &recordingChatBackend{}, unreachable)
+	var decided, aside bytes.Buffer
+	if code := runChatMessage(context.Background(), resumed, domain.RoleProductManager, "y", true, &decided, &aside); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
+	}
+	var decoded chatOutput
+	if err := json.Unmarshal(decided.Bytes(), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, decided.String())
+	}
+	if len(decoded.Decisions) != 1 || decoded.Decisions[0].WorkItemID != "" || !decoded.Decisions[0].Undecided {
+		t.Fatalf("decisions = %#v, want an approval that created nothing", decoded.Decisions)
+	}
+	if !strings.Contains(decoded.Decisions[0].Problem, "bd is unreachable") {
+		t.Fatalf("problem = %q, want what the tracker said", decoded.Decisions[0].Problem)
+	}
+	// And it is still on the table, so a script reading this knows what to ask
+	// for again rather than having to work out whether the item exists.
+	if len(decoded.Pending) != 1 || decoded.Pending[0].ID != "1.1" {
+		t.Fatalf("pending = %#v, want the refused proposal still awaiting a decision", decoded.Pending)
+	}
+}
+
 // A command that recorded something and then failed to report it recorded it
 // all the same, so what it printed is written before the failure rather than
 // lost behind it — and the failure is still the command's, which is what the
@@ -430,6 +509,10 @@ func openTestChatSession(t *testing.T, root string, provider chat.Backend, track
 type recordingChatTracker struct {
 	created   beads.WorkItem
 	creations []beads.NewWorkItem
+	// createErr is a tracker that will not create what it was asked to, which is
+	// what makes "nothing was created and the proposal is still waiting" an
+	// assertion rather than a claim.
+	createErr error
 }
 
 func (t *recordingChatTracker) Show(context.Context, string) (beads.WorkItem, error) {
@@ -441,6 +524,9 @@ func (t *recordingChatTracker) List(context.Context, string) ([]beads.WorkItem, 
 }
 
 func (t *recordingChatTracker) Create(_ context.Context, item beads.NewWorkItem) (beads.WorkItem, error) {
+	if t.createErr != nil {
+		return beads.WorkItem{}, t.createErr
+	}
 	t.creations = append(t.creations, item)
 	created := t.created
 	if created.Title == "" {

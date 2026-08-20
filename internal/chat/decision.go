@@ -111,6 +111,33 @@ func (d DecisionOutcome) Render() string {
 	}
 }
 
+// namesAProposal reports an answer that decides a proposal by name, and which
+// one it names first. It exists for the case where nothing is awaiting a
+// decision at all, which is the one case the grammar above cannot be asked:
+// there are no cards to resolve a selector against, and the difference between
+// somebody deciding and somebody talking has to be read from the answer itself.
+//
+// The rule is a decision verb followed by a proposal's own identifier. Both
+// halves matter. Without the verb, an answer that merely mentions a number is
+// prose; without the identifier, a bare "yes" with nothing on the table names no
+// proposal and cannot be treated as deciding one. A card number deliberately
+// does not count either: a number means a position in a listing, the listing it
+// meant is gone, and "no 2 of those are worth doing" is a sentence.
+func namesAProposal(answer string) (string, bool) {
+	verb, rest := nextWord(strings.TrimSpace(answer))
+	if !matches(verb, approveWords) && !matches(verb, declineWords) {
+		return "", false
+	}
+	for _, word := range strings.Fields(rest) {
+		for _, part := range splitSelectors(word) {
+			if isProposalID(part) {
+				return part, true
+			}
+		}
+	}
+	return "", false
+}
+
 // declineReason is what the record keeps about why a proposal was turned down.
 // An operator who declined it without saying anything still declined it, so the
 // record says that rather than recording no reason at all.

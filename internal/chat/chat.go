@@ -1742,17 +1742,32 @@ func (s *Session) decideOne(ctx context.Context, made decision) (DecisionOutcome
 // none of it, and is reported as a decision that failed rather than passed on as
 // speech: a proposal named by an approval that has already been decided, or that
 // this conversation no longer holds, is said out loud rather than quietly
-// becoming a sentence the agent is asked to interpret.
+// becoming a sentence the agent is asked to interpret. That holds when there is
+// nothing left on the table at all, which is the case it most needs to hold in —
+// an operator approving a proposal that was decided by another process, or that
+// aged out of the record, is exactly the operator whose approval went missing
+// before, and answering them with a turn spent on the agent would be the same
+// failure wearing a different coat.
 func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome, bool, error) {
-	cards := s.pendingCards()
-	if len(cards) == 0 {
-		return nil, false, nil
-	}
 	// Bounded exactly as a message is, and before it is read rather than after: a
 	// decline keeps what the operator said as the reason, so an answer too large
 	// to be said is too large to be recorded as one.
 	trimmed := strings.TrimSpace(answer)
 	if len(trimmed) > MaxOperatorMessageBytes {
+		return nil, false, nil
+	}
+	cards := s.pendingCards()
+	if len(cards) == 0 {
+		// Nothing is on the table, so a bare yes is somebody talking rather than
+		// somebody deciding: there is no proposal it could mean. An answer that
+		// names one is not ambiguous in that way, and it is refused as a decision
+		// rather than said to the agent — the proposal it names was decided
+		// already, or is no longer one this conversation holds, and either answer
+		// is the operator's to hear.
+		if named, names := namesAProposal(trimmed); names {
+			return nil, true, fmt.Errorf("no proposal %s is awaiting a decision in this conversation; it was decided already, or this conversation no longer holds it. Nothing was decided, and nothing was said to the %s",
+				named, RoleTitle(s.state.Role))
+		}
 		return nil, false, nil
 	}
 	decisions, err := readDecisions(trimmed, cards)

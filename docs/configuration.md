@@ -638,12 +638,14 @@ exemption does not require is that the goal be *approved*, which is what makes i
 usable by the projects that keep the human gate.
 
 **What was admitted without asking is reported where a decision would have been.**
-Each item is named with the goal that let it through, in the conversation and in
-`yoyo chat --message ... --json` under `admitted`, and the item's own notes record
-what actually admitted it — the approved goal, or the class you exempted, never
-that you approved the item. The conversation's event log records an admission as
-its own event, so work nobody was asked about is never readable as work somebody
-approved.
+Each item is named with the goal it traces to and with what actually admitted it
+— the approved goal, or the class you exempted — in the conversation and in
+`yoyo chat --message ... --json` under `admitted`, where they are the `goal` and
+`basis` fields. The two are not the same answer: under an exemption the item
+still names a goal, and the goal is not what let it through. The item's own notes
+record the same basis, and never that you approved the item. The conversation's
+event log records an admission as its own event, so work nobody was asked about
+is never readable as work somebody approved.
 
 **Approving writes nothing but the approval.** The prose, the title, what the
 document supports, and its status are untouched, so an approval can never become

@@ -602,3 +602,47 @@ func TestAProposalTheTrackerRefusesIsNotAskedAboutAgain(t *testing.T) {
 		t.Fatalf("the operator was asked %d times, want once", asked)
 	}
 }
+
+// Which answers are decisions when there is nothing left to resolve them
+// against. The grammar above cannot be asked with no cards on the table, so this
+// is the rule that separates an operator deciding a proposal a second process
+// already settled from an operator talking — and it errs toward speech, because
+// treating speech as a decision would refuse a message somebody meant to send.
+func TestAnAnswerNamesAProposalOnlyWhenItDecidesOneByName(t *testing.T) {
+	t.Parallel()
+
+	for _, decision := range []struct {
+		answer string
+		named  string
+	}{
+		{answer: "approve 1.1", named: "1.1"},
+		{answer: "decline 1.1 we already handle this", named: "1.1"},
+		{answer: "yes 3.1 and 3.2", named: "3.1"},
+		{answer: "approve 2.1, 2.2", named: "2.1"},
+	} {
+		named, names := namesAProposal(decision.answer)
+		if !names || named != decision.named {
+			t.Errorf("namesAProposal(%q) = %q, %t; want %q named", decision.answer, named, names, decision.named)
+		}
+	}
+
+	// Everything else is somebody talking. A bare yes names no proposal, so with
+	// nothing on the table there is none it could mean; a number is a position in
+	// a listing that is gone; and a sentence that merely mentions a proposal is a
+	// sentence.
+	for _, speech := range []string{
+		"y",
+		"yes",
+		"yes please",
+		"no thanks",
+		"approve the resolver work",
+		"approve 1",
+		"what about 1.1?",
+		"no, 1.1 was the one I meant",
+		"",
+	} {
+		if named, names := namesAProposal(speech); names {
+			t.Errorf("namesAProposal(%q) = %q, true; want it read as speech", speech, named)
+		}
+	}
+}

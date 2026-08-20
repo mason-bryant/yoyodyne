@@ -7,6 +7,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -117,12 +118,69 @@ func TestADecidedProposalDoesNotComeBackFromTheRecord(t *testing.T) {
 	if pending := third.Proposals(); len(pending) != 0 {
 		t.Fatalf("a declined proposal came back as pending: %#v", pending)
 	}
+	// A bare yes with nothing on the table names no proposal, so it is somebody
+	// talking and is said to the agent exactly as it always was.
 	outcomes, decided, err := third.Decide(context.Background(), "y")
 	if decided || err != nil || len(outcomes) != 0 {
 		t.Fatalf("Decide() = %v, %t, %v; want nothing on the table to decide", outcomes, decided, err)
 	}
-	if len(tracker.created) != 0 {
-		t.Fatalf("a declined proposal created %d item(s)", len(tracker.created))
+	// An answer that names the decided proposal is not ambiguous in that way, and
+	// it is the answer that must never go quietly to the agent: this is an
+	// operator approving something whose decision they did not see, and telling
+	// them the approval was said to a product manager as chat is the whole defect.
+	outcomes, decided, err = third.Decide(context.Background(), "approve 1.1")
+	if !decided {
+		t.Fatalf("an approval naming a proposal was passed on as speech with nothing on the table")
+	}
+	if err == nil || !strings.Contains(err.Error(), "1.1") {
+		t.Fatalf("Decide() error = %v, want it to name the proposal that is not awaiting a decision", err)
+	}
+	if len(outcomes) != 0 || len(tracker.created) != 0 {
+		t.Fatalf("outcomes = %#v and %d creation(s); want a decided proposal decided once", outcomes, len(tracker.created))
+	}
+}
+
+// An approval the tracker will not carry out creates nothing and leaves the
+// proposal awaiting a decision, and says both. Nothing here is a broken
+// conversation: the operator can approve it again once the tracker answers, and
+// what they must not be told is that the item exists.
+func TestAnApprovalTheTrackerRefusesLeavesTheProposalWaitingAndSaysSo(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	proposed := openTestSession(t, perItemApprovalOptions(t, root, &fakeTracker{}, oneProposalTurn))
+	if _, err := proposed.Send(context.Background(), "what should we do about usage limits?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	unreachable := &fakeTracker{err: errors.New("bd is unreachable")}
+	resumed := openTestSession(t, perItemApprovalOptions(t, root, unreachable, "nothing to say"))
+	outcomes, decided, err := resumed.Decide(context.Background(), "y")
+	if !decided || err != nil {
+		t.Fatalf("Decide() = %t, %v; want the approval carried out and its failure reported in the outcome", decided, err)
+	}
+	if len(outcomes) != 1 {
+		t.Fatalf("outcomes = %#v, want the one approval", outcomes)
+	}
+	outcome := outcomes[0]
+	if !outcome.Approved || !outcome.Undecided || outcome.WorkItemID != "" {
+		t.Fatalf("outcome = %#v, want an approval that created nothing", outcome)
+	}
+	if !strings.Contains(outcome.Problem, "bd is unreachable") {
+		t.Fatalf("problem = %q, want what the tracker said", outcome.Problem)
+	}
+	rendered := outcome.Render()
+	if !strings.Contains(rendered, "not created") || !strings.Contains(rendered, "still awaiting a decision") {
+		t.Fatalf("rendered = %q, want it to say nothing exists and the decision is still open", rendered)
+	}
+	// Still on the table, in this process and in the record, so approving it again
+	// once the tracker answers asks for the same item rather than losing it.
+	if len(resumed.Proposals()) != 1 {
+		t.Fatalf("%d proposal(s) pending, want the one the tracker refused", len(resumed.Proposals()))
+	}
+	later := openTestSession(t, perItemApprovalOptions(t, root, &fakeTracker{}, "nothing to say"))
+	if pending := later.Proposals(); len(pending) != 1 || pending[0].ID != "1.1" {
+		t.Fatalf("pending = %#v, want the refused proposal still decidable by a later process", pending)
 	}
 }
 
