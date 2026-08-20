@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // MaxProposalBytes bounds the untrusted proposal payload one turn may carry.
@@ -61,6 +63,17 @@ type Proposal struct {
 	// invent the items it is placed against.
 	Parent       string   `json:"parent,omitempty"`
 	Dependencies []string `json:"dependencies,omitempty"`
+	// Class is the kind of work this is, where a project treats a kind of work
+	// differently at admission. It is optional and usually absent: work that
+	// claims no class is ordinary work, and that is what most work is.
+	//
+	// It is a claim the agent makes about its own proposal, which is exactly what
+	// it looks like. What keeps it honest is that a class only ever matters where
+	// the operator carved it out themselves, and what they carved out is a kind
+	// of work that changes nothing: an item claiming to be diagnosis and then
+	// doing something else is a work item whose description says what it does,
+	// under a goal that had to resolve, in a queue the operator reads.
+	Class domain.WorkItemClass `json:"class,omitempty"`
 }
 
 // PendingProposal is a recorded proposal awaiting the operator's decision,
@@ -85,6 +98,47 @@ type PendingProposal struct {
 	// prompt: the answer depends on the goals as they stood when the proposal was
 	// made, and the goals move.
 	Asking string `json:"asking,omitempty"`
+}
+
+// recorded is the proposal as the durable conversation keeps it, so a later
+// process can put it back on the table. Everything an operator decides from is
+// carried: what was proposed, which turn proposed it, and why it was not simply
+// admitted.
+func (p PendingProposal) recorded() runstate.PendingProposal {
+	return runstate.PendingProposal{
+		ID:           p.ID,
+		Turn:         p.Turn,
+		Title:        p.Proposal.Title,
+		Description:  p.Proposal.Description,
+		Rationale:    p.Proposal.Rationale,
+		Goal:         p.Proposal.Goal,
+		Parent:       p.Proposal.Parent,
+		Dependencies: p.Proposal.Dependencies,
+		Class:        string(p.Proposal.Class),
+		Asking:       p.Asking,
+	}
+}
+
+// restoredProposal is one recorded proposal put back on the table, in the
+// conversation it was proposed in. It is the exact inverse of recorded: a
+// proposal an operator decides in a later process has to be the one they were
+// shown in an earlier one, down to the reason they are being asked at all.
+func restoredProposal(conversationID string, recorded runstate.PendingProposal) PendingProposal {
+	return PendingProposal{
+		ID:             recorded.ID,
+		ConversationID: conversationID,
+		Turn:           recorded.Turn,
+		Proposal: Proposal{
+			Title:        recorded.Title,
+			Description:  recorded.Description,
+			Rationale:    recorded.Rationale,
+			Goal:         recorded.Goal,
+			Parent:       recorded.Parent,
+			Dependencies: recorded.Dependencies,
+			Class:        domain.WorkItemClass(recorded.Class),
+		},
+		Asking: recorded.Asking,
+	}
 }
 
 // CreatedItem is one work item the harness created from an approved proposal.
@@ -252,6 +306,12 @@ func (p Proposal) Validate() error {
 		if err := beads.ValidateIssueID(parent); err != nil {
 			problems = append(problems, fmt.Errorf("parent: %w", err))
 		}
+	}
+	// A class the harness does not recognize claims an exemption that does not
+	// exist, so the proposal is refused rather than admitted as ordinary work
+	// under a word nothing reads. The empty class is not a claim at all.
+	if p.Class != "" && !p.Class.Valid() {
+		problems = append(problems, fmt.Errorf("class %q is not one the harness recognizes; the classes there are: %s", p.Class, namedWorkItemClasses()))
 	}
 	seen := make(map[string]struct{}, len(p.Dependencies))
 	for i, dependency := range p.Dependencies {

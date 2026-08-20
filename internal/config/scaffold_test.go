@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -112,7 +113,7 @@ func TestScaffoldStatesExactlyWhatTheBundleWouldHaveSupplied(t *testing.T) {
 	if generated.Execution != inherited.Execution {
 		t.Errorf("execution = %+v, want %+v", generated.Execution, inherited.Execution)
 	}
-	if generated.Approvals != inherited.Approvals {
+	if !reflect.DeepEqual(generated.Approvals, inherited.Approvals) {
 		t.Errorf("approvals = %+v, want %+v", generated.Approvals, inherited.Approvals)
 	}
 	if generated.Product.Specifications != inherited.Product.Specifications {
