@@ -237,7 +237,11 @@ Into the work item's thread, as they happen:
 - the promotion onto the target branch
 - the pull request, a merge the forge queued, and the merge itself
 - the run waiting — an exhausted usage limit, an overloaded provider, an
-  operator hold, an unresolved directive — and the run carrying on afterwards
+  operator hold, an unresolved directive — and the run carrying on afterwards. A
+  run waiting out an exhausted usage limit is said as a `warning`, because it
+  means hours in which nothing will happen for a reason nobody chose; the other
+  three are ordinary facts, since an overload lifts in seconds and a hold or a
+  directive is waiting on the person reading the channel
 - the blocker that stopped a run, if one did, said as `critical`
 - every report an agent filed against that item, as the agent wrote it
 - every change an agent proposed to a document it does not own, with the
@@ -249,6 +253,31 @@ operator holding and lifting all harness activity, proposed work you turned
 down — there is no item, because nothing was created — and anything an agent
 filed with no work item attached. Burying those in one item's thread would
 misfile them.
+
+A provider refusing the harness for want of capacity goes there too, wherever it
+happened. The harness asks a provider for work in three places, and each one
+accounts for a refusal:
+
+- **inside a run**, for the developer attempt or the review — the run parks, and
+  the park is what is posted, in that item's thread
+- **a conversation turn** with any role, which has no run to park
+- **an independent `yoyo review`**, which uses the same reviewer with no run
+  around it
+
+The last two record the refusal themselves, and it is posted here as a `warning`
+naming what was stopped and, when the provider quotes one, when the limit lifts.
+Without it an exhausted limit reaches only whoever typed the command, and hours
+of silence with a known cause look exactly like a quiet queue.
+
+A watching `yoyo work` session is not a fourth place. It reads the tracker and
+starts runs, and makes no provider call of its own, so a limit it meets is met by
+a run it started and said by that run parking. That the list above is the whole
+list is checked rather than asserted:
+`TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the tree for
+every provider invocation and fails on one that has no account of what an
+exhausted limit does to it — so teaching selection, or anything else, to ask a
+provider something arrives with a failing test rather than with a process that
+goes quiet and says nothing.
 
 What a watching `yoyo work` session is doing goes there too, and it is the one
 thing here that is news precisely because nothing is happening: a session that

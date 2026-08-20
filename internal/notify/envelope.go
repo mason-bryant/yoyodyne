@@ -66,6 +66,11 @@ const (
 	// A blocker is work that stopped and stayed stopped, which is the one thing
 	// nobody finds out about on their own.
 	KindBlockerRecorded Kind = "blocker.recorded"
+	// A provider refusing the harness for want of capacity, somewhere that is not
+	// a run: a conversation turn, an independent review. A run says it by parking,
+	// and this is the same news from every other process — hours in which nothing
+	// will happen, with a cause and, where the provider named one, an end.
+	KindUsageLimitExhausted Kind = "usage-limit.exhausted"
 	// What an agent said in its own words: a report at its severity, a proposed
 	// change to a document it does not own, a turn of an ask exchange, and the
 	// exchange closing — including closing unresolved at its round cap, which
@@ -119,6 +124,7 @@ func Kinds() []Kind {
 		KindRunParked,
 		KindRunContinued,
 		KindBlockerRecorded,
+		KindUsageLimitExhausted,
 		KindReportFiled,
 		KindProposalRaised,
 		KindExchangeTurn,
@@ -145,7 +151,7 @@ func (k Kind) Valid() bool {
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
-		KindRunParked, KindRunContinued, KindBlockerRecorded,
+		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped:
@@ -417,11 +423,17 @@ type Detail struct {
 	// PullRequest is how the published request is named to a reader, read by the
 	// three publication kinds.
 	PullRequest string `json:"pull_request,omitempty"`
-	// Cause is what a parked run is waiting on, read by KindRunParked. It is a
-	// phrase rather than a code because what an operator needs is the answer to
-	// "waiting on what", and the causes do not share a shape: a deadline, an
-	// overloaded server, the operator themselves, an unresolved directive.
+	// Cause is what a parked run is waiting on, read by KindRunParked, and what a
+	// provider refused for, read by KindUsageLimitExhausted. It is a phrase
+	// rather than a code because what an operator needs is the answer to "waiting
+	// on what", and the causes do not share a shape: a deadline, an overloaded
+	// server, the operator themselves, an unresolved directive.
 	Cause string `json:"cause,omitempty"`
+	// Waiting is what a provider's refusal stopped, read by
+	// KindUsageLimitExhausted. A run names itself, so this is for everything that
+	// is not one: which conversation, which review. It is what turns "the
+	// provider is out of capacity" into news somebody can act on.
+	Waiting string `json:"waiting,omitempty"`
 	// Round and Rounds are where an ask exchange has got to against its cap, read
 	// by KindExchangeTurn and KindExchangeClosed.
 	Round  int `json:"round,omitempty"`

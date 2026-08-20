@@ -320,6 +320,65 @@ func TestBranchReviewRecordsAReviewThatNeverAnswered(t *testing.T) {
 	}
 }
 
+// A branch review is a provider invocation with no run to park, so an exhausted
+// limit that stops one leaves nothing behind unless it is written down here.
+// What it records is the refusal itself: what was waiting, and when the provider
+// said it lifts.
+func TestABranchReviewTheProviderRefusedRecordsTheExhaustedLimit(t *testing.T) {
+	t.Parallel()
+
+	repository := accumulatedRepository(t)
+	resetsAt := fixedBranchClock{}.Now().Add(3 * time.Hour)
+	provider := &fakeBackend{run: func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{
+			IsError:    true,
+			StopReason: "usage_limit",
+			UsageLimit: &backend.UsageLimit{Kind: "five_hour", ResetsAt: resetsAt},
+			Process:    execution.ProcessResult{Status: execution.ProcessSucceeded},
+		}, nil
+	}}
+	reviewer, _, _ := newBranchReviewer(t, repository, provider)
+	limits, err := runstate.NewUsageLimitStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewUsageLimitStore() error = %v", err)
+	}
+	reviewer.UsageLimits = limits
+
+	if _, err := reviewer.Review(context.Background(), BranchReviewRequest{Branch: "milestone", BaseRef: "main"}); err == nil {
+		t.Fatal("Review() error = nil, want the refused review still failed")
+	}
+	recorded, err := limits.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("List() = %#v, want the refusal recorded once", recorded)
+	}
+	refusal := recorded[0]
+	if !strings.Contains(refusal.Waiting, branchReviewID) || !strings.Contains(refusal.Waiting, "milestone") {
+		t.Fatalf("waiting = %q, want the review and the branch that were stopped", refusal.Waiting)
+	}
+	if refusal.Kind != "five_hour" || refusal.ResetsAt == nil || !refusal.ResetsAt.Equal(resetsAt) {
+		t.Fatalf("refusal = %#v, want the limit and when it lifts", refusal)
+	}
+
+	// A review that failed for anything else is not a refusal, and a review that
+	// answered is not one either: neither is hours of silence anybody is waiting
+	// through.
+	unrefused, _, _ := newBranchReviewer(t, repository, branchProvider(`{"decision":"approve","summary":"looks consistent"}`))
+	quiet, err := runstate.NewUsageLimitStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewUsageLimitStore() error = %v", err)
+	}
+	unrefused.UsageLimits = quiet
+	if _, err := unrefused.Review(context.Background(), BranchReviewRequest{Branch: "milestone", BaseRef: "main"}); err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	if refusals, err := quiet.List(); err != nil || len(refusals) != 0 {
+		t.Fatalf("List() = %#v, error %v, want an answered review recorded as no refusal", refusals, err)
+	}
+}
+
 func TestBranchReviewCannotApproveAChangeItCouldNotSeeInFull(t *testing.T) {
 	t.Parallel()
 

@@ -110,7 +110,13 @@ type components struct {
 	// under the product beside the intake hold, because what it watches is one
 	// backlog and because the two are read together: a session that is choosing
 	// nothing and a hold that says why are one story to whoever reads them.
-	watch        *runstate.WatchStore
+	watch *runstate.WatchStore
+	// usageLimits is where a provider refusing the harness outside a run is
+	// recorded. It is built under the product beside the watch log, because a
+	// limit is exhausted for an account and read as a fact about one product's
+	// line stopping: the processes that meet one — a conversation, a review —
+	// have no run between them to write it on.
+	usageLimits  *runstate.UsageLimitStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -181,6 +187,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	usageLimits, err := runstate.NewUsageLimitStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -205,6 +215,7 @@ func buildComponents(configPath string) (components, error) {
 		holds:         holds,
 		intake:        intake,
 		watch:         watch,
+		usageLimits:   usageLimits,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
