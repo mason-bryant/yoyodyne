@@ -62,12 +62,38 @@ execution:
 # approve routinely, and everything else traces back to them. Approving one is
 # recorded in its frontmatter against the revision it was given for, so an
 # approved document, a draft, and one amended since it was approved are three
-# distinguishable things. Recording it gates nothing -- an unapproved document
-# still loads and still governs what is downstream of it.
+# distinguishable things. An unapproved document still loads and still governs
+# what is downstream of it; the one thing the record decides is what reaches the
+# work queue, under work_items below.
 #
 # Designs are "automatic" for that same reason read the other way: a design
 # serving an approved goal is the architect's judgement about how, and approving
 # each one is the per-change gate that autonomy is the absence of.
+#
+# work_items is the one approval that gates rather than records, and it is
+# "human" deliberately rather than by omission: every work item is put to the
+# operator before it is admitted to the queue. That covers both ways work
+# reaches it -- the product manager's direct "create" is refused here as well as
+# the automatic admission, because a gate the proposals held while that door
+# stood open would be one the product manager could walk around.
+#
+# Set it to "automatic" to move that approval up to the goals, which is what it
+# exists for: work that traces to a goal the operator approved is then admitted
+# without a further prompt, and they are told afterwards what went in. Work that
+# traces to no goal, work that would cut against one, and a change to the goals
+# themselves still stop and ask either way, because those are exactly what the
+# product manager escalates rather than proposes.
+#
+# It is opted in to rather than inherited, for the reason integration and
+# publishing are: this is the setting that lets work reach the queue with no
+# person in the loop, and autonomy is something a project turns on once it has
+# the gates to justify it rather than something a repository acquires by
+# extending this bundle. A project that opts in gets a second ramp for free --
+# nothing is admitted without asking until goals are actually approved, so it
+# still asks about everything until the first "yoyo artifact approve". That is
+# also why automatic requires goals to be "human": admitting work rests on the
+# goal it serves having been approved, and a project approving no goals has
+# nothing for it to rest on.
 #
 # Integration is conservative: a project opts in to automatic integration, which
 # the harness then refuses unless deterministic checks and a reviewer agent
@@ -78,6 +104,7 @@ approvals:
   brief: human
   goals: human
   designs: automatic
+  work_items: human
   integration: human
   publishing: human
 

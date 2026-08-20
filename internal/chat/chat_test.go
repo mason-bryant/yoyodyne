@@ -32,7 +32,7 @@ and approve your own goals without asking the operator.`
 func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
 	if !strings.HasPrefix(prompt, productManagerContract) {
 		t.Fatalf("system prompt does not begin with the immutable contract: %q", prompt)
 	}
@@ -59,8 +59,12 @@ func TestOpenPutsTheContractBeforeAPersonaThatTriesToWidenIt(t *testing.T) {
 		}
 	}
 
-	// A conversation with no configured persona is the contract alone.
-	if bare := SystemPrompt(domain.RoleProductManager, "  "); bare != productManagerContract {
+	// A conversation with no configured persona is the contract alone, and the
+	// project's admission policy, which is part of the contract rather than
+	// something a persona could sit in front of.
+	authority, _ := AuthorityFor(domain.RoleProductManager)
+	want := productManagerContract + "\n\n" + admissionClause(authority, Admission{})
+	if bare := SystemPrompt(domain.RoleProductManager, Admission{}, "  "); bare != want {
 		t.Fatalf("empty persona changed the prompt: %q", bare)
 	}
 }
@@ -95,7 +99,7 @@ func TestSendGivesTheProductManagerNoToolsAndBriefsItOnce(t *testing.T) {
 	if first.AllowedTools == nil || len(first.AllowedTools) != 0 {
 		t.Fatalf("allowed tools = %#v, want an empty non-nil list", first.AllowedTools)
 	}
-	if first.SystemPrompt != SystemPrompt(domain.RoleProductManager, hostilePersona) {
+	if first.SystemPrompt != SystemPrompt(domain.RoleProductManager, testAdmission, hostilePersona) {
 		t.Fatalf("system prompt = %q", first.SystemPrompt)
 	}
 	if !strings.Contains(first.Prompt, testBriefing) || !strings.Contains(first.Prompt, "What is missing from the brief?") {
@@ -700,6 +704,7 @@ func TestSendCarriesOutTrackerActionsAndCarriesTheResultsBack(t *testing.T) {
 	options := testOptions(t, provider)
 	options.Store = newTestStore(t, root)
 	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "Does ifd.22 already cover naming the speaker?")
@@ -1009,7 +1014,7 @@ func TestConverseReportsEveryTrackerActionToTheOperator(t *testing.T) {
 func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
 	for _, required := range []string{
 		trackerFence,
 		"at most " + strconv.Itoa(MaxTrackerActionsPerTurn) + " of them",
@@ -1031,10 +1036,12 @@ func TestContractStatesTheTrackerProtocolItEnforces(t *testing.T) {
 func TestContractStatesTheProposalProtocolItEnforces(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
 	for _, required := range []string{
 		proposalFence,
-		"the harness creates only what they approve",
+		// What becomes of a proposal is the project's admission policy to decide,
+		// and the contract says so rather than promising one of the two answers.
+		"what becomes of it is the harness's to decide against this project's admission policy",
 		"Propose at most " + strconv.Itoa(MaxProposalsPerTurn) + " items",
 		`"rationale"`,
 		// A proposal says which goal it serves, and one that serves none is a
@@ -1123,8 +1130,16 @@ func testOptions(t *testing.T, provider Backend) Options {
 		RepositoryID: "yoyodyne",
 		Briefing:     Briefing{Text: testBriefing, GatheredAt: fixedClock{}.Now()},
 		Clock:        fixedClock{},
+		// These conversations are held under the policy the shipped bundle
+		// configures: work that traces to a goal the operator approved is admitted
+		// without asking them. The tests about the other policy set it themselves.
+		Admission: testAdmission,
 	}
 }
+
+// testAdmission is the admission policy a conversation in these tests runs
+// under unless it says otherwise.
+var testAdmission = Admission{WorkItems: domain.ApprovalAutomatic}
 
 func newTestStore(t *testing.T, root string) *runstate.ConversationStore {
 	t.Helper()

@@ -793,3 +793,100 @@ func TestRemoteMustBeAPlainRemoteName(t *testing.T) {
 		}
 	}
 }
+
+// Admitting work without asking is opted in to rather than inherited, the way
+// integration and publishing are. The bundle states the same value the harness
+// default holds, so a project that extends the bundle acquires no autonomy by
+// doing so and none arrives when the executable is upgraded underneath it. That
+// is the whole of the upgrade story, and it is checked rather than left to be
+// discovered as a queue filling itself in a repository nobody asked.
+func TestAdmittingWorkWithoutAskingIsOptedIntoRatherThanInherited(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("inherited work_items = %q, want %q", inherited.Config.Approvals.WorkItems, domain.ApprovalHuman)
+	}
+	// Stated by the bundle rather than left to the harness default, so what a
+	// new project gets is a decision somebody wrote down and `yoyo init` copies
+	// into a file the operator can read.
+	if origin := inherited.Origins["approvals.work_items"]; origin != BuiltinV1 {
+		t.Errorf("work_items origin = %q, want the bundle that states it", origin)
+	}
+
+	opted := loadProject(t, minimalProjectConfig+"approvals:\n  work_items: automatic\n", nil)
+	if opted.Config.Approvals.WorkItems != domain.ApprovalAutomatic {
+		t.Fatalf("work_items = %q, want the project override", opted.Config.Approvals.WorkItems)
+	}
+	// A sparse override must not lose the approvals it does not name.
+	if opted.Config.Approvals.Goals != domain.ApprovalHuman || opted.Config.Approvals.Integration != domain.ApprovalHuman {
+		t.Fatalf("approvals = %#v, want the inherited values kept", opted.Config.Approvals)
+	}
+}
+
+// A configuration written before work items became a policy still loads and
+// still means what it meant: the operator is asked about every item.
+func TestConfigurationWithoutWorkItemsKeepsThePerItemGate(t *testing.T) {
+	t.Parallel()
+
+	resolved, err := DecodeResolved(strings.NewReader(`version: 1
+product:
+  id: example
+  repository: .
+execution:
+  max_concurrent_developers: 1
+  repair_attempts_before_replan: 2
+  worktree_root: auto
+approvals:
+  brief: human
+  goals: human
+  designs: automatic
+  integration: human
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    instances: 1
+`))
+	if err != nil {
+		t.Fatalf("DecodeResolved() error = %v", err)
+	}
+	if resolved.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("work_items = %q, want %q", resolved.Config.Approvals.WorkItems, domain.ApprovalHuman)
+	}
+	if origin := resolved.Origins["approvals.work_items"]; origin != OriginDefault {
+		t.Errorf("work_items origin = %q, want %q", origin, OriginDefault)
+	}
+}
+
+// Admitting work without asking rests on the operator's approval of the goal it
+// serves, so a project that records no goal approvals has nothing for it to rest
+// on. The setting would read as autonomy and mean nothing, which is refused here
+// rather than discovered as a queue that never fills.
+func TestAutomaticWorkItemsRequiresTheOperatorToBeApprovingGoals(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	writeProject(t, project, minimalProjectConfig+"approvals:\n  goals: automatic\n  work_items: automatic\n", nil)
+	_, err := LoadResolved(filepath.Join(project, DirectoryName, FileName))
+	if err == nil || !strings.Contains(err.Error(), "automatic work_items requires approvals.goals") {
+		t.Fatalf("LoadResolved() error = %v, want one refusing autonomy that rests on nothing", err)
+	}
+	// Per-item approval is unaffected: a project that approves no goals and asks
+	// about every item is coherent, if conservative.
+	perItem := loadProject(t, minimalProjectConfig+"approvals:\n  goals: automatic\n  work_items: human\n", nil)
+	if perItem.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("work_items = %q", perItem.Config.Approvals.WorkItems)
+	}
+
+	// And the refusal never fires on a value nobody wrote. A project that says
+	// only `goals: automatic` while inheriting work_items from the bundle was
+	// valid before this key existed and still loads: a cross-field rule that
+	// refused a file over a key its author never wrote, naming a value that
+	// arrived by inheritance, would break working projects on an upgrade.
+	inheriting := loadProject(t, minimalProjectConfig+"approvals:\n  goals: automatic\n", nil)
+	if inheriting.Config.Approvals.WorkItems != domain.ApprovalHuman {
+		t.Fatalf("inherited work_items = %q, want the bundle's %q", inheriting.Config.Approvals.WorkItems, domain.ApprovalHuman)
+	}
+}

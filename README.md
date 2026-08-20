@@ -65,7 +65,9 @@ to an agent's good behavior:
 **You drive it from one conversation.** `yoyo chat` opens it: you talk to a
 product manager that has read your product's own written intent and the work
 already tracked against it, approve as many of the work items it proposes as you
-like in a single answer, and say `/work <id>` when you want one of them run. The
+like in a single answer — or hand that decision to your goals and watch the work
+that serves them go into the queue by itself — and say `/work <id>` when you want
+one of them run. The
 run happens in the background while the conversation stays a conversation — an
 isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
@@ -384,8 +386,11 @@ goals are what work is admitted against, and a product manager with no goals to
 name will stop and ask you for one.
 
 **Then drive the work from the same conversation.** Talk about what you want and
-approve the work items it proposes, as many as you like in one answer. You can
-also file one by hand if you would rather have something to run immediately:
+approve the work items it proposes, as many as you like in one answer. Once you
+trust it, `approvals.work_items: automatic` hands that decision to your goals:
+approve them with `yoyo artifact approve v1-goals`, and work that serves them
+reaches the queue without asking you. You can also file one by hand if you would
+rather have something to run immediately:
 
 ```sh
 bd create --title="Add a subtract function" \
@@ -599,14 +604,26 @@ and what could not be read is said.
 ### Proposals, and deciding them in batches
 
 The product manager can propose a Beads work item instead of creating one, when
-the decision is yours rather than its. Each proposal is shown to you as a
-numbered card with its reasoning, and the harness creates an item only after an
-answer that approves it by name. Nothing you did not approve is created, a
-proposal you left undecided is named when the conversation ends, and a created
-item records the conversation, the turn, and the rationale it came from. A
-proposal the harness cannot read is reported and the conversation carries on;
+the decision is yours rather than its. What becomes of a proposal is
+[`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to decide,
+and until you say otherwise every one of them is put to you: shown as a numbered
+card with its reasoning, and created only after an answer that approves it by
+name. A proposal you left undecided is named when the conversation ends, and a
+created item records the conversation, the turn, and the rationale it came from.
+A proposal the harness cannot read is reported and the conversation carries on;
 `--message` has nobody to ask, so it reports what was proposed and creates
 nothing.
+
+**Set `work_items: automatic` to move that approval up to your goals** — approve
+what the product should do, then watch it happen. Work that traces to a goal you
+approved then goes into the queue without asking you, and you are told afterwards
+what went in, with the goal that let it through. It holds only where the goal
+actually resolves and the document stating it is approved as it now stands, so a
+project that has just opted in still asks about everything until its first
+`yoyo artifact approve`. Everything short of that is still put to you, with why
+you are being asked printed on the card. A created item records which of the two
+it was, because an item claiming an approval you never gave is the one record
+this arrangement cannot afford.
 
 A turn that proposes five things is not five questions in a row. One answer
 decides as many of them as you like:
@@ -659,7 +676,8 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself, says which goal it serves in the words your goals document states it in;
+itself where [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)
+lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
 anything they do not state. So what an item says it is for is checked rather
@@ -1080,10 +1098,22 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits, orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
+
+The product manager's admitting is the one row a setting moves, and it moves in
+one direction only. `approvals.work_items` decides what may reach the queue
+without you, and at `human` — the shipped value — it refuses the direct
+admission as well as the automatic one, because a gate the proposals held while
+this door stood open would be no gate at all: the product manager reaches both,
+and work would arrive through whichever asked less. So a project that leaves the
+setting alone has a product manager that proposes work rather than admitting it,
+and nothing reaches the backlog that you did not approve. Set `work_items` to
+`automatic` and it admits directly again, against a goal you approved. Ordering,
+attributing, closing, and retiring are untouched either way: those tidy work you
+already agreed to rather than adding any.
 
 The development manager is the one worth reading twice, because it is where a
 design becomes tracked work. It decomposes: every item it creates hangs under an
@@ -1817,11 +1847,22 @@ for what you gave it for, and the document as it now reads is not that. What is
 asked of you is your configuration's to say: `approvals.brief` and
 `approvals.goals` are `human`, `approvals.designs` is `automatic`, and a decision
 record is an account of how something was decided rather than a statement of
-intent, so nothing asks you to approve one. None of it is a gate: an unapproved
-document still loads and still governs what is downstream of it, and approving
-writes nothing but the approval — the document itself stays the owning role's to
-change. The [configuration guide](docs/configuration.md#approving-a-document) has
-the schema and what is refused.
+intent, so nothing asks you to approve one.
+
+**Recording an approval gates one thing: what reaches the work queue.** An
+unapproved document still loads, still governs what is downstream of it, and
+stops nothing that reads it, and approving writes nothing but the approval — the
+document itself stays the owning role's to change. What your approval of the
+goals decides is whether work serving them is admitted without asking you, which
+is [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to say:
+it is `human` until you set it otherwise, and every item is put to you. Set it to
+`automatic` and your approval of the goals document is what lets work serving
+those goals into the queue — so a goals document nobody approved, and one amended
+since you approved it, are documents nothing is admitted under. Everywhere else
+an amendment after approval changes what is reported about a document rather than
+what is allowed. The
+[configuration guide](docs/configuration.md#approving-a-document) has the schema
+and what is refused.
 
 A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given

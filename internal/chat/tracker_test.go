@@ -366,6 +366,7 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	}}
 	options := testOptions(t, provider)
 	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "This one comes first.")
@@ -637,7 +638,7 @@ func TestWhatIsRefusedOnClosedWorkIsWhatWouldMeanNothing(t *testing.T) {
 func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	t.Parallel()
 
-	contract := SystemPrompt(domain.RoleProductManager, "")
+	contract := SystemPrompt(domain.RoleProductManager, Admission{}, "")
 	// An action a role may ask for but is never shown is one it will not use, and
 	// one shown to a role that may not ask for it is one it will ask for and be
 	// refused. Both are ways for a contract and the authority table to disagree,
@@ -646,7 +647,7 @@ func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	// manager's alone.
 	for _, role := range ConversationalRoles() {
 		authority, _ := AuthorityFor(role)
-		offered := SystemPrompt(role, "")
+		offered := SystemPrompt(role, Admission{}, "")
 		for _, action := range trackerActionNames {
 			shown := strings.Contains(offered, `{"action":"`+action+`"`)
 			if authority.MayAct(action) && !shown {

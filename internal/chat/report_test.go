@@ -240,7 +240,7 @@ func TestTheContractTellsTheProductManagerHowAndWhenToReport(t *testing.T) {
 
 	// Guidance on what merits a report belongs in the contract, where a persona
 	// cannot weaken it.
-	prompt := SystemPrompt(domain.RoleProductManager, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
 	for _, required := range []string{
 		report.Fence,
 		"A report is not a blocker",

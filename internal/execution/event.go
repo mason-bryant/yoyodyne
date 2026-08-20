@@ -33,6 +33,11 @@ const (
 	EventProposalRecorded EventType = "proposal.recorded"
 	EventProposalApproved EventType = "proposal.approved"
 	EventProposalRejected EventType = "proposal.rejected"
+	// A proposal the harness admitted itself, on the strength of the operator's
+	// approval of the goal it serves. It is its own event rather than an approval
+	// with a different reason: nobody approved this item, and a record that read
+	// as though somebody had would be the one claim this arrangement cannot make.
+	EventProposalAdmitted EventType = "proposal.admitted"
 	EventProposalCreated  EventType = "proposal.created"
 	// A concern is work the product manager judged against the goals and put to
 	// the operator as a question instead of proposing. What it raised and what

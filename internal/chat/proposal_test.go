@@ -9,6 +9,7 @@ import (
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 func TestExtractProposalsSeparatesProseFromWhatWasProposed(t *testing.T) {
@@ -193,10 +194,12 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 		}
 	}
 
-	// A created item has to trace back to the turn that produced it.
-	notes := pending.provenanceNotes()
+	// A created item has to trace back to the turn that produced it, and to what
+	// authorized it rather than to whichever of the two is more flattering.
+	notes := pending.provenanceNotes("approved by the operator")
 	for _, required := range []string{
 		"chat-0123456789abcdef0123456789abcdef", "turn 3", "proposal 3.1",
+		"approved by the operator",
 		"Rationale: You said capacity is not failure.",
 		// An item in the queue that does not say what it is for is exactly the work
 		// nobody can later decide to stop doing.
@@ -205,6 +208,17 @@ func TestPendingProposalRendersWhatAnOperatorDecidesOn(t *testing.T) {
 		if !strings.Contains(notes, required) {
 			t.Fatalf("provenance notes = %q, want them to contain %q", notes, required)
 		}
+	}
+	// An item nobody was asked about never records an approval nobody gave.
+	admittedNotes := pending.provenanceNotes(approvedGoalNote(goal.Attribution{
+		State: goal.StateAttributed,
+		Goal:  goal.Goal{ArtifactID: "v1-goals"},
+	}))
+	if strings.Contains(admittedNotes, "approved by the operator") {
+		t.Fatalf("an admitted item claims an approval nobody gave: %q", admittedNotes)
+	}
+	if !strings.Contains(admittedNotes, "without asking the operator") || !strings.Contains(admittedNotes, "v1-goals") {
+		t.Fatalf("admitted notes do not say what admitted it: %q", admittedNotes)
 	}
 }
 
