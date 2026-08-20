@@ -432,6 +432,47 @@ func TestTheDevelopmentManagerIsWiredTheProductsTriageBudget(t *testing.T) {
 	}
 }
 
+// The budgets a decision spends and the docket that same conversation reads are
+// one record. A development manager who records a re-run and then finds the
+// docket showing nothing decided is how one authorized recovery is nearly spent
+// twice, once by them and once by whoever is helping them.
+func TestTheDocketReportsWhatTheWiredBudgetSpent(t *testing.T) {
+	// Not parallel: the state root the components read is set here.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	parts, err := buildComponents(writeConfig(t, validConfig))
+	if err != nil {
+		t.Fatalf("buildComponents() error = %v", err)
+	}
+	if err := parts.store.Create(stoppedRunOf("yoyodyne-ifd.90")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	budgets := conversationTriage(parts, domain.RoleDevelopmentManager)
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); err != nil {
+		t.Fatalf("RecordRerun() through the wired budget error = %v", err)
+	}
+
+	built, err := docketerFrom(parts).Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 1 {
+		t.Fatalf("docket = %#v, want the stopped run", built.Entries)
+	}
+	entry := built.Entries[0]
+	if entry.Counters.Reruns != 1 || entry.Counters.RerunsCap != 1 || entry.Counters.RerunsCarriedOut != 0 {
+		t.Fatalf("counters = %#v, want the decision the budget just recorded", entry.Counters)
+	}
+	if !strings.Contains(entry.Render(), "already recorded and not yet carried out") {
+		t.Fatalf("the entry does not show the decision as authorized:\n%s", entry.Render())
+	}
+	// The guard refuses a second against the same record the entry just showed,
+	// which is the whole of what makes what it showed worth reading.
+	if _, err := budgets.RecordRerun(context.Background(), "yoyodyne-ifd.90"); !errors.Is(err, runstate.ErrTriageCapReached) {
+		t.Fatalf("a second re-run through the wired budget error = %v, want a cap refusal", err)
+	}
+}
+
 // stoppedRunState records one run that ended on a durable blocker, which is
 // what a docket build has to find.
 func stoppedRunState(t *testing.T) *runstate.Store {
@@ -440,13 +481,21 @@ func stoppedRunState(t *testing.T) *runstate.Store {
 	if err != nil {
 		t.Fatalf("runstate.NewStore() error = %v", err)
 	}
+	if err := store.Create(stoppedRunOf("yoyodyne-task")); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	return store
+}
+
+// stoppedRunOf is one run of a work item that ended on a durable blocker.
+func stoppedRunOf(workItemID string) runstate.State {
 	completed := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
-	state := runstate.State{
+	return runstate.State{
 		SchemaVersion: runstate.StateSchemaVersion,
 		RunID:         "run-0123456789abcdef0123456789abcdef",
 		ProductID:     "yoyodyne",
 		RepositoryID:  "yoyodyne",
-		WorkItemID:    "yoyodyne-task",
+		WorkItemID:    workItemID,
 		Backend:       domain.BackendClaudeCode,
 		Status:        runstate.StatusFailed,
 		Phase:         runstate.PhaseReviewing,
@@ -459,10 +508,6 @@ func stoppedRunState(t *testing.T) *runstate.Store {
 		ReviewRounds:  3,
 		Blocker:       "Yoyodyne stopped this item: the repair budget was spent.",
 	}
-	if err := store.Create(state); err != nil {
-		t.Fatalf("Create() error = %v", err)
-	}
-	return store
 }
 
 func docketerOverRuns(t *testing.T, runs *runstate.Store) *orchestrator.Docketer {
@@ -471,9 +516,16 @@ func docketerOverRuns(t *testing.T, runs *runstate.Store) *orchestrator.Docketer
 	if err != nil {
 		t.Fatalf("runstate.NewDocketStore() error = %v", err)
 	}
+	triage := config.Triage{StuckMergeAge: config.Duration(2 * time.Hour), ReviewRoundsCap: 4, RepairGrantAttempts: 2}
 	return &orchestrator.Docketer{
 		Docket: docket,
 		Runs:   runs,
-		Triage: config.Triage{StuckMergeAge: config.Duration(2 * time.Hour), ReviewRoundsCap: 4, RepairGrantAttempts: 2},
+		// The same durable records the conversation's triage budgets spend, so the
+		// docket the development manager reads and the guards that refuse a
+		// decision are one record rather than two.
+		Decisions: runs.Triage(),
+		Reruns:    runs.Reruns(),
+		Caps:      orchestrator.TriageCaps(config.Execution{IntegrationRetriesBeforeReconciliation: 1}, triage),
+		Triage:    triage,
 	}
 }

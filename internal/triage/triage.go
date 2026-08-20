@@ -29,6 +29,7 @@ package triage
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -164,6 +165,12 @@ type Publication struct {
 // configured it may spend. Both halves travel together on purpose: a
 // development manager that sees five rounds without seeing the cap of four
 // cannot tell whether granting another is a decision or a contradiction.
+//
+// Every figure here is read from the durable per-item triage record the guards
+// spend and refuse against, rather than counted again from somewhere else. That
+// is the whole of what stops the two disagreeing: a view working from its own
+// count can show a decision as unrecorded that the guard would refuse a second
+// of, which is how one authorized recovery nearly got spent twice.
 type Counters struct {
 	// ReviewRounds is how many reviews this work item has accumulated across
 	// every run made for it, and ReviewRoundsCap is the configured total past
@@ -174,6 +181,38 @@ type Counters struct {
 	// RepairGrantAttempts is what a grant would hand the item.
 	RepairAttempts      int `json:"repair_attempts"`
 	RepairGrantAttempts int `json:"repair_grant_attempts"`
+	// The three decisions triage records against a durable budget, each beside
+	// the cap that refuses the next one. A decision is spent as it is recorded
+	// and long before anything acts on it, so an entry that showed none of them
+	// would describe an item nobody had decided anything about — which is exactly
+	// what an item with a decision already standing looks like from the outside.
+	RepairGrants    int `json:"repair_grants"`
+	RepairGrantsCap int `json:"repair_grants_cap"`
+	Reruns          int `json:"reruns"`
+	RerunsCap       int `json:"reruns_cap"`
+	MergeRearms     int `json:"merge_rearms"`
+	MergeRearmsCap  int `json:"merge_rearms_cap"`
+	// RerunsCarriedOut is how many of the recorded re-runs the harness has
+	// actually claimed. It is the other half of the re-run gate: a decision
+	// authorizes one re-run, so an item with as many claims as decisions has had
+	// everything triage decided about it carried out, and the counter alone
+	// cannot tell that from a decision still waiting to be acted on.
+	RerunsCarriedOut int `json:"reruns_carried_out"`
+}
+
+// Decided reports triage having recorded a re-run of this item that the harness
+// has not carried out. It is the state that most needs saying out loud: the
+// decision is already spent, so deciding a second is a second decision rather
+// than a repeat of this one.
+func (c Counters) Decided() bool { return c.Reruns > c.RerunsCarriedOut }
+
+// Rerun is the re-run the harness has already claimed against one docketed
+// stoppage: what a guard refuses a second of, named on the entry it is about.
+// RunID is the fresh run it started, and is absent on a claim whose run never
+// got as far as being reserved.
+type Rerun struct {
+	ClaimedAt time.Time `json:"claimed_at"`
+	RunID     string    `json:"run_id,omitempty"`
 }
 
 // Exhausted reports an item that has already accumulated the configured review
@@ -215,6 +254,17 @@ type Entry struct {
 	Artifacts   Artifacts    `json:"artifacts"`
 	Publication *Publication `json:"publication,omitempty"`
 	Counters    Counters     `json:"counters"`
+	// Rerun is the re-run already claimed against this entry's own stoppage, when
+	// there is one. It is joined to the entry where the docket is read rather
+	// than written into the log: an entry is recorded once as the work stops, and
+	// every decision about it is made afterwards, so a claim frozen into the
+	// entry could only ever be absent.
+	Rerun *Rerun `json:"rerun,omitempty"`
+	// CountersProblem is why the item's durable triage record could not be read
+	// for this entry. It is stated rather than left to zeros, which would read as
+	// an item nothing has been decided about — the one reading that turns an
+	// unreadable record into a second decision nobody meant to make.
+	CountersProblem string `json:"counters_problem,omitempty"`
 }
 
 // Key names the durable event an entry is about. It is derived rather than
@@ -224,6 +274,30 @@ type Entry struct {
 // publication is one event however many sweeps walk past it.
 func Key(class Class, runID string) string {
 	return string(class) + ":" + strings.TrimSpace(runID)
+}
+
+// PublicationKey names the publication event: the run that made the publication
+// and the pull request it made. The pull request is part of the identity rather
+// than only evidence carried on the entry, because "the publication of this run"
+// is not by itself something anybody can point at — one run can publish more
+// than once, and a reader that has to work out which publication an entry is
+// about from the item's state is a reader that can work it out wrongly. A key
+// built from the two durable facts is what nothing has to interpret.
+func PublicationKey(runID string, number int) string {
+	return Key(ClassPublication, runID) + "#" + strconv.Itoa(number)
+}
+
+// keys are the keys one entry may legitimately carry. There are two only for a
+// publication, and only for what is already on disk: entries recorded before the
+// pull request joined the key name the run alone, and the docket is an
+// append-only log that nothing rewrites. Both are accepted where an entry is
+// read and one is written where an entry is made.
+func (e Entry) keys() []string {
+	derived := []string{Key(e.Class, e.RunID)}
+	if e.Class == ClassPublication && e.Publication != nil {
+		derived = append(derived, PublicationKey(e.RunID, e.Publication.Number))
+	}
+	return derived
 }
 
 // Validate reports every contract violation in the entry at once.
@@ -240,7 +314,7 @@ func (e Entry) Validate() error {
 		problems = append(problems, errors.New("key is required"))
 	case len(key) > MaxKeyBytes:
 		problems = append(problems, fmt.Errorf("key is %d bytes, limit is %d", len(key), MaxKeyBytes))
-	case e.Class.Valid() && key != Key(e.Class, e.RunID):
+	case e.Class.Valid() && !slices.Contains(e.keys(), key):
 		// A key that does not derive from the event it claims to describe would
 		// make two records of one stoppage, which is the one thing the key exists
 		// to prevent.
@@ -358,7 +432,50 @@ func (e Entry) Render() string {
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %d review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
 		e.Counters.ReviewRounds, e.Counters.ReviewRoundsCap, exhaustedNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
+	rendered.WriteString(e.renderDecisions())
 	return rendered.String()
+}
+
+// renderDecisions says what triage has already decided about this item, in the
+// figures the guards will be read against. It is never silent: a decision the
+// guard would refuse a second of and an entry that shows nothing recorded are
+// how one authorized recovery is nearly spent twice, once by the development
+// manager and once by whoever is helping them.
+func (e Entry) renderDecisions() string {
+	if e.CountersProblem != "" {
+		return indented("Triage decisions could not be read",
+			e.CountersProblem+"\nThis says nothing about what has been decided: read the record before deciding anything that spends a budget.")
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %d repair grant(s); %d of %d re-run(s), %d carried out; %d of %d merge re-arm(s)\n",
+		e.Counters.RepairGrants, e.Counters.RepairGrantsCap,
+		e.Counters.Reruns, e.Counters.RerunsCap, e.Counters.RerunsCarriedOut,
+		e.Counters.MergeRearms, e.Counters.MergeRearmsCap)
+	rendered.WriteString(e.renderRerunStanding())
+	return rendered.String()
+}
+
+// renderRerunStanding says where this stoppage stands with the one re-run it
+// gets, which is the question the counters above cannot answer on their own: the
+// re-run counter is a total nothing clears, so what it means for this entry
+// depends on what has been claimed against it.
+func (e Entry) renderRerunStanding() string {
+	if e.Rerun != nil {
+		if e.Rerun.RunID == "" {
+			return fmt.Sprintf("      This stoppage was already re-run at %s and no fresh run was recorded for it; triage re-runs a docketed stoppage once, so another is refused.\n",
+				e.Rerun.ClaimedAt.UTC().Format(time.RFC3339))
+		}
+		return fmt.Sprintf("      This stoppage was already re-run as run %s; triage re-runs a docketed stoppage once, so another is refused.\n", e.Rerun.RunID)
+	}
+	if e.Counters.Decided() {
+		return fmt.Sprintf("      A re-run of %s is already recorded and not yet carried out, so this stoppage may be run again on the decision that stands; deciding another would spend a further one rather than repeat it.\n",
+			e.WorkItemID)
+	}
+	if e.Counters.Reruns > 0 {
+		return fmt.Sprintf("      Every recorded re-run of %s has been carried out, so this stoppage has no decision of its own to act on; a further one is refused past the cap and is an escalation rather than a larger budget.\n",
+			e.WorkItemID)
+	}
+	return ""
 }
 
 // item names the work an entry is about: the identifier, which is what the

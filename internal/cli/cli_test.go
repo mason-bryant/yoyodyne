@@ -19,6 +19,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 func TestRunHelp(t *testing.T) {
@@ -537,7 +538,14 @@ func TestPipelineGivesChecksTheConfiguredBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	runner, ok := pipelineFrom(components{config: cfg}).Checks.(checks.Runner)
+	// The durable records the pipeline is wired over are real ones under a
+	// temporary root: the triage docket it dockets a stoppage into reads the
+	// item's triage record beside them.
+	store, err := runstate.NewStore(t.TempDir(), cfg.Product.ID)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	runner, ok := pipelineFrom(components{config: cfg, store: store}).Checks.(checks.Runner)
 	if !ok {
 		t.Fatal("the pipeline's check runner is not a checks.Runner")
 	}

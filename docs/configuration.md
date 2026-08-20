@@ -1901,6 +1901,20 @@ spend rather than against the evidence alone. Deciding what becomes
 of a docketed item is the development manager's; the caps are what refuse a
 decision that would spend more than the item is allowed.
 
+**The docket reads the record the guards enforce, not a count of its own.** Every
+figure on an entry — the rounds spent, each decision recorded, and each cap
+beside it — comes from the [per-item counters](#what-one-work-item-has-been-given)
+a decision spends, and the re-runs already carried out come from the per-stoppage
+re-run records under `<state root>/products/<product id>/reruns/`. It
+is read as the docket is read rather than written into the entry: the entry is
+recorded once as the work stops and every decision about it is made afterwards,
+so an entry frozen at docket time could only ever show every decision as absent.
+That was the defect — a re-run decided and durably recorded, a resubmission
+refused as one of one re-runs spent, and a docket showing nothing decided, which
+nearly had one authorized recovery spent twice. An item whose record cannot be
+read says so on its entries instead of rendering as an item nobody has decided
+anything about.
+
 The docket is built when something scans: `yoyo reconcile`, and the moment a
 development manager conversation opens. There is no scheduled process behind it,
 so `stuck_merge_age` is a floor rather than a promise — a publication becomes
@@ -2058,6 +2072,11 @@ grant, a re-run, a merge re-arm — and `wait`, `rescope`, and `escalate` cost
 nothing and reach no counter, so an item that was escalated reads `triage has
 spent nothing on it`. Whether stopped work has been decided, and what was
 decided, is recorded on the work item itself.
+
+**This is also what the docket reports.** Every entry for an item carries these
+counters and these caps, read as the docket is read, so what `yoyo status` says
+about an item, what a docket entry says about it, and what refuses the next
+decision about it are one record rather than three counts of it.
 
 **A round is a reviewer verdict a developer attempt produced**, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a

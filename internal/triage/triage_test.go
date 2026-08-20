@@ -167,6 +167,99 @@ func TestOneEventHasOneKeyWhoeverDerivesIt(t *testing.T) {
 	if Key(ClassStoppedRun, run) == Key(ClassPublication, run) {
 		t.Fatalf("a run's stoppage and its publication share a key, so one would hide the other")
 	}
+	// A publication is the run and the pull request together, so two publications
+	// of one run are two events rather than one entry standing for both.
+	if PublicationKey(run, 42) == PublicationKey(run, 43) {
+		t.Fatalf("two publications of one run share a key, so one would hide the other")
+	}
+	if !strings.HasPrefix(PublicationKey(run, 42), Key(ClassPublication, run)) {
+		t.Fatalf("a publication key does not name the publication event: %s", PublicationKey(run, 42))
+	}
+}
+
+// A publication entry names the run and the pull request it is about, and the
+// entries already on the docket name the run alone. Both are accepted, because
+// the docket is an append-only log that nothing rewrites: refusing the older
+// form would make every docket carrying one unreadable.
+func TestAPublicationEntryIsAcceptedUnderEitherKeyItCanCarry(t *testing.T) {
+	t.Parallel()
+
+	current := publicationEntry()
+	current.Key = PublicationKey(current.RunID, current.Publication.Number)
+	if err := current.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v for the key the harness now writes", err)
+	}
+	// The key of some other pull request of the same run is not this entry's, and
+	// is what the check exists to catch.
+	other := publicationEntry()
+	other.Key = PublicationKey(other.RunID, other.Publication.Number+1)
+	if err := other.Validate(); err == nil || !strings.Contains(err.Error(), "does not name the publication event") {
+		t.Fatalf("Validate() error = %v, want the mismatched publication refused", err)
+	}
+}
+
+// The docket is where a decision is made, so what has already been decided has
+// to be on it. A guard that refuses a second re-run while the entry shows
+// nothing recorded is how one authorized recovery is spent twice.
+func TestARenderedEntrySaysWhatTriageHasAlreadyDecided(t *testing.T) {
+	t.Parallel()
+
+	decided := stoppedRunEntry()
+	decided.Counters.RepairGrants, decided.Counters.RepairGrantsCap = 1, 1
+	decided.Counters.Reruns, decided.Counters.RerunsCap = 1, 1
+	decided.Counters.MergeRearmsCap = 1
+	for _, want := range []string{
+		"1 of 1 repair grant(s)",
+		"1 of 1 re-run(s), 0 carried out",
+		"0 of 1 merge re-arm(s)",
+		"already recorded and not yet carried out",
+	} {
+		if rendered := decided.Render(); !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// Once it has been carried out against this stoppage, the entry says that
+	// instead: the counter is a total nothing clears, so it cannot say on its own
+	// whether this stoppage may still be run again.
+	carriedOut := decided
+	carriedOut.Counters.RerunsCarriedOut = 1
+	carriedOut.Rerun = &Rerun{
+		ClaimedAt: time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC),
+		RunID:     "run-fedcba9876543210fedcba9876543210",
+	}
+	rendered := carriedOut.Render()
+	if !strings.Contains(rendered, "already re-run as run run-fedcba9876543210fedcba9876543210") {
+		t.Fatalf("rendered entry does not say this stoppage was re-run:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "not yet carried out") {
+		t.Fatalf("a spent decision was rendered as one still standing:\n%s", rendered)
+	}
+
+	// A claim whose fresh run never existed is still a claim, and the entry says
+	// so rather than reading as a stoppage nothing was done about.
+	unstarted := carriedOut
+	unstarted.Rerun = &Rerun{ClaimedAt: time.Date(2026, 8, 19, 13, 0, 0, 0, time.UTC)}
+	if rendered := unstarted.Render(); !strings.Contains(rendered, "no fresh run was recorded for it") {
+		t.Fatalf("rendered entry does not say the claim started nothing:\n%s", rendered)
+	}
+}
+
+// A triage record that could not be read is stated. Rendering it as an item with
+// nothing decided about it is the one reading that turns an unreadable record
+// into a decision taken twice.
+func TestARenderedEntrySaysWhenTheTriageRecordCouldNotBeRead(t *testing.T) {
+	t.Parallel()
+
+	entry := stoppedRunEntry()
+	entry.CountersProblem = "read what triage has recorded about yoyodyne-task: permission denied"
+	rendered := entry.Render()
+	if !strings.Contains(rendered, "Triage decisions could not be read: read what triage has recorded") {
+		t.Fatalf("rendered entry does not say the record could not be read:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Triage decisions recorded") {
+		t.Fatalf("an unreadable record was rendered as decisions:\n%s", rendered)
+	}
 }
 
 func TestARenderedEntryCarriesTheEvidenceSomebodyDecidesOn(t *testing.T) {
