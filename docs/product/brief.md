@@ -8,6 +8,10 @@ revisions:
       by: product-manager
       at: 2026-08-17T00:00:00Z
       reason: identity added with the artifact metadata schema; the prose is unchanged
+    - action: amended
+      by: product-manager
+      at: 2026-08-20T20:00:52Z
+      reason: added the operations goal, drafted by the product manager as post-v1 intent and approved by the operator as drafted, asked one decision at a time on 2026-08-20; it gates nothing in v1
 approvals:
     - revision: 0
       by: operator
@@ -80,3 +84,6 @@ stops, not limits on what the product is for.
 - **Safety invariants hold whatever the configuration says.** Roles, policies,
   and providers are the operator's to change; the boundaries that keep agents
   from reaching outside the harness are not optional.
+- **The system can operate what it ships.** For products that enable it, an
+  operations role watches the running software, performs bounded recovery within
+  recorded runbooks, and deploys only with the operator's explicit approval.
