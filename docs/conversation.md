@@ -3,6 +3,18 @@
 *For an operator driving work from `yoyo chat`. Part of
 [yoyo's documentation](../README.md#further-reading).*
 
+> **Where its links point while the split is in progress.** This document is
+> tranche 1 of the README split, so two of the documents it links to are not
+> written yet. Resolving today: every `configuration.md` anchor it cites,
+> `work.md#letting-the-harness-choose-the-work`,
+> `reporting.md#what-agents-report-and-where-it-reaches-you`, its own
+> `#directives-and-the-work-they-pause` and
+> `#deciding-what-becomes-of-stopped-work`, and `../README.md#further-reading`
+> — the README is untouched by this tranche and keeps that heading. Not yet:
+> `artifacts.md#goals-and-what-work-serves-them` and
+> `operations.md#pausing-everything-and-resuming-it`, which arrive in tranche
+> 2. This note goes when they do.
+
 The product manager reads the product specifications — every Markdown file under
 `product.specifications`, which defaults to `docs/product` — plus the open Beads
 items, and discusses product intent with you. It owns the queue that serves that
