@@ -75,10 +75,11 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		sayWith(kind, severity, speaker, detail, "")
 	}
 
-	// The development manager is the speaker for a run starting because pulling
-	// work is its act, whoever chose the item; the reason it carries says which.
+	// A run starting is the one crossing whose speaker varies, and it follows the
+	// selector the record names: a persona must not narrate a selection it never
+	// made.
 	if started {
-		say(KindRunStarted, report.SeverityNote, Persona(domain.RoleDevelopmentManager, ""), selectionDetail(after.Selection))
+		say(KindRunStarted, report.SeverityNote, selectionSpeaker(after.Selection), selectionDetail(after.Selection))
 	}
 	if parked(before) && !parked(after) && !after.Status.Terminal() {
 		say(KindRunContinued, report.SeverityNote, Harness(), Detail{})
@@ -247,6 +248,21 @@ func topicForItem(workItemID string) (Topic, error) {
 // this item. A run recorded before selections existed carries none, and the
 // absence is stated rather than rendered as a blank — an unaccounted run is
 // exactly what recording the reason exists to make visible.
+// selectionSpeaker is whose account the start of a run is. The development
+// manager speaks where its triage chose the item, because that choice is its own
+// judgment; everything else is the harness, which is the same rule the whole
+// table follows. The operator is not a persona and the scheduler is not a role,
+// so neither has a voice to be spoken in, and a run whose selection nothing
+// recorded has nobody to attribute at all — the harness's flat sentence is the
+// honest account of it rather than a persona claiming a choice the record cannot
+// show it made.
+func selectionSpeaker(selection *runstate.Selection) Speaker {
+	if selection == nil || strings.TrimSpace(selection.By) != runstate.SelectedByDevelopmentManager {
+		return Harness()
+	}
+	return Persona(domain.RoleDevelopmentManager, "")
+}
+
 func selectionDetail(selection *runstate.Selection) Detail {
 	if selection == nil {
 		return Detail{}
