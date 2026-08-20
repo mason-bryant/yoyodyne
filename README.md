@@ -225,12 +225,14 @@ keeps pointing where it points, and a Slack token already stored is left alone â
 and it keeps no record of its own, which is what makes running it again
 safe: every step looks at your installation first, says what was already true,
 and resumes an interrupted setup where it actually got to rather than where a
-record claims. `--yes` answers every question with the answer it proposes, which
-is what carries the walk out with nobody at the terminal. `--json` on its own
-asks nothing and *changes* nothing: it reports the same steps machine-readably,
-saying what is already true and what would still have to be done, so reading the
-report is never consent to alter the machine. `yoyo setup --yes --json` is the
-pair that both carries the walk out and reports it.
+record claims. `--yes` answers every question setup asks with the answer it
+proposes; the one prompt it cannot answer for you is the keychain's own, which
+waits for each Slack token to be typed. `--json` on its own asks nothing and
+*changes* nothing: it reports the same steps machine-readably, saying what is
+already true and what would still have to be done, so reading the report is
+never consent to alter the machine. `yoyo setup --yes --json` is what carries a
+walk out with nobody at the terminal â€” it leaves the keychain step, and only
+that step, to a walk somebody is watching.
 
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role

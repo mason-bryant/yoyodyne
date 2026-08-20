@@ -42,6 +42,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -115,8 +116,8 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	directory := flags.String("directory", ".", "project directory to set up")
 	product := flags.String("product", "", "product id (default: the project directory name)")
 	channel := flags.String("slack-channel", "", "Slack channel to report into, which is also how the optional Slack walk is answered without being asked")
-	assumeYes := flags.Bool("yes", false, "answer every question with the answer setup proposes, and ask nothing")
-	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
+	assumeYes := flags.Bool("yes", false, "answer every question setup asks with the answer it proposes")
+	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON, asking nothing and, without --yes, changing nothing")
 	if err := flags.Parse(args); err != nil {
 		return 2
 	}
@@ -441,10 +442,13 @@ func (s *setup) ensureConfiguration(ctx context.Context) setupStep {
 // deliberately syncs its tracker somewhere else -- a repository of its own,
 // which bd supports with any Git URL -- must not have that decision undone by
 // something that ran to set up a machine, so an `origin` that is already there
-// is reported and left. That is also why this asks nothing: the only thing it
-// can do is fill in a remote that is unset, which is what `yoyo init` has always
-// done, and the alternative to filling it in is a backlog that silently differs
-// on every machine.
+// is reported and left.
+//
+// Everything it does before the question is a read, and the write is behind the
+// question like every other write here. That ordering is the whole of what makes
+// `yoyo setup --json` a report rather than an act: asking what a machine needs
+// is not consent to do it, and a step that mutated on the way to answering would
+// make the report itself the change.
 func (s *setup) ensureTrackerRemote(ctx context.Context, tracker setupStep) setupStep {
 	if tracker.Status != setupAlready && tracker.Status != setupDone {
 		// Reading or setting where the tracker syncs is asking the tracker, and
@@ -459,23 +463,29 @@ func (s *setup) ensureTrackerRemote(ctx context.Context, tracker setupStep) setu
 		}
 	}
 	repository := s.repository()
-	remote := configureTrackerRemote(ctx, repository, "", s.runner)
-	switch remote.Status {
-	case trackerRemoteConfigured:
+	held, err := (beads.Client{Runner: s.runner, Dir: repository, Timeout: trackerCommandTimeout}).SyncRemotes(ctx)
+	if err != nil {
 		return setupStep{
 			Step:    stepTrackerRemote,
-			Status:  setupDone,
-			Summary: fmt.Sprintf("the tracker now syncs through %s: %s", remote.Name, remote.URL),
-			Detail:  "the backlog is shared over this project's own Git remote rather than one per machine",
+			Status:  setupHandedOff,
+			Summary: "bd would not say where the tracker syncs, so it was left as it is",
+			Detail:  singleLine(err.Error()),
+			Remedy:  fmt.Sprintf("bd dolt remote add %s <url>%s", trackerRemoteName, inDirectoryNote(repository)),
 		}
-	case trackerRemoteUnchanged:
-		return setupStep{
-			Step:    stepTrackerRemote,
-			Status:  setupAlready,
-			Summary: fmt.Sprintf("the tracker already syncs through %s: %s", remote.Name, remote.URL),
-			Detail:  "setup leaves a remote the tracker already holds exactly as it is",
+	}
+	for _, remote := range held {
+		if remote.Name == trackerRemoteName {
+			return setupStep{
+				Step:    stepTrackerRemote,
+				Status:  setupAlready,
+				Summary: fmt.Sprintf("the tracker already syncs through %s: %s", remote.Name, remote.URL),
+				Detail:  "setup leaves a remote the tracker already holds exactly as it is",
+			}
 		}
-	case trackerRemoteSkipped:
+	}
+
+	url, absence := gitRemoteURL(ctx, s.runner, repository, trackerRemoteName)
+	if url == "" {
 		// Nothing is wrong with this project; it has nowhere to sync to yet.
 		// It is still said, and still carries the command, because a per-machine
 		// backlog is discovered at the first divergence otherwise.
@@ -483,18 +493,39 @@ func (s *setup) ensureTrackerRemote(ctx context.Context, tracker setupStep) setu
 			Step:    stepTrackerRemote,
 			Status:  setupSkipped,
 			Summary: "the tracker syncs nowhere, so this machine's backlog is its own",
-			Detail:  singleLine(remote.Reason),
+			Detail:  singleLine(absence),
 			Remedy: fmt.Sprintf("git -C %s remote add %s <url> && %s",
 				shellQuote(repository), trackerRemoteName, s.setupCommand()),
 		}
-	default:
+	}
+	uncommitted := fmt.Sprintf("bd dolt remote add %s %s%s", trackerRemoteName, url, inDirectoryNote(repository))
+	if !s.ask.confirm(fmt.Sprintf("Sync the tracker through %s, so the backlog is shared rather than one per machine?", url), true) {
+		return setupStep{
+			Step:    stepTrackerRemote,
+			Status:  setupSkipped,
+			Summary: "the tracker syncs nowhere, so this machine's backlog is its own",
+			Detail:  fmt.Sprintf("this project's Git remote %s is what it would ride on", url),
+			Remedy:  uncommitted,
+		}
+	}
+	// The URL that was asked about is the URL that is configured, rather than
+	// one read again afterwards: a remote quietly different from the one the
+	// answer was given for is not the thing that was agreed to.
+	remote := configureTrackerRemote(ctx, repository, url, s.runner)
+	if remote.Status != trackerRemoteConfigured {
 		return setupStep{
 			Step:    stepTrackerRemote,
 			Status:  setupHandedOff,
-			Summary: "bd would not say where the tracker syncs, so it was left as it is",
+			Summary: "bd would not point the tracker at this project's Git remote",
 			Detail:  singleLine(remote.Reason),
-			Remedy:  fmt.Sprintf("bd dolt remote add %s <url>%s", trackerRemoteName, inDirectoryNote(repository)),
+			Remedy:  uncommitted,
 		}
+	}
+	return setupStep{
+		Step:    stepTrackerRemote,
+		Status:  setupDone,
+		Summary: fmt.Sprintf("the tracker now syncs through %s: %s", remote.Name, remote.URL),
+		Detail:  "the backlog is shared over this project's own Git remote rather than one per machine",
 	}
 }
 
@@ -1060,9 +1091,13 @@ Options:
   --product <id>            product id (default: the project directory name)
   --slack-channel <id>      the channel reporting goes into, which also answers
                             the optional Slack walk without being asked
-  --yes                     answer every question with the answer setup proposes
+  --yes                     answer every question setup asks with the answer it
+                            proposes. The keychain's own prompt is not one of
+                            them: it still waits for each token to be typed
   --json                    emit machine-readable JSON. On its own it asks
                             nothing and changes nothing, reporting what is
                             already true and what is still to be done; with
-                            --yes it carries the walk out and reports it`))
+                            --yes it carries the walk out and reports it,
+                            leaving the keychain step to a walk with somebody
+                            behind it`))
 }

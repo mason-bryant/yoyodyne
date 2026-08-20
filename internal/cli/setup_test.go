@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,7 +25,10 @@ func TestSetupWalksABlankProjectToAnInstallationThatCanRunWork(t *testing.T) {
 
 	world := newSetupWorld(t)
 	world.trackerReady = false
-	world.answers = "\n\n" // the tracker and the configuration, both proposed yes
+	world.trackerRemote = ""
+	// The tracker, the configuration, and where the tracker syncs: all three
+	// proposed yes.
+	world.answers = "\n\n\n"
 
 	report := world.walk()
 
@@ -121,7 +125,7 @@ func TestSetupPointsTheTrackerAtTheGitRemoteOnAProjectThatIsAlreadyConfigured(t 
 	world.trackerReady = false
 	world.trackerRemote = ""
 	world.runner.commands = nil
-	world.answers = "\n" // only the tracker has anything to ask about
+	world.answers = "\n\n" // the tracker, and then where it syncs
 
 	report := world.walk()
 
@@ -145,6 +149,69 @@ func TestSetupPointsTheTrackerAtTheGitRemoteOnAProjectThatIsAlreadyConfigured(t 
 	}
 	if world.runner.ran("dolt remote add") {
 		t.Error("setup configured a sync remote the tracker already held")
+	}
+}
+
+// Asking what a machine needs is not consent to do it. This is the state that
+// distinguishes a report from an act -- a configured project whose tracker
+// answers and whose sync remote is not set, which is the one thing left that
+// setup could carry out with no question answered -- so it is arranged
+// deliberately rather than left to a blank directory where nothing is reachable
+// anyway.
+func TestSetupChangesNothingWhenItIsOnlyBeingAskedForAReport(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.trackerRemote = ""
+	world.answers = "\nn\n" // configure the project, and decline the sync remote for now
+	world.walk()
+	if world.trackerRemote != "" {
+		t.Fatalf("a declined sync remote was configured anyway: %q", world.trackerRemote)
+	}
+
+	// What `--json` without `--yes` leaves the walk as: nothing may be asked, so
+	// nothing may be done.
+	world.closed = true
+	world.answers = ""
+	world.runner.commands = nil
+	report := world.walk()
+
+	step := world.step(report, stepTrackerRemote)
+	if step.Status != setupSkipped {
+		t.Fatalf("tracker-remote step = %s (%s), want it left for a walk somebody answers", step.Status, step.Summary)
+	}
+	if step.Remedy == "" {
+		t.Error("the step nobody was asked about says nothing about what would do it")
+	}
+	if world.runner.ran("dolt remote add") || world.trackerRemote != "" {
+		t.Fatal("reading a report configured the tracker's sync remote")
+	}
+	// And the machine is otherwise exactly as it was: nothing here writes.
+	for _, forbidden := range []string{"bd init", "add-generic-password"} {
+		if world.runner.ran(forbidden) {
+			t.Errorf("reading a report ran %q", forbidden)
+		}
+	}
+}
+
+// The questioner is where consent is decided, so the two states that decide it
+// are pinned here rather than inferred from the walks above: --yes takes the
+// answer setup proposes, and a walk nobody can answer declines everything --
+// including the questions whose proposed answer is yes.
+func TestQuestionerTakesDefaultsOnlyWhenItWasToldTo(t *testing.T) {
+	t.Parallel()
+
+	assuming := &questioner{out: io.Discard, defaults: true}
+	if !assuming.confirm("proposed yes", true) || assuming.confirm("proposed no", false) {
+		t.Error("--yes did not answer with what setup proposed")
+	}
+
+	unanswerable := &questioner{out: io.Discard, closed: true}
+	if unanswerable.confirm("proposed yes", true) || unanswerable.confirm("proposed no", false) {
+		t.Error("a question nobody could answer was taken as a yes")
+	}
+	if unanswerable.line("which channel?", "C1") != "" {
+		t.Error("a line nobody typed was taken from the command line instead")
 	}
 }
 
@@ -374,10 +441,16 @@ func unfinishedSetups() map[string]func(*setupWorld) {
 			w.answers = "n\n"
 		},
 		"the project has no Git remote for the tracker to sync through": func(w *setupWorld) {
+			w.trackerRemote = ""
 			w.gitRemote = ""
 			w.answers = "\n"
 		},
+		"the operator declines the tracker's sync remote": func(w *setupWorld) {
+			w.trackerRemote = ""
+			w.answers = "\nn\n"
+		},
 		"bd will not say where the tracker syncs": func(w *setupWorld) {
+			w.trackerRemote = ""
 			w.runner.refuse("dolt remote list")
 			w.answers = "\n"
 		},
@@ -523,8 +596,11 @@ type setupWorld struct {
 	gitRemote     string
 	slackChannel  string
 	defaults      bool
-	answers       string
-	out           bytes.Buffer
+	// closed is the walk with nobody behind it: what `--json` without `--yes`
+	// puts the questioner in, and what an input that has run out reaches.
+	closed  bool
+	answers string
+	out     bytes.Buffer
 }
 
 func newSetupWorld(t *testing.T) *setupWorld {
@@ -543,13 +619,14 @@ func newSetupWorld(t *testing.T) *setupWorld {
 	}
 
 	world := &setupWorld{
-		t:            t,
-		project:      project,
-		stateRoot:    filepath.Join(root, "state"),
-		goos:         "darwin",
-		missing:      map[string]bool{},
-		trackerReady: true,
-		gitRemote:    "file:///origin.git",
+		t:             t,
+		project:       project,
+		stateRoot:     filepath.Join(root, "state"),
+		goos:          "darwin",
+		missing:       map[string]bool{},
+		trackerReady:  true,
+		trackerRemote: "file:///origin.git",
+		gitRemote:     "file:///origin.git",
 	}
 	world.runner = &setupRunner{world: world, keychain: map[string]bool{}, refusals: map[string]bool{}}
 	return world
@@ -568,7 +645,7 @@ func (w *setupWorld) walk() setupReport {
 		homeDir:      func() (string, error) { return w.project, nil },
 		goos:         w.goos,
 		stdin:        strings.NewReader(w.answers),
-		ask:          &questioner{reader: bufio.NewReader(strings.NewReader(w.answers)), out: &w.out, defaults: w.defaults},
+		ask:          &questioner{reader: bufio.NewReader(strings.NewReader(w.answers)), out: &w.out, defaults: w.defaults, closed: w.closed},
 	}
 	return walk.converge(context.Background())
 }
