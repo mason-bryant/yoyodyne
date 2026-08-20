@@ -21,11 +21,25 @@
 # both.
 version: 1
 
+# The humans this project recognizes, one entry each, binding the identifier
+# namespaces they are known by. Authority attaches to the human rather than to
+# any one namespace: an act is authorized by resolving whichever namespace it
+# arrived through -- a commit's address, a push's forge account, a thread
+# reply's member id -- to a person, and then asking what that person may do.
+# The Slack allow-list is derived from this rather than authored beside it: the
+# humans granted direct-work who bound a slack_member_id.
+operators:
+  mason-bryant:
+    git_email: hamneggs@gmail.com
+    forge_account: mason-bryant
+    slack_member_id: U0BR9M2EKKP # from your profile → "Copy member ID"
+    grants:
+      - own-intent
+      - direct-work
+
 slack:
   enabled: true
   channel: C0BQY3ZHE8P
-  operators:
-    - U0BR9M2EKKP # the operator's Slack member id, from your profile → "Copy member ID"
 
 product:
   id: yoyodyne

@@ -280,10 +280,18 @@ func (r *resolution) apply(applied layer) error {
 	if slack := document.Slack; slack != nil {
 		setValue(r.origins, "slack.enabled", slack.Enabled, &r.config.Slack.Enabled, applied.origin)
 		setValue(r.origins, "slack.channel", slack.Channel, &r.config.Slack.Channel, applied.origin)
-		if slack.Operators != nil {
-			r.config.Slack.Operators = append([]string(nil), (*slack.Operators)...)
-			r.origins["slack.operators"] = applied.origin
+	}
+	// A supplied operators mapping replaces the inherited one entirely, for the
+	// reason the check list below does and with more riding on it: it says who may
+	// act, and a mapping half from one layer and half from another is not the set
+	// of humans either layer named.
+	if document.Operators != nil {
+		operators := make(map[string]Operator, len(*document.Operators))
+		for name, operator := range *document.Operators {
+			operators[name] = operator.clone()
 		}
+		r.config.Operators = operators
+		r.origins["operators"] = applied.origin
 	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate

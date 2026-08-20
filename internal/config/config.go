@@ -62,6 +62,13 @@ type Config struct {
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
+	// Operators are the humans the project recognizes, keyed by a short name for
+	// each one. It is top level rather than under any one surface because a human
+	// is known by several, and the authority is the human's: an act is authorized
+	// by resolving whichever namespace it arrived through to a person. It is
+	// absent from a project that has named nobody, which recognizes nobody rather
+	// than everybody.
+	Operators map[string]Operator `yaml:"operators,omitempty" json:"operators,omitempty"`
 	// Slack configures the reporting sink. It is absent from a project that does
 	// not report to a workspace, which is every project until one opts in.
 	Slack Slack `yaml:"slack,omitempty" json:"slack,omitempty"`
@@ -74,6 +81,13 @@ type Config struct {
 // is identity and addressing, which is configuration in the ordinary sense —
 // checked in, reviewed with the code, and readable by anybody who can read the
 // repository.
+//
+// What it deliberately no longer holds either is the allow-list of who may steer
+// the harness from the workspace. Who counts as an operator is a fact about
+// humans rather than about Slack, so it is stated once in the top-level
+// operators mapping and read back through Config.SlackOperators: the humans
+// granted direct-work who have bound a member id. An allow-list authored beside
+// those grants is one that disagrees with them — silently, and about authority.
 type Slack struct {
 	// Enabled is the switch. A project that has not set it reports nothing, and
 	// the sink refuses to start rather than posting into a workspace nobody
@@ -85,13 +99,6 @@ type Slack struct {
 	// the alternative is a sink that starts, reads a stream, and then discovers
 	// it has nowhere to post.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
-	// Operators is the allow-list of Slack user ids whose thread replies the
-	// harness will act on. It is inert until the inbound half exists: nothing
-	// today reads a reply at all. It lives here rather than in the environment
-	// because a user id is identity rather than a secret, and it defaults to
-	// empty so enabling reporting never enables anybody to steer the harness
-	// from a chat workspace by accident.
-	Operators []string `yaml:"operators,omitempty" json:"operators,omitempty"`
 }
 
 type Product struct {
@@ -540,6 +547,7 @@ func (c Config) Validate() error {
 		}
 	}
 
+	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
 
 	if len(problems) > 0 {
@@ -554,10 +562,11 @@ func (c Config) Validate() error {
 // seconds for as long as the sink runs.
 var slackChannelPattern = regexp.MustCompile(`^#?[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-// slackUserPattern is the shape of a Slack user id. Names are deliberately not
-// accepted: a display name is not identity — two people can carry one, and one
-// person can change theirs — and an allow-list keyed on something that moves is
-// an allow-list that quietly stops matching the person it was written for.
+// slackUserPattern is the shape of a Slack member id, which an operator binds in
+// the top-level mapping. Names are deliberately not accepted: a display name is
+// not identity — two people can carry one, and one person can change theirs —
+// and a binding keyed on something that moves is one that quietly stops matching
+// the person it was written for.
 var slackUserPattern = regexp.MustCompile(`^[UW][A-Z0-9]{6,}$`)
 
 // MaxSlackChannelBytes bounds a configured channel so it stays a channel rather
@@ -580,16 +589,6 @@ func (s Slack) problems() []string {
 		problems = append(problems, fmt.Sprintf("slack.channel is %d bytes, limit is %d", len(channel), MaxSlackChannelBytes))
 	case !slackChannelPattern.MatchString(channel):
 		problems = append(problems, fmt.Sprintf("slack.channel %q must be a channel id or name", s.Channel))
-	}
-	for index, operator := range s.Operators {
-		trimmed := strings.TrimSpace(operator)
-		if trimmed == "" {
-			problems = append(problems, fmt.Sprintf("slack.operators[%d] cannot be empty", index))
-			continue
-		}
-		if !slackUserPattern.MatchString(trimmed) {
-			problems = append(problems, fmt.Sprintf("slack.operators[%d] %q must be a Slack user id", index, operator))
-		}
 	}
 	return problems
 }
