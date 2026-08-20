@@ -1208,17 +1208,26 @@ Recording a decision is not carrying it out, and one of the six now has an
 action that does. `yoyo triage rerun <run-id> --reason "<what the development
 manager decided>"` starts a fresh run of the item whose stopped run the docket
 entry names — the case where the ground moved under a change that was never
-wrong. The run records the development manager as having chosen the work and
-carries the decision's reasoning as why it exists, so a re-run accounts for
+wrong. The run records the development manager as having chosen the work and the
+reasoning the harness was given as why it exists, so a re-run accounts for
 itself the way every other chosen run does; **your hold on intake applies to
 it**, because the harness is the one choosing here and the exemption for an item
-named by hand is yours rather than the development manager's. It is refused
-unless the stopped run is really over — terminal, with its blocker standing,
-read from the run's own record rather than from the entry — and one docketed
-stoppage is re-run once. What that stopped run preserved is kept until the fresh
-run integrates and retired explicitly then, with anything that could not be
-retired recorded as kept and why; a branch whose work nothing promoted is never
-deleted, so what survives is discoverable rather than orphaned.
+named by hand is yours rather than the development manager's.
+
+Three things refuse it. The stopped run has to be really over — terminal, with
+its blocker standing, read from the run's own record rather than from the docket
+entry. One docketed stoppage is re-run once. And the development manager's
+decision has to actually be recorded: deciding a re-run spends the item's re-run
+budget as it is decided, so an item whose budget carries none is one nobody
+decided this about, and the harness will not start a run attributed to a
+decision that does not exist.
+
+What that stopped run preserved is kept until the fresh run integrates and
+retired explicitly then — removed, and the removal written onto the stopped run's
+own record so `/status` and the docket stop advertising a branch and a worktree
+that are gone. Anything that could not be retired is recorded as kept and why; a
+branch whose work nothing promoted is never deleted, so what survives is
+discoverable rather than orphaned.
 
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the

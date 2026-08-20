@@ -81,6 +81,10 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 		Runs:   parts.store,
 		Intake: parts.intake,
 		Reruns: parts.store.Reruns(),
+		// The same per-item counters the development manager's decision spends and
+		// `yoyo status` reports, so what proves the decision was made and what an
+		// operator reads about it can never be two different records.
+		Decisions: parts.store.Triage(),
 		// What the stopped run preserved is retired through the same manager that
 		// created it, which is what keeps the removal inside the ownership rules
 		// every other removal here is held to.

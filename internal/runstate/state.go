@@ -466,6 +466,16 @@ type State struct {
 	// preserved-artifact claim truthful.
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
+	// ArtifactsRetiredBy names the run that superseded this one, on a run whose
+	// artifacts were retired by triage rather than cleaned up after a promotion
+	// of its own. It is the second way a removal is earned, and the reason it is
+	// recorded rather than inferred: a stopped run integrates nothing, so without
+	// it a removal on one would be a claim with no evidence behind it — which is
+	// exactly what the rule below refuses.
+	//
+	// Absent is every run whose artifacts it removed itself, which is all of them
+	// until triage retires one.
+	ArtifactsRetiredBy string `json:"artifacts_retired_by,omitempty"`
 	// TargetBranch is the integration target fixed when the worktree was
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
@@ -908,8 +918,24 @@ func (s State) Validate() error {
 			problems = append(problems, errors.New("a merged pull request requires recorded integration"))
 		}
 	}
-	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil {
-		problems = append(problems, errors.New("removed artifacts require recorded integration"))
+	// A removal is only ever recorded with the evidence that earned it. There are
+	// two kinds: the run promoted its own work and cleaned up after it, or triage
+	// retired what it preserved once another run superseded it. A record carrying
+	// neither describes cleanup nothing authorized.
+	retiredBy := strings.TrimSpace(s.ArtifactsRetiredBy)
+	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
+		problems = append(problems, errors.New("removed artifacts require recorded integration, or the run that superseded this one and retired them"))
+	}
+	if retiredBy != "" {
+		if !ValidRunID(retiredBy) {
+			problems = append(problems, fmt.Errorf("artifacts_retired_by %q is not a run identifier", s.ArtifactsRetiredBy))
+		}
+		if retiredBy == s.RunID {
+			problems = append(problems, errors.New("a run does not supersede itself; artifacts it removed after its own promotion are recorded by that integration"))
+		}
+		if !s.WorktreeRemoved && !s.BranchRemoved {
+			problems = append(problems, errors.New("a recorded retirement names what it removed, and this one removed neither artifact"))
+		}
 	}
 	// A run is complete only once nothing is left to clean up; anything else is
 	// still an outstanding-cleanup marker.

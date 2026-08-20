@@ -1866,12 +1866,16 @@ decisions has an action for the second: `yoyo triage rerun <run-id> --reason
 docket entry names. It is refused unless that run is terminally recorded with
 its blocker standing — read from the run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
-budget still says. The intake hold applies to it, because the harness is the one
-choosing the work; a re-run under a hold starts nothing and claims nothing, so
-the stoppage keeps its re-run for after the hold is lifted. The fresh run records
-the development manager as having chosen it and the decision's reasoning as why,
-which is what the `selected-work-passes-intake-and-records-why` invariant
-requires of anything the harness chooses for itself.
+budget still says. It is also refused unless the development manager's decision
+is actually recorded: the decision spends the item's re-run budget as it is
+made, so an item whose budget carries no re-run is one nobody decided this
+about, and the harness will not start a run attributed to a decision that does
+not exist. The intake hold applies too, because the harness is the one choosing
+the work; a re-run under a hold starts nothing and claims nothing, so the
+stoppage keeps its re-run for after the hold is lifted. The fresh run records
+the development manager as having chosen it and the reasoning the harness was
+given as why, which is what the `selected-work-passes-intake-and-records-why`
+invariant requires of anything the harness chooses for itself.
 
 The re-run is recorded beside the counters, one file per docketed stoppage at
 `<state root>/products/<product id>/reruns/`, and it carries what the stopped
@@ -1882,6 +1886,15 @@ not be retired stays kept with the reason recorded: a worktree holding
 uncommitted work and a branch whose work nothing promoted are both left exactly
 where they are, because nothing else records what they hold. Nothing automated
 deletes the record, for the reason nothing deletes a counter file.
+
+A retirement is written onto the stopped run itself as well, under that run's own
+lease, because its record is what `yoyo status` and the docket read to say
+whether its branch and worktree are still there. A stopped run promoted nothing,
+so the removal names the run that superseded it — `artifacts_retired_by` on the
+run's state — which is the second way a recorded removal is earned beside a
+promotion of the run's own. A retirement the harness could not write onto that
+run is reported rather than swallowed: the artifacts are gone and its record
+still says otherwise, which is a thing to go and correct.
 
 The other five decisions still carry themselves out no further than the record:
 a repair grant is followed by `yoyo run <id>`, and nothing in the harness repeats
@@ -1982,7 +1995,7 @@ Which threshold refuses which action:
 | Action | Refused by |
 | --- | --- |
 | another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
-| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, and is bounded again by one re-run per docketed stoppage |
+| another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back as the proof that the decision was made at all |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
 
 The first two buy review rounds, so the round cap bounds them, and a grant is

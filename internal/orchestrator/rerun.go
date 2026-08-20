@@ -60,13 +60,35 @@ type RerunDocket interface {
 	List() ([]triage.Entry, error)
 }
 
-// RerunRuns is the durable run state this action reads. Both halves are the
-// architect's condition rather than convenience: the stopped run's own record is
-// what proves the stoppage is terminal, and what is in flight is what proves the
-// item has no live run to collide with.
+// RerunRuns is the durable run state this action reads, and — once a retirement
+// has actually removed something — writes. The two reads are the architect's
+// condition rather than convenience: the stopped run's own record is what proves
+// the stoppage is terminal, and what is in flight is what proves the item has no
+// live run to collide with.
+//
+// The write is the other side of the same fact. Everything in the harness that
+// asks whether a stopped run's branch and worktree are still there reads the
+// flags on its record rather than looking on disk, so a retirement that is not
+// written back leaves every one of those readers naming artifacts that are gone.
+// It is taken under the stopped run's own lease, which is what AdoptRun exists
+// for: a run that is terminal and still owes cleanup is not in flight, and still
+// must have exactly one owner while anybody acts on it.
 type RerunRuns interface {
 	Load(runID string) (runstate.State, error)
 	Incomplete() ([]runstate.State, error)
+	AdoptRun(ctx context.Context, runID string) (runstate.State, *runstate.Lease, error)
+	Save(state runstate.State) error
+}
+
+// RerunDecisions is the harness's own durable record of what triage has decided
+// about one work item. It is what proves a re-run was actually decided: the
+// development manager's decision spends the item's re-run budget as it is
+// recorded, so an item whose budget carries no re-run is an item nobody decided
+// this about.
+//
+// It is satisfied by runstate.TriageStore.
+type RerunDecisions interface {
+	Counters(workItemID string) (runstate.TriageCounters, error)
 }
 
 // RerunRecords is where the one re-run a docketed stoppage gets is claimed and
@@ -95,6 +117,11 @@ type Rerunner struct {
 	Runs   RerunRuns
 	Intake IntakeHolds
 	Reruns RerunRecords
+	// Decisions is the item's durable triage record, which is what says the
+	// development manager decided this at all. Required: a re-run carried out on
+	// nobody's decision would record the development manager as having chosen
+	// work it never looked at.
+	Decisions RerunDecisions
 	// Preserved retires the stopped run's branch and worktree once the fresh run
 	// integrates. Optional; see PreservedRetirer.
 	Preserved PreservedRetirer
@@ -164,7 +191,6 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 		WorkItemID: entry.WorkItemID,
 		PriorRunID: entry.RunID,
 		DocketKey:  entry.Key,
-		Reason:     rerunReason(entry, reasoning),
 	}
 	prior, err := r.Runs.Load(entry.RunID)
 	if err != nil {
@@ -184,6 +210,15 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	if err := r.noRunInFlight(entry.WorkItemID); err != nil {
 		return result, err
 	}
+	// That the development manager decided this is read rather than taken on
+	// trust. The reason this run records names that role, so an action carried out
+	// on nobody's decision would put an attribution nothing supports into the one
+	// record the invariant exists to make trustworthy.
+	decided, err := r.decided(entry.WorkItemID)
+	if err != nil {
+		return result, err
+	}
+	result.Reason = rerunReason(entry, decided, reasoning)
 	// The hold is read before the claim, so a held harness leaves the stoppage its
 	// one re-run rather than spending it on a run that would decline to start.
 	hold, held, err := r.Intake.Held()
@@ -251,6 +286,28 @@ func stoppageIsOver(prior runstate.State) error {
 	return nil
 }
 
+// decided reports how many re-runs of this item triage has recorded, and refuses
+// where it has recorded none. The counter is the decision's own footprint: the
+// development manager spends it as the decision is recorded and before anything
+// acts on it, so an item carrying none is an item nobody decided this about.
+//
+// It is not the same question as which stoppage was decided — the docket entry
+// and the one-re-run-per-entry claim answer that — and it is deliberately the
+// only part of the decision this reads, because it is the part the harness
+// records structurally rather than in prose somebody wrote.
+func (r Rerunner) decided(workItemID string) (int, error) {
+	counters, err := r.Decisions.Counters(workItemID)
+	if err != nil {
+		return 0, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
+	}
+	if counters.Reruns < 1 {
+		return 0, fmt.Errorf(
+			"triage has recorded no re-run of %s, so there is no decision here to carry out: the development manager records the decision, which spends the item's re-run budget, before the harness starts anything on it",
+			workItemID)
+	}
+	return counters.Reruns, nil
+}
+
 // noRunInFlight refuses a re-run of an item something is already running. The
 // reservation refuses a second run of one item anyway; this is the same rule
 // asked before anything is claimed, so a collision costs the stoppage's re-run
@@ -278,33 +335,69 @@ func (r Rerunner) noRunInFlight(workItemID string) error {
 func (r Rerunner) settle(ctx context.Context, entry triage.Entry, prior runstate.State, outcome Outcome, result *RerunResult) runstate.PreservedArtifacts {
 	preserved := preservedOf(prior)
 	if preserved.Disposition == runstate.PreservedKept && outcome.Integration != nil {
-		preserved = r.retire(ctx, prior, preserved)
+		var problem string
+		preserved, problem = r.retire(ctx, prior, outcome.RunID, preserved)
+		result.note(problem)
 	}
 	settled, err := r.Reruns.Settle(ctx, entry.Key, outcome.RunID, preserved)
 	if err != nil {
-		result.RecordProblem = fmt.Sprintf(
+		result.note(fmt.Sprintf(
 			"the re-run of %s ran, and what became of the branch and worktree run %s preserved could not be recorded: %v",
-			entry.WorkItemID, entry.RunID, err)
+			entry.WorkItemID, entry.RunID, err))
 		return preserved
 	}
 	return settled.Preserved
 }
 
+// note adds one record this action could not update. They accumulate rather than
+// replacing each other: the stopped run's record and the re-run's own are two
+// different readers' accounts of the same artifacts, and a caller told about one
+// failure would go looking in the wrong place for the other.
+func (result *RerunResult) note(problem string) {
+	switch {
+	case problem == "":
+	case result.RecordProblem == "":
+		result.RecordProblem = problem
+	default:
+		result.RecordProblem += "; " + problem
+	}
+}
+
 // retire removes what the stopped run preserved, now that the fresh run has
-// integrated the work. Nothing here fails the re-run: the work landed, and an
-// artifact that has to be looked at by hand is a fact to record rather than a
-// reason to report a successful run as a failure.
-func (r Rerunner) retire(ctx context.Context, prior runstate.State, preserved runstate.PreservedArtifacts) runstate.PreservedArtifacts {
+// integrated the work, and reports the disposition beside any record it could
+// not update. Nothing here fails the re-run: the work landed, and an artifact
+// that has to be looked at by hand is a fact to record rather than a reason to
+// report a successful run as a failure.
+//
+// It is done under the stopped run's own lease, taken and released here. That is
+// what makes the removal and the record of it one act: the state the flags are
+// written onto is the state read under the lease, so a sweep settling the same
+// run beside this cannot lose either half.
+func (r Rerunner) retire(ctx context.Context, prior runstate.State, freshRunID string, preserved runstate.PreservedArtifacts) (runstate.PreservedArtifacts, string) {
 	if r.Preserved == nil {
 		preserved.Problem = "nothing is wired to retire what the stopped run preserved, so it is still there"
-		return preserved
+		return preserved, ""
 	}
-	retirement, err := r.Preserved.RetirePreserved(ctx, worktreeOf(prior), prior.TargetBranch)
-	if err == nil && retirement.Retired() {
+	stopped, lease, err := r.Runs.AdoptRun(ctx, prior.RunID)
+	if err != nil {
+		// Somebody else owns the stopped run, or its record could not be read.
+		// Either way nothing is removed: an artifact retired without its record
+		// being writable is exactly the stale record this took the lease to avoid.
+		preserved.Problem = fmt.Sprintf("what run %s preserved was left where it is, because its record could not be taken to write the removal onto: %v", prior.RunID, err)
+		return preserved, ""
+	}
+	defer lease.Release()
+
+	retirement, retireErr := r.Preserved.RetirePreserved(ctx, worktreeOf(stopped), stopped.TargetBranch)
+	// What was removed is written onto the stopped run before anything else is
+	// decided, because that record is what every other reader in the harness asks
+	// whether these artifacts still exist.
+	recorded := r.recordRemoval(stopped, freshRunID, retirement)
+	if retireErr == nil && retirement.Retired() {
 		retired := r.now()
 		preserved.Disposition = runstate.PreservedRetired
 		preserved.RetiredAt = &retired
-		return preserved
+		return preserved, recorded
 	}
 	// Something survived, so the record still says kept — and it names only what
 	// actually survived. A retirement that took one of the two and then failed is
@@ -316,12 +409,48 @@ func (r Rerunner) retire(ctx context.Context, prior runstate.State, preserved ru
 	if retirement.Branch.Removed {
 		preserved.Branch = ""
 	}
-	if err != nil {
-		preserved.Problem = fmt.Sprintf("retiring what run %s preserved failed: %v", prior.RunID, err)
-		return preserved
+	if retireErr != nil {
+		preserved.Problem = fmt.Sprintf("retiring what run %s preserved failed: %v", prior.RunID, retireErr)
+		return preserved, recorded
 	}
 	preserved.Problem = retirement.Kept()
-	return preserved
+	return preserved, recorded
+}
+
+// recordRemoval marks the stopped run's own record with the artifacts this
+// retirement removed, and reports what stopped it where it could not.
+//
+// It is the record the rest of the harness reads: `yoyo status`, a docket entry
+// built later, and reconciliation all take these flags as the answer to whether
+// the branch and the worktree are still there. A removal that is not written back
+// leaves every one of them sending somebody after an artifact that is gone, which
+// is the same failure the disposition on the re-run's own record exists to
+// prevent, one reader further out.
+//
+// A retirement that removed nothing writes nothing: this is called on every
+// retirement, including the ones that kept both artifacts.
+func (r Rerunner) recordRemoval(stopped runstate.State, freshRunID string, retirement gitworktree.Retirement) string {
+	worktreeGone := retirement.Worktree.Removed && !stopped.WorktreeRemoved
+	branchGone := retirement.Branch.Removed && !stopped.BranchRemoved
+	if !worktreeGone && !branchGone {
+		return ""
+	}
+	stopped.WorktreeRemoved = stopped.WorktreeRemoved || worktreeGone
+	stopped.BranchRemoved = stopped.BranchRemoved || branchGone
+	// A stopped run promoted nothing, so what earns the removal is the run that
+	// superseded it. Naming it is what keeps the record evidence rather than an
+	// assertion, and it is what the run state requires of a removal with no
+	// integration behind it.
+	stopped.ArtifactsRetiredBy = freshRunID
+	// When the run ended is what dates it; this dates the last thing the harness
+	// did to what it left behind, which is what UpdatedAt has always meant.
+	stopped.UpdatedAt = r.now()
+	if err := r.Runs.Save(stopped); err != nil {
+		return fmt.Sprintf(
+			"what run %s preserved was retired, and its own record still says otherwise, so anything reading that run will name artifacts that are gone: %v",
+			stopped.RunID, err)
+	}
+	return ""
 }
 
 // preservedOf is what the stopped run left behind, as its own record has it. A
@@ -341,17 +470,22 @@ func preservedOf(prior runstate.State) runstate.PreservedArtifacts {
 	return preserved
 }
 
-// rerunReason is what the fresh run records as why it exists. It names the
-// decision, the stoppage it settles, and the development manager's own reasoning,
-// because a reason that only said "triage decided" would account for a run
-// without explaining it.
-func rerunReason(entry triage.Entry, reasoning string) string {
-	reason := fmt.Sprintf("the development manager triaged the stopped run %s of %s as a re-run, and the harness started this run on that decision: ",
-		entry.RunID, entry.WorkItemID)
-	// The reasoning is folded to what the run's recorded selection will hold. It
-	// is the development manager's prose, so it is bounded rather than refused:
-	// losing the end of a long argument is better than refusing to carry out a
-	// decision because of its length.
+// rerunReason is what the fresh run records as why it exists: the decision the
+// harness verified, the stoppage it settles, and the reasoning it was given.
+//
+// The two are worded apart on purpose. That the development manager decided a
+// re-run of this item is a fact read from the item's durable triage record, and
+// is stated as one. The prose after it arrived with the instruction to carry the
+// decision out, and is attributed to that rather than quoted as the development
+// manager's own words — a reason nobody can check must not read as one somebody
+// verified.
+func rerunReason(entry triage.Entry, decided int, reasoning string) string {
+	reason := fmt.Sprintf(
+		"the development manager's triage decided a re-run of %s, recorded as %d against the item's durable triage budget, and the harness started this run to carry that out on the stopped work of run %s. The reasoning given to the harness when it was asked to: ",
+		entry.WorkItemID, decided, entry.RunID)
+	// The reasoning is folded to what the run's recorded selection will hold,
+	// rather than refused: losing the end of a long argument is better than
+	// refusing to carry out a decision because of its length.
 	return reason + singleLine(reasoning, runstate.MaxSelectionReasonBytes-len(reason))
 }
 
@@ -368,6 +502,9 @@ func (r Rerunner) validate() error {
 	}
 	if r.Reruns == nil {
 		problems = append(problems, errors.New("a re-run requires the record that bounds it to one per docketed stoppage"))
+	}
+	if r.Decisions == nil {
+		problems = append(problems, errors.New("a re-run requires the item's triage record, which is what says the development manager decided one"))
 	}
 	if r.Start == nil {
 		problems = append(problems, errors.New("a re-run requires a way to start a run"))

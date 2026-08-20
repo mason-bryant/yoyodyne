@@ -64,6 +64,7 @@ func (h *rerunHarness) rerunner() Rerunner {
 		Runs:      h.runs,
 		Intake:    h.intake,
 		Reruns:    h.reruns,
+		Decisions: h.runs.Triage(),
 		Preserved: h,
 		Clock:     docketClock{},
 		Start: func(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
@@ -93,6 +94,10 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 	if _, err := docketerOver(nil, docket).RecordStoppedRun(state); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
+	// The decision itself: the development manager recorded a re-run of this
+	// item, which spent the item's re-run budget. That footprint is what the
+	// action reads to know somebody decided this.
+	recordRerunDecision(t, runs, state.WorkItemID)
 	return &rerunHarness{
 		docket: docket,
 		runs:   runs,
@@ -105,6 +110,20 @@ func newRerunHarness(t *testing.T, state runstate.State) *rerunHarness {
 		},
 	}
 }
+
+// recordRerunDecision is what the development manager's triage does to the
+// item's durable record when it decides a re-run: it spends the item's one
+// re-run before anything acts on the decision.
+func recordRerunDecision(t *testing.T, runs *runstate.Store, workItemID string) {
+	t.Helper()
+	if _, err := runs.Triage().RecordRerun(context.Background(), workItemID, docketedNow, rerunCaps); err != nil {
+		t.Fatalf("RecordRerun() error = %v", err)
+	}
+}
+
+// rerunCaps are the harness defaults the decision is recorded against: triage
+// acts alone once per item, under the configured round cap.
+var rerunCaps = runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 2}
 
 // integrated is the fresh run landing its work, which is what retires what the
 // stopped run preserved.
@@ -364,6 +383,74 @@ func TestThePreservedArtifactsAreKeptUntilTheFreshRunIntegratesAndThenRetired(t 
 		if recorded.Preserved.Disposition != runstate.PreservedRetired {
 			t.Fatalf("recorded disposition = %q, want the retirement durable", recorded.Preserved.Disposition)
 		}
+		// The stopped run's own record is what everything else in the harness
+		// reads to find out whether those artifacts are still there, so the
+		// removal is written onto it as well.
+		stopped, err := harness.runs.Load(docketedRunID)
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !stopped.WorktreeRemoved || !stopped.BranchRemoved {
+			t.Fatalf("run %s still advertises what was retired: worktree removed = %t, branch removed = %t (%s)",
+				stopped.RunID, stopped.WorktreeRemoved, stopped.BranchRemoved, result.RecordProblem)
+		}
+		// The removal is evidence rather than an assertion: a stopped run
+		// promoted nothing, so what earned it is the run that superseded it.
+		if stopped.ArtifactsRetiredBy != harness.outcome.RunID {
+			t.Fatalf("retired by = %q, want the fresh run that superseded it", stopped.ArtifactsRetiredBy)
+		}
+		if result.RecordProblem != "" {
+			t.Fatalf("record problem = %q, want every record written", result.RecordProblem)
+		}
+	})
+
+	t.Run("says so when the removal could not be written onto the stopped run", func(t *testing.T) {
+		t.Parallel()
+
+		harness := newRerunHarness(t, stoppedState())
+		harness.integrated()
+		rerunner := harness.rerunner()
+		rerunner.Runs = unwritableRuns{RerunRuns: harness.runs}
+		result, err := rerunner.Rerun(context.Background(), rerunRequest())
+		if err != nil {
+			t.Fatalf("Rerun() error = %v, want the run to stand and the record named", err)
+		}
+		// The artifacts really are gone, so the re-run's own record says retired.
+		if result.Preserved.Disposition != runstate.PreservedRetired {
+			t.Fatalf("disposition = %q, want the retirement that happened", result.Preserved.Disposition)
+		}
+		if !strings.Contains(result.RecordProblem, "still says otherwise") {
+			t.Fatalf("record problem = %q, want the stale run record named", result.RecordProblem)
+		}
+	})
+
+	t.Run("retires nothing while somebody else owns the stopped run", func(t *testing.T) {
+		t.Parallel()
+
+		harness := newRerunHarness(t, stoppedState())
+		harness.integrated()
+		// Another process is acting on the stopped run. Removing its artifacts
+		// without being able to record the removal is the stale record this
+		// refuses to create.
+		_, lease, err := harness.runs.AdoptRun(context.Background(), docketedRunID)
+		if err != nil {
+			t.Fatalf("AdoptRun() error = %v", err)
+		}
+		defer lease.Release()
+
+		result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+		if err != nil {
+			t.Fatalf("Rerun() error = %v", err)
+		}
+		if harness.retired != 0 {
+			t.Fatalf("retirements = %d, want nothing removed while another owner holds the run", harness.retired)
+		}
+		if result.Preserved.Disposition != runstate.PreservedKept {
+			t.Fatalf("disposition = %q, want the artifacts kept", result.Preserved.Disposition)
+		}
+		if !strings.Contains(result.Preserved.Problem, "could not be taken") {
+			t.Fatalf("problem = %q, want why nothing was retired", result.Preserved.Problem)
+		}
 	})
 
 	t.Run("names only what survived a retirement that failed part way", func(t *testing.T) {
@@ -463,12 +550,14 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	if _, err := docketerOver(nil, docket).RecordStoppedRun(stopped); err != nil {
 		t.Fatalf("RecordStoppedRun() error = %v", err)
 	}
+	recordRerunDecision(t, store, stopped.WorkItemID)
 
 	rerunner := Rerunner{
-		Docket: docket,
-		Runs:   store,
-		Intake: intake,
-		Reruns: reruns,
+		Docket:    docket,
+		Runs:      store,
+		Intake:    intake,
+		Reruns:    reruns,
+		Decisions: store.Triage(),
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 			fresh := pipeline
 			fresh.Selection = selection
@@ -559,6 +648,80 @@ func TestARecordThatCouldNotBeSettledIsReportedBesideTheRun(t *testing.T) {
 	}
 }
 
+// The reason a re-run records names the development manager, so the harness
+// checks that one actually decided this rather than taking the caller's word:
+// the decision spends the item's re-run budget as it is recorded, and an item
+// carrying none is an item nobody decided this about.
+func TestARerunNobodyDecidedIsRefused(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runs, err := runstate.NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewStore() error = %v", err)
+	}
+	if err := runs.Create(stoppedState()); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	intake, err := runstate.NewIntakeHoldStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
+	}
+	docket := &memoryDocket{}
+	if _, err := docketerOver(nil, docket).RecordStoppedRun(stoppedState()); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+	started := 0
+	rerunner := Rerunner{
+		Docket: docket, Runs: runs, Intake: intake, Reruns: runs.Reruns(), Decisions: runs.Triage(),
+		Start: func(context.Context, string, runstate.Selection) (Outcome, error) {
+			started++
+			return Outcome{}, nil
+		},
+	}
+	_, err = rerunner.Rerun(context.Background(), rerunRequest())
+	if err == nil || !strings.Contains(err.Error(), "no re-run of") {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the missing decision", err)
+	}
+	if started != 0 {
+		t.Fatalf("started = %d, want nothing started on nobody's decision", started)
+	}
+	if _, claimed, _ := runs.Reruns().Find(triage.Key(triage.ClassStoppedRun, docketedRunID)); claimed {
+		t.Fatalf("a re-run nobody decided spent the stoppage's claim")
+	}
+}
+
+// The recorded reason separates what the harness verified from what it was
+// told, because only one of the two is checkable.
+func TestTheRecordedReasonSeparatesTheDecisionFromTheProseItWasGiven(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	for _, want := range []string{
+		"durable triage budget",
+		"reasoning given to the harness when it was asked to",
+		rerunReasoning,
+	} {
+		if !strings.Contains(result.Reason, want) {
+			t.Fatalf("reason %q is missing %q", result.Reason, want)
+		}
+	}
+}
+
+// unwritableRuns reads exactly as the store does, including taking the stopped
+// run's lease, and cannot write the removal back onto it.
+type unwritableRuns struct {
+	RerunRuns
+}
+
+func (unwritableRuns) Save(runstate.State) error {
+	return errors.New("the run record is unwritable")
+}
+
 // unsettlableReruns claims exactly as the store does and then cannot write down
 // what became of the run.
 type unsettlableReruns struct {
@@ -577,7 +740,7 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 	if err == nil {
 		t.Fatal("Rerun() with nothing wired did not refuse")
 	}
-	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "start a run"} {
+	for _, want := range []string{"triage docket", "intake hold", "one per docketed stoppage", "triage record", "start a run"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal is missing %q: %v", want, err)
 		}
