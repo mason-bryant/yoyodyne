@@ -119,6 +119,26 @@ A project that enables reporting without naming a channel is refused when the
 configuration loads, before any work is claimed. A project that says nothing
 about Slack reports nothing, which is every project until it opts in.
 
+Each speaker has a face as well as a name, and the face is yours to change —
+including to a custom emoji this workspace already has:
+
+```yaml
+slack:
+  enabled: true
+  channel: C0123456789
+  avatars:
+    developer: ":ship-it:"
+    harness: https://example.com/faces/yoyodyne.png
+```
+
+Keys are roles, or `harness` for what no persona did; values are an emoji
+shortcode or the https URL of an image. Leave a speaker out to keep the picture
+the harness ships. Both shapes work with the scopes the manifest already asked
+for, so neither costs a reinstall. **The names are not configurable** — only the
+picture is: who speaks is a claim about who did the work, and that stays the
+harness's to make. [`docs/configuration.md`](../configuration.md#avatars) has
+the whole of it.
+
 Who may steer the harness from a thread is not part of this block. It comes from
 the top-level `operators` mapping, which is where the project says which humans
 it recognizes — and a human is bound there by all of their identifiers rather

@@ -20,6 +20,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
@@ -135,6 +136,10 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 	}
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,
+		// What the project configured is the picture beside each name and nothing
+		// else about who is speaking; a speaker it named none for keeps the one
+		// the harness ships.
+		Avatars: notify.Avatars(settings.Avatars),
 		Store:   store,
 		API:     api,
 		// The sink reports what happens from the moment somebody first pointed

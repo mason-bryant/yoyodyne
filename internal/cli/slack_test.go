@@ -3,6 +3,9 @@ package cli
 import (
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/notify"
 )
 
 // The two tokens belong to this process's environment and to nowhere else. A
@@ -69,6 +72,20 @@ func TestSlackIsListedAmongTheCommands(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "slack") {
 		t.Fatalf("usage = %q, want the reporting verb listed", stdout)
+	}
+}
+
+// An avatar is keyed by the speaker it decorates, and two packages have to agree
+// on how a speaker is spelled: the configuration checks the key and the notifier
+// looks it up. They are separate constants so neither package depends on the
+// other, which is exactly the arrangement that can drift — a rename on one side
+// would turn every configured avatar into an entry nothing reads, silently,
+// because an avatar nobody applies looks like an avatar nobody configured.
+func TestTheHarnessIsSpelledTheSameWayInAnAvatarKeyAsInASpeaker(t *testing.T) {
+	t.Parallel()
+
+	if config.SlackHarnessAvatar != notify.HarnessSpeaker {
+		t.Fatalf("slack.avatars keys the harness as %q and the notifier as %q", config.SlackHarnessAvatar, notify.HarnessSpeaker)
 	}
 }
 

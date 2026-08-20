@@ -12,6 +12,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -99,6 +100,19 @@ type Slack struct {
 	// the alternative is a sink that starts, reads a stream, and then discovers
 	// it has nowhere to post.
 	Channel string `yaml:"channel,omitempty" json:"channel,omitempty"`
+	// Avatars overrides the picture beside a speaker's name, keyed by role —
+	// `developer`, `reviewer`, and the rest — or by `harness` for what no persona
+	// did. A value is an emoji shortcode, including one this workspace added
+	// itself, or the https URL of an image. A speaker with no entry keeps the avatar
+	// the harness ships, so a project that names one names one.
+	//
+	// Only the picture is here. The name a message appears under, and whose
+	// account it is, are deliberately not configurable: who speaks is a claim
+	// about who did the work, and a project that could rewrite it could attribute
+	// a promotion to a developer. The avatar carries none of that — everything it
+	// distinguishes is already distinguished by the name beside it — which is what
+	// makes it the part that can be a preference.
+	Avatars map[string]string `yaml:"avatars,omitempty" json:"avatars,omitempty"`
 }
 
 type Product struct {
@@ -569,9 +583,26 @@ var slackChannelPattern = regexp.MustCompile(`^#?[A-Za-z0-9][A-Za-z0-9._-]*$`)
 // the person it was written for.
 var slackUserPattern = regexp.MustCompile(`^[UW][A-Z0-9]{6,}$`)
 
+// slackEmojiPattern is the shape of an emoji shortcode: a name between colons,
+// optionally with a skin-tone variant after it. It checks the shape and
+// deliberately not the name, because a workspace's own custom emoji are the
+// workspace's — a list of accepted names checked in here would refuse
+// `:ship-it:` and go stale besides.
+var slackEmojiPattern = regexp.MustCompile(`^:[a-z0-9][a-z0-9_+-]*:(:skin-tone-[2-6]:)?$`)
+
 // MaxSlackChannelBytes bounds a configured channel so it stays a channel rather
 // than a request smuggled onto the Slack API.
 const MaxSlackChannelBytes = 80
+
+// MaxSlackAvatarBytes bounds one configured avatar. It is generous enough for
+// an image URL with a path on it and far short of anything that is no longer an
+// avatar.
+const MaxSlackAvatarBytes = 500
+
+// SlackHarnessAvatar is the key an avatar override uses for what no persona did.
+// It is the notifier's own speaker key, spelled here so checking a key does not
+// make the configuration package depend on the notifier.
+const SlackHarnessAvatar = "harness"
 
 // problems reports what makes a Slack section unusable. Everything is checked
 // whether or not reporting is enabled, so a project that has configured the
@@ -590,7 +621,51 @@ func (s Slack) problems() []string {
 	case !slackChannelPattern.MatchString(channel):
 		problems = append(problems, fmt.Sprintf("slack.channel %q must be a channel id or name", s.Channel))
 	}
+	return append(problems, s.avatarProblems()...)
+}
+
+// avatarProblems reports what makes a configured avatar unusable. A typo here
+// is worth refusing at load rather than posting: Slack takes an unknown
+// shortcode or an unreachable image without complaint and simply shows the
+// app's own icon, so the failure would be a picture nobody notices is the wrong
+// one rather than anything that says so.
+//
+// The keys are reported in a stable order, because a validation error that
+// names three problems in a different order on every load is one nobody can
+// diff.
+func (s Slack) avatarProblems() []string {
+	speakers := make([]string, 0, len(s.Avatars))
+	for speaker := range s.Avatars {
+		speakers = append(speakers, speaker)
+	}
+	sort.Strings(speakers)
+
+	var problems []string
+	for _, speaker := range speakers {
+		if speaker != SlackHarnessAvatar && !domain.AgentRole(speaker).Valid() {
+			problems = append(problems, fmt.Sprintf("slack.avatars %q is not a role or %q", speaker, SlackHarnessAvatar))
+			continue
+		}
+		avatar := strings.TrimSpace(s.Avatars[speaker])
+		switch {
+		case avatar == "":
+			problems = append(problems, fmt.Sprintf("slack.avatars.%s is empty; leave it out to keep the one the harness ships", speaker))
+		case len(avatar) > MaxSlackAvatarBytes:
+			problems = append(problems, fmt.Sprintf("slack.avatars.%s is %d bytes, limit is %d", speaker, len(avatar), MaxSlackAvatarBytes))
+		case !slackEmojiPattern.MatchString(avatar) && !slackImageURL(avatar):
+			problems = append(problems, fmt.Sprintf("slack.avatars.%s %q must be an emoji shortcode like %q or an https image URL", speaker, avatar, ":robot_face:"))
+		}
+	}
 	return problems
+}
+
+// slackImageURL reports the other shape an avatar may take. It is https only:
+// Slack fetches the image itself and an avatar is not worth a plaintext hop,
+// and a project that meant a shortcode and wrote something else gets a refusal
+// naming both shapes rather than a URL nothing will load.
+func slackImageURL(avatar string) bool {
+	parsed, err := url.Parse(avatar)
+	return err == nil && parsed.Scheme == "https" && parsed.Host != ""
 }
 
 // problems reports what makes a declared persona unusable. A persona that

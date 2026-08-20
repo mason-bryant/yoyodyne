@@ -1,6 +1,7 @@
 package notify
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -135,6 +136,74 @@ func TestTheConfiguredAgentIsNamedOnlyWhenItSaysSomethingTheRoleDoesNot(t *testi
 	named := Persona(domain.RoleDeveloper, "opus").Identity()
 	if named.Name != "Developer (opus)" {
 		t.Fatalf("a configured agent appears as %q", named.Name)
+	}
+}
+
+// A project may choose the picture beside a name, in either shape a surface
+// takes one. A speaker it configured nothing for keeps what the voice table
+// ships, so naming one persona's avatar does not quietly un-decorate the rest.
+func TestAConfiguredAvatarReplacesTheShippedOne(t *testing.T) {
+	avatars := Avatars{
+		HarnessSpeaker:               "https://example.invalid/faces/harness.png",
+		string(domain.RoleDeveloper): ":ship-it:",
+	}
+	for _, want := range []struct {
+		speaker Speaker
+		avatar  string
+	}{
+		{speaker: Harness(), avatar: "https://example.invalid/faces/harness.png"},
+		{speaker: Persona(domain.RoleDeveloper, ""), avatar: ":ship-it:"},
+		{speaker: Persona(domain.RoleReviewer, ""), avatar: Persona(domain.RoleReviewer, "").Identity().Avatar},
+	} {
+		if got := avatars.Identity(want.speaker); got.Avatar != want.avatar {
+			t.Errorf("the %s appears with %q, want %q", want.speaker.Key(), got.Avatar, want.avatar)
+		}
+	}
+
+	// A project with nothing configured is the shipped table exactly, and a blank
+	// entry is the same as no entry rather than a speaker with no picture at all.
+	for name, configured := range map[string]Avatars{
+		"nothing configured": nil,
+		"a blank entry":      {string(domain.RoleDeveloper): "   "},
+	} {
+		speaker := Persona(domain.RoleDeveloper, "")
+		if got := configured.Identity(speaker); got != speaker.Identity() {
+			t.Errorf("with %s the developer appears as %+v, want the shipped %+v", name, got, speaker.Identity())
+		}
+	}
+}
+
+// The boundary the override stops at. An avatar is decoration; the name a
+// message appears under, and whose account it is, are the voice table's, so
+// there is nothing a project can configure that moves either.
+func TestConfiguringAnAvatarMovesNothingAboutWhoSpeaks(t *testing.T) {
+	avatars := Avatars{string(domain.RoleDeveloper): ":ship-it:"}
+	for _, speaker := range speakers() {
+		shipped := speaker.Identity()
+		configured := avatars.Identity(speaker)
+		if configured.Name != shipped.Name {
+			t.Errorf("the %s appears as %q with an avatar configured, want %q", speaker.Key(), configured.Name, shipped.Name)
+		}
+	}
+	// And the message still says whose account it is, whatever the picture is.
+	topic, err := WorkItem("yoyodyne-ifd.68.6")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	posted := &recorder{}
+	speaker := Persona(domain.RoleDeveloper, "")
+	if err := New(posted, avatars).Notify(context.Background(), topic, speaker, fullyRecorded(KindChecksPassed)); err != nil {
+		t.Fatalf("Notify() error = %v", err)
+	}
+	if len(posted.posted) != 1 {
+		t.Fatalf("posted %d messages, want one", len(posted.posted))
+	}
+	message := posted.posted[0]
+	if message.Speaker != speaker.Key() || message.Identity.Name != speaker.Identity().Name {
+		t.Fatalf("message = %+v, want it still attributed to the developer", message)
+	}
+	if message.Identity.Avatar != ":ship-it:" {
+		t.Fatalf("message avatar = %q, want the configured one", message.Identity.Avatar)
 	}
 }
 
