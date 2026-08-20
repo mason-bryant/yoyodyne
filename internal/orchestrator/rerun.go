@@ -92,10 +92,16 @@ type RerunDecisions interface {
 }
 
 // RerunRecords is where the one re-run a docketed stoppage gets is claimed and
-// settled. It is satisfied by runstate.RerunStore.
+// settled, and where what has already been carried out for a work item is
+// read back. What has been claimed is the other half of the decision gate: a
+// claim is what says a decision has been acted on, so counting them is what stops
+// one decision authorizing a re-run of every stoppage an item ever has.
+//
+// It is satisfied by runstate.RerunStore.
 type RerunRecords interface {
 	Claim(ctx context.Context, rerun runstate.Rerun) (runstate.Rerun, error)
 	Settle(ctx context.Context, docketKey, runID string, preserved runstate.PreservedArtifacts) (runstate.Rerun, error)
+	Claimed(workItemID string) ([]runstate.Rerun, error)
 }
 
 // PreservedRetirer retires what the stopped run left behind, once the fresh run
@@ -214,11 +220,11 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// trust. The reason this run records names that role, so an action carried out
 	// on nobody's decision would put an attribution nothing supports into the one
 	// record the invariant exists to make trustworthy.
-	decided, err := r.decided(entry.WorkItemID)
+	decided, taken, err := r.decided(entry)
 	if err != nil {
 		return result, err
 	}
-	result.Reason = rerunReason(entry, decided, reasoning)
+	result.Reason = rerunReason(entry, decided, taken, reasoning)
 	// The hold is read before the claim, so a held harness leaves the stoppage its
 	// one re-run rather than spending it on a run that would decline to start.
 	hold, held, err := r.Intake.Held()
@@ -286,26 +292,61 @@ func stoppageIsOver(prior runstate.State) error {
 	return nil
 }
 
-// decided reports how many re-runs of this item triage has recorded, and refuses
-// where it has recorded none. The counter is the decision's own footprint: the
-// development manager spends it as the decision is recorded and before anything
-// acts on it, so an item carrying none is an item nobody decided this about.
+// decided reports a decision of the development manager's that this re-run may
+// carry out, and refuses where there is none. It is two questions and the second
+// is what makes the first mean anything.
 //
-// It is not the same question as which stoppage was decided — the docket entry
-// and the one-re-run-per-entry claim answer that — and it is deliberately the
-// only part of the decision this reads, because it is the part the harness
-// records structurally rather than in prose somebody wrote.
-func (r Rerunner) decided(workItemID string) (int, error) {
+// The item's re-run counter is the decision's own footprint: the development
+// manager spends it as the decision is recorded and before anything acts on it,
+// so an item carrying none is an item nobody decided this about. But the counter
+// is a total and is never cleared, so on its own it cannot tell a decision that
+// is waiting to be carried out from one that was carried out last month — and
+// reading it that way would let a second stoppage of an already re-run item start
+// a whole second run on the strength of the first decision, past the one-per-item
+// bound and under an attribution that describes a decision about a different
+// stoppage.
+//
+// So each decision authorizes exactly one re-run, and what has been claimed for
+// the item is read back against what has been decided. An item whose decisions
+// are all spent is refused: a further stoppage of it needs a further decision,
+// which past the cap is an escalation rather than a larger budget — which is
+// exactly what the development manager's own workflow says.
+//
+// The count is read before the claim is taken, so two processes carrying out one
+// decision at the same instant could both pass it. What that costs is bounded by
+// the reservation rather than by this: the second run of one item is refused
+// where it is reserved, so the loser spends a claim rather than putting a second
+// developer on the work.
+func (r Rerunner) decided(entry triage.Entry) (decided, taken int, err error) {
+	workItemID := entry.WorkItemID
 	counters, err := r.Decisions.Counters(workItemID)
 	if err != nil {
-		return 0, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
+		return 0, 0, fmt.Errorf("read what triage has recorded about %s: %w", workItemID, err)
 	}
 	if counters.Reruns < 1 {
-		return 0, fmt.Errorf(
+		return 0, 0, fmt.Errorf(
 			"triage has recorded no re-run of %s, so there is no decision here to carry out: the development manager records the decision, which spends the item's re-run budget, before the harness starts anything on it",
 			workItemID)
 	}
-	return counters.Reruns, nil
+	claimed, err := r.Reruns.Claimed(workItemID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("read the re-runs already taken of %s: %w", workItemID, err)
+	}
+	// This stoppage having been re-run already is the more particular answer, and
+	// the one whose refusal can say what became of it, so it is given rather than
+	// the arithmetic below. The claim itself refuses this too; asking here is what
+	// makes the refusal name the run the first re-run started.
+	for _, existing := range claimed {
+		if existing.DocketKey == entry.Key {
+			return 0, 0, runstate.RerunTakenError{Existing: existing}
+		}
+	}
+	if len(claimed) >= counters.Reruns {
+		return 0, 0, fmt.Errorf(
+			"triage has decided %d re-run(s) of %s and the harness has carried out %d, so this stoppage has no decision of its own to act on: a further stoppage of an item that has already been run again needs a further decision, which past the cap is an escalation rather than a larger budget",
+			counters.Reruns, entry.WorkItemID, len(claimed))
+	}
+	return counters.Reruns, len(claimed), nil
 }
 
 // noRunInFlight refuses a re-run of an item something is already running. The
@@ -479,10 +520,10 @@ func preservedOf(prior runstate.State) runstate.PreservedArtifacts {
 // decision out, and is attributed to that rather than quoted as the development
 // manager's own words — a reason nobody can check must not read as one somebody
 // verified.
-func rerunReason(entry triage.Entry, decided int, reasoning string) string {
+func rerunReason(entry triage.Entry, decided, taken int, reasoning string) string {
 	reason := fmt.Sprintf(
-		"the development manager's triage decided a re-run of %s, recorded as %d against the item's durable triage budget, and the harness started this run to carry that out on the stopped work of run %s. The reasoning given to the harness when it was asked to: ",
-		entry.WorkItemID, decided, entry.RunID)
+		"the development manager's triage decided a re-run of %s — %d recorded against the item's durable triage budget, %d of them already carried out — and the harness started this run to carry out the one left, on the stopped work of run %s. The reasoning given to the harness when it was asked to: ",
+		entry.WorkItemID, decided, taken, entry.RunID)
 	// The reasoning is folded to what the run's recorded selection will hold,
 	// rather than refused: losing the end of a long argument is better than
 	// refusing to carry out a decision because of its length.

@@ -29,6 +29,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -353,29 +354,74 @@ func (s *RerunStore) Find(docketKey string) (Rerun, bool, error) {
 	return s.load(key)
 }
 
+// Claimed reports the re-runs this product has already taken of one work item's
+// stoppages, oldest claim first. It is what says a decision has been acted on: a
+// decision authorizes one re-run, so an item with as many claims as decisions has
+// had everything triage decided about it carried out, and a further stoppage of
+// it needs a further decision rather than the same one a second time.
+//
+// A claim counts whatever became of the run it caused. That is the direction this
+// record fails in everywhere else: a re-run claimed and then not run is an
+// attempt nobody took rather than one nobody counted, and treating it as unspent
+// is what would let one decision start two runs.
+func (s *RerunStore) Claimed(workItemID string) ([]Rerun, error) {
+	id := strings.TrimSpace(workItemID)
+	if id == "" {
+		return nil, errors.New("a work item is required to read the re-runs taken of its stoppages")
+	}
+	recorded, err := s.List()
+	if err != nil {
+		return nil, err
+	}
+	var claimed []Rerun
+	for _, rerun := range recorded {
+		if rerun.WorkItemID == id {
+			claimed = append(claimed, rerun)
+		}
+	}
+	return claimed, nil
+}
+
+// List reports every re-run recorded for this product, oldest claim first. A
+// product nothing has been re-run in lists nothing, which is not a failure to
+// look; a record that cannot be read is one, because a claim nobody can read
+// must never be counted as absent.
+func (s *RerunStore) List() ([]Rerun, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read the triage re-runs: %w", err)
+	}
+	var claimed []Rerun
+	for _, entry := range entries {
+		// The directory also holds each record's lock file and the temporary files
+		// a replacement is written through. Only the records are read: a lock is
+		// named for the record it guards and would otherwise be decoded as one.
+		name := entry.Name()
+		if entry.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		recorded, err := s.read(filepath.Join(s.root, name))
+		if err != nil {
+			return nil, err
+		}
+		claimed = append(claimed, recorded)
+	}
+	sort.Slice(claimed, func(first, second int) bool {
+		return claimed[first].ClaimedAt.Before(claimed[second].ClaimedAt)
+	})
+	return claimed, nil
+}
+
 func (s *RerunStore) load(docketKey string) (Rerun, bool, error) {
-	file, err := os.Open(s.path(docketKey))
+	recorded, err := s.read(s.path(docketKey))
 	if errors.Is(err, os.ErrNotExist) {
 		return Rerun{}, false, nil
 	}
 	if err != nil {
-		return Rerun{}, false, fmt.Errorf("open triage re-run: %w", err)
-	}
-	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
-	var recorded Rerun
-	if err := decoder.Decode(&recorded); err != nil {
-		return Rerun{}, false, fmt.Errorf("decode triage re-run for %s: %w", docketKey, err)
-	}
-	if err := ensureJSONEOF(decoder); err != nil {
-		return Rerun{}, false, fmt.Errorf("decode triage re-run for %s: %w", docketKey, err)
-	}
-	if err := recorded.Validate(); err != nil {
 		return Rerun{}, false, err
-	}
-	if recorded.ProductID != s.productID {
-		return Rerun{}, false, fmt.Errorf("triage re-run belongs to product %q, not %q", recorded.ProductID, s.productID)
 	}
 	// The file is named for a digest of the docket key rather than for the key
 	// itself, so this is what catches two keys that were ever to land on one name:
@@ -385,6 +431,34 @@ func (s *RerunStore) load(docketKey string) (Rerun, bool, error) {
 		return Rerun{}, false, fmt.Errorf("triage re-run at %s belongs to docket entry %q, not %q", s.path(docketKey), recorded.DocketKey, docketKey)
 	}
 	return recorded, true, nil
+}
+
+// read decodes one record. A file that is not there is reported as itself, so a
+// caller asking about one stoppage can tell an absent claim from an unreadable
+// one; everything else is an error, because a claim nobody can read must never
+// be read as absent.
+func (s *RerunStore) read(path string) (Rerun, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return Rerun{}, fmt.Errorf("open triage re-run: %w", err)
+	}
+	defer file.Close()
+	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
+	decoder.DisallowUnknownFields()
+	var recorded Rerun
+	if err := decoder.Decode(&recorded); err != nil {
+		return Rerun{}, fmt.Errorf("decode triage re-run at %s: %w", path, err)
+	}
+	if err := ensureJSONEOF(decoder); err != nil {
+		return Rerun{}, fmt.Errorf("decode triage re-run at %s: %w", path, err)
+	}
+	if err := recorded.Validate(); err != nil {
+		return Rerun{}, err
+	}
+	if recorded.ProductID != s.productID {
+		return Rerun{}, fmt.Errorf("triage re-run belongs to product %q, not %q", recorded.ProductID, s.productID)
+	}
+	return recorded, nil
 }
 
 // save replaces one stoppage's re-run durably, as a temporary file and a rename,

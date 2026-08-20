@@ -129,6 +129,68 @@ func TestARerunsDispositionSurvivesTheProcessThatRecordedIt(t *testing.T) {
 	}
 }
 
+// What has been claimed for one item is what says a decision about it has been
+// acted on, so it is read back by item and counts every claim whatever became of
+// the run it caused.
+func TestTheClaimsOfOneItemAreReadBackFromEveryStoppage(t *testing.T) {
+	t.Parallel()
+
+	store := newRerunStore(t)
+	second := claimedRerun()
+	second.DocketKey = "stopped_run:run-fedcba9876543210fedcba9876543210"
+	second.PriorRunID = "run-fedcba9876543210fedcba9876543210"
+	second.ClaimedAt = second.ClaimedAt.Add(time.Hour)
+	other := claimedRerun()
+	other.DocketKey = "stopped_run:run-11112222333344445555666677778888"
+	other.PriorRunID = "run-11112222333344445555666677778888"
+	other.WorkItemID = "yoyodyne-ifd.119"
+	for _, rerun := range []Rerun{claimedRerun(), second, other} {
+		if _, err := store.Claim(context.Background(), rerun); err != nil {
+			t.Fatalf("Claim() error = %v", err)
+		}
+	}
+
+	claimed, err := store.Claimed("yoyodyne-ifd.102.6")
+	if err != nil {
+		t.Fatalf("Claimed() error = %v", err)
+	}
+	if len(claimed) != 2 {
+		t.Fatalf("Claimed() = %d re-run(s), want both stoppages of that item", len(claimed))
+	}
+	// Oldest first, so a reader following the record reads the item's history in
+	// the order it happened.
+	if claimed[0].DocketKey != rerunDocketKey || claimed[1].DocketKey != second.DocketKey {
+		t.Fatalf("Claimed() order = %q, %q", claimed[0].DocketKey, claimed[1].DocketKey)
+	}
+	// Another item's claims are its own: nothing here bounds one item by what
+	// triage did about another.
+	elsewhere, err := store.Claimed("yoyodyne-ifd.119")
+	if err != nil || len(elsewhere) != 1 {
+		t.Fatalf("Claimed() = %d re-run(s), error = %v, want the other item's own", len(elsewhere), err)
+	}
+	all, err := store.List()
+	if err != nil || len(all) != 3 {
+		t.Fatalf("List() = %d re-run(s), error = %v, want every record", len(all), err)
+	}
+	// The lock file each record is guarded by sits in the same directory and is
+	// not a record; a listing that read it would fail on every product that has
+	// ever claimed one.
+	if _, err := store.Claimed("yoyodyne-ifd.102.6"); err != nil {
+		t.Fatalf("Claimed() error = %v after the locks were written", err)
+	}
+}
+
+// An item nothing has been re-run about has no claims, which is the ordinary
+// answer rather than a failure to look.
+func TestAnItemWithNoRerunsHasNoClaims(t *testing.T) {
+	t.Parallel()
+
+	claimed, err := newRerunStore(t).Claimed("yoyodyne-ifd.102.6")
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("Claimed() = %#v, error = %v, want nothing", claimed, err)
+	}
+}
+
 // A stoppage nothing has been recorded about is an absence rather than a
 // failure to look: that is every stoppage before somebody decides about it.
 func TestAnUnclaimedStoppageIsAnAbsence(t *testing.T) {

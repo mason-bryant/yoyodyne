@@ -234,6 +234,47 @@ func TestOneDocketedStoppageIsRerunOnce(t *testing.T) {
 	}
 }
 
+// One decision buys one re-run, and the item's counter alone cannot say so: it
+// is a total nothing clears, so a second stoppage of an already re-run item
+// would pass it on the strength of a decision that was about the first stoppage
+// and has already been carried out. What has been claimed is read back against
+// what was decided, so the second stoppage is refused until somebody decides
+// about it — which past the cap is an escalation rather than a larger budget.
+func TestASecondStoppageOfAnAlreadyRerunItemIsRefused(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, stoppedState())
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	// The fresh run stopped too, and its stoppage was docketed like any other.
+	second := stoppedState()
+	second.RunID = harness.outcome.RunID
+	second.Blocker = "Yoyodyne stopped this item: the ground moved again."
+	if err := harness.runs.Create(second); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := docketerOver(nil, harness.docket).RecordStoppedRun(second); err != nil {
+		t.Fatalf("RecordStoppedRun() error = %v", err)
+	}
+
+	_, err := harness.rerunner().Rerun(context.Background(), RerunRequest{Run: second.RunID, Reason: rerunReasoning})
+	if err == nil || !strings.Contains(err.Error(), "has carried out 1") {
+		t.Fatalf("Rerun() error = %v, want a refusal naming the decision already carried out", err)
+	}
+	if len(harness.started) != 1 {
+		t.Fatalf("started = %#v, want the item run again once in total", harness.started)
+	}
+	if _, claimed, _ := harness.reruns.Find(triage.Key(triage.ClassStoppedRun, second.RunID)); claimed {
+		t.Fatalf("the refused second stoppage was claimed anyway")
+	}
+	// Deciding about the second stoppage is what makes it actionable — and the
+	// cap is what makes that a person's decision rather than this action's.
+	if _, err := harness.runs.Triage().RecordRerun(context.Background(), second.WorkItemID, docketedNow, rerunCaps); err == nil {
+		t.Fatal("RecordRerun() gave a second re-run of one item, which the cap refuses")
+	}
+}
+
 // The architect's condition: the stoppage has to be over, and it is proved from
 // the run's own record rather than assumed from the entry being on the docket.
 // The docket says what was true when it was written.
@@ -514,6 +555,83 @@ func TestThePreservedArtifactsAreKeptUntilTheFreshRunIntegratesAndThenRetired(t 
 func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	t.Parallel()
 
+	pipelined := newPipelinedRerun(t, nil)
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if result.Outcome.Integration == nil {
+		t.Fatalf("the fresh run did not integrate: %#v", result.Outcome)
+	}
+	developer := pipelined.provider.requestsForRole(domain.RoleDeveloper)
+	if len(developer) != 1 {
+		t.Fatalf("developer invocations = %d, want the fresh attempt", len(developer))
+	}
+	if !strings.Contains(developer[0].Prompt, rerunGuidance) {
+		t.Fatalf("the developer was not given the triage guidance:\n%s", developer[0].Prompt)
+	}
+	fresh, err := pipelined.runs.Load(result.Outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if fresh.Selection == nil || fresh.Selection.By != runstate.SelectedByDevelopmentManager {
+		t.Fatalf("recorded selection = %#v, want the development manager's", fresh.Selection)
+	}
+	if !strings.Contains(fresh.Selection.Reason, rerunReasoning) {
+		t.Fatalf("recorded reason = %q, want the triage reasoning", fresh.Selection.Reason)
+	}
+	if fresh.Selection.At.IsZero() {
+		t.Fatalf("recorded selection carries no moment: %#v", fresh.Selection)
+	}
+}
+
+// A hold the operator places after the claim is taken still stops the run. That
+// second reading is the enforcement — the action's own reading before the claim
+// only keeps a held harness from spending the stoppage's re-run on a start that
+// would decline — and it is the pipeline that makes it, on the same hold record
+// the action read.
+func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
+	t.Parallel()
+
+	var pipelined *pipelinedRerun
+	pipelined = newPipelinedRerun(t, func() {
+		// The operator holds intake while the claim is being taken, which is the
+		// window the action itself cannot cover.
+		if _, err := pipelined.intake.Hold("stop choosing while I reorder the queue", docketedNow); err != nil {
+			t.Fatalf("Hold() error = %v", err)
+		}
+	})
+	result, err := pipelined.rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	// The action started the run, and the run declined to claim anything.
+	if !result.Started || result.Outcome.PausedByIntake == nil {
+		t.Fatalf("outcome = %#v, want the fresh run held by intake", result.Outcome)
+	}
+	if result.Outcome.RunID != "" || result.Outcome.Integration != nil {
+		t.Fatalf("outcome = %#v, want nothing reserved and nothing integrated", result.Outcome)
+	}
+	if invocations := len(pipelined.provider.requestsForRole(domain.RoleDeveloper)); invocations != 0 {
+		t.Fatalf("developer invocations = %d, want none under a hold", invocations)
+	}
+}
+
+// pipelinedRerun is the re-run action over the real pipeline: one repository,
+// one state root, and one intake hold record read by both the action and the
+// run it starts.
+type pipelinedRerun struct {
+	rerunner Rerunner
+	runs     *runstate.Store
+	intake   *runstate.IntakeHoldStore
+	provider *fakeBackend
+}
+
+// newPipelinedRerun builds it over a stopped, docketed, decided-about run.
+// beforeStart is called between the claim and the run, which is where a test
+// puts something that arrives while the harness is committing to the work.
+func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
+	t.Helper()
 	repository := pipelineRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{
 		ID:     docketedItem,
@@ -528,11 +646,17 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	}, approveVerdict)
 	pipeline, store := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
 
+	// One intake record for both readings: the pipeline reads it where it would
+	// start the work, and the action reads it before it claims anything. A test
+	// that wired them to two records would prove nothing about either, which is
+	// why the pipeline's own is replaced here rather than left where the shared
+	// fixture put it.
 	root := t.TempDir()
 	intake, err := runstate.NewIntakeHoldStore(root, "yoyodyne")
 	if err != nil {
 		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
+	pipeline.Intake = intake
 	reruns, err := runstate.NewRerunStore(root, "yoyodyne")
 	if err != nil {
 		t.Fatalf("runstate.NewRerunStore() error = %v", err)
@@ -552,44 +676,25 @@ func TestARerunHandsTheDevelopmentManagersGuidanceToTheDeveloper(t *testing.T) {
 	}
 	recordRerunDecision(t, store, stopped.WorkItemID)
 
-	rerunner := Rerunner{
-		Docket:    docket,
-		Runs:      store,
-		Intake:    intake,
-		Reruns:    reruns,
-		Decisions: store.Triage(),
-		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
-			fresh := pipeline
-			fresh.Selection = selection
-			return fresh.Run(ctx, workItemID)
+	return &pipelinedRerun{
+		runs:     store,
+		intake:   intake,
+		provider: provider,
+		rerunner: Rerunner{
+			Docket:    docket,
+			Runs:      store,
+			Intake:    intake,
+			Reruns:    reruns,
+			Decisions: store.Triage(),
+			Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
+				if beforeStart != nil {
+					beforeStart()
+				}
+				fresh := pipeline
+				fresh.Selection = selection
+				return fresh.Run(ctx, workItemID)
+			},
 		},
-	}
-	result, err := rerunner.Rerun(context.Background(), RerunRequest{Run: priorRunID, Reason: rerunReasoning})
-	if err != nil {
-		t.Fatalf("Rerun() error = %v", err)
-	}
-	if result.Outcome.Integration == nil {
-		t.Fatalf("the fresh run did not integrate: %#v", result.Outcome)
-	}
-	developer := provider.requestsForRole(domain.RoleDeveloper)
-	if len(developer) != 1 {
-		t.Fatalf("developer invocations = %d, want the fresh attempt", len(developer))
-	}
-	if !strings.Contains(developer[0].Prompt, rerunGuidance) {
-		t.Fatalf("the developer was not given the triage guidance:\n%s", developer[0].Prompt)
-	}
-	fresh, err := store.Load(result.Outcome.RunID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if fresh.Selection == nil || fresh.Selection.By != runstate.SelectedByDevelopmentManager {
-		t.Fatalf("recorded selection = %#v, want the development manager's", fresh.Selection)
-	}
-	if !strings.Contains(fresh.Selection.Reason, rerunReasoning) {
-		t.Fatalf("recorded reason = %q, want the triage reasoning", fresh.Selection.Reason)
-	}
-	if fresh.Selection.At.IsZero() {
-		t.Fatalf("recorded selection carries no moment: %#v", fresh.Selection)
 	}
 }
 

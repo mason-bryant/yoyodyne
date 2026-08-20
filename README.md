@@ -1216,11 +1216,16 @@ named by hand is yours rather than the development manager's.
 
 Three things refuse it. The stopped run has to be really over — terminal, with
 its blocker standing, read from the run's own record rather than from the docket
-entry. One docketed stoppage is re-run once. And the development manager's
-decision has to actually be recorded: deciding a re-run spends the item's re-run
-budget as it is decided, so an item whose budget carries none is one nobody
-decided this about, and the harness will not start a run attributed to a
-decision that does not exist.
+entry. One docketed stoppage is re-run once. And a decision of the development
+manager's has to be there to carry out: deciding a re-run spends the item's
+re-run budget as it is decided, and each decision authorizes exactly one re-run,
+so the harness reads what it has already carried out for the item back against
+what was decided. An item nobody decided this about is refused, and so is one
+whose decision has already been acted on — a second stoppage of an item that was
+already run again needs somebody to decide about *that* stoppage, which past the
+once-per-item cap means an escalation rather than a bigger budget. The harness
+will not start a run attributed to a decision that does not exist, or to one that
+was about something else.
 
 What that stopped run preserved is kept until the fresh run integrates and
 retired explicitly then — removed, and the removal written onto the stopped run's
