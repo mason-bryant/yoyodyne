@@ -1706,17 +1706,20 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Five things keep an item out of a pass, and the pass accounts for them at two
-different grains. Two are named against the item, because nothing else would
+Six things keep an item out of a pass, and the pass accounts for them at two
+different grains. Three are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
-named with the directive's own words, because it needs a person. And an item
+named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
 children named: a decomposed epic and the child that does its work are both
 reported as ready to pull, so a scheduler that did not know the difference would
 buy the same change twice — two developers rewriting one file, the second of them
 guaranteed a conflict at integration. A child covers whether it is queued,
 blocked, or already claimed by a run in flight, and the container becomes
-ordinary work again once its last unfinished child leaves the backlog. The other
+ordinary work again once its last unfinished child leaves the backlog. And an
+item that **would race work already in flight** is sequenced behind it rather
+than started beside it, with the run it would have raced and what the two share
+both named. The other
 three — the tracker not reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -1729,7 +1732,28 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-A sixth thing deliberately keeps nothing out: an item whose goal was amended after
+Sequencing is the one of those three that is a wait rather than a refusal. Two
+items race when they are siblings of one epic, when one is the epic the other was
+broken out of, or when the files they will change overlap. An item says which
+files those are by naming them after `conflict-surface:` on a line of its own, in
+its title, description, design guidance, or acceptance criteria — the fields
+somebody authored, not the notes the harness appends each run's record to — and an
+item that declares nothing has those same fields read for the files it plainly
+names. That inference is deliberately narrow, taking a path with a separator and
+an extension on the end and nothing else: a surface invented out of prose holds
+unrelated work back, and unrelated work running at once is what the concurrency is
+for. Nothing here enforces anything — the promotion lease still serializes
+integration, and a change whose target moved is still replayed onto where it went
+— and what it buys is the difference between one wait and a replayed, re-checked,
+freshly reviewed run, or a stopped one where the replay will not apply. An item is
+held for exactly as long as the run it would have raced lasts, because the
+conflicts are re-read at every pull from what is actually in flight. And the slot a
+hold frees is not idled: the pass carries on down the order to the next item that
+races nothing, and both runs record what the sequencing did — the one that waited
+says what it waited for, and the one pulled past it says which items it was pulled
+ahead of.
+
+A seventh thing deliberately keeps nothing out: an item whose goal was amended after
 it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.
@@ -1739,8 +1763,9 @@ Holding intake stops it choosing anything more while what is running finishes,
 and it is read at every pull rather than once at the start, so a hold you place
 mid-pass takes effect at the next selection. And every run it starts records, in
 durable state, why that item was chosen — where it sat in the order, how much of
-the queue was pullable, how much of the machine was free, and anything upstream
-that had moved. `yoyo status` reads it back.
+the queue was pullable, how much of the machine was free, anything upstream that
+had moved, and whether conflict-avoidance shaped the choice. `yoyo status` reads
+it back.
 
 The configuration is re-read before every pull for the same reason: a capacity
 you raise or a priority you reorder while a pass is running is picked up the next

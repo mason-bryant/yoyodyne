@@ -1343,7 +1343,7 @@ happens at a time, and a change whose target moved while it was being reviewed i
 replayed onto where the target went and promoted by fast-forward, or blocked if
 it will not replay. Nothing is ever forced.
 
-Five things keep an item out of a pass, reported at two different grains. Two are
+Six things keep an item out of a pass, reported at two different grains. Three are
 named against the item, because nothing else would report that this item was
 passed over. An unresolved directive is named with the directive's own words: it
 needs a person. An item whose unfinished children already carry its execution is
@@ -1352,7 +1352,19 @@ both reported as ready, and starting both buys the same change twice — two
 developers over one file, the second of them guaranteed a conflict at
 integration. A child covers whether it is queued, blocked, or already claimed,
 and the container is ordinary work again once its last unfinished child leaves
-the backlog. The tracker not reporting an item as ready, a run for it
+the backlog. And an item that would race work already in flight is sequenced
+behind it rather than started beside it, named with the run it would have raced
+and what the two share — the siblings of one epic, or overlapping files. That one
+is a wait rather than a refusal: the conflicts are re-read at every pull from
+what is actually in flight, so the item is pulled at the first pull where the run
+it would have raced has ended, and the slot the hold freed is spent on the next
+item down the order that races nothing. An item says which files it will change
+by naming them after `conflict-surface:` on a line of its own, in its title,
+description, design guidance, or acceptance criteria; an item that declares
+nothing has those same fields read for the files it plainly names, and that
+inference takes only a path with a separator and an extension on the end, because
+a surface invented out of prose would hold unrelated work back. The tracker not
+reporting an item as ready, a run for it
 already being in flight anywhere, and there being no free slot are facts about
 the pass rather than about any one item, so the pass reports them as such — the
 stop reason names which of them ended the choosing, and a pass that got as far as
@@ -1363,7 +1375,7 @@ on every pass and bury the deferrals worth reading. A pass that stopped before
 reading the queue at all — held intake, or every slot already taken — says
 nothing about the backlog rather than reporting zeroes it never looked up.
 
-A sixth thing deliberately keeps nothing out: an item whose goal was amended
+A seventh thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, and what changed
 goes into the run's recorded reason instead. See
 [what a change upstream leaves stale](#what-a-change-upstream-leaves-stale) for
