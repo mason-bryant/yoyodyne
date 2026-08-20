@@ -21,6 +21,22 @@ const SchemaVersion = 1
 type Kind string
 
 const (
+	// The backlog moving, which is the harness's steering wheel turning. An item
+	// admitted says what it is for, because work in the queue that does not say
+	// what it serves is exactly the work nobody can later decide to stop doing; a
+	// decomposition is separate from an admission because they are different acts
+	// by different roles, and recording one as the other would say a role admitted
+	// work it has no authority to admit.
+	KindItemAdmitted      Kind = "backlog.admitted"
+	KindItemDecomposed    Kind = "backlog.decomposed"
+	KindItemAttributed    Kind = "backlog.attributed"
+	KindItemReprioritized Kind = "backlog.reprioritized"
+	// What the operator decided about work an agent proposed. It is two kinds
+	// rather than one with a field, for the reason the reviewer's verdict is:
+	// work entering the backlog and work turned down are different news, and
+	// every persona says them differently.
+	KindWorkApproved Kind = "proposed-work.approved"
+	KindWorkDeclined Kind = "proposed-work.declined"
 	// KindRunStarted carries the recorded selection reason with it, so the fact
 	// the selected-work-passes-intake-and-records-why invariant makes durable is
 	// the fact an operator actually reads.
@@ -66,11 +82,18 @@ const (
 	KindHoldLifted     Kind = "hold.lifted"
 )
 
-// Kinds is the whole reportable set, in the order a run reaches them followed by
-// what an agent says and what an operator does. A caller that has to cover every
-// kind reads it from here rather than repeating the list.
+// Kinds is the whole reportable set, in the order work reaches them: the queue
+// changing, then what a run does to one item of it, then what an agent says and
+// what an operator does. A caller that has to cover every kind reads it from
+// here rather than repeating the list.
 func Kinds() []Kind {
 	return []Kind{
+		KindItemAdmitted,
+		KindItemDecomposed,
+		KindItemAttributed,
+		KindItemReprioritized,
+		KindWorkApproved,
+		KindWorkDeclined,
 		KindRunStarted,
 		KindChecksPassed,
 		KindChecksFailed,
@@ -99,7 +122,9 @@ func Kinds() []Kind {
 // something nobody wrote words for.
 func (k Kind) Valid() bool {
 	switch k {
-	case KindRunStarted, KindChecksPassed, KindChecksFailed,
+	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
+		KindWorkApproved, KindWorkDeclined,
+		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
 		KindRunParked, KindRunContinued, KindBlockerRecorded,
@@ -338,9 +363,26 @@ type Detail struct {
 	Unresolved string `json:"unresolved,omitempty"`
 	// Artifact is the document a proposal is about, read by KindProposalRaised.
 	Artifact string `json:"artifact,omitempty"`
-	// Reason is why the operator held something, read by KindIntakeHeld. An
-	// operator who holds in a hurry owes nobody an explanation, so absence is
-	// ordinary.
+	// Title is what an item is called, read by the kinds that report one arriving
+	// in the backlog. An identifier says which item; the title is what makes a
+	// thread readable by somebody who has not read the tracker.
+	Title string `json:"title,omitempty"`
+	// Goal is what the work says it serves, read by the admission kinds and by
+	// KindItemAttributed. It is the goal in the words the goals document states
+	// it in, which is what makes the claim checkable rather than decorative.
+	Goal string `json:"goal,omitempty"`
+	// Parent is the admitted item a decomposition was created under, read by
+	// KindItemDecomposed. "Created under what" is the whole of what makes a
+	// decomposition auditable.
+	Parent string `json:"parent,omitempty"`
+	// Priority is where in the queue a reprioritization put an item, read by
+	// KindItemReprioritized. It is negative where the record did not say, because
+	// zero is the highest priority rather than an unstated one.
+	Priority int `json:"priority,omitempty"`
+	// Reason is why: why the operator held something, read by KindIntakeHeld; why
+	// a role changed the backlog, read by the tracker kinds; and why proposed work
+	// was turned down, read by KindWorkDeclined. An operator who holds in a hurry
+	// owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
 }
 

@@ -36,9 +36,9 @@ import "context"
 
 // Notifier is what a producer of events talks to. It takes the topic the event
 // belongs to, the persona whose account it is, and the event itself, and it
-// assumes nothing whatever about the producer: runs are the first one,
-// conversations and branch reviews are the same shape, and ask exchanges arrive
-// later with exchange topics. A new producer adds nothing here.
+// assumes nothing whatever about the producer: runs were the first one and
+// conversations the second, branch reviews are the same shape, and ask exchanges
+// arrive later with exchange topics. A new producer adds nothing here.
 type Notifier interface {
 	Notify(ctx context.Context, topic Topic, speaker Speaker, event Event) error
 }
@@ -97,3 +97,9 @@ type Notification struct {
 func (n Notification) Notify(ctx context.Context, to Notifier) error {
 	return to.Notify(ctx, n.Topic, n.Speaker, n.Event)
 }
+
+// Silent reports a notification with nothing to say. Selection over a log
+// produces one for every record that is not a milestone, which is most of a
+// conversation's: the reading still has to move past them, and nobody is told
+// about them.
+func (n Notification) Silent() bool { return n.Event.Kind == "" }
