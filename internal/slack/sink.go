@@ -77,9 +77,11 @@ type Options struct {
 	// Dial opens the websocket transport. It is optional and exists so a test
 	// can exercise the connection without a network.
 	Dial dialFunc
-	// Now is read once, for the watermark this product's reporting begins at. It
-	// is optional and exists so a test can say when a sink was first pointed at a
-	// product without waiting for real time to pass.
+	// Now is read for the watermark this product's reporting begins at, and again
+	// on each pass for which end of a deep backlog is still recent enough to post
+	// in full. It is optional and exists so a test can say when a sink was first
+	// pointed at a product, or how far behind it is, without waiting for real time
+	// to pass.
 	Now func() time.Time
 }
 
@@ -96,7 +98,11 @@ type Sink struct {
 	// every sink the harness builds gets refusalBackoff.
 	refusal time.Duration
 	// now is the clock the watermark is taken from, injected for the same reason.
-	now        func() time.Time
+	now func() time.Time
+	// pace is what keeps a catch-up from being posted faster than Slack will
+	// carry it. Every post goes through it, including the message that opens a
+	// thread: what the workspace counts is messages, not what they are for.
+	pace       *pacer
 	log        func(format string, args ...any)
 	connection *connection
 }
@@ -144,7 +150,12 @@ func New(options Options) (*Sink, error) {
 		poll:    poll,
 		refusal: refusalBackoff,
 		now:     options.Now,
-		log:     log,
+		pace: &pacer{
+			every: DefaultPostInterval,
+			now:   time.Now,
+			sleep: sleepContext,
+		},
+		log: log,
 		connection: &connection{
 			api:    options.API,
 			dial:   options.Dial,
@@ -294,13 +305,21 @@ func (s *Sink) pass(ctx context.Context) error {
 	into := &poster{sink: s, threads: &threads}
 	notifier := notify.New(into, s.avatars)
 
-	for _, delivery := range batch.Deliveries {
+	// How deep the backlog is has to be decided over the whole batch before any of
+	// it is posted, because a digest says how many events it stands for. An
+	// ordinary pass plans nothing and posts every delivery as it is.
+	plan := planCatchUp(batch.Deliveries, s.clock())
+	if len(plan.digest) > 0 {
+		s.log("catching up on a deep backlog: %d threads are digested rather than replayed, and the durable records hold what they stand for", len(plan.digest))
+	}
+
+	for index, delivery := range batch.Deliveries {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !delivery.Silent() {
+		if notification, say := plan.say(index, delivery); say {
 			into.reached = false
-			if err := delivery.Notification.Notify(ctx, notifier); err != nil {
+			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
 				}
@@ -325,6 +344,17 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// post puts one message in the workspace at the pace the workspace sustains.
+// Every message the sink sends goes through here rather than to the client
+// directly, because what Slack suppresses is an application posting too fast and
+// it does not care which of its own messages were the interesting ones.
+func (s *Sink) post(ctx context.Context, message Message) (string, error) {
+	if err := s.pace.wait(ctx); err != nil {
+		return "", err
+	}
+	return s.api.Post(ctx, message)
 }
 
 // advance records that one delivery has been posted, durably, before anything
@@ -389,7 +419,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	}
 
 	emoji, url := icon(message.Identity.Avatar)
-	if _, err := sink.api.Post(ctx, Message{
+	if _, err := sink.post(ctx, Message{
 		Channel:   sink.channel,
 		Text:      renderText(message),
 		ThreadTS:  threadTS,
@@ -419,7 +449,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
 	identity := s.avatars.Identity(notify.Harness())
 	emoji, url := icon(identity.Avatar)
-	ts, err := s.api.Post(ctx, Message{
+	ts, err := s.post(ctx, Message{
 		Channel:   s.channel,
 		Text:      fmt.Sprintf("*%s*", header(topic)),
 		Username:  identity.Name,

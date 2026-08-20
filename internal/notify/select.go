@@ -320,6 +320,61 @@ func FromLine(line Line, at time.Time) Notification {
 	})
 }
 
+// Accumulation is what one topic gathered while nothing was posting its events:
+// how many there were, the first and last of them, and the most attention any
+// one of them asked for.
+//
+// It is the one thing here that is not read from a record at all. Everything
+// else compares two readings and reports the difference; this reports what a
+// surface did with the difference when it was too large to say one message at a
+// time, which is a fact about the reporting rather than about the work. It is
+// still said in this package, because what a message says is decided here
+// whatever ends up carrying it.
+type Accumulation struct {
+	// Topic is the thread the accumulation belongs to, which is what makes a
+	// digest one message per thread rather than one message for a whole backlog.
+	Topic Topic
+	// Events is how many were collapsed into this one message.
+	Events int
+	// Since and At are the first and last of them. The span between them is what
+	// tells a reader whether they are looking at an afternoon or a fortnight.
+	Since time.Time
+	At    time.Time
+	// Severity is the most attention any of the collapsed events asked for, so a
+	// digest standing for a warning is marked as one. A digest is not allowed to
+	// be quieter than the loudest thing inside it.
+	Severity report.Severity
+}
+
+// FromAccumulation says that a topic gathered more than a channel can carry, and
+// where the whole of it is.
+//
+// It is spoken by the harness rather than by any of the personas whose events
+// were collapsed, for the reason a thread's opening message is: deciding not to
+// repeat four hundred messages is not anybody's account of the work, and a
+// persona made to say it would be claiming a judgement it never made.
+func FromAccumulation(gathered Accumulation) Notification {
+	severity := gathered.Severity
+	if !severity.Valid() {
+		severity = report.SeverityNote
+	}
+	refs := Refs{}
+	if gathered.Topic.Kind == TopicWorkItem {
+		refs.WorkItemID = gathered.Topic.ID
+	}
+	return Notification{
+		Topic:   gathered.Topic,
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindCatchUpDigest,
+			At:       gathered.At,
+			Severity: severity,
+			Refs:     refs,
+			Detail:   Detail{Accumulated: gathered.Events, Since: gathered.Since},
+		},
+	}
+}
+
 func FromOperatorHold(hold runstate.OperatorHold) Notification {
 	return productNotification(KindHoldPlaced, hold.HeldAt, Detail{})
 }

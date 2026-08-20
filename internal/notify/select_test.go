@@ -867,6 +867,7 @@ func TestTheAgeOfAWaitingLineIsSaidInTheLargestHonestUnit(t *testing.T) {
 		stood time.Duration
 		want  string
 	}{
+		{stood: 0, want: "under a minute"},
 		{stood: 30 * time.Second, want: "under a minute"},
 		{stood: time.Minute, want: "one minute"},
 		{stood: 47 * time.Minute, want: "47 minutes"},
@@ -892,6 +893,47 @@ func TestTheAgeOfAWaitingLineIsSaidInTheLargestHonestUnit(t *testing.T) {
 	}
 	if !strings.Contains(message.Body, "an unrecorded length of time") {
 		t.Fatalf("body %q does not state that the start was not recorded", message.Body)
+	}
+}
+
+// A digest stands for messages nobody will ever see one at a time, so what it
+// says has to carry the whole of the claim: how many there were, over what span,
+// and that the durable record is the account of them. It is the harness's own
+// line, because deciding not to repeat a backlog is not any persona's account of
+// the work.
+func TestADigestSaysHowMuchAccumulatedAndWhereTheWholeOfItIs(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.8")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	digest := FromAccumulation(Accumulation{
+		Topic:    topic,
+		Events:   37,
+		Since:    moment.Add(-9 * time.Hour),
+		At:       moment,
+		Severity: report.SeverityWarning,
+	})
+	if digest.Speaker.Key() != HarnessSpeaker {
+		t.Fatalf("digest speaker = %q, want the harness rather than a persona", digest.Speaker.Key())
+	}
+	if digest.Event.Kind != KindCatchUpDigest {
+		t.Fatalf("digest kind = %q, want %q", digest.Event.Kind, KindCatchUpDigest)
+	}
+
+	message, err := Render(digest.Topic, digest.Speaker, digest.Event)
+	if err != nil {
+		t.Fatalf("render a digest: %v", err)
+	}
+	if !strings.HasPrefix(message.Body, warningMark) {
+		t.Fatalf("digest = %q, want it marked by the loudest thing it stands for", message.Body)
+	}
+	for _, want := range []string{"37 events", "9 hours", "record"} {
+		if !strings.Contains(message.Body, want) {
+			t.Fatalf("digest = %q, want it to carry %q", message.Body, want)
+		}
+	}
+	if message.Topic != topic.Key() {
+		t.Fatalf("digest addressed to %q, want the thread it stands for", message.Topic)
 	}
 }
 

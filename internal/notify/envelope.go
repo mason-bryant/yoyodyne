@@ -104,6 +104,13 @@ const (
 	// is still true hours later. Silence has to mean nothing to do, so a state
 	// that means waiting-on-you says so periodically until it clears.
 	KindLineWaiting Kind = "line.waiting"
+	// What one topic gathered while nothing was posting it. Every kind above is
+	// something the record says happened; this one is what a surface does with a
+	// backlog it cannot say one message at a time — a long gap replayed in full
+	// is hundreds of messages nobody scrolls, and the surface that carries them
+	// starts dropping them. So the accumulation is said once per thread, naming
+	// how much of it there is and the record that holds all of it.
+	KindCatchUpDigest Kind = "catch-up.digest"
 )
 
 // Kinds is the whole reportable set, in the order work reaches them: the queue
@@ -145,6 +152,7 @@ func Kinds() []Kind {
 		KindWatchResumed,
 		KindWatchStopped,
 		KindLineWaiting,
+		KindCatchUpDigest,
 	}
 }
 
@@ -162,7 +170,7 @@ func (k Kind) Valid() bool {
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindLineWaiting:
+		KindLineWaiting, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -474,9 +482,18 @@ type Detail struct {
 	// the event's own moment rather than carried as a phrase, because a state
 	// that is said again every hour has a different age every time it is said and
 	// a timestamp a reader has to subtract from is not the fact they need.
+	//
+	// Since is read a second time by KindCatchUpDigest, where it is the first of
+	// the events the digest stands for: the same subtraction against the event's
+	// own moment says how much of a gap was digested away.
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
+	// Accumulated is how many events one topic gathered while nothing was posting
+	// them, read by KindCatchUpDigest. It is the whole of what the digest claims:
+	// how much there is, and therefore how much of the thread's narrative is in
+	// the durable record rather than in the channel.
+	Accumulated int `json:"accumulated,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
 	// a role changed the backlog, read by the tracker kinds; and why proposed work
 	// was turned down, read by KindWorkDeclined. An operator who holds in a hurry

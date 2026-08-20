@@ -146,6 +146,7 @@ var harnessVoice = voice{
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.",
+		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
 
@@ -188,6 +189,7 @@ var developerVoice = voice{
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.",
+		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
 
@@ -230,6 +232,7 @@ var reviewerVoice = voice{
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.",
+		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
 }
 
@@ -271,6 +274,7 @@ var developmentManagerVoice = voice{
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.",
+		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
 }
 
@@ -313,6 +317,7 @@ var productManagerVoice = voice{
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.",
+		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
 }
 
@@ -355,6 +360,7 @@ var architectVoice = voice{
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.",
+		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
 
@@ -484,6 +490,7 @@ func (e Event) fields(topic Topic) map[string]string {
 		"stopped":  stated(detail.Stopped, "nothing the record names has stopped it"),
 		"age":      ageOf(detail.Since, e.At),
 		"ready":    countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
+		"events":   countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
 	}
 }
 
@@ -575,8 +582,14 @@ func roundsOf(detail Detail) string {
 // It is measured against the moment the message dates itself to rather than a
 // clock of its own, so a message says the age it had when it was said however
 // long afterwards it is read.
+//
+// What is unrecorded is a moment the record does not hold, or one that comes
+// after the message that measures against it. A length of zero is not that: two
+// records written in the same moment are a span of no time rather than a span
+// nobody wrote down, and saying it was unrecorded would blame the record for
+// something it holds exactly.
 func ageOf(since, at time.Time) string {
-	if since.IsZero() || at.IsZero() || !at.After(since) {
+	if since.IsZero() || at.IsZero() || at.Before(since) {
 		return "an unrecorded length of time"
 	}
 	stood := at.Sub(since)
