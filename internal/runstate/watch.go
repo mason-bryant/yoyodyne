@@ -144,6 +144,9 @@ func NewWatchSessionID() (string, error) {
 type WatchStore struct {
 	root      string
 	productID domain.ProductID
+	// reading is how strictly lines are decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewWatchStore(root string, productID domain.ProductID) (*WatchStore, error) {
@@ -231,16 +234,23 @@ func (s *WatchStore) List() ([]WatchTransition, error) {
 	var transitions []WatchTransition
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 8*1024), maxEncodedWatchBytes)
+	number := 0
 	for scanner.Scan() {
+		number++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		decoded, err := decodeWatchTransition([]byte(line))
-		if err != nil {
-			return nil, fmt.Errorf("decode watch log: %w", err)
+		if err == nil {
+			err = s.validate(decoded)
 		}
-		if err := s.validate(decoded); err != nil {
+		if err != nil {
+			// A reader carries on past a line it cannot read, for the reason the
+			// report log does.
+			if s.readPastLine("the watch log", number, err) {
+				continue
+			}
 			return nil, fmt.Errorf("decode watch log: %w", err)
 		}
 		transitions = append(transitions, decoded)

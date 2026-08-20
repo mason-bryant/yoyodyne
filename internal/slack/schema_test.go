@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -51,8 +54,15 @@ func TestARecordThatWillNotDecodeIsSkippedAndTheRestOfThePassStillReports(t *tes
 	if err != nil {
 		t.Fatalf("Poll() error = %v, want the undecodable record skipped rather than the pass failed", err)
 	}
-	if !batch.Partial {
-		t.Fatal("Partial = false, want a pass that read past a record to say so")
+	// A run record names its own stream even when it will not decode, so its
+	// cursor is accounted for and the pass can still prune. Freezing pruning over
+	// a skip that costs nothing would keep every dead run's cursor for the life of
+	// the process.
+	if _, kept := batch.Streams[runStream("run-4c1d9f2a5b6e70318294adcb5e7f0d11")]; !kept {
+		t.Fatalf("streams = %v, want the skipped run's own stream still accounted for", batch.Streams)
+	}
+	if batch.Partial {
+		t.Fatal("Partial = true, want a skip that could name its stream not to freeze pruning")
 	}
 	var kinds []notify.Kind
 	for _, delivery := range batch.Deliveries {
@@ -157,6 +167,91 @@ func TestAHoldThatCannotBeReadIsNeitherPostedNorReportedLifted(t *testing.T) {
 	harness.poll(t, cursors, notify.KindIntakeReleased)
 }
 
+// A conversation's event log is a record of another process's output like any
+// other, and the turn a newer build wrote is the same collision on a different
+// file. An added key is read past; a line this build cannot decode is skipped so
+// the milestones behind it still reach the channel, rather than one turn taking
+// the whole pass down with it.
+func TestAConversationEventANewerBuildWroteDoesNotStopTheLogBeingRead(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	said := harness.logs()
+	conversation := harness.converse(t, domain.RoleProductManager)
+	appendEventLine(t, harness.chats, conversation.ConversationID, `{
+  "schema_version": 1,
+  "run_id": "`+conversation.ConversationID+`",
+  "sequence": 1,
+  "timestamp": "2026-08-19T10:00:00Z",
+  "type": "agent_message",
+  "source": "harness.chat",
+  "payload": {"text": "a turn a newer build wrote"},
+  "a_key_this_build_has_never_heard_of": true
+}`)
+	// And one this build cannot make sense of at all.
+	appendEventLine(t, harness.chats, conversation.ConversationID, `{"schema_version": 99, "run_id": "`+conversation.ConversationID+`", "sequence": 2}`)
+	harness.chatted(t, conversation, 3, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":   "reprioritize",
+			"id":       "yoyodyne-ifd.99",
+			"priority": 1,
+			"reason":   "it waits on the epic above it",
+		},
+		"work_item_id": "yoyodyne-ifd.99",
+		"summary":      "set yoyodyne-ifd.99 to priority 1",
+	})
+
+	// The milestone behind the unreadable turn is still said.
+	harness.poll(t, harness.start(), notify.KindItemReprioritized)
+	if len(*said) != 1 || !strings.Contains((*said)[0], "the event log of conversation "+conversation.ConversationID) {
+		t.Fatalf("log = %v, want the one unreadable line named and the added key read past in silence", *said)
+	}
+	if !strings.Contains((*said)[0], "restarting it on the current build") {
+		t.Fatalf("notice = %q, want the remedy named", (*said)[0])
+	}
+}
+
+// The reports pile is the same shape and gets the same reading: one report a
+// newer build filed must not take every report behind it off the channel.
+func TestAReportLineThatWillNotDecodeIsSkippedAndTheRestStillReach(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	said := harness.logs()
+	appendLine(t, harness.reports.Path(), `{"schema_version": 99, "id": "rep-unreadable"}`)
+	harness.file(t, "report-0123456789abcdef0123456789abcde0", report.SeverityWarning, moment)
+
+	harness.poll(t, harness.start(), notify.KindReportFiled)
+	if len(*said) != 1 || !strings.Contains((*said)[0], "the report log line 1") {
+		t.Fatalf("log = %v, want the unreadable line named by log and position", *said)
+	}
+}
+
+// A conversation record that will not decode is the one skip that costs the pass
+// something: its stream is the conversation id inside the record, so a pass that
+// read past it can no longer enumerate what this product has and must not be the
+// pass that forgets a cursor.
+func TestAConversationRecordThatWillNotDecodeLeavesThePassUnableToPrune(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.logs()
+	harness.converse(t, domain.RoleProductManager)
+	if err := os.WriteFile(filepath.Join(harness.chats.Root(), "architect.json"), []byte(`{"schema_version": 99}`), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v, want the record skipped rather than the pass failed", err)
+	}
+	if !batch.Partial {
+		t.Fatal("Partial = false, want a skip that could not name its stream to stop the pruning")
+	}
+}
+
 // The heartbeat is derived from the switches rather than read from a record, so
 // a switch that would not read leaves it with nothing to derive from. It says
 // nothing and forgets nothing: the state it was already standing on keeps its
@@ -197,6 +292,33 @@ func (h *testHarness) logs() *[]string {
 		said = append(said, fmt.Sprintf(format, args...))
 	}
 	return &said
+}
+
+// appendEventLine puts one raw line on a conversation's event log, which is how
+// a turn recorded by another build is reproduced without a second build to
+// record it. The document is folded onto one line because the log is one record
+// per line and a reader counts them.
+func appendEventLine(t *testing.T, store *runstate.ConversationStore, conversationID, document string) {
+	t.Helper()
+	folded := strings.Join(strings.Fields(document), " ")
+	appendLine(t, filepath.Join(store.Root(), conversationID+".events.jsonl"), folded)
+}
+
+// appendLine appends one raw line to an append-only log, creating it if this is
+// the first thing on it.
+func appendLine(t *testing.T, path, line string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	defer file.Close()
+	if _, err := file.WriteString(line + "\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
 }
 
 // writeRunFile puts one run state file on disk with an extra line spliced into

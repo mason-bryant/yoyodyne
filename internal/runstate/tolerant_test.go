@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // The failure this exists for: a field added to run state by a build newer than
@@ -118,6 +120,56 @@ func TestAReaderTakesConversationRecordsANewerBuildWrote(t *testing.T) {
 	}
 	if len(skipped) != 1 || skipped[0] != "architect.json" {
 		t.Fatalf("skipped = %v, want the one record that would not decode", skipped)
+	}
+}
+
+// An append-only log never refused a key it did not know — json.Unmarshal has
+// always read past one — so what a tolerant view adds there is the skip. A
+// process that acts on the log still gets the error, because a log it cannot
+// read whole is not a log it can act on.
+func TestAReaderSkipsALineOfALogAndAnActorStillRefusesIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	conversation := testConversation(t)
+	if err := store.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	first, err := execution.NewEvent(conversation.ConversationID, 1, time.Now().UTC(), execution.EventAgentMessage, "harness.chat", nil)
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	if err := store.AppendEvent(first); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+	path := filepath.Join(store.Root(), conversation.ConversationID+".events.jsonl")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatalf("OpenFile() error = %v", err)
+	}
+	if _, err := file.WriteString(`{"schema_version": 99, "run_id": "` + conversation.ConversationID + `", "sequence": 2}` + "\n"); err != nil {
+		t.Fatalf("WriteString() error = %v", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	if _, err := store.LoadEvents(conversation.ConversationID); err == nil {
+		t.Fatal("LoadEvents() error = nil, want a strict reader to fail on a line it cannot decode")
+	}
+	var skipped []string
+	events, err := store.Tolerant(func(record string, err error) {
+		skipped = append(skipped, record)
+	}).LoadEvents(conversation.ConversationID)
+	if err != nil {
+		t.Fatalf("LoadEvents() error = %v, want the line read past", err)
+	}
+	if len(events) != 1 || events[0].Sequence != 1 {
+		t.Fatalf("LoadEvents() = %#v, want the line that reads and nothing else", events)
+	}
+	if len(skipped) != 1 || !strings.Contains(skipped[0], "line 2") {
+		t.Fatalf("skipped = %v, want the log and the line in it named", skipped)
 	}
 }
 

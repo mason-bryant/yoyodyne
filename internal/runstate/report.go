@@ -28,6 +28,9 @@ const maxEncodedReportBytes = 64 << 10
 type ReportStore struct {
 	root      string
 	productID domain.ProductID
+	// reading is how strictly lines are decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewReportStore(root string, productID domain.ProductID) (*ReportStore, error) {
@@ -115,16 +118,23 @@ func (s *ReportStore) List() ([]report.Report, error) {
 	var reports []report.Report
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 8*1024), maxEncodedReportBytes)
+	number := 0
 	for scanner.Scan() {
+		number++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		decoded, err := decodeReport([]byte(line))
-		if err != nil {
-			return nil, fmt.Errorf("decode report log: %w", err)
+		if err == nil {
+			err = s.validate(decoded)
 		}
-		if err := s.validate(decoded); err != nil {
+		if err != nil {
+			// A reader carries on past a line it cannot read: one report filed by a
+			// build newer than this one must not stop every report behind it.
+			if s.readPastLine("the report log", number, err) {
+				continue
+			}
 			return nil, fmt.Errorf("decode report log: %w", err)
 		}
 		reports = append(reports, decoded)

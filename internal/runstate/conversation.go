@@ -573,13 +573,21 @@ func (s *ConversationStore) LoadEvents(conversationID string) ([]execution.Event
 	var events []execution.Event
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
+	number := 0
 	for scanner.Scan() {
+		number++
 		event, err := execution.DecodeEvent(scanner.Bytes())
-		if err != nil {
-			return nil, fmt.Errorf("decode conversation event log for %s: %w", conversationID, err)
+		if err == nil && event.RunID != conversationID {
+			err = fmt.Errorf("event belongs to %s", event.RunID)
 		}
-		if event.RunID != conversationID {
-			return nil, fmt.Errorf("decode conversation event log for %s: event belongs to %s", conversationID, event.RunID)
+		if err != nil {
+			// A reader carries on past a line it cannot read: one turn recorded by
+			// a build newer than this one must not stop the whole conversation
+			// being read, which is the same starvation one run record caused.
+			if s.readPastLine("the event log of conversation "+conversationID, number, err) {
+				continue
+			}
+			return nil, fmt.Errorf("decode conversation event log for %s: %w", conversationID, err)
 		}
 		events = append(events, event)
 	}

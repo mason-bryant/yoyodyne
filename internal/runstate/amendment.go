@@ -37,6 +37,9 @@ const maxEncodedAmendmentBytes = 64 << 10
 type AmendmentStore struct {
 	root      string
 	productID domain.ProductID
+	// reading is how strictly lines are decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewAmendmentStore(root string, productID domain.ProductID) (*AmendmentStore, error) {
@@ -116,18 +119,25 @@ func (s *AmendmentStore) List() ([]amendment.Record, error) {
 	var records []amendment.Record
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 8*1024), maxEncodedAmendmentBytes)
+	number := 0
 	for scanner.Scan() {
+		number++
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
 		}
 		decoded, err := decodeAmendmentRecord([]byte(line))
-		if err != nil {
-			return nil, fmt.Errorf("decode amendment log: %w", err)
-		}
-		if decoded.Proposal != nil && decoded.Proposal.ProductID != s.productID {
-			return nil, fmt.Errorf("decode amendment log: proposal product %q does not match store product %q",
+		if err == nil && decoded.Proposal != nil && decoded.Proposal.ProductID != s.productID {
+			err = fmt.Errorf("proposal product %q does not match store product %q",
 				decoded.Proposal.ProductID, s.productID)
+		}
+		if err != nil {
+			// A reader carries on past a line it cannot read, for the reason the
+			// report log does.
+			if s.readPastLine("the amendment log", number, err) {
+				continue
+			}
+			return nil, fmt.Errorf("decode amendment log: %w", err)
 		}
 		records = append(records, decoded)
 	}

@@ -20,9 +20,24 @@ package runstate
 // It is a view rather than a setting on the store, because the processes that
 // act on these records keep the strict reading: a key an actor does not
 // understand is a key it would act without.
+//
+// The append-only logs are half of this already: they decode a line with
+// json.Unmarshal, which has never minded a key it does not know, so what a
+// tolerant view adds there is only the skip. That skip costs something the
+// single-record stores' does not, and it is worth stating plainly. The position
+// a cursor keeps on a log is a count of records rather than an offset in the
+// file, so a line read past shifts the lines behind it. Within one process that
+// is consistent, because the same lines are skipped on every pass. Across a
+// restart onto the build that can read them it repeats a message rather than
+// losing one, which is the at-least-once trade the sink already takes
+// deliberately. The one direction it does lose is a downgrade — an older build
+// resuming from a cursor a newer one advanced sees fewer records than that
+// cursor counted, and reads past the difference — which is a real cost, and a
+// narrower one than a log nobody can read at all.
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 )
 
@@ -67,6 +82,14 @@ func (r reading) readPast(record string, err error) bool {
 	return true
 }
 
+// readPastLine is readPast for one line of an append-only log, which has no name
+// of its own until this gives it one. The label names the log and the number
+// names the line in it, because "a record would not decode" sends somebody to a
+// file with thousands of them.
+func (r reading) readPastLine(label string, number int, err error) bool {
+	return r.readPast(fmt.Sprintf("%s line %d", label, number), err)
+}
+
 // Tolerant returns a view of the run records for a process that reads them
 // rather than acting on them. A record written by a newer build decodes without
 // its unknown keys, and a record that will not decode at all is skipped through
@@ -101,5 +124,34 @@ func (s *IntakeHoldStore) Tolerant() *IntakeHoldStore {
 func (s *OperatorHoldStore) Tolerant() *OperatorHoldStore {
 	view := *s
 	view.reading = tolerantReading(nil)
+	return &view
+}
+
+// Tolerant returns the same view of the collected reports. On an append-only log
+// it is the skip that a reader gains: unknown keys were never refused there.
+func (s *ReportStore) Tolerant(skipped Skipped) *ReportStore {
+	view := *s
+	view.reading = tolerantReading(skipped)
+	return &view
+}
+
+// Tolerant returns the same view of the proposed amendments.
+func (s *AmendmentStore) Tolerant(skipped Skipped) *AmendmentStore {
+	view := *s
+	view.reading = tolerantReading(skipped)
+	return &view
+}
+
+// Tolerant returns the same view of what the watch sessions did.
+func (s *WatchStore) Tolerant(skipped Skipped) *WatchStore {
+	view := *s
+	view.reading = tolerantReading(skipped)
+	return &view
+}
+
+// Tolerant returns the same view of what the provider refused.
+func (s *UsageLimitStore) Tolerant(skipped Skipped) *UsageLimitStore {
+	view := *s
+	view.reading = tolerantReading(skipped)
 	return &view
 }
