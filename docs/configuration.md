@@ -1701,7 +1701,7 @@ own budget, whatever the rounds say.
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
   1 grant(s) were cut down to the rounds the cap still had room for; 1 round(s) were granted in total
-  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
+  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
 ```
 
 **The first line counts what has been spent, not how many times triage looked.**

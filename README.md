@@ -2347,7 +2347,7 @@ triage of yoyodyne-ifd.90: triage has spent 2 passes on it
   review rounds: 3 spent across every run of this item, under the cap of 4
   repair grants: 1 of 1 permitted; re-runs: 0 of 1; each is refused by its own budget or once no round remains
   merge re-arms: 1 of 2 permitted
-  a decision that spends no budget — waiting, re-scoping, escalating — is recorded on the work item rather than here
+  waiting, re-scoping, and escalating spend nothing and stay available; a re-arm spends only its own budget, whatever the rounds say
 ```
 
 Every figure here is a budget, and the first line counts what has been spent
