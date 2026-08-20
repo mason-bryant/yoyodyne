@@ -270,8 +270,10 @@ func TestReviewAsksForAFindingWhenAGrantedPathNamesNoDecidedChange(t *testing.T)
 		t.Fatalf("Review() error = %v", err)
 	}
 	for _, want := range []string{
-		// The marker is named, because a grant is only recognizable by it.
+		// The marker is named, because a grant is only recognizable by it, and
+		// named as the gate reads it: an item that capitalized it still granted.
 		protectedpath.GrantMarker,
+		"capitalized however the item wrote it",
 		"A grant admits the path; it does not decide what goes into it",
 		"read the item for the decided change named behind each grant it makes",
 		"names no decided change behind the grant is a finding at major severity or higher",
@@ -281,8 +283,9 @@ func TestReviewAsksForAFindingWhenAGrantedPathNamesNoDecidedChange(t *testing.T)
 		}
 	}
 	// The instruction is worth nothing without the item text a grant lives in.
-	// The marker is matched the way the gate matches it, case and all, because an
-	// item writes it however its author capitalized the sentence.
+	// The item here capitalizes the marker as the documentation renders it, and
+	// the gate matches it either way, so the haystack is lowered rather than the
+	// item rewritten to the constant's own case.
 	if !strings.Contains(strings.ToLower(provider.request.Prompt), protectedpath.GrantMarker) {
 		t.Fatalf("the granting item text never reached the reviewer: %q", provider.request.Prompt)
 	}
