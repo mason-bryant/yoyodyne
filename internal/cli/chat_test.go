@@ -271,6 +271,44 @@ func TestAMessageThatIsNotADecisionIsStillSaidToTheProductManager(t *testing.T) 
 	}
 }
 
+// A reply that merely opens with a decision word is speech, and speech reaches
+// the product manager. At a prompt the operator has just been asked, so whatever
+// follows their verb is about the question; here the proposal may be hours and
+// several messages old and they are usually talking. Turning down work they
+// never mentioned, and never saying their message to anybody either, would be
+// this item's own defect pointing the other way.
+func TestAConversationalReplyOpeningWithADecisionWordIsSaidToTheProductManager(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &recordingChatTracker{}
+	proposing := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: proposalReply}}
+	var stdout, stderr bytes.Buffer
+	proposed := openTestChatSession(t, root, proposing, tracker)
+	if code := runChatMessage(context.Background(), proposed, domain.RoleProductManager, "what about usage limits?", false, &stdout, &stderr); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	answering := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: "The resolver is yoyodyne-ifd.108."}}
+	resumed := openTestChatSession(t, root, answering, tracker)
+	var said, aside bytes.Buffer
+	if code := runChatMessage(context.Background(), resumed, domain.RoleProductManager, "no, let's look at the resolver instead", false, &said, &aside); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
+	}
+	if answering.turns != 1 {
+		t.Fatalf("the product manager was asked %d time(s), want the message said to her", answering.turns)
+	}
+	if !strings.Contains(said.String(), "The resolver is yoyodyne-ifd.108.") {
+		t.Fatalf("stdout = %q, want the answer", said.String())
+	}
+	if len(resumed.Proposals()) != 1 {
+		t.Fatalf("%d proposal(s) pending, want the one nobody decided left where it was", len(resumed.Proposals()))
+	}
+	if len(tracker.creations) != 0 {
+		t.Fatalf("speech created %d item(s)", len(tracker.creations))
+	}
+}
+
 // An approval naming a proposal this conversation no longer holds says so. The
 // failure this guards is the quiet one: an identifier that has expired, or that
 // was mistyped, being passed on to the product manager as a sentence to

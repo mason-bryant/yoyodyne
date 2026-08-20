@@ -773,10 +773,12 @@ inside a conversation — /work, /wait, /stop, and /exit (alias /quit) — are r
 say what to reach for instead.
 
 A --message that decides a proposal this conversation is waiting on is carried
-out here too, and no turn is spent on it: "approve 3.1" creates that item,
-"decline 3.1 <reason>" turns it down, and a bare "y" decides the one proposal on
-the table where there is exactly one. Anything that is not a decision is said to
-the product manager as it always was, and leaves every proposal where it was.
+out here too, and no turn is spent on it. Two shapes decide: one that names the
+proposal, as "approve 3.1" or "decline 3.1 <reason>", and one that is nothing but
+decision words, as "y", "no", or "approve 1,3". Everything else is said to the
+product manager as it always was and leaves every proposal where it was —
+including a reply that opens with one of those words, because "no, let us look at
+the resolver instead" is a sentence rather than a decline.
 
 This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same

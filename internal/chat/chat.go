@@ -1731,23 +1731,34 @@ func (s *Session) decideOne(ctx context.Context, made decision) (DecisionOutcome
 // every decision goes through the same Approve and Reject.
 //
 // What it does not carry over is the prompt's own rule that anything unrecognized
-// declines. That rule belongs to the question: an operator answering "create
-// 3.1?" has been asked, so silence about it is an answer. A single message was
-// never asked anything, and reading "what else is open?" as a decision would
-// decline work nobody said a word about. So an answer that is not a decision is
-// reported as one that decided nothing, and the caller says it to the agent
-// exactly as it would have.
+// declines, and more than that: it does not carry over the prompt's licence to
+// read prose after a verb as the reason. Both belong to the question. An operator
+// answering "create 3.1?" has just been asked, so whatever they say is about
+// that; an operator sending a message was asked nothing, and the proposals they
+// would be deciding may be hours and several messages old. Reading "no, let's
+// look at the resolver instead" as a decline would turn down work they never
+// mentioned and spend the message doing it. decidesAsAMessage draws that line:
+// an answer that names a proposal or carries no prose at all is a decision, and
+// everything else is speech the caller says to the agent exactly as it would
+// have.
 //
-// An answer that is a decision the harness cannot carry out whole carries out
-// none of it, and is reported as a decision that failed rather than passed on as
-// speech: a proposal named by an approval that has already been decided, or that
-// this conversation no longer holds, is said out loud rather than quietly
-// becoming a sentence the agent is asked to interpret. That holds when there is
-// nothing left on the table at all, which is the case it most needs to hold in —
-// an operator approving a proposal that was decided by another process, or that
+// An answer that is a decision the harness cannot read against what is waiting
+// is reported as a decision that failed rather than passed on as speech: a
+// proposal named by an approval that has already been decided, or that this
+// conversation no longer holds, is said out loud rather than quietly becoming a
+// sentence the agent is asked to interpret. That holds when there is nothing
+// left on the table at all, which is the case it most needs to hold in — an
+// operator approving a proposal that was decided by another process, or that
 // aged out of the record, is exactly the operator whose approval went missing
 // before, and answering them with a turn spent on the agent would be the same
 // failure wearing a different coat.
+//
+// Reading the answer is all-or-nothing; carrying it out is not, and cannot be.
+// An answer the harness cannot resolve whole decides nothing at all, because
+// nothing has happened yet. Once the decisions are being made each is its own
+// durable event — that is what makes one auditable — so a batch whose second
+// decline fails to record leaves the first decision made and returns the
+// failure. The outcomes returned alongside it say exactly which those were.
 func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome, bool, error) {
 	// Bounded exactly as a message is, and before it is read rather than after: a
 	// decline keeps what the operator said as the reason, so an answer too large
@@ -1756,14 +1767,16 @@ func (s *Session) Decide(ctx context.Context, answer string) ([]DecisionOutcome,
 	if len(trimmed) > MaxOperatorMessageBytes {
 		return nil, false, nil
 	}
+	if !decidesAsAMessage(trimmed) {
+		return nil, false, nil
+	}
 	cards := s.pendingCards()
 	if len(cards) == 0 {
-		// Nothing is on the table, so a bare yes is somebody talking rather than
-		// somebody deciding: there is no proposal it could mean. An answer that
-		// names one is not ambiguous in that way, and it is refused as a decision
-		// rather than said to the agent — the proposal it names was decided
-		// already, or is no longer one this conversation holds, and either answer
-		// is the operator's to hear.
+		// The answer decides something and there is nothing here to decide. Only an
+		// answer naming a proposal can say which, and it is refused out loud rather
+		// than said to the agent: the proposal it names was decided already, or is
+		// no longer one this conversation holds, and either answer is the
+		// operator's to hear. A bare yes names nothing, so it is somebody talking.
 		if named, names := namesAProposal(trimmed); names {
 			return nil, true, fmt.Errorf("no proposal %s is awaiting a decision in this conversation; it was decided already, or this conversation no longer holds it. Nothing was decided, and nothing was said to the %s",
 				named, RoleTitle(s.state.Role))

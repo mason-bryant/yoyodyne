@@ -138,6 +138,64 @@ func namesAProposal(answer string) (string, bool) {
 	return "", false
 }
 
+// decidesAsAMessage reports an answer that decides proposals when nobody has
+// just asked a question. It is the whole of the difference between a prompt and
+// a single message, and it exists because the grammar below is written for a
+// prompt: there, the operator is answering "create 3.1?" and the words after
+// their verb can only be about that, so a clause that trails off into prose is
+// safely read as a decline with the prose kept as the reason.
+//
+// A message is not that. The proposals it would decide may be hours and several
+// messages old, and the operator is usually talking rather than answering. So an
+// ordinary reply that happens to open with a decision word — "no, let's look at
+// the resolver instead", "yes, and can you also check X" — must reach the agent
+// as what it is, rather than quietly turning down work nobody mentioned.
+//
+// Two shapes are decisions here, and both are shapes prose does not take:
+//
+//   - the answer names a proposal by its own identifier, as "approve 3.1" or
+//     "decline 3.1 too vague" — the identifier is what the harness prints and
+//     what nobody writes by accident, so the words after it are a reason;
+//   - the answer is nothing but decision vocabulary, as "y", "decline all", or
+//     "approve 1,3" — there is no prose in it to lose.
+//
+// Everything else is speech, including "decline 2 too vague": a bare number is a
+// position in a listing rather than a name, and that ambiguity is the one this
+// package already resolves toward the reason. Deciding it from a message would
+// resolve it toward a proposal the operator may not have been looking at.
+func decidesAsAMessage(answer string) bool {
+	if _, names := namesAProposal(answer); names {
+		return true
+	}
+	return onlyDecisionWords(answer)
+}
+
+// onlyDecisionWords reports an answer with no prose in it at all: a decision
+// verb, and after it nothing but more verbs, the words that join them, and the
+// proposals they name.
+func onlyDecisionWords(answer string) bool {
+	words := strings.Fields(strings.TrimSpace(answer))
+	if len(words) == 0 || !isDecisionVerb(words[0]) {
+		return false
+	}
+	for _, word := range words[1:] {
+		trimmed := strings.Trim(word, ",;")
+		switch {
+		case trimmed == "":
+			// Punctuation the operator separated selectors with, as in "1 , 3".
+		case isDecisionVerb(trimmed) || matches(trimmed, connectorWords):
+		case isSelectorList(trimmed):
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isDecisionVerb(word string) bool {
+	return matches(word, approveWords) || matches(word, declineWords)
+}
+
 // declineReason is what the record keeps about why a proposal was turned down.
 // An operator who declined it without saying anything still declined it, so the
 // record says that rather than recording no reason at all.

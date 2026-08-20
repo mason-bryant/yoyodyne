@@ -110,7 +110,7 @@ func TestADecidedProposalDoesNotComeBackFromTheRecord(t *testing.T) {
 		t.Fatalf("Send() error = %v", err)
 	}
 	deciding := openTestSession(t, perItemApprovalOptions(t, root, tracker, "declined"))
-	if _, _, err := deciding.Decide(context.Background(), "no thanks, we do this already"); err != nil {
+	if _, _, err := deciding.Decide(context.Background(), "decline 1.1 we already handle this"); err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
 
@@ -205,6 +205,68 @@ func TestAMessageThatDecidesNothingLeavesEveryProposalWhereItWas(t *testing.T) {
 	}
 	if len(resumed.Proposals()) != 1 {
 		t.Fatalf("%d proposal(s) are pending, want the undecided one exactly where it was", len(resumed.Proposals()))
+	}
+}
+
+// And an ordinary reply that happens to open with a decision word is speech too.
+// This is the sharp edge of putting a prompt's grammar on a message: at a prompt
+// the operator was just asked, so words after their verb are about the question,
+// while here the proposal may be hours and several messages old and they are
+// usually talking. A message that turned down work nobody mentioned, and was
+// never said to the product manager either, would be the same silent drop this
+// item exists to remove, pointing the other way.
+func TestAConversationalReplyThatOpensWithADecisionWordIsStillSpeech(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{}
+	proposed := openTestSession(t, perItemApprovalOptions(t, root, tracker, oneProposalTurn))
+	if _, err := proposed.Send(context.Background(), "what should we do about usage limits?"); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+
+	for _, speech := range []string{
+		"no, let's look at the resolver instead",
+		"no thanks, we do this already",
+		"yes, and can you also check the attribution counts",
+		"decline 2 too vague",
+	} {
+		resumed := openTestSession(t, perItemApprovalOptions(t, root, tracker, "understood"))
+		outcomes, decided, err := resumed.Decide(context.Background(), speech)
+		if decided || err != nil || len(outcomes) != 0 {
+			t.Fatalf("Decide(%q) = %v, %t, %v; want it said to the product manager rather than decided", speech, outcomes, decided, err)
+		}
+		if len(resumed.Proposals()) != 1 {
+			t.Fatalf("Decide(%q) left %d proposal(s) pending, want the undecided one exactly where it was", speech, len(resumed.Proposals()))
+		}
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("speech created %d item(s)", len(tracker.created))
+	}
+}
+
+// The shapes that are decisions, all of which a prompt accepts and none of which
+// prose takes: a proposal named by its identifier with the operator's words after
+// it, and an answer with no prose in it at all.
+func TestTheDecisionShapesAMessageAcceptsAreDecidedAndNothingElseIs(t *testing.T) {
+	t.Parallel()
+
+	for _, answer := range []string{"y", "yes", "n", "no", "approve 1.1", "decline 1.1 too vague", "decline all", "approve 1,2", "approve 1 and 2"} {
+		if !decidesAsAMessage(answer) {
+			t.Errorf("decidesAsAMessage(%q) = false, want a decision", answer)
+		}
+	}
+	for _, answer := range []string{
+		"no, let's look at the resolver instead",
+		"yes please, and also check X",
+		"decline 2 too vague",
+		"what else is open?",
+		"approve the resolver work",
+		"",
+	} {
+		if decidesAsAMessage(answer) {
+			t.Errorf("decidesAsAMessage(%q) = true, want it read as speech", answer)
+		}
 	}
 }
 
