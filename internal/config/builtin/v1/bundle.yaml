@@ -62,8 +62,9 @@ execution:
 # approve routinely, and everything else traces back to them. Approving one is
 # recorded in its frontmatter against the revision it was given for, so an
 # approved document, a draft, and one amended since it was approved are three
-# distinguishable things. Recording it gates nothing -- an unapproved document
-# still loads and still governs what is downstream of it.
+# distinguishable things. An unapproved document still loads and still governs
+# what is downstream of it; the one thing the record decides is what reaches the
+# work queue, under work_items below.
 #
 # Designs are "automatic" for that same reason read the other way: a design
 # serving an approved goal is the architect's judgement about how, and approving

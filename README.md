@@ -1847,11 +1847,22 @@ for what you gave it for, and the document as it now reads is not that. What is
 asked of you is your configuration's to say: `approvals.brief` and
 `approvals.goals` are `human`, `approvals.designs` is `automatic`, and a decision
 record is an account of how something was decided rather than a statement of
-intent, so nothing asks you to approve one. None of it is a gate: an unapproved
-document still loads and still governs what is downstream of it, and approving
-writes nothing but the approval — the document itself stays the owning role's to
-change. The [configuration guide](docs/configuration.md#approving-a-document) has
-the schema and what is refused.
+intent, so nothing asks you to approve one.
+
+**Recording an approval gates one thing: what reaches the work queue.** An
+unapproved document still loads, still governs what is downstream of it, and
+stops nothing that reads it, and approving writes nothing but the approval — the
+document itself stays the owning role's to change. What your approval of the
+goals decides is whether work serving them is admitted without asking you, which
+is [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to say:
+it is `human` until you set it otherwise, and every item is put to you. Set it to
+`automatic` and your approval of the goals document is what lets work serving
+those goals into the queue — so a goals document nobody approved, and one amended
+since you approved it, are documents nothing is admitted under. Everywhere else
+an amendment after approval changes what is reported about a document rather than
+what is allowed. The
+[configuration guide](docs/configuration.md#approving-a-document) has the schema
+and what is refused.
 
 A document in one of those directories with no usable identity is named on
 stderr rather than governed under a guessed id, so a home you have not given
