@@ -243,12 +243,26 @@ Up to three layers produce the effective configuration, later ones winning:
    applied, and is floored at 1 for a project that repairs nothing routinely.
    `approvals.publishing` and `approvals.work_items` are the only approvals with
    a harness default, because they are the ones added after configurations
-   existed: a file written before either keeps the behavior it was written for —
-   the harness publishes nothing, and you are asked about every work item —
-   rather than failing to load for not mentioning a key that did not exist yet.
-   The bundle states both at the same value the default holds, so extending it
-   inherits neither and upgrading the executable moves neither. Both are opt-ins,
-   and an opt-in that arrived by inheritance would not be one.
+   existed, and a file that mentions neither loads rather than failing over a key
+   that did not exist when it was written. The bundle states both at the same
+   value the default holds, so extending it inherits neither and upgrading the
+   executable moves neither. Both are opt-ins, and an opt-in that arrived by
+   inheritance would not be one.
+
+   **`work_items` is the one of the two that changes an existing project's
+   behavior**, and it is worth being plain about rather than leaving to be
+   discovered. `publishing: human` is exactly what a file written before it got:
+   the harness publishes nothing. `work_items: human` is not, because before this
+   key existed the product manager could admit work to the backlog **directly**,
+   through its `create` action, and you were told afterwards rather than asked.
+   That direct admission is now refused at `human`, so a project that upgrades
+   and leaves the key alone has a product manager that proposes work instead of
+   admitting it. Nothing is lost when it does — the proposal is put to you and
+   approving it creates the item — and the trade is deliberate: a `human` setting
+   that left this door open would be a gate the product manager could walk around
+   by choosing the other one. An operator who wants the old behavior back sets
+   `work_items: automatic`, which admits directly again against goals they have
+   approved. See [what reaches the queue](#what-reaches-the-queue).
 2. **The built-in bundle**, named by `extends`, and present only if a project
    asks for it. Today the only bundle is `builtin:v1`. It supplies `execution`,
    `approvals`, and the five default agents. It deliberately supplies no
@@ -551,8 +565,16 @@ then admitted without a further prompt, and you are told afterwards what went in
 person in the loop, and autonomy is something you turn on once you have the gates
 to justify it rather than something a repository acquires by extending a bundle
 or by upgrading the executable. The bundle states `human` at the same value the
-harness default holds, so no existing project's approval posture moves when
-Yoyodyne does.
+harness default holds, so `automatic` never arrives on its own.
+
+**Upgrading does move one thing, and it moves toward asking you.** Before this
+key existed the product manager could admit work to the backlog directly, and you
+were told afterwards rather than asked; `human` refuses that direct admission, so
+a project that upgrades and leaves the key alone has a product manager that
+proposes work instead of admitting it. That is the whole of the change, it is in
+the direction of more consent rather than less, and the work is not lost — the
+proposal is put to you, and approving it creates the item. Set `work_items` to
+`automatic` to have it admit directly again, against goals you approved.
 
 **Approval moved up a level; it did not disappear.** Three things still stop and
 ask, and they are exactly what the product manager escalates rather than
@@ -907,7 +929,7 @@ nested.
 | `unresolved` | Names something no in-force goals artifact states. | A claim that is wrong. Admission is refused, and an item already carrying one is reported for correction. |
 | `unattributed` | Names no goal at all, and the tracker witnesses none was ever written. | Work admitted before this check existed. Grandfathered: reported, never refused, and nothing stops it running. |
 | `lost` | Names no goal, on an item the tracker witnesses one was written onto. | A record that was destroyed rather than never made. Reported and failed. Where the witness kept the words, they are quoted and putting them back is a restoration rather than a fresh judgement; where it kept only that a goal was written, the words have to be recovered from outside the tracker. |
-| `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. |
+| `uncheckable` | The repository records no goal in force, or the goals could not be read. | Nothing was checked, and it is said so rather than reported either way. Admitting work without asking is refused here, because an attribution nobody could check is not one the operator agreed to; the work is proposed instead and they decide, which is how a repository with no goals yet files the work of writing them. |
 
 Wording is compared with case, surrounding and repeated whitespace, and trailing
 sentence punctuation folded. Nothing else is guessed at: a paraphrase is

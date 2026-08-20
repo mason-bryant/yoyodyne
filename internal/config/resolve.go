@@ -210,16 +210,26 @@ func newResolution() *resolution {
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
 			// Publishing and work_items are the approvals with a harness default,
-			// because they are the ones added after configurations existed. A file
-			// written before either keeps the behavior it was written for — the
-			// harness publishes nothing, and the operator is asked about every work
-			// item — rather than failing to load for not mentioning a key that did
-			// not exist when it was written.
+			// because they are the ones added after configurations existed: a file
+			// mentioning neither loads rather than failing over a key that did not
+			// exist when it was written.
 			//
 			// The bundle states both, at the same value these defaults hold, so a
 			// project that extends it inherits nothing it did not already have and
 			// upgrading the executable moves neither. Both are opt-ins, and an
 			// opt-in that arrived by inheritance would not be one.
+			//
+			// Only one of the two is behaviour-preserving, and the difference is
+			// worth stating where the default is written rather than only in the
+			// guide. Publishing nothing is exactly what a file written before that
+			// key got. Asking about every work item is not: before work_items
+			// existed the product manager admitted work to the backlog directly and
+			// the operator was told afterwards, and `human` refuses that admission
+			// as well as the automatic one. That is deliberate — a `human` setting
+			// that gated the proposal path alone would be one the product manager
+			// could walk around by taking the other door — and it costs the work
+			// nothing, because what is refused is proposed instead and the operator
+			// decides. A project that wants the old behaviour sets `automatic`.
 			Approvals: Approvals{Publishing: domain.ApprovalHuman, WorkItems: domain.ApprovalHuman},
 		},
 		origins: map[string]string{

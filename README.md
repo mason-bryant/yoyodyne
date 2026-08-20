@@ -676,7 +676,8 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself, says which goal it serves in the words your goals document states it in;
+itself where [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)
+lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
 anything they do not state. So what an item says it is for is checked rather
@@ -1097,10 +1098,22 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits, orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
+
+The product manager's admitting is the one row a setting moves, and it moves in
+one direction only. `approvals.work_items` decides what may reach the queue
+without you, and at `human` — the shipped value — it refuses the direct
+admission as well as the automatic one, because a gate the proposals held while
+this door stood open would be no gate at all: the product manager reaches both,
+and work would arrive through whichever asked less. So a project that leaves the
+setting alone has a product manager that proposes work rather than admitting it,
+and nothing reaches the backlog that you did not approve. Set `work_items` to
+`automatic` and it admits directly again, against a goal you approved. Ordering,
+attributing, closing, and retiring are untouched either way: those tidy work you
+already agreed to rather than adding any.
 
 The development manager is the one worth reading twice, because it is where a
 design becomes tracked work. It decomposes: every item it creates hangs under an

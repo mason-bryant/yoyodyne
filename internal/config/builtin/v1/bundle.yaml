@@ -71,7 +71,10 @@ execution:
 #
 # work_items is the one approval that gates rather than records, and it is
 # "human" deliberately rather than by omission: every work item is put to the
-# operator before it is admitted to the queue.
+# operator before it is admitted to the queue. That covers both ways work
+# reaches it -- the product manager's direct "create" is refused here as well as
+# the automatic admission, because a gate the proposals held while that door
+# stood open would be one the product manager could walk around.
 #
 # Set it to "automatic" to move that approval up to the goals, which is what it
 # exists for: work that traces to a goal the operator approved is then admitted

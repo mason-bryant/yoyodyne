@@ -353,6 +353,60 @@ func TestAdmittingWorkWithNoRecordedGoalsIsRefusedRatherThanUnchecked(t *testing
 	}
 }
 
+func TestAProjectWithNoGoalsWrittenDownCanStillFileTheWorkOfWritingThem(t *testing.T) {
+	t.Parallel()
+
+	// This is the other half of the refusal above, and the reason refusing there
+	// costs nothing. A repository with no goals is the documented ordinary
+	// starting case, so a harness that could not file the work of writing its own
+	// goals from the conversation would have refused the one thing such a project
+	// needs to do first. It cannot admit that work without asking -- nobody has
+	// approved anything for it to rest on -- but it can propose it, and the
+	// operator approving is what creates it.
+	//
+	// The re-check that approval makes is deliberately about the goal still being
+	// there rather than about it having been approved: an attribution nothing
+	// could check is not an attribution that resolved to something wrong, so it
+	// does not stand in the way of the operator's own decision.
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "I suggest this.\n\n" + proposalFence +
+			"\n{\"items\":[{\"title\":\"Write the goals\",\"description\":\"There are none yet.\",\"rationale\":\"Nothing traces anywhere.\",\"goal\":\"Have goals to work from.\"}]}\n```\n"},
+	}})
+	options.Tracker = tracker
+	// No Goals at all, which is what a fresh repository has.
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "what next")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	// Nothing was admitted without asking, and the work became a question rather
+	// than being lost.
+	if len(reply.Admitted) != 0 {
+		t.Fatalf("admitted = %#v, want nothing admitted where no goal is approved", reply.Admitted)
+	}
+	if len(reply.Proposals) != 1 {
+		t.Fatalf("proposals = %#v, want the work put to the operator", reply.Proposals)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v, want nothing created before the operator decided", tracker.created)
+	}
+
+	item, err := session.Approve(context.Background(), reply.Proposals[0].ID)
+	if err != nil {
+		t.Fatalf("Approve() error = %v, want a goal-less repository to be able to file this work", err)
+	}
+	if item.WorkItemID == "" || len(tracker.created) != 1 {
+		t.Fatalf("item = %#v, created = %#v", item, tracker.created)
+	}
+	// It is recorded as the operator's decision, because it was one. Nothing here
+	// may claim a goal approved it.
+	if notes := tracker.created[0].Notes; !strings.Contains(notes, "approved by the operator") {
+		t.Fatalf("notes = %q, want the operator's approval recorded as the authority", notes)
+	}
+}
+
 func TestASurveySaysWhichAdmittedWorkNamesNoGoal(t *testing.T) {
 	t.Parallel()
 
