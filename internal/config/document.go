@@ -63,9 +63,14 @@ type triageDocument struct {
 }
 
 type approvalsDocument struct {
-	Brief       *domain.ApprovalMode `yaml:"brief"`
-	Goals       *domain.ApprovalMode `yaml:"goals"`
-	Designs     *domain.ApprovalMode `yaml:"designs"`
+	Brief   *domain.ApprovalMode `yaml:"brief"`
+	Goals   *domain.ApprovalMode `yaml:"goals"`
+	Designs *domain.ApprovalMode `yaml:"designs"`
+	// WorkItems is absent from files written before per-item approval became a
+	// policy rather than the only behavior. A layer that does not supply it
+	// leaves the harness default in place, which is the per-item gate such a
+	// file was written for.
+	WorkItems   *domain.ApprovalMode `yaml:"work_items"`
 	Integration *domain.ApprovalMode `yaml:"integration"`
 	Publishing  *domain.ApprovalMode `yaml:"publishing"`
 }

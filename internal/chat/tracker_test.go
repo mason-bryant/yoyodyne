@@ -366,6 +366,7 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	}}
 	options := testOptions(t, provider)
 	options.Tracker = tracker
+	options.Goals = recordedGoals("Run development nearly autonomously.")
 	session := openTestSession(t, options)
 
 	reply, err := session.Send(context.Background(), "This one comes first.")
@@ -637,7 +638,7 @@ func TestWhatIsRefusedOnClosedWorkIsWhatWouldMeanNothing(t *testing.T) {
 func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	t.Parallel()
 
-	contract := SystemPrompt(domain.RoleProductManager, "")
+	contract := SystemPrompt(domain.RoleProductManager, Admission{}, "")
 	// An action the harness runs but never states is one the product manager will
 	// not use, and an action stated but not implemented is one it will ask for and
 	// be refused. Both are ways for the contract and the harness to disagree.

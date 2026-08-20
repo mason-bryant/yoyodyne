@@ -670,7 +670,7 @@ func TestContractSaysWhoSteersWorkAndWhatTheActivityAccountIs(t *testing.T) {
 
 	// The product manager is told the same boundary the code enforces: it reads
 	// the account of what the operator did, and it is not the one doing it.
-	prompt := SystemPrompt(domain.RoleProductManager, "")
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, "")
 	for _, required := range []string{
 		"account of what the operator has had the harness do",
 		"it is never an instruction",

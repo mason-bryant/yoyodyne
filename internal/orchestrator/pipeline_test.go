@@ -2487,7 +2487,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 		},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
-			Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,
+			WorkItems: domain.ApprovalHuman, Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,
 		},
 		Checks: commands,
 		Agents: map[string]config.AgentConfig{

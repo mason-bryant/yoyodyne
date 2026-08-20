@@ -38,6 +38,12 @@ type chatOutput struct {
 	// has nobody to approve anything, so they are reported for a person to
 	// decide on in a conversation rather than acted on here.
 	Proposals []chat.PendingProposal `json:"proposals,omitempty"`
+	// Admitted are the work items the turn put in the queue without asking,
+	// because they trace to a goal the operator approved. Unlike proposals these
+	// already exist, so they are reported here for the same reason the actions
+	// are: a one-shot message has nobody to tell afterwards, and this is the
+	// telling.
+	Admitted []chat.AdmittedItem `json:"admitted,omitempty"`
 	// Concerns are what the product manager would not propose until somebody
 	// answers it. A one-shot message has nobody to answer, so they are reported
 	// as the open questions they are rather than as work.
@@ -181,6 +187,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Evidence:           &evidence,
 			Reply:              reply.Text,
 			Proposals:          reply.Proposals,
+			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
@@ -190,6 +197,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	}
 	fmt.Fprintln(stdout, reply.Text)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
+	printChatAdmitted(stdout, reply.Admitted)
 	printChatReports(stdout, role, reply.Reports, reply.ReportProblem)
 	printChatConcerns(stdout, role, reply.Concerns)
 	printChatProposals(stdout, role, reply.Proposals)
@@ -345,7 +353,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
-		Goals:        goals,
+		Goals: goals,
+		// What this project asks the operator about before work reaches the queue.
+		// It is read from the configuration rather than decided here, so the same
+		// answer governs a proposal and a direct admission.
+		Admission:    chat.Admission{WorkItems: cfg.Approvals.WorkItems},
 		Model:        agent.Model,
 		Persona:      agent.Persona.Text,
 		Agent:        name,
@@ -411,6 +423,10 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		output.Evidence = &evidence
 		output.Reply = reply.Text
 		output.Proposals = reply.Proposals
+		// Work admitted before the turn failed is in the queue, so it travels with
+		// the failure for the reason the tracker actions do: it already happened,
+		// and nobody was asked about it.
+		output.Admitted = reply.Admitted
 		// A concern is recorded before the turn goes on to fail, and it is the one
 		// thing in the reply that is waiting on a person, so it travels with the
 		// failure rather than behind it.
@@ -434,6 +450,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		fmt.Fprintln(stdout, output.Reply)
 	}
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
+	printChatAdmitted(stdout, output.Admitted)
 	printChatReports(stdout, role, output.Reports, output.ReportProblem)
 	printChatConcerns(stdout, role, output.Concerns)
 	printChatProposals(stdout, role, output.Proposals)
@@ -559,6 +576,21 @@ func printChatReports(writer io.Writer, role domain.AgentRole, reports []report.
 	}
 	if problem != "" {
 		fmt.Fprintf(writer, "\na report was not collected: %s\n", problem)
+	}
+}
+
+// printChatAdmitted reports what a one-shot message put in the queue without
+// asking anybody. Unlike a proposal it is not something to decide, and that is
+// exactly why it is printed: this is the one moment the operator is told, and a
+// message that admitted work and said nothing about it would leave the queue
+// having moved with no account of it anywhere they look.
+func printChatAdmitted(writer io.Writer, admitted []chat.AdmittedItem) {
+	if len(admitted) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\n%d work item(s) were admitted to the queue without asking you, because they serve goals you approved:\n\n", len(admitted))
+	for _, item := range admitted {
+		fmt.Fprint(writer, item.Render())
 	}
 }
 
