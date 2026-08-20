@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -287,6 +289,31 @@ func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, e
 	if err != nil {
 		return Conversation{}, err
 	}
+	conversation, err := s.read(path, string(role))
+	if err != nil {
+		return Conversation{}, err
+	}
+	if conversation.Role != role {
+		return Conversation{}, fmt.Errorf("conversation state for %s belongs to role %s", identity, conversation.Role)
+	}
+	// A record that names its agent must be the agent that was asked for. It
+	// cannot be another one under the default layout, where the file is named for
+	// the agent, and it is checked anyway: a record whose agent and file disagree
+	// is a record somebody moved, and resuming it would put one agent's session
+	// behind another's persona.
+	if conversation.Agent != "" && conversation.Agent != identity.Agent {
+		return Conversation{}, fmt.Errorf("conversation state for %s belongs to agent %s", identity, conversation.Agent)
+	}
+	return conversation, nil
+}
+
+// read is one conversation record as it sits on disk, checked as far as the
+// record itself can be checked. Who it belongs to is the caller's question: an
+// agent resuming its own conversation and a reader listing every conversation
+// there is ask it differently, and neither can answer it from the file alone.
+// The label names the record in a failure, because a reader that cannot say
+// which file would not decode has been told nothing useful.
+func (s *ConversationStore) read(path, label string) (Conversation, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Conversation{}, ErrNoConversation
@@ -300,32 +327,62 @@ func (s *ConversationStore) Load(identity ConversationIdentity) (Conversation, e
 		return Conversation{}, fmt.Errorf("stat conversation state: %w", err)
 	}
 	if info.Size() > maxEncodedStateBytes {
-		return Conversation{}, fmt.Errorf("conversation state for %s is %d bytes, limit is %d", role, info.Size(), maxEncodedStateBytes)
+		return Conversation{}, fmt.Errorf("conversation state for %s is %d bytes, limit is %d", label, info.Size(), maxEncodedStateBytes)
 	}
 	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
 	decoder.DisallowUnknownFields()
 	var conversation Conversation
 	if err := decoder.Decode(&conversation); err != nil {
-		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", role, err)
+		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
-		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", role, err)
-	}
-	if conversation.Role != role {
-		return Conversation{}, fmt.Errorf("conversation state for %s belongs to role %s", identity, conversation.Role)
-	}
-	// A record that names its agent must be the agent that was asked for. It
-	// cannot be another one under the default layout, where the file is named for
-	// the agent, and it is checked anyway: a record whose agent and file disagree
-	// is a record somebody moved, and resuming it would put one agent's session
-	// behind another's persona.
-	if conversation.Agent != "" && conversation.Agent != identity.Agent {
-		return Conversation{}, fmt.Errorf("conversation state for %s belongs to agent %s", identity, conversation.Agent)
+		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
 	}
 	if err := s.validateConversation(conversation); err != nil {
 		return Conversation{}, err
 	}
 	return conversation, nil
+}
+
+// Recorded lists the conversation this product holds a record of for each of
+// its agents. It is for a reader that has to notice change rather than act on
+// it — the reporting sink is the first — and it decides nothing about what it
+// reads: a conversation a live process is holding is listed exactly as an idle
+// one is.
+//
+// What it lists is one conversation per agent, because that is what the records
+// name. An agent whose conversation was replaced keeps the replaced one's event
+// log on disk, and nothing here points at it any more: a reader that was away
+// while a conversation was replaced misses whatever it had not already read of
+// it. That is the same trade the watermark makes — the durable records are
+// authoritative and this is a view of them — and it is stated rather than hidden
+// because a gap somebody does not know about is worse than one they do.
+func (s *ConversationStore) Recorded() ([]Conversation, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read conversation directory: %w", err)
+	}
+	conversations := make([]Conversation, 0, len(entries))
+	for _, entry := range entries {
+		// The leases, the event logs, and the temporary files of a save in flight
+		// all live in this directory; only a file named for an agent holds a
+		// conversation.
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		conversation, err := s.read(filepath.Join(s.root, entry.Name()), entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("discover recorded conversations: %w", err)
+		}
+		conversations = append(conversations, conversation)
+	}
+	sort.Slice(conversations, func(i, j int) bool {
+		return conversations[i].ConversationID < conversations[j].ConversationID
+	})
+	return conversations, nil
 }
 
 // Save replaces a role's conversation record atomically. Unlike a run, a

@@ -189,6 +189,10 @@ the first one exits.
 
 Into the work item's thread, as they happen:
 
+- the item arriving in the backlog: **admitted, with the goal it serves**, or
+  decomposed out of the item above it, said by the role that did it
+- work you approved from a proposal, admitted with the goal it was proposed under
+- a goal recorded on an item already in the queue, and an item's priority changed
 - the run starting, **carrying the reason that work item was selected**
 - the checks passing or failing
 - the reviewer's verdict, approved or sent back for repairs
@@ -203,9 +207,18 @@ Into the work item's thread, as they happen:
 
 At the top level of the channel, unthreaded, goes what is about the whole line
 rather than any one item: the operator holding and releasing intake, the
-operator holding and lifting all harness activity, and anything an agent filed
-with no work item attached. Burying those in one item's thread would misfile
-them.
+operator holding and lifting all harness activity, proposed work you turned
+down — there is no item, because nothing was created — and anything an agent
+filed with no work item attached. Burying those in one item's thread would
+misfile them.
+
+The queue changing comes from the conversations you hold with the product
+manager and the development manager, read from the same durable records `yoyo
+status` reads. A conversation's log is mostly the turn itself, and none of that
+is posted: what reaches the channel is the few points where the backlog actually
+moved. A conversation you replace with a new one stops being read from, so a sink
+that was down while you replaced one may miss the tail of what the old one did —
+the durable records still have it.
 
 Severity is said in words rather than only in colour: a `critical` says
 "Critical" and a `warning` says "Warning", so a client that renders no emoji

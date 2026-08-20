@@ -28,8 +28,9 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// The streams a product has. Runs take one each, named for the run, because they
-// are separate subjects rather than one log; the rest are one apiece.
+// The streams a product has. Runs and conversations take one each, named for
+// the run or the conversation, because they are separate subjects rather than
+// one log; the rest are one apiece.
 const (
 	reportStream   = "reports"
 	proposalStream = "proposals"
@@ -37,6 +38,8 @@ const (
 )
 
 func runStream(runID string) string { return "run:" + runID }
+
+func conversationStream(conversationID string) string { return "chat:" + conversationID }
 
 // The prefixes the operator's two switches are marked under. A hold is marked
 // with the moment it was placed, so a second hold a week later is a second thing
@@ -61,7 +64,7 @@ type Delivery struct {
 }
 
 // Silent reports a delivery that advances a cursor and posts nothing.
-func (d Delivery) Silent() bool { return d.Notification.Event.Kind == "" }
+func (d Delivery) Silent() bool { return d.Notification.Silent() }
 
 // Batch is one pass over the durable records: what is ready to post, and which
 // streams still exist so cursors for the rest can be dropped.
@@ -79,14 +82,20 @@ type Feed interface {
 }
 
 // HarnessFeed reads the product's own durable records: what became of its runs,
-// what its agents reported and proposed while their work carried on, and the
-// operator's two switches over the whole line.
+// what its conversations did to the backlog, what its agents reported and
+// proposed while their work carried on, and the operator's two switches over the
+// whole line.
 type HarnessFeed struct {
-	Runs      *runstate.Store
-	Reports   *runstate.ReportStore
-	Proposals *runstate.AmendmentStore
-	Intake    *runstate.IntakeHoldStore
-	Holds     *runstate.OperatorHoldStore
+	Runs *runstate.Store
+	// Conversations is where the backlog moving is read from. It is optional
+	// only in the sense that a feed assembled without it reports everything else:
+	// a product whose queue changes invisibly is the thing this exists to
+	// prevent, and every sink the harness builds is given one.
+	Conversations *runstate.ConversationStore
+	Reports       *runstate.ReportStore
+	Proposals     *runstate.AmendmentStore
+	Intake        *runstate.IntakeHoldStore
+	Holds         *runstate.OperatorHoldStore
 	// Now is read for the moment a hold was seen to have lifted, which is the one
 	// thing here no record holds: what lifts a hold is its absence. It is
 	// injected so a test can say when that was.
@@ -130,6 +139,12 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		}
 		batch.Deliveries = append(batch.Deliveries, deliveries...)
 	}
+
+	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, conversed...)
 
 	filed, err := f.Reports.List()
 	if err != nil {
@@ -232,8 +247,49 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since t
 	return pending, nil
 }
 
-// logDeliveries reads an append-only log from where the cursor left it. What was
-// filed before the watermark is read past in one silent advance, because a
+// conversationDeliveries says what each of the product's conversations did to
+// the backlog since the reading already reported. A conversation's log is an
+// append-only log like the reports pile, so it advances by position: what it
+// holds is mostly the turn itself — provider messages, tools, the reply as it
+// was written — and the milestones are the few records among them where the
+// queue actually moved. Everything else advances the position and says nothing.
+func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+	if f.Conversations == nil {
+		return nil, nil
+	}
+	conversations, err := f.Conversations.Recorded()
+	if err != nil {
+		return nil, fmt.Errorf("read the recorded conversations: %w", err)
+	}
+	var deliveries []Delivery
+	for _, conversation := range conversations {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		stream := conversationStream(conversation.ConversationID)
+		streams[stream] = struct{}{}
+		events, err := f.Conversations.LoadEvents(conversation.ConversationID)
+		if err != nil {
+			return nil, fmt.Errorf("read the log of conversation %s: %w", conversation.ConversationID, err)
+		}
+		said, err := f.logDeliveries(stream, cursors.Streams[stream], len(events), cursors.Since,
+			func(index int) (time.Time, notify.Notification, error) {
+				notification, err := notify.FromConversation(conversation, events, index)
+				return events[index].Timestamp, notification, err
+			})
+		if err != nil {
+			return nil, err
+		}
+		deliveries = append(deliveries, said...)
+	}
+	return deliveries, nil
+}
+
+// logDeliveries reads an append-only log from where the cursor left it. A record
+// selection had nothing to say about is read past exactly as one that predates
+// the watermark is: the position still moves, so a log that is mostly not
+// milestones is not re-read from its beginning on every pass. What was filed
+// before the watermark is read past in one silent advance, because a
 // channel turned on today does not want a year of history arriving at once.
 // Nothing after the watermark is ever read past on age: the watermark is a fixed
 // moment rather than this process's start, so a record filed while the sink was
@@ -253,7 +309,7 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 			skipped = position
 			continue
 		}
-		if predates(since, recordedAt) {
+		if notification.Silent() || predates(since, recordedAt) {
 			skipped = position
 			continue
 		}

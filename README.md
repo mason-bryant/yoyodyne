@@ -2477,9 +2477,11 @@ state.
 Everything above needs you at the terminal, which is the wrong requirement for
 work that runs while you are not. `yoyo slack` is the same account of the work in
 a Slack workspace: one thread per work item, one message per milestone, and every
-report an agent filed at the severity it was filed under. Each role speaks under
-its own name and in its own voice, and what no persona did — a promotion, a
-merge, your own holds — arrives from the harness itself. It is a process you
+report an agent filed at the severity it was filed under. The backlog moving is a
+milestone too — work admitted with the goal it serves, decomposed, attributed, or
+reordered — so the queue changing is as visible as the runs it feeds. Each role
+speaks under its own name and in its own voice, and what no persona did — a
+promotion, a merge, your own holds — arrives from the harness itself. It is a process you
 start and leave running, and it needs your project to have opted in:
 
 ```yaml

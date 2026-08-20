@@ -104,6 +104,10 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 	if err != nil {
 		return nil, "", err
 	}
+	conversations, err := runstate.NewConversationStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	reports, err := runstate.NewReportStore(stateRoot, productID)
 	if err != nil {
 		return nil, "", err
@@ -141,12 +145,13 @@ func buildSlackSink(configPath string, poll time.Duration, stdout io.Writer) (*s
 		// watermark that moved forward with each restart would read past
 		// everything filed while the sink was down.
 		Feed: &slack.HarnessFeed{
-			Runs:      runs,
-			Reports:   reports,
-			Proposals: proposals,
-			Intake:    intake,
-			Holds:     holds,
-			Log:       log,
+			Runs:          runs,
+			Conversations: conversations,
+			Reports:       reports,
+			Proposals:     proposals,
+			Intake:        intake,
+			Holds:         holds,
+			Log:           log,
 		},
 		Poll: poll,
 		Log:  log,
@@ -183,7 +188,9 @@ func printSlackUsage(writer io.Writer) {
 
 Report what the harness is doing into the configured Slack channel: one thread
 per work item, one message per milestone, and every report an agent files at the
-severity it was filed under.
+severity it was filed under. The backlog moving is reported too — work admitted,
+decomposed, attributed, or reordered in a conversation — so the queue changing is
+as visible as the runs it feeds.
 
 It reads the durable records and posts from them, so it is an observation rather
 than a gate: nothing waits on it, a workspace that is down delays messages

@@ -353,3 +353,73 @@ func TestAConversationRecordedWithoutAnAgentStillLoads(t *testing.T) {
 		t.Fatalf("Load() agent = %q, err = %v", stamped.Agent, err)
 	}
 }
+
+// Something has to be able to ask what conversations this product has held
+// without knowing which agents were configured for it. The reporting sink is the
+// first thing that does, and what it lists is what it will read logs from.
+func TestConversationStoreListsEveryRecordedConversation(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	if recorded, err := store.Recorded(); err != nil || len(recorded) != 0 {
+		t.Fatalf("Recorded() on an untouched product = %v, %v", recorded, err)
+	}
+
+	manager := testConversation(t)
+	manager.Agent = "product-manager"
+	if err := store.Save(manager); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	developmentManager := testConversation(t)
+	developmentManager.Agent = "development-manager"
+	developmentManager.Role = domain.RoleDevelopmentManager
+	if err := store.Save(developmentManager); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	// The leases and the event logs live in the same directory, and only a file
+	// named for an agent holds a conversation.
+	lease, err := store.Hold(ConversationIdentity{Agent: "product-manager", Role: domain.RoleProductManager})
+	if err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	defer lease.Release()
+	event, err := execution.NewEvent(manager.ConversationID, 1, manager.StartedAt, execution.EventAgentMessage, "harness.chat", nil)
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	if err := store.AppendEvent(event); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+
+	recorded, err := store.Recorded()
+	if err != nil {
+		t.Fatalf("Recorded() error = %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("Recorded() = %#v, want the two conversations", recorded)
+	}
+	found := map[string]domain.AgentRole{}
+	for _, conversation := range recorded {
+		found[conversation.ConversationID] = conversation.Role
+	}
+	if found[manager.ConversationID] != domain.RoleProductManager || found[developmentManager.ConversationID] != domain.RoleDevelopmentManager {
+		t.Fatalf("Recorded() = %#v, want each conversation under the role that holds it", found)
+	}
+}
+
+func TestConversationStoreRefusesToListARecordItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newConversationStore(t, root)
+	if err := store.Save(testConversation(t)); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(store.Root(), "product-manager.json"), []byte("{not json"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	if _, err := store.Recorded(); err == nil || !strings.Contains(err.Error(), "product-manager.json") {
+		t.Fatalf("Recorded() error = %v, want the file it could not read named", err)
+	}
+}

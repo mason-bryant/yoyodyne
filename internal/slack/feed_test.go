@@ -8,6 +8,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -306,6 +307,7 @@ type testHarness struct {
 	since   time.Time
 	feed    *HarnessFeed
 	runs    *runstate.Store
+	chats   *runstate.ConversationStore
 	reports *runstate.ReportStore
 	amend   *runstate.AmendmentStore
 	intake  *runstate.IntakeHoldStore
@@ -318,6 +320,10 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	runs, err := runstate.NewStore(root, "yoyodyne")
 	if err != nil {
 		t.Fatalf("NewStore() error = %v", err)
+	}
+	chats, err := runstate.NewConversationStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
 	}
 	reports, err := runstate.NewReportStore(root, "yoyodyne")
 	if err != nil {
@@ -338,14 +344,16 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	return &testHarness{
 		since: since,
 		feed: &HarnessFeed{
-			Runs:      runs,
-			Reports:   reports,
-			Proposals: amend,
-			Intake:    intake,
-			Holds:     holds,
-			Now:       func() time.Time { return moment.Add(time.Hour) },
+			Runs:          runs,
+			Conversations: chats,
+			Reports:       reports,
+			Proposals:     amend,
+			Intake:        intake,
+			Holds:         holds,
+			Now:           func() time.Time { return moment.Add(time.Hour) },
 		},
 		runs:    runs,
+		chats:   chats,
 		reports: reports,
 		amend:   amend,
 		intake:  intake,
@@ -489,5 +497,106 @@ func (h *testHarness) propose(t *testing.T, id string, at time.Time) {
 		RaisedAt:      at,
 	}); err != nil {
 		t.Fatalf("Append() error = %v", err)
+	}
+}
+
+// A conversation is the second producer, and it arrives the way the design said
+// one would: the feed reads its log by position and the notifier decides what
+// any of it means. Most of the log is the turn itself, and what is said is the
+// few records where the queue actually moved.
+func TestAConversationSaysWhatItDidToTheBacklogAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	conversation := harness.converse(t, domain.RoleProductManager)
+	harness.chatted(t, conversation, 1, execution.EventAgentMessage, map[string]any{"text": "what was said in the turn"})
+	harness.chatted(t, conversation, 2, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":      "create",
+			"title":       "Conversation milestones reach Slack",
+			"description": "the item's own words",
+			"goal":        "Work the harness runs on its own is visible while it runs",
+			"reason":      "the backlog moves invisibly today",
+		},
+		"work_item_id": "yoyodyne-ifd.114",
+		"summary":      "admitted yoyodyne-ifd.114 to the backlog",
+	})
+	harness.chatted(t, conversation, 3, execution.EventProcessOutput, map[string]any{"provider_subtype": "api_retry"})
+
+	cursors := harness.poll(t, harness.start(), notify.KindItemAdmitted)
+	// The position moved past the turn as well as past the milestone, so the log
+	// is not read from its beginning again on the next pass.
+	if position := cursors.Streams[conversationStream(conversation.ConversationID)].Position; position != 3 {
+		t.Fatalf("position = %d, want the whole log read", position)
+	}
+	harness.poll(t, cursors)
+}
+
+// What a conversation did before somebody pointed a sink at this product is
+// history nobody turned reporting on to read, exactly as a finished run is.
+func TestWhatAConversationDidBeforeTheWatermarkIsReadPastSilently(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment.Add(time.Hour))
+	conversation := harness.converse(t, domain.RoleProductManager)
+	harness.chatted(t, conversation, 1, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":   "reprioritize",
+			"id":       "yoyodyne-ifd.99",
+			"priority": 1,
+			"reason":   "it waits on the epic above it",
+		},
+		"work_item_id": "yoyodyne-ifd.99",
+		"summary":      "set yoyodyne-ifd.99 to priority 1",
+	})
+
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	for _, delivery := range batch.Deliveries {
+		if !delivery.Silent() {
+			t.Fatalf("said %s about work that predates reporting", delivery.Notification.Event.Kind)
+		}
+	}
+}
+
+// converse records a conversation for one role, which is what makes its log
+// discoverable and tells the notifier whose account the milestones in it are.
+func (h *testHarness) converse(t *testing.T, role domain.AgentRole) runstate.Conversation {
+	t.Helper()
+	id, err := runstate.NewConversationID()
+	if err != nil {
+		t.Fatalf("NewConversationID() error = %v", err)
+	}
+	conversation := runstate.Conversation{
+		SchemaVersion:  runstate.ConversationSchemaVersion,
+		ConversationID: id,
+		ProductID:      "yoyodyne",
+		RepositoryID:   "yoyodyne",
+		Agent:          string(role),
+		Role:           role,
+		Backend:        domain.BackendClaudeCode,
+		StartedAt:      moment,
+		UpdatedAt:      moment,
+	}
+	if err := h.chats.Save(conversation); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	return conversation
+}
+
+func (h *testHarness) chatted(t *testing.T, conversation runstate.Conversation, sequence uint64, eventType execution.EventType, payload any) {
+	t.Helper()
+	event, err := execution.NewEvent(conversation.ConversationID, sequence, moment, eventType, "harness.chat", payload)
+	if err != nil {
+		t.Fatalf("NewEvent() error = %v", err)
+	}
+	if err := h.chats.AppendEvent(event); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
 	}
 }
