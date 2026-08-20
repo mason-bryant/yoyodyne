@@ -2321,8 +2321,15 @@ from nowhere else: never from this file, never from a work item, never from a
 prompt. That is what keeps the boundary structural rather than behavioral — one
 separate process posts, so no run process, and therefore no agent's subprocess
 tree, has a Slack token in its environment at all. Exporting them in a shell
-profile every process inherits would undo exactly that, so export them in the
-shell you start `yoyo slack` from.
+profile every process inherits would undo exactly that, so they are read from a
+store only the sink's own launch looks at, under names that carry the product —
+`yoyo-slack-bot.<product id>` and `yoyo-slack-app.<product id>`. The product is
+in the name because a machine running more than one harness has more than one
+pair, and a sink launched from a shell holding the wrong one connects,
+authenticates, and posts this project's work into another project's channel.
+`yoyo doctor` asks whether this project's pair is stored, and whether the sink
+that is running was launched with it; [`docs/slack/setup.md`](slack/setup.md#5-store-the-two-tokens-under-this-projects-names)
+has the launcher.
 
 Reporting is an observation and never a gate: a workspace that is down, slow, or
 misconfigured changes nothing about any run. [`docs/slack/setup.md`](slack/setup.md)

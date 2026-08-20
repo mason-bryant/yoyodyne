@@ -36,7 +36,7 @@ const (
 	appTokenVariable = "SLACK_APP_TOKEN"
 )
 
-func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer, version string) int {
 	flags := flag.NewFlagSet("slack", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
@@ -63,7 +63,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 2
 	}
 
-	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, stdout)
+	sink, channel, err := buildSlackSink(*configPath, *poll, *heartbeat, version, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "slack failed: %v\n", err)
 		return 1
@@ -100,7 +100,7 @@ func runSlack(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 // anything. A tracker that will not answer costs the sink that one message and
 // nothing else — it is said in the sink's own log and asked again later — so this
 // is still a process that starts wherever the operator runs it.
-func buildSlackSink(configPath string, poll, heartbeat time.Duration, stdout io.Writer) (*slack.Sink, string, error) {
+func buildSlackSink(configPath string, poll, heartbeat time.Duration, version string, stdout io.Writer) (*slack.Sink, string, error) {
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
 		return nil, "", err
@@ -171,6 +171,16 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, stdout io.
 		Avatars: notify.Avatars(settings.Avatars),
 		Store:   store,
 		API:     api,
+		// What this process is, for whoever asks later whether the sink reporting
+		// for this product is the right one. The namespace is taken from the
+		// environment rather than assumed to be this product: what it records is
+		// whose secrets the launcher said it read, and a launcher that said
+		// nothing has to read as nothing rather than as agreement.
+		Identity: slack.Presence{
+			Version:         version,
+			Config:          resolved.Path,
+			SecretNamespace: os.Getenv(slack.SecretNamespaceVariable),
+		},
 		// The sink reports what happens from the moment somebody first pointed
 		// one at this product. What was already over before then is in the
 		// records the reporting verbs read, and a channel opened today does not
@@ -270,6 +280,18 @@ It needs both tokens in its own environment and takes them from nowhere else:
 
   export SLACK_BOT_TOKEN=xoxb-...
   export SLACK_APP_TOKEN=xapp-...
+
+Exported into a shell they are inherited by everything started from it, which on
+a machine running more than one harness is how a sink ends up posting this
+project's work through another project's Slack app. The supported form is a
+launcher that reads this project's own stored pair into exactly one process and
+says which project it read them for:
+
+  YOYO_SLACK_SECRET_NAMESPACE=<product id> exec yoyo slack
+
+That name is not a credential. It is what the sink records about whose secrets it
+was launched with, so `+"`yoyo doctor`"+` can tell a sink that is merely running from
+one that is running for this project.
 
 One sink per product. Two of them hold separate thread maps, so the second
 opens its own threads and posts everything twice; the second to start is
