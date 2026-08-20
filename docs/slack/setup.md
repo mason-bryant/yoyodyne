@@ -362,6 +362,17 @@ this channel and changes nothing about your setup.
 - **Reporting is not an audit trail.** The durable records under the state root
   are; this is a view of them. `yoyo status`, `yoyo reports`, and `yoyo cost`
   read the same records from the command line.
+- **A sink you leave running gets older than the records it reads.** Deploys
+  land while it runs, and the records the harness writes afterwards are the newer
+  build's. It reads them tolerantly rather than refusing them: a key added by a
+  newer build is read straight past, which is how these schemas are meant to
+  grow, and reporting carries on with no sign of anything having happened. A
+  record it genuinely cannot decode — a schema version that broke compatibility
+  on purpose — is skipped rather than retried forever, with one line in its log
+  naming the record and saying that restarting the sink on the current build is
+  what picks it up. Nothing is lost by that skip: cursors are untouched, so the
+  restart reports the record from where the sink had got to rather than from its
+  beginning.
 
 ## When it does not work
 
@@ -375,6 +386,7 @@ this channel and changes nothing about your setup.
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
+| `… could not be decoded and was skipped` | A record was written by a build newer than the one this sink is running, in a format it cannot read. The named record is skipped and everything else still reports. Restart the sink on the current build to pick it up; its cursors are untouched, so it resumes rather than replays. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 

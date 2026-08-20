@@ -23,10 +23,8 @@ package runstate
 // on the machine reads it.
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -66,6 +64,9 @@ func (h OperatorHold) Validate() error {
 // above the per-product records, because the switch is one switch.
 type OperatorHoldStore struct {
 	root string
+	// reading is how strictly the record is decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewOperatorHoldStore(root string) (*OperatorHoldStore, error) {
@@ -132,8 +133,7 @@ func (s *OperatorHoldStore) Held() (OperatorHold, bool, error) {
 		return OperatorHold{}, false, fmt.Errorf("open operator hold: %w", err)
 	}
 	defer file.Close()
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	decoder := s.decoder(file, maxEncodedStateBytes)
 	var held OperatorHold
 	if err := decoder.Decode(&held); err != nil {
 		return OperatorHold{}, false, fmt.Errorf("decode operator hold: %w", err)

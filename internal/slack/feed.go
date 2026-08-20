@@ -74,6 +74,13 @@ func (d Delivery) Silent() bool { return d.Notification.Silent() }
 type Batch struct {
 	Deliveries []Delivery
 	Streams    map[string]struct{}
+	// Partial reports a pass that read past a record it could not decode. What
+	// streams the product has is then not fully known — a record that would not
+	// decode does not say which stream it is — so nothing may be forgotten on the
+	// strength of it. A run whose cursor was dropped because a deploy outpaced the
+	// sink would be reported from its beginning again the moment a newer sink
+	// could read it, which is the whole of what the cursor exists to prevent.
+	Partial bool
 }
 
 // Feed is where the sink's messages come from. It is polled rather than
@@ -131,6 +138,13 @@ type HarnessFeed struct {
 	// before it is read past. It is the sink's own log, and it is never given a
 	// token to print.
 	Log func(format string, args ...any)
+	// skipped remembers which records this feed has already said it could not
+	// decode. A record stays undecodable until somebody acts, so a line per pass
+	// would be the same sentence every fifteen seconds for as long as the process
+	// runs, which is how a log stops being read — the same reason a standing
+	// refusal is said once. A restart says them again, which is right: a restart
+	// that did not fix it is news.
+	skipped map[string]struct{}
 }
 
 // Poll reads every stream and reports what the cursors say has not been posted.
@@ -142,15 +156,29 @@ type HarnessFeed struct {
 // a record filed while the sink was down is after the watermark whatever the
 // cursor for its stream happens to say, so it is posted when the sink returns
 // rather than mistaken for history somebody has already read.
+//
+// The records are read tolerantly, because this sink is older than them whenever
+// a deploy has landed since it started — which under watch mode is most nights.
+// A key it has never heard of is the additive change these schemas evolve by and
+// is read straight past; a record it cannot decode at all is skipped, said once
+// with the remedy, and does not stop the pass. The alternative is what an
+// overnight found: one record in a new format, every pass afterwards failing on
+// it, and cursors that never move again.
 func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) {
 	batch := Batch{Streams: map[string]struct{}{
 		reportStream:   {},
 		proposalStream: {},
 		productStream:  {},
 	}}
+	// A pass that read past a record has not seen every stream this product has,
+	// so it must not be the pass that forgets a cursor.
+	readPast := func(record string, err error) {
+		batch.Partial = true
+		f.skip(record, err)
+	}
 	since := cursors.Since
 
-	states, err := f.Runs.Recorded()
+	states, err := f.Runs.Tolerant(readPast).Recorded()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the recorded runs: %w", err)
 	}
@@ -175,7 +203,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		batch.Deliveries = append(batch.Deliveries, deliveries...)
 	}
 
-	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams)
+	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams, readPast)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -234,10 +262,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// that say they were placed and lifted, and for what has stopped the line when
 	// the heartbeat below asks. Reading them apart would let one pass post a hold
 	// and derive a line nothing is holding.
-	held, err := f.switches()
-	if err != nil {
-		return Batch{}, err
-	}
+	held := f.switches(readPast)
 	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
 	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
@@ -263,24 +288,43 @@ func (f *HarnessFeed) sessions() ([]runstate.WatchTransition, error) {
 }
 
 // switches reads the operator's two holds. Neither absence is a failure: not
-// holding anything is the ordinary state of both, and a record that cannot be
-// read is an error rather than an absence, because a hold nobody can read must
-// never be treated as one that was never placed.
-func (f *HarnessFeed) switches() (switches, error) {
-	intake, intakeHeld, err := f.Intake.Held()
-	if err != nil {
-		return switches{}, fmt.Errorf("read the intake hold: %w", err)
+// holding anything is the ordinary state of both.
+//
+// A record that cannot be read is neither absent nor held, and it is carried as
+// exactly that third thing. Reading it as absent would post a release the
+// operator never made; failing the pass over it would stop every other stream
+// for as long as the record stayed unreadable, which is the starvation this
+// reading exists to end. So it is said once, carried as unknown, and nothing is
+// claimed about that switch until it reads again.
+func (f *HarnessFeed) switches(readPast runstate.Skipped) switches {
+	var read switches
+	if intake, held, err := f.Intake.Tolerant().Held(); err != nil {
+		readPast("the intake hold", err)
+		read.intakeUnreadable = true
+	} else {
+		read.intake, read.intakeHeld = intake, held
 	}
-	operator, operatorHeld, err := f.Holds.Held()
-	if err != nil {
-		return switches{}, fmt.Errorf("read the operator hold: %w", err)
+	if operator, held, err := f.Holds.Tolerant().Held(); err != nil {
+		readPast("the operator hold", err)
+		read.operatorUnreadable = true
+	} else {
+		read.operator, read.operatorHeld = operator, held
 	}
-	return switches{
-		intake:       intake,
-		intakeHeld:   intakeHeld,
-		operator:     operator,
-		operatorHeld: operatorHeld,
-	}, nil
+	return read
+}
+
+// skip says one record was read past and names the remedy, once per record for
+// as long as this process lives.
+func (f *HarnessFeed) skip(record string, err error) {
+	notice := record + ": " + err.Error()
+	if _, said := f.skipped[notice]; said {
+		return
+	}
+	if f.skipped == nil {
+		f.skipped = map[string]struct{}{}
+	}
+	f.skipped[notice] = struct{}{}
+	f.say("%s could not be decoded and was skipped; a sink cannot read a record a build newer than its own wrote, so if a deploy has landed since this one started, restarting it on the current build is the remedy: %v", record, err)
 }
 
 // watchDeliveries says what the sessions that choose work have been doing. It is
@@ -391,11 +435,12 @@ func (f *HarnessFeed) runDeliveries(state runstate.State, cursor Cursor, since t
 // holds is mostly the turn itself — provider messages, tools, the reply as it
 // was written — and the milestones are the few records among them where the
 // queue actually moved. Everything else advances the position and says nothing.
-func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursors, streams map[string]struct{}, readPast runstate.Skipped) ([]Delivery, error) {
 	if f.Conversations == nil {
 		return nil, nil
 	}
-	conversations, err := f.Conversations.Recorded()
+	store := f.Conversations.Tolerant(readPast)
+	conversations, err := store.Recorded()
 	if err != nil {
 		return nil, fmt.Errorf("read the recorded conversations: %w", err)
 	}
@@ -406,7 +451,7 @@ func (f *HarnessFeed) conversationDeliveries(ctx context.Context, cursors Cursor
 		}
 		stream := conversationStream(conversation.ConversationID)
 		streams[stream] = struct{}{}
-		events, err := f.Conversations.LoadEvents(conversation.ConversationID)
+		events, err := store.LoadEvents(conversation.ConversationID)
 		if err != nil {
 			return nil, fmt.Errorf("read the log of conversation %s: %w", conversation.ConversationID, err)
 		}
@@ -475,46 +520,53 @@ func (f *HarnessFeed) logDeliveries(stream string, cursor Cursor, count int, sin
 // against a mark saying it was once there. The pair is forgotten once both have
 // been said, so the product's cursor does not grow a line for every afternoon
 // somebody was away.
+//
+// A switch this pass could not read says nothing either way and leaves its mark
+// where it is. That absence is the reading failing rather than the operator
+// lifting anything, and the lift is derived from an absence, so a switch that
+// went unread has to be left out of the derivation entirely.
 func (f *HarnessFeed) holdDeliveries(cursor Cursor, read switches) []Delivery {
 	var deliveries []Delivery
 	advanced := cursor
 
-	intake, held := read.intake, read.intakeHeld
-	if held {
-		if mark := intakeMark + stamp(intake.HeldAt); !advanced.Has(mark) {
-			advanced = advanced.With(mark)
+	if !read.intakeUnreadable {
+		if intake, held := read.intake, read.intakeHeld; held {
+			if mark := intakeMark + stamp(intake.HeldAt); !advanced.Has(mark) {
+				advanced = advanced.With(mark)
+				deliveries = append(deliveries, Delivery{
+					Stream:       productStream,
+					Cursor:       advanced,
+					Notification: notify.FromIntakeHold(intake),
+				})
+			}
+		} else if mark, said := advanced.Marked(intakeMark); said {
+			advanced = advanced.Without(mark)
 			deliveries = append(deliveries, Delivery{
 				Stream:       productStream,
 				Cursor:       advanced,
-				Notification: notify.FromIntakeHold(intake),
+				Notification: notify.IntakeReleased(f.now()),
 			})
 		}
-	} else if mark, said := advanced.Marked(intakeMark); said {
-		advanced = advanced.Without(mark)
-		deliveries = append(deliveries, Delivery{
-			Stream:       productStream,
-			Cursor:       advanced,
-			Notification: notify.IntakeReleased(f.now()),
-		})
 	}
 
-	operator, held := read.operator, read.operatorHeld
-	if held {
-		if mark := holdMark + stamp(operator.HeldAt); !advanced.Has(mark) {
-			advanced = advanced.With(mark)
+	if !read.operatorUnreadable {
+		if operator, held := read.operator, read.operatorHeld; held {
+			if mark := holdMark + stamp(operator.HeldAt); !advanced.Has(mark) {
+				advanced = advanced.With(mark)
+				deliveries = append(deliveries, Delivery{
+					Stream:       productStream,
+					Cursor:       advanced,
+					Notification: notify.FromOperatorHold(operator),
+				})
+			}
+		} else if mark, said := advanced.Marked(holdMark); said {
+			advanced = advanced.Without(mark)
 			deliveries = append(deliveries, Delivery{
 				Stream:       productStream,
 				Cursor:       advanced,
-				Notification: notify.FromOperatorHold(operator),
+				Notification: notify.HoldLifted(f.now()),
 			})
 		}
-	} else if mark, said := advanced.Marked(holdMark); said {
-		advanced = advanced.Without(mark)
-		deliveries = append(deliveries, Delivery{
-			Stream:       productStream,
-			Cursor:       advanced,
-			Notification: notify.HoldLifted(f.now()),
-		})
 	}
 	return deliveries
 }

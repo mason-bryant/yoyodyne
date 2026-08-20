@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"crypto/rand"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -312,6 +311,9 @@ func (i ConversationIdentity) validate() error {
 type ConversationStore struct {
 	root      string
 	productID domain.ProductID
+	// reading is how strictly records are decoded, for the reason the run store
+	// carries one: a reader of other processes' output takes a tolerant view.
+	reading
 }
 
 func NewConversationStore(root string, productID domain.ProductID) (*ConversationStore, error) {
@@ -410,8 +412,7 @@ func (s *ConversationStore) read(path, label string) (Conversation, error) {
 	if info.Size() > maxEncodedStateBytes {
 		return Conversation{}, fmt.Errorf("conversation state for %s is %d bytes, limit is %d", label, info.Size(), maxEncodedStateBytes)
 	}
-	decoder := json.NewDecoder(io.LimitReader(file, maxEncodedStateBytes))
-	decoder.DisallowUnknownFields()
+	decoder := s.decoder(file, maxEncodedStateBytes)
 	var conversation Conversation
 	if err := decoder.Decode(&conversation); err != nil {
 		return Conversation{}, fmt.Errorf("decode conversation state for %s: %w", label, err)
@@ -456,6 +457,12 @@ func (s *ConversationStore) Recorded() ([]Conversation, error) {
 		}
 		conversation, err := s.read(filepath.Join(s.root, entry.Name()), entry.Name())
 		if err != nil {
+			// A reader carries on past a record it cannot read, for the reason the
+			// run store does: one conversation recorded by a newer build must not
+			// stop every other conversation being listed.
+			if s.readPast(entry.Name(), err) {
+				continue
+			}
 			return nil, fmt.Errorf("discover recorded conversations: %w", err)
 		}
 		conversations = append(conversations, conversation)
