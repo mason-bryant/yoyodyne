@@ -581,11 +581,13 @@ func (s *ConversationStore) LoadEvents(conversationID string) ([]execution.Event
 			err = fmt.Errorf("event belongs to %s", event.RunID)
 		}
 		if err != nil {
-			// A reader carries on past a line it cannot read: one turn recorded by
-			// a build newer than this one must not stop the whole conversation
-			// being read, which is the same starvation one run record caused.
-			if s.readPastLine("the event log of conversation "+conversationID, number, err) {
-				continue
+			// A reader stops at a line it cannot read rather than carrying on past
+			// it. One turn recorded by a newer build costs the rest of this
+			// conversation's log until a restart, and costs no other stream
+			// anything — which is the difference from the pass that used to fail
+			// whole, and the only reading under which the turn is not lost.
+			if s.stopAtLine("the event log of conversation "+conversationID, number, err) {
+				break
 			}
 			return nil, fmt.Errorf("decode conversation event log for %s: %w", conversationID, err)
 		}

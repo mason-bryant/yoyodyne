@@ -106,18 +106,26 @@ type waiting struct {
 // happened, and a second message a moment later would be the sink repeating what
 // the channel already has. What this adds is the hour after that, and every hour
 // after that.
-func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, streams map[string]struct{}) ([]Delivery, error) {
+// derived says the pass read everything the line is worked out from. It is false
+// when a run record was skipped or the watch log was cut short, both of which
+// leave the reading short of records that were there — and the two are passed in
+// rather than inferred here, because this function is given the counts and cannot
+// tell a product with no runs from a product whose runs it could not read.
+func (f *HarnessFeed) heartbeatDeliveries(ctx context.Context, cursor Cursor, held switches, sessions []runstate.WatchTransition, inFlight int, derived bool, streams map[string]struct{}) ([]Delivery, error) {
 	if f.Backlog == nil {
 		return nil, nil
 	}
 	streams[heartbeatStream] = struct{}{}
 
-	if held.unreadable() {
-		// One of the operator's switches could not be read, so what has stopped the
-		// line cannot be derived from it — and guessing in either direction is the
-		// one thing this must not do. Nothing is said and nothing is forgotten: a
-		// state already standing keeps its clock and is picked up again on the pass
-		// the record reads, exactly as an unreadable tracker is handled below.
+	if !derived || held.unreadable() {
+		// Something the line is derived from was not read in full: a switch, a run
+		// record, or the tail of the watch log. Every one of them is missing in the
+		// same direction — a record that exists and was not counted — so deriving
+		// anyway would report a line as stopped while work is in fact running, which
+		// is worse than silence because it is false rather than absent. Nothing is
+		// said and nothing is forgotten: a state already standing keeps its clock and
+		// is picked up again on the pass that reads in full, exactly as an unreadable
+		// tracker is handled below.
 		return nil, nil
 	}
 

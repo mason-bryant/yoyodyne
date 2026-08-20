@@ -177,25 +177,39 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		proposalStream: {},
 		productStream:  {},
 	}}
-	// A record read past is said and then read past, and what that costs the pass
-	// depends on whether the skip can still name the stream the record belongs to.
+	// A record this pass could not read is said and then left out, and what that
+	// costs depends on what else was being derived from it.
 	//
-	// A run can: the run records are files named for the run, so a run state that
-	// would not decode still says which stream it is, and its cursor is as safe as
-	// any other. So is a line of an append-only log, whose stream has a fixed name
-	// this pass added before it read anything. A conversation cannot — its file is
-	// named for the agent and the conversation id is inside the record — so a
-	// conversation read past leaves a `chat:` stream unaccounted for, and a pass
-	// that cannot enumerate its streams must not be the pass that forgets a cursor.
+	// Two things can be. Cursors are forgotten from the list of streams a pass
+	// enumerated, so a record that cannot name its own stream must stop the
+	// forgetting: a run can name one, because run records are files named for the
+	// run, and a line of a log belongs to a stream this pass named before reading
+	// anything, but a conversation cannot — its file is named for the agent and the
+	// stream is the id inside the record. And the heartbeat is derived rather than
+	// read: what has stopped the line is worked out from the runs in flight, the
+	// watch sessions, and the two switches together, so a reading that is missing
+	// any of them cannot support the derivation and must not be guessed from.
+	derived := true
 	readPastRun := func(runID string, err error) {
 		batch.Streams[runStream(runID)] = struct{}{}
+		// A run this sink cannot decode is still a run. Left out of the count it
+		// looks like no run at all, and the heartbeat would then say the line is
+		// stalled while work is executing — which is worse than silence, because it
+		// is false rather than absent.
+		derived = false
 		f.skip(runID, err)
 	}
 	readPastConversation := func(record string, err error) {
 		batch.Partial = true
 		f.skip(record, err)
 	}
-	readPastLine := runstate.Skipped(f.skip)
+	stopAtLine := runstate.Skipped(f.stopped)
+	// The watch log is the other reading the line is derived from, so a log cut
+	// short at a line leaves the sessions as underived as a missing run does.
+	stopAtWatchLine := func(record string, err error) {
+		derived = false
+		f.stopped(record, err)
+	}
 	since := cursors.Since
 
 	states, err := f.Runs.Tolerant(readPastRun).Recorded()
@@ -223,13 +237,13 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		batch.Deliveries = append(batch.Deliveries, deliveries...)
 	}
 
-	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams, readPastConversation, readPastLine)
+	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams, readPastConversation, stopAtLine)
 	if err != nil {
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, conversed...)
 
-	filed, err := f.Reports.Tolerant(readPastLine).List()
+	filed, err := f.Reports.Tolerant(stopAtLine).List()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the collected reports: %w", err)
 	}
@@ -243,7 +257,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, reported...)
 
-	records, err := f.Proposals.Tolerant(readPastLine).List()
+	records, err := f.Proposals.Tolerant(stopAtLine).List()
 	if err != nil {
 		return Batch{}, fmt.Errorf("read the proposed changes: %w", err)
 	}
@@ -262,7 +276,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// doing, and for whether any session is still doing it. Reading it twice would
 	// let one pass post a session stopping and then derive a line from a log that
 	// had moved underneath it.
-	sessions, err := f.sessions(readPastLine)
+	sessions, err := f.sessions(stopAtWatchLine)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -272,7 +286,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, watched...)
 
-	refused, err := f.usageLimitDeliveries(cursors, batch.Streams, readPastLine)
+	refused, err := f.usageLimitDeliveries(cursors, batch.Streams, stopAtLine)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -282,10 +296,10 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	// that say they were placed and lifted, and for what has stopped the line when
 	// the heartbeat below asks. Reading them apart would let one pass post a hold
 	// and derive a line nothing is holding.
-	held := f.switches(readPastLine)
+	held := f.switches(f.skip)
 	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
-	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
+	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, derived, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -333,9 +347,29 @@ func (f *HarnessFeed) switches(readPast runstate.Skipped) switches {
 	return read
 }
 
-// skip says one record was read past and names the remedy, once per record for
-// as long as this process lives.
+// skip says one record was read past and names the remedy. A record left out of
+// a listing is not recovered by a restart on its own — the reading is what the
+// restart fixes, and until then that record is simply not reported — so the
+// notice says skipped rather than promising it will arrive later.
 func (f *HarnessFeed) skip(record string, err error) {
+	f.once(record, err, "%s could not be decoded and was skipped; nothing else about the product was held up by it. A sink cannot read a record a build newer than its own wrote, so if a deploy has landed since this one started, restart it on the current build and that record is read: %v")
+}
+
+// stopped says one append-only log was cut short at a line, which is a different
+// thing from a record being skipped and is said differently. The cursor stays
+// behind the line, so what is behind it is delayed rather than lost and a restart
+// genuinely does pick it up — but that log says nothing at all until somebody
+// restarts, which is the part an operator has to know.
+func (f *HarnessFeed) stopped(record string, err error) {
+	f.once(record, err, "%s could not be decoded, so this sink stopped reading that log there rather than reading past it and losing the record. Everything behind that line waits, every other stream still reports, and restarting on the current build resumes from exactly that line: %v")
+}
+
+// once says one thing about one record, and says it once for as long as this
+// process lives. The record stays unreadable until somebody acts, so a line per
+// pass would be the same sentence every fifteen seconds — which is how a log
+// stops being read, and the same reason a standing refusal is said once. A
+// restart says it again, which is right: a restart that did not fix it is news.
+func (f *HarnessFeed) once(record string, err error, format string) {
 	notice := record + ": " + err.Error()
 	if _, said := f.skipped[notice]; said {
 		return
@@ -344,7 +378,7 @@ func (f *HarnessFeed) skip(record string, err error) {
 		f.skipped = map[string]struct{}{}
 	}
 	f.skipped[notice] = struct{}{}
-	f.say("%s could not be decoded and was skipped; a sink cannot read a record a build newer than its own wrote, so if a deploy has landed since this one started, restarting it on the current build is the remedy: %v", record, err)
+	f.say(format, record, err)
 }
 
 // watchDeliveries says what the sessions that choose work have been doing. It is

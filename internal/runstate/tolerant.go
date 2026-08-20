@@ -21,19 +21,26 @@ package runstate
 // act on these records keep the strict reading: a key an actor does not
 // understand is a key it would act without.
 //
-// The append-only logs are half of this already: they decode a line with
-// json.Unmarshal, which has never minded a key it does not know, so what a
-// tolerant view adds there is only the skip. That skip costs something the
-// single-record stores' does not, and it is worth stating plainly. The position
-// a cursor keeps on a log is a count of records rather than an offset in the
-// file, so a line read past shifts the lines behind it. Within one process that
-// is consistent, because the same lines are skipped on every pass. Across a
-// restart onto the build that can read them it repeats a message rather than
-// losing one, which is the at-least-once trade the sink already takes
-// deliberately. The one direction it does lose is a downgrade — an older build
-// resuming from a cursor a newer one advanced sees fewer records than that
-// cursor counted, and reads past the difference — which is a real cost, and a
-// narrower one than a log nobody can read at all.
+// An append-only log is read past differently, and the difference is forced
+// rather than chosen. Those logs decode a line with json.Unmarshal, which has
+// never minded a key it does not know, so tolerance was always there and what a
+// tolerant view adds is only what to do about a line that will not decode at
+// all. It cannot be the same answer, because the position a reader of these logs
+// keeps is a count of records rather than an offset in the file. Read past line k
+// and post line k+1, and the count now stands past k's slot: the build that can
+// read k finds it below the cursor and treats it as already said, while k+1 is
+// said a second time. That loses a record and repeats a different one, which is
+// the wrong side of every trade this package makes — the durable record is
+// authoritative and reporting is a view of it, so a view that silently drops one
+// is worse than a view that is behind.
+//
+// So a tolerant reader of a log stops at the line it cannot decode instead of
+// reading past it. The records before it are returned and reported; the cursor
+// stays behind the line, so nothing is said twice and nothing is dropped; and
+// the build that can read it picks up exactly there. What it costs is that one
+// log going quiet until somebody restarts the reader, which is a delay on one
+// stream and stated as one — every other stream is still read, which is the
+// whole difference from a reader that stops on everything.
 
 import (
 	"encoding/json"
@@ -82,12 +89,22 @@ func (r reading) readPast(record string, err error) bool {
 	return true
 }
 
-// readPastLine is readPast for one line of an append-only log, which has no name
-// of its own until this gives it one. The label names the log and the number
-// names the line in it, because "a record would not decode" sends somebody to a
-// file with thousands of them.
-func (r reading) readPastLine(label string, number int, err error) bool {
-	return r.readPast(fmt.Sprintf("%s line %d", label, number), err)
+// stopAtLine reports one line of an append-only log the caller should stop
+// reading at, having said so. It is deliberately not readPast: a log's cursor
+// counts records, so a line read past is a line lost the moment one behind it is
+// posted. A strict reading does not stop either — it fails, because a log it
+// cannot read whole is not a log it can act on.
+//
+// The label names the log and the number names the line in it, because "a record
+// would not decode" sends somebody to a file with thousands of them.
+func (r reading) stopAtLine(label string, number int, err error) bool {
+	if !r.lenient {
+		return false
+	}
+	if r.skipped != nil {
+		r.skipped(fmt.Sprintf("%s line %d", label, number), err)
+	}
+	return true
 }
 
 // Tolerant returns a view of the run records for a process that reads them

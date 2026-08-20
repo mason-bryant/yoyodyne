@@ -124,10 +124,13 @@ func TestAReaderTakesConversationRecordsANewerBuildWrote(t *testing.T) {
 }
 
 // An append-only log never refused a key it did not know — json.Unmarshal has
-// always read past one — so what a tolerant view adds there is the skip. A
-// process that acts on the log still gets the error, because a log it cannot
-// read whole is not a log it can act on.
-func TestAReaderSkipsALineOfALogAndAnActorStillRefusesIt(t *testing.T) {
+// always read past one — so what a tolerant view adds there is what to do about a
+// line that will not decode at all. It stops there rather than reading past it,
+// because the position these logs are read by counts records: a line read past
+// would be a line lost the moment one behind it was posted. A process that acts
+// on the log still gets the error, because a log it cannot read whole is not a
+// log it can act on.
+func TestAReaderStopsAtALineOfALogAndAnActorStillRefusesIt(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -166,7 +169,7 @@ func TestAReaderSkipsALineOfALogAndAnActorStillRefusesIt(t *testing.T) {
 		t.Fatalf("LoadEvents() error = %v, want the line read past", err)
 	}
 	if len(events) != 1 || events[0].Sequence != 1 {
-		t.Fatalf("LoadEvents() = %#v, want the line that reads and nothing else", events)
+		t.Fatalf("LoadEvents() = %#v, want everything in front of the line and nothing past it", events)
 	}
 	if len(skipped) != 1 || !strings.Contains(skipped[0], "line 2") {
 		t.Fatalf("skipped = %v, want the log and the line in it named", skipped)

@@ -367,17 +367,31 @@ this channel and changes nothing about your setup.
   build's. It reads them tolerantly rather than refusing them: a key added by a
   newer build is read straight past, which is how these schemas are meant to
   grow, and reporting carries on with no sign of anything having happened. That
-  covers everything it reads each pass — runs, conversations and their turn logs,
-  reports, proposals, watch sessions, usage limits, and your two holds. A record
-  it genuinely cannot decode — a schema version that broke compatibility on
-  purpose — is skipped rather than retried forever, with one line in its log
-  naming the record and saying that restarting the sink on the current build is
-  what picks it up. A skipped run keeps its cursor, so the restart reports it from
-  where the sink had got to rather than from its beginning. A skipped *line* of an
-  append-only log is the one case that costs something: positions on those logs
-  are counts of records, so the restart may repeat a message it already sent,
-  which is the same at-least-once trade a crash between a post and its cursor
-  already takes.
+  covers every durable record it reads — runs, conversations and their turn logs,
+  reports, proposals, watch sessions, usage limits, and your two holds.
+
+  A record it genuinely cannot decode — a schema version that broke
+  compatibility on purpose — costs that one record and nothing else, with a line
+  in the sink's log naming it. The two shapes recover differently, and the
+  difference is worth knowing. A **run or conversation** is skipped: it is not
+  reported until you restart the sink on the current build, and its cursor is kept
+  so the restart resumes rather than replays. A **line of an append-only log** is
+  not skipped but stopped at — that log says nothing further until you restart,
+  and then picks up from exactly that line. Stopping is deliberate: those logs are
+  read by counting records, so reading past a line would drop it for good and
+  repeat a different one, and a delayed message is always the better half of that
+  trade.
+
+  While any of that is outstanding the hourly heartbeat goes quiet too, because
+  what has stopped the line is worked out from the runs, the sessions and the
+  holds together, and a reading missing one of them could report a stalled line
+  while runs are executing. Silence there is deliberate: an absent message is
+  better than a false one.
+
+- **The tracker is not one of those records.** The ready count behind a heartbeat
+  comes from `bd` rather than from the state root, so none of the above applies to
+  it: a tracker the sink cannot read costs that one message and is asked again at
+  the next interval, exactly as described above.
 
 ## When it does not work
 
@@ -391,7 +405,8 @@ this channel and changes nothing about your setup.
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
-| `… could not be decoded and was skipped` | A record was written by a build newer than the one this sink is running, in a format it cannot read. The named record — a run, a conversation, one of your holds, or a numbered line of one of the logs — is skipped and everything else still reports. Restart the sink on the current build to pick it up. |
+| `… could not be decoded and was skipped` | A run, a conversation, or one of your holds was written by a build newer than the one this sink is running. That record is left out and everything else still reports. Restart the sink on the current build and it is read. |
+| `… could not be decoded, so this sink stopped reading that log there` | The same, on one of the append-only logs. That log is reported up to the named line and no further, so nothing is lost; every other stream carries on. Restart the sink on the current build and it resumes from that line. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 

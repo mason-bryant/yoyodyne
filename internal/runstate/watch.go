@@ -246,10 +246,10 @@ func (s *WatchStore) List() ([]WatchTransition, error) {
 			err = s.validate(decoded)
 		}
 		if err != nil {
-			// A reader carries on past a line it cannot read, for the reason the
-			// report log does.
-			if s.readPastLine("the watch log", number, err) {
-				continue
+			// A reader stops at a line it cannot read, for the reason the report
+			// log does.
+			if s.stopAtLine("the watch log", number, err) {
+				break
 			}
 			return nil, fmt.Errorf("decode watch log: %w", err)
 		}

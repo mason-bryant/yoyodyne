@@ -220,10 +220,10 @@ func (s *UsageLimitStore) List() ([]UsageLimitExhaustion, error) {
 			err = s.validate(decoded)
 		}
 		if err != nil {
-			// A reader carries on past a line it cannot read, for the reason the
-			// report log does.
-			if s.readPastLine("the usage limit log", number, err) {
-				continue
+			// A reader stops at a line it cannot read, for the reason the report
+			// log does.
+			if s.stopAtLine("the usage limit log", number, err) {
+				break
 			}
 			return nil, fmt.Errorf("decode usage limit log: %w", err)
 		}

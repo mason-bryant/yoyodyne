@@ -130,10 +130,11 @@ func (s *ReportStore) List() ([]report.Report, error) {
 			err = s.validate(decoded)
 		}
 		if err != nil {
-			// A reader carries on past a line it cannot read: one report filed by a
-			// build newer than this one must not stop every report behind it.
-			if s.readPastLine("the report log", number, err) {
-				continue
+			// A reader stops at a line it cannot read rather than carrying on past
+			// it: the position it keeps counts records, so a line read past is one
+			// lost as soon as a line behind it is posted.
+			if s.stopAtLine("the report log", number, err) {
+				break
 			}
 			return nil, fmt.Errorf("decode report log: %w", err)
 		}

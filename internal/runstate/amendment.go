@@ -132,10 +132,10 @@ func (s *AmendmentStore) List() ([]amendment.Record, error) {
 				decoded.Proposal.ProductID, s.productID)
 		}
 		if err != nil {
-			// A reader carries on past a line it cannot read, for the reason the
-			// report log does.
-			if s.readPastLine("the amendment log", number, err) {
-				continue
+			// A reader stops at a line it cannot read, for the reason the report
+			// log does.
+			if s.stopAtLine("the amendment log", number, err) {
+				break
 			}
 			return nil, fmt.Errorf("decode amendment log: %w", err)
 		}

@@ -2687,10 +2687,14 @@ durable records the verbs above read and catches up from its own cursors when it
 returns. The moment its history starts from is written down the first time you
 ever run it and never taken again, so time the sink itself spent stopped is a gap
 it reads across rather than a gap in what it says. A deploy landing under a
-running sink is not a gap either: every record it reads each pass is read
-tolerantly, so a key added by a build newer than its own is read straight past,
-and a record it cannot decode at all is skipped with a line in its log naming the
-record and the restart that picks it up. It is also the reason no run
+running sink is not a gap either: it reads the harness's own durable records
+tolerantly, so a key added by a build newer than its own is read straight past. A
+record it cannot decode at all costs that one record and nothing else — the run
+or conversation is skipped, or the log is stopped at that line and resumes there
+after a restart — and its own log says which record and that a restart is what
+reads it. The one thing it consults that is not a durable record is the tracker,
+for the ready count behind a heartbeat; a tracker it cannot read costs that one
+message and is asked again at the next interval. It is also the reason no run
 holds a Slack token — one separate process posts, so no agent's subprocess tree
 ever has a credential for your workspace in it. Replies are acknowledged and
 nothing acts on them yet; steering the harness from a thread is designed and not
