@@ -479,6 +479,49 @@ func TestPipelineRevalidatesBlockersReturnedByClaim(t *testing.T) {
 	}
 }
 
+// An item whose notes name a path this repository does not hold still runs. The
+// notes are append-only, so a reference nobody can remove from them would
+// otherwise be a run nobody could ever start: the developer is told the
+// reference was left out and gets on with the work.
+func TestPipelineRunsAnItemWhoseNotesNameAnUnresolvableReference(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:                 "yoyodyne-task",
+		Title:              "Repair the documentation",
+		Description:        "Follow docs/design.md",
+		AcceptanceCriteria: "The documentation matches the code",
+		Status:             "open",
+		Notes:              "Triage recorded a reviewer citing ../README.md, and notes are append-only.",
+	}}
+	var prompt string
+	provider := roleBackend(func(request backend.RunRequest) error {
+		if request.Role == domain.RoleDeveloper {
+			prompt = request.Prompt
+		}
+		return nil
+	}, approveVerdict)
+	pipeline, _ := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the run to start", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded {
+		t.Fatalf("Run() outcome = %#v, want a run that finished", outcome)
+	}
+	for _, want := range []string{
+		"## Referenced file: ../README.md (omitted)",
+		"does not resolve to a file in this repository",
+		"design content",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("developer prompt omitted %q: %s", want, prompt)
+		}
+	}
+}
+
 func TestSingleLineKeepsCommitSubjectsBoundedAndValid(t *testing.T) {
 	t.Parallel()
 
