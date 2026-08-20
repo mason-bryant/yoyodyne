@@ -3,18 +3,6 @@
 *For an operator who has approved work and wants to know what happens
 to it. Part of [yoyo's documentation](../README.md#further-reading).*
 
-> **Where its links point while the split is in progress.** This document is
-> tranche 1 of the README split, so two of the documents it links to are not
-> written yet. Resolving today: every `configuration.md` anchor it cites,
-> `designs/v1-harness-design.md#what-is-enforced-and-what-is-not`,
-> `reporting.md#reporting-into-slack`, its own
-> `#reviewing-what-a-branch-adds-up-to`, and `../README.md#further-reading` —
-> the README is untouched by this tranche and keeps that heading. Not yet:
-> `artifacts.md#what-a-change-upstream-leaves-stale`,
-> `operations.md#following-a-run-a-conversation-or-a-branch-review`, and
-> `operations.md#recovering-interrupted-runs`, which arrive in tranche 2.
-> This note goes when they do.
-
 `/work <beads-id>` and `yoyo run <beads-id>` execute the same thing. The run
 claims the item, creates a branch and an isolated worktree outside your primary
 checkout from exactly the branch the work will be promoted into, and asks the
