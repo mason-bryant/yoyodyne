@@ -1877,37 +1877,116 @@ These are all errors, reported before any work is claimed:
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;
-- `slack.enabled` with no `slack.channel`, a channel that is not a channel id or
-  name, or an operator that is not a Slack user id — checked whether or not
-  reporting is switched on, so a typo is found now rather than on the day
-  somebody turns it on.
+- `slack.enabled` with no `slack.channel`, or a channel that is not a channel id
+  or name — checked whether or not reporting is switched on, so a typo is found
+  now rather than on the day somebody turns it on;
+- an `operators` entry that binds no namespace at all, binds one that is not an
+  address, a forge account, or a Slack member id, names a grant the harness does
+  not have, or binds an identifier a second human already bound — and two humans
+  holding `own-intent`, since intent has one owner.
+
+## Operators
+
+`operators` is the humans this project recognizes. Each entry binds one person's
+identifier namespaces and says what that person may do:
+
+```yaml
+operators:
+  mason:
+    git_email: mason@example.com
+    forge_account: mason-bryant
+    slack_member_id: U0123456789
+    grants:
+      - own-intent
+      - direct-work
+  jordan:
+    git_email: jordan@example.com
+    forge_account: jordan-q
+    grants:
+      - direct-work
+```
+
+The whole mapping is optional, and a project that names nobody recognizes
+nobody — which is every project until it names somebody, and is closed rather
+than open.
+
+It is **top level rather than under any one surface**, because a human is known
+by more than one. An act carries an identifier and never a person: a commit
+carries an address, a push carries a forge account, a thread reply carries a
+member id. Binding all three to one entry is what lets an authority check
+resolve whichever namespace the act arrived through to the same person and then
+ask what that person may do. Filing the whole thing under `slack` would have
+made the Slack id the identity and the other two an afterthought.
+
+**No new identity machinery, deliberately.** Git and Dolt authorship are the
+assertion — the address on a commit is what the author says about themselves —
+and the forge's push authentication is the proof, at the one boundary that is
+shared. This mapping adds the join between namespaces that otherwise have
+nothing to do with each other; it does not add a login.
+
+Each key is a short name for a person, in the same shape as an agent name
+(`mason`, `jordan-q`). Every field under it is optional except that at least one
+namespace has to be bound: a human bound to nothing is authority attached to
+nobody, since no act can arrive carrying an identifier that reaches them.
+
+- `git_email` — the address their commits and tracker writes are authored with.
+- `forge_account` — their account on the remote the project publishes to.
+- `slack_member_id` — their member id in the reporting workspace, from their
+  profile → "Copy member ID". It is identity rather than a secret, which is why
+  it is checked in here with the rest.
+
+Addresses and forge accounts are matched without regard to case, because they
+are case-insensitive where they live; a member id is matched exactly, because it
+is an opaque id the workspace issued rather than something a person types. One
+identifier may be bound by one human: an identifier that resolves to two people
+resolves to neither, so it is refused when the configuration loads.
+
+`grants` is what the human may do, whichever namespace they arrive through, and
+it defaults to empty. Recognizing somebody and authorizing them are two
+decisions, so an entry with no grants records who a person is without giving
+them anything — which is also how you take authority back without forgetting the
+person.
+
+| grant | what it is |
+| --- | --- |
+| `own-intent` | stating and approving what the product is for: the brief, the goals, and the non-goals. **At most one human may hold it** — several people amending goals concurrently is conflict machinery nobody has designed. |
+| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on once the inbound half exists. |
+
+The grants are checked where the act arrives rather than where it is recorded,
+which is what makes them worth stating: the point of attaching authority to a
+person is that `by: operator` becomes a proven human rather than whoever ran the
+command.
 
 ## Reporting to Slack
 
 `yoyo slack` reports what the harness is doing into a Slack channel: one thread
 per work item, one message per milestone, and every report an agent filed at the
-severity it was filed under. The project says where to report and who may
-eventually steer it; nothing else about reporting is configurable here.
+severity it was filed under. The project says where to report; nothing else
+about reporting is configurable here.
 
 ```yaml
 slack:
   enabled: true
   channel: C0123456789   # a channel id, or a #name
-  operators:             # optional, and inert today
-    - U01234567
 ```
 
 The whole block is optional, and a project that omits it reports nothing — which
 is every project until it opts in. `channel` takes a channel id or a name;
 an id is worth preferring because renaming the channel does not break it.
 
-`operators` is the allow-list of Slack user ids whose thread replies the harness
-will act on once the inbound half is built. **Nothing reads a reply today.** It
-is here rather than in the environment because a user id is identity rather than
-a secret, it defaults to empty so enabling reporting never enables anybody to
-steer the harness by accident, and an override replaces an inherited list
-outright rather than merging into it — a list concatenated from two layers is
-not the list either layer wrote.
+**Who may steer the harness from a thread is not configured here.** The
+allow-list is derived from [`operators`](#operators): the humans granted
+`direct-work` who have bound a `slack_member_id`, and nobody else. It is a
+derivation rather than a second list because a list maintained beside those
+grants is a list that disagrees with them — silently, and about authority. A
+human granted `direct-work` who has bound no member id simply is not on it: they
+hold the authority, and Slack is not a boundary they can reach it through.
+**Nothing reads a reply today** either way; the inbound half is designed and not
+built.
+
+An earlier shape put this list under `slack` as `slack.operators`. It is gone,
+and a file that still carries it is refused when the configuration loads, with a
+message naming the entry to write instead.
 
 **The credentials are not here and must never be.** The sink reads
 `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` from its own process environment and

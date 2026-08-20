@@ -20,9 +20,9 @@ func TestSlackReportingWithNoChannelIsRefusedAtLoad(t *testing.T) {
 	}
 }
 
-// A channel or a user id that names nothing the workspace has is a typo, and a
-// typo found at load is one an operator fixes now rather than one that becomes a
-// posting failure every few seconds for as long as the sink runs.
+// A channel that names nothing the workspace has is a typo, and a typo found at
+// load is one an operator fixes now rather than one that becomes a posting
+// failure every few seconds for as long as the sink runs.
 func TestSlackIdentifiersAreCheckedWhetherOrNotReportingIsOn(t *testing.T) {
 	t.Parallel()
 
@@ -30,17 +30,9 @@ func TestSlackIdentifiersAreCheckedWhetherOrNotReportingIsOn(t *testing.T) {
 		"a channel that is not one": `slack:
   channel: "not a channel"
 `,
-		"an operator that is a display name": `slack:
+		"a channel longer than the limit": `slack:
   enabled: true
-  channel: C0123456789
-  operators:
-    - "@mason"
-`,
-		"an empty operator": `slack:
-  enabled: true
-  channel: C0123456789
-  operators:
-    - ""
+  channel: "` + strings.Repeat("C", MaxSlackChannelBytes+1) + `"
 `,
 	} {
 		if _, err := loadProjectError(t, minimalProjectConfig+section, nil); err == nil {
@@ -61,28 +53,66 @@ func TestAProjectThatSaysNothingAboutSlackReportsNothing(t *testing.T) {
 	}
 }
 
-// The allow-list decides who may steer the harness from a chat workspace. A
-// list silently concatenated from two layers is not the list either layer
-// wrote, so an override replaces it outright — the same rule the checks follow,
-// and for a stronger reason.
-func TestTheOperatorAllowListIsReplacedRatherThanMerged(t *testing.T) {
+// The Slack section says where to report and nothing about who may steer the
+// harness. That moved to the top-level operators mapping, so a file that still
+// authors an allow-list here is refused rather than loading with an authority
+// decision nothing reads. The refusal has to say where the decision went: the
+// setup guide told operators to write this key, so the people who hit this are
+// the ones who followed the documentation.
+func TestAnAllowListLeftUnderSlackIsRefusedAndSaysWhereItWent(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadProjectError(t, minimalProjectConfig+`slack:
+  enabled: true
+  channel: C0123456789
+  operators:
+    - U01234567
+`, nil)
+	if err == nil {
+		t.Fatal("LoadResolved() = nil, want a file still carrying slack.operators refused")
+	}
+	for _, wanted := range []string{
+		"slack.operators has moved",
+		"operators:",
+		"slack_member_id",
+		string(GrantDirectWork),
+	} {
+		if !strings.Contains(err.Error(), wanted) {
+			t.Errorf("LoadResolved() error = %v, want it to name %q", err, wanted)
+		}
+	}
+}
+
+// The migration answer is for the retired key alone. Every other unknown key
+// still gets the decoder's own report, which names the line it is on.
+func TestAnOrdinaryUnknownKeyStillReportsItself(t *testing.T) {
+	t.Parallel()
+
+	_, err := loadProjectError(t, minimalProjectConfig+`slack:
+  enabled: true
+  channel: C0123456789
+  operatrs:
+    - U01234567
+`, nil)
+	if err == nil || strings.Contains(err.Error(), "has moved") {
+		t.Fatalf("LoadResolved() error = %v, want a typo reported as an unknown field", err)
+	}
+}
+
+// What the sink reads instead: the ordinary settings resolve, and the allow-list
+// comes from the grants rather than from anything written here.
+func TestTheSlackSectionCarriesAddressingAndNotAuthority(t *testing.T) {
 	t.Parallel()
 
 	resolved := loadProject(t, minimalProjectConfig+`slack:
   enabled: true
   channel: "#development"
-  operators:
-    - U01234567
-    - W76543210
 `, nil)
 	settings := resolved.Config.Slack
 	if !settings.Enabled || settings.Channel != "#development" {
 		t.Fatalf("slack = %#v, want the configured channel", settings)
 	}
-	if len(settings.Operators) != 2 {
-		t.Fatalf("operators = %#v, want both named operators", settings.Operators)
-	}
-	if origin := resolved.Origins["slack.operators"]; origin == "" {
-		t.Fatal("the allow-list must record where it came from, like every other configured value")
+	if allowed := resolved.Config.SlackOperators(); len(allowed) != 0 {
+		t.Fatalf("SlackOperators() = %#v, want nobody until a human is granted direct-work", allowed)
 	}
 }
