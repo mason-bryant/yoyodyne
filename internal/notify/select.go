@@ -136,7 +136,7 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 		say(KindMergeCompleted, report.SeverityNote, Harness(), Detail{PullRequest: describePullRequest(after.PullRequest)})
 	}
 	if !parked(before) && parked(after) {
-		say(KindRunParked, report.SeverityNote, Harness(), Detail{Cause: causeOf(after)})
+		say(KindRunParked, parkSeverity(after), Harness(), Detail{Cause: causeOf(after)})
 	}
 	// A run that stopped and stayed stopped is the one thing nobody finds out
 	// about on their own, so it is the one crossing said as critical.
@@ -164,6 +164,40 @@ func FromReport(reported report.Report) (Notification, error) {
 			Severity: reported.Severity,
 			Refs:     Refs{RunID: reported.RunID, WorkItemID: reported.WorkItemID},
 			Text:     reported.Message,
+		},
+	}, nil
+}
+
+// FromUsageLimit says that a provider refused the harness for want of capacity
+// somewhere that is not a run. A run says the same thing by parking, and this is
+// how every other process says it: the conversation turn or the review that was
+// stopped, what the limit was, and when the provider said it lifts.
+//
+// It is a warning for the reason a park by the same cause is. Nobody chose it,
+// nothing else in the record says it happened, and what follows it is hours of
+// silence that look exactly like a healthy quiet queue. The speaker is the
+// harness, because a provider running out of capacity is not any persona's act
+// and no role should be made to narrate one.
+func FromUsageLimit(exhaustion runstate.UsageLimitExhaustion) (Notification, error) {
+	topic, err := topicForItem(exhaustion.WorkItemID)
+	if err != nil {
+		return Notification{}, fmt.Errorf("address usage limit refusal at %s: %w", exhaustion.At.UTC().Format(time.RFC3339), err)
+	}
+	return Notification{
+		Topic:   topic,
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     KindUsageLimitExhausted,
+			At:       exhaustion.At,
+			Severity: report.SeverityWarning,
+			Refs: Refs{
+				WorkItemID:     exhaustion.WorkItemID,
+				ConversationID: exhaustion.ConversationID,
+			},
+			Detail: Detail{
+				Waiting: exhaustion.Waiting,
+				Cause:   exhaustion.Describe(),
+			},
 		},
 	}, nil
 }
@@ -367,6 +401,27 @@ func causeOf(state runstate.State) string {
 		waiting += ", until " + state.UsageLimitResetsAt.UTC().Format(time.RFC3339)
 	}
 	return waiting
+}
+
+// parkSeverity is how loudly a park is said, and it follows the same precedence
+// causeOf names the cause by, so the weight of a message and the words in it can
+// never describe two different pauses.
+//
+// An exhausted usage limit is a warning and the other causes are notes. That is
+// not a judgement about which is worse: it is what an unattended reader can do
+// about each. A directive and an operator hold are waiting on the person reading
+// the channel, who already knows they placed them; an exhausted limit is hours
+// in which nothing will happen for a reason nobody chose, and it must not weigh
+// the same as checks passing. A transient overload lifts in seconds and stays a
+// note for exactly that reason.
+func parkSeverity(state runstate.State) report.Severity {
+	if state.DirectivePause != nil || state.OperatorHeldSince != nil {
+		return report.SeverityNote
+	}
+	if state.PauseCause == runstate.PauseServerOverload {
+		return report.SeverityNote
+	}
+	return report.SeverityWarning
 }
 
 // blocked reports a run that stopped and stayed stopped. It is read from a

@@ -93,8 +93,13 @@ func branchReviewerFrom(parts components) orchestrator.BranchReviewer {
 			Model:   agentModel(cfg, domain.RoleReviewer),
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 		},
-		Reviews:      parts.branchReviews,
-		Reports:      parts.reports,
+		Reviews: parts.branchReviews,
+		Reports: parts.reports,
+		// Where a provider refusing this review for want of capacity is written
+		// down. It records nothing about the branch and reaches no run: it is the
+		// account of why nothing happened, for somebody who is not at this
+		// terminal.
+		UsageLimits:  parts.usageLimits,
 		Repository:   parts.repository,
 		Config:       cfg,
 		RedactValues: parts.redactValues,

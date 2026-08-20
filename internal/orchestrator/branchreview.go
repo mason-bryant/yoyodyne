@@ -70,7 +70,14 @@ type BranchReviewer struct {
 	Reviews BranchReviewRecorder
 	// Reports is where what the reviewer noticed beside its verdict is
 	// collected, exactly as it is for a run.
-	Reports     ReportCollector
+	Reports ReportCollector
+	// UsageLimits is where a provider refusing this review for want of capacity
+	// is written down. A branch review is a provider invocation with no run to
+	// park, so without this an exhausted limit stops it at whoever's terminal
+	// asked for it and leaves the durable record silent. It is optional like the
+	// report collector: a review assembled without one is refused exactly as it
+	// always was, and what is lost is the only account of why.
+	UsageLimits UsageLimitRecorder
 	Clock       execution.Clock
 	NewReviewID func() (string, error)
 	Repository  string
@@ -195,16 +202,24 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		outcome.Decision = result.Decision
 	}
 	failure := ""
+	var refusal error
 	if reviewErr != nil {
 		failure = reviewErr.Error()
 		outcome.Decision = ""
+		// A provider that declined this review for want of capacity is a fact
+		// about the whole product rather than about this review, and nothing
+		// else in the record would ever say it happened. It is recorded only
+		// where the review actually failed: a limit reported beside a verdict
+		// the provider still gave stopped nothing.
+		refusal = recordUsageLimit(b.UsageLimits, b.Config.Product.ID, b.clock().Now(),
+			fmt.Sprintf("the independent review %s of %s", reviewID, change.Branch), result.UsageLimit)
 	}
 	// The record is written whichever way the review went, because "this branch
 	// has been independently reviewed" is answered from it, and a review that
 	// failed answers it just as much as one that decided.
 	b.record(&outcome, change, failure)
 	if reviewErr != nil {
-		return outcome, fmt.Errorf("independent branch review failed: %w", reviewErr)
+		return outcome, errors.Join(fmt.Errorf("independent branch review failed: %w", reviewErr), refusal)
 	}
 	return outcome, nil
 }

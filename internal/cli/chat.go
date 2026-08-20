@@ -412,6 +412,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// invocation, so `yoyo pause` covers this conversation exactly as it covers
 		// the work steered from it.
 		Holds: parts.holds,
+		// Where a provider refusing this conversation for want of capacity is
+		// written down. It is the same log every other process outside a run
+		// records one in, so an exhausted limit reaches the channel from wherever
+		// it was met rather than only from a run.
+		UsageLimits: parts.usageLimits,
 		// The operator's switch over the work the harness chooses for itself, so
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.

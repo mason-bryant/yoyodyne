@@ -74,7 +74,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 	case "reconcile":
 		return reconcileRuns(ctx, args[1:], stdout, stderr)
 	case "slack":
-		return runSlack(ctx, args[1:], stdout, stderr)
+		return runSlack(ctx, args[1:], stdout, stderr, version)
+	case "doctor":
+		return runDoctor(ctx, args[1:], stdout, stderr, version)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -298,6 +300,7 @@ Commands:
   cost              price work items from the runs made for them, and record it
   reconcile         settle interrupted runs, then converge local state on the forge
   slack             report what the harness is doing into a Slack channel
+  doctor            check this installation, and say what would fix what is wrong
   version           print version information
   help              show this help`)
 }

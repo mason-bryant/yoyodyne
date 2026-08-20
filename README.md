@@ -338,6 +338,20 @@ list still is; it is `yoyo run` that refuses a run with no checks. Everything
 under `.yoyodyne/` is machine-independent and belongs in version control, so
 commit it along with the rest of your adoption.
 
+**Then check the whole installation, not only the file:**
+
+```sh
+yoyo doctor
+```
+
+`config validate` is about one document; this is about whether work can actually
+run here — the binary on your `PATH`, Git, the tracker, the configuration, the
+checks you just settled, the provider that executes every agent, and forge access
+if you publish. Everything it finds wrong comes with the command that fixes it,
+so a first run that would have failed halfway through is a problem you fix now
+instead. [Checking the installation](#checking-the-installation) has the whole of
+what it looks at.
+
 ### 3. `yoyo chat` — establish the brief and the goals
 
 Commit what you have added first: a run refuses to start while the primary
@@ -2166,6 +2180,74 @@ simply has none, and runs are unaffected.
 
 ## Operations and recovery
 
+### Checking the installation
+
+`yoyo doctor` answers one question — can work actually run here — and answers it
+before anything is spent rather than at the point a run discovers it cannot:
+
+```sh
+yoyo doctor            # everything it looked at, healthy or not
+yoyo doctor --quiet    # only what is wrong
+yoyo doctor --json     # the same findings, for something automating the repair
+```
+
+It looks at the `yoyo` on your `PATH` and whether it is the build you think it
+is, Git and whether this project is a repository with something to branch from,
+the tracker and whether it answers *here*, the configuration, the deterministic
+checks and whether this machine can run the programs they name, each provider
+your agents name — installed always, and authenticated where the harness has an
+adapter that can ask, which today is Claude Code — forge access when the project
+publishes, and, when reporting is on, this project's own Slack secrets and the
+sink that is supposed to be using them.
+
+**Every finding that is not healthy carries a remedy, and a remedy is a
+command.** That is the whole difference between this and a status listing: what
+it prints under a problem is what to run.
+
+```text
+yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
+
+problem  tracker                bd is installed but could not read this project's issues
+                                fix: bd init
+ok       checks                 4 checks configured, and every command resolves here
+problem  provider:claude-code   claude is installed but not authenticated, so every agent invocation would be refused
+                                fix: claude auth login
+warning  slack-sink             no sink is running for this product, so nothing is being reported
+                                fix: SLACK_BOT_TOKEN="$(security find-generic-password …
+```
+
+Findings come in the order you would fix them in — the tools, then the project,
+then what the project turns on — rather than worst first, because the first
+problem in the list is usually why the ones under it are problems too. `--quiet`
+drops the healthy ones and changes nothing else.
+
+A healthy installation says so in as many words, because an empty list of
+complaints and a check that never ran read the same. It exits 1 when something
+would stop work running and 0 otherwise.
+
+**A warning is not a small problem — it is something about an installation that
+works.** The `yoyo` on your `PATH` having drifted from the one you are running is
+one. Every reporting finding is another, and deliberately so: reporting is an
+observation and never a gate, so a sink you never started, a workspace that is
+down, and a token nobody stored all leave an installation that runs work exactly
+as it would have. They are still named, in full, with the command that ends each
+one — what the exit status refuses to do is fail a machine that works.
+
+It changes nothing. Nothing here installs, authenticates, restarts, or edits a
+configuration, and no credential is ever read: whether a secret is stored is
+asked in the form that answers without producing the value.
+
+The two checks worth calling out are the ones that catch an installation that
+was working and stopped. **A long-running sink is started from a binary that
+keeps moving underneath it**, so the build that is reporting and the build that
+is installed drift apart with no event between them — nothing fails, nothing is
+logged, and the milestones added since it started are simply never posted, which
+in a channel reads as a quiet week. And **on a machine running more than one
+harness, "a Slack token exists" is true for all of them and right for at most
+one**, so what is checked is this project's own pair under names that carry the
+product, and whether the sink that is running was launched with them. See
+[Reporting into Slack](#reporting-into-slack).
+
 ### Pausing everything, and resuming it
 
 `yoyo pause` stops everything the harness would spend on a provider, and
@@ -2259,6 +2341,25 @@ the run's remaining budget — stops the run and records a blocker rather than
 guessing a wait. An exhausted limit is not the only thing a run waits out:
 [an overloaded provider](#waiting-out-an-overloaded-provider) below takes the
 same machinery on a much shorter clock.
+
+An exhausted limit is not only a run's problem, either. The harness asks a
+provider for work in three places: inside a run, which parks as above; a
+conversation turn; and an independent `yoyo review`, which uses the same reviewer
+with no run around it. The last two have no run to park, so each records the
+refusal instead — what was stopped, the limit the provider named, and when it
+said it lifts. Nothing waits on it: the turn or the review fails at your terminal
+exactly as it did before. What the record buys is that
+[reporting into Slack](#reporting-into-slack) says it as a `warning` without you
+there, and a run that parks on the same limit is said at that weight too. Hours
+in which nothing will happen is the one message a channel nobody is watching most
+needs to carry, and it must not weigh the same as checks passing.
+
+Selection is not a fourth place. A watching `yoyo work` session reads the tracker
+and starts runs and makes no provider call of its own, so a limit it meets is met
+by a run it started. That the three above are all of them is checked rather than
+asserted — `TestEveryProviderInvocationAccountsForAnExhaustedLimit` sweeps the
+tree and fails on a provider invocation with no account of what an exhausted
+limit does to it.
 
 ### Waiting out an overloaded provider
 
@@ -2642,6 +2743,27 @@ export SLACK_BOT_TOKEN=xoxb-...   # this process's environment, and nowhere else
 export SLACK_APP_TOKEN=xapp-...
 ./bin/yoyo slack                  # or --once to make a single pass and exit
 ```
+
+That is the shape of it, and it is not the shape to leave running. Tokens
+exported into a shell are inherited by everything started from it, and on a
+machine running more than one harness the sink you start second reads whichever
+pair that shell happened to have — it connects, authenticates, and posts this
+project's work into another project's channel. So the supported arrangement is a
+launcher that reads **this project's own** secrets, stored under names that carry
+the product, into exactly one process:
+
+```sh
+SLACK_BOT_TOKEN="$(security find-generic-password -s yoyo-slack-bot.<product id> -a yoyo -w)" \
+SLACK_APP_TOKEN="$(security find-generic-password -s yoyo-slack-app.<product id> -a yoyo -w)" \
+YOYO_SLACK_SECRET_NAMESPACE=<product id> \
+exec yoyo slack
+```
+
+`YOYO_SLACK_SECRET_NAMESPACE` is not read as a credential and is not one: it is
+how the sink records whose secrets it was launched with, so
+[`yoyo doctor`](#checking-the-installation) can tell a sink that is merely
+running from one that is running for this project. Leave it out and the sink
+still works; what is lost is anything being able to notice when it is wrong.
 
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest
