@@ -16,10 +16,23 @@ authority would satisfy the item's form and defeat its purpose in the same
 stroke.
 
 So this is design **input**, in the shape the architect can adopt: it decides
-nothing, and when she takes it up it moves to `docs/designs/` under her
-identity, or is replaced by what she writes instead. Everything below is
-grounded in the code as it stands — file and line references throughout — so
-that what she is deciding is which shape to take, not what exists today.
+nothing that is hers to decide, and when she takes it up it moves to
+`docs/designs/` under her identity, or is replaced by what she writes instead.
+Everything below is grounded in the code as it stands — file and line references
+throughout — so that what she is deciding is which shape to take, not what
+exists today.
+
+**This document does not satisfy yoyodyne-ifd.130.1's done condition, and is not
+offered as though it did.** That condition is a design recorded in the
+architect's home whose sections the epic's implementation children can cite. Two
+things are missing and neither is a developer's to supply: the item grants no
+`protected-path grant:` for `docs/designs/`, and four of the questions below are
+the architect's judgement, which is the whole reason the operator asked that this
+route through her rather than being settled by anyone else. What this run can
+honestly deliver is the grounding and the options, and a clear statement of what
+is already decided and by whom — which is what follows. The item is escalated as
+not completable in this form; [what is settled and what
+is not](#what-is-settled-and-what-is-not) says exactly what is missing.
 
 ## What this is for
 
@@ -238,8 +251,18 @@ Under the target shape in §1, the permanent thing is the PM service, and the
 sink is one of its residents — so a separate launchd job for the sink would be a
 second supervisor to unwind at exactly the moment the first one arrives.
 
-This must reach 125.3 before it builds the service, which is named as work to
-admit rather than queued here.
+This must reach 125.3 **before** it builds the service, and nothing in this
+document carries it there. A developer may not admit work to the backlog or
+amend another item, so the propagation runs through the product manager: the run
+that drafted this named the 125.3 amendment in its summary as work to admit, and
+until the product manager acts on it, 125.3 still has a service tier the
+operator has removed. Whoever picks 125.3 up should read this section first and
+stop if the item still describes a start-on-login sink service.
+
+The drafting run could not confirm the state of 125.3 itself — the tracker was
+locked for its whole session (`openat LOCK: operation not permitted`) and
+`.beads/issues.jsonl` is a passive export that stops at ifd.99 — so this is a
+statement about what must be true, not a report that it is.
 
 ## 7. Spend control is visibility, not a cap
 
@@ -310,38 +333,57 @@ The configuration is re-read before every pull (`internal/cli/schedule.go:78`),
 which is what makes the first consequence cheap to honour: the loop already
 re-reads its world each interval and needs no special resume path.
 
-## Which child builds which section
+## What is settled and what is not
 
-So that each implementation child of ifd.130 cites the section it builds rather
-than deciding structure of its own:
+Not every section here is in the same state, and treating them alike is what
+would let a child be built against a decision nobody made. Three are already
+decided — by the operator on 2026-08-20, or by the architect long before this
+document — and a child may cite those today. Four wait on the architect. The
+column says which, and who would have to answer.
 
-| Section | What a child building it delivers |
-|---|---|
-| §2 The supervision tree | `yoyo chat` spawning and watching two residents; the explicit-environment rule for the sink child and the token-stripped environment for the provider subprocess |
-| §3 What the chat owns | The two exit policies — sink dies, loop detaches — and the exit path that applies each |
-| §4 Reattachment and the lease seam | The read/submit split beside the unchanged exclusive turn lease; a returning chat's reattach |
-| §5 The brake in conversation | The raise: PM notices a brake-placed hold, presents triage and a recommendation, a person answers; ifd.129's path untouched |
-| §6 Residency | 125.3 amended to drop its service tier |
-| §7 Spend as visibility | Per-run and session-total on the channel; `--budget` retired to an optional config value |
-| §8 Invariants | Not a child; a constraint every child above inherits |
+| Section | What a child building it delivers | State |
+|---|---|---|
+| §1 Interim → target | The supervision built so the launchd migration is a re-parenting | **Shape settled** (operator: headless PM service, thin attach/detach client). Open: whether §1's two carry-over conditions are sufficient — architect Q4 |
+| §2 The supervision tree | `yoyo chat` spawning and watching two residents; the sink child's explicit environment and the token-stripped environment for the provider subprocess | **That chat supervises is settled** (follows from §6). Open: the form of the credential boundary — architect Q1 |
+| §3 What the chat owns | The two exit policies — sink dies, loop detaches — and the exit path that applies each | **Open** — architect Q2, plus the operator's question on the detached loop |
+| §4 Reattachment and the lease seam | The read/submit split beside the unchanged exclusive turn lease; a returning chat's reattach | **Open** — architect Q3 |
+| §5 The brake in conversation | The raise: PM notices a brake-placed hold, presents triage and a recommendation, a person answers; ifd.129's path untouched | **Nothing contested**, but unratified: no open question stands against it, and it still wants the architect's hand before a child cites it |
+| §6 Residency | 125.3 amended to drop its service tier | **Settled** — the operator decided it; citable today |
+| §7 Spend as visibility | Per-run and session-total on the channel; `--budget` retired to an optional config value | **Settled** — the operator decided it; citable today |
+| §8 Invariants | Not a child; a constraint every child above inherits | **In force already** — the architect's, and not this document's to settle or loosen |
+
+So the epic is not blocked end to end. §§6 and 7 can be built now against
+decisions their owner has already made, and §8 binds whatever is built. What
+cannot be built yet is the supervision tree and the residency and lease
+behaviour that sit on top of §§1–4, because a child citing one of those would be
+citing this document's proposal rather than a decision.
 
 ## What the architect is being asked
 
-1. **Is §2's explicit-environment rule the right form of the credential
-   boundary**, or should the sink never be a child of anything that spawns a
-   provider — supervised by handle but started some other way? The rule as
-   drafted keeps decision 2's purpose while accepting that the guarantee moves
-   from "impossible" to "constructed correctly in one place".
-2. **Is §3's asymmetry right** — sink dies, loop detaches — or should the loop
-   also die with the pane and be restarted on reattach, accepting a park at the
-   next boundary in exchange for one rule instead of two?
-3. **Is §4's read/submit split the right seam**, or does the assistant reaching
-   the PM belong behind the same exclusive lease, serialized rather than split?
-   The split is proposed because the lease's own stated reason is about resuming
-   provider sessions, and reading is not that.
-4. **Does §1's "re-parenting rather than rewrite" claim hold** under the two
-   conditions it names, or does the interim step need a third condition to keep
-   the launchd migration cheap?
+These four are what [What is settled and what is
+not](#what-is-settled-and-what-is-not) marks open, and they are the whole of what
+stands between this draft and a design the epic's children can build against. An
+answer to each — however brief, and "as drafted" is an answer — closes the
+section it names.
+
+**Q1.** **Is §2's explicit-environment rule the right form of the credential
+boundary**, or should the sink never be a child of anything that spawns a
+provider — supervised by handle but started some other way? The rule as drafted
+keeps decision 2's purpose while accepting that the guarantee moves from
+"impossible" to "constructed correctly in one place".
+
+**Q2.** **Is §3's asymmetry right** — sink dies, loop detaches — or should the
+loop also die with the pane and be restarted on reattach, accepting a park at the
+next boundary in exchange for one rule instead of two?
+
+**Q3.** **Is §4's read/submit split the right seam**, or does the assistant
+reaching the PM belong behind the same exclusive lease, serialized rather than
+split? The split is proposed because the lease's own stated reason is about
+resuming provider sessions, and reading is not that.
+
+**Q4.** **Does §1's "re-parenting rather than rewrite" claim hold** under the two
+conditions it names, or does the interim step need a third condition to keep the
+launchd migration cheap?
 
 ## What the operator is being asked
 
