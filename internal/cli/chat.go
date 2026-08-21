@@ -131,11 +131,11 @@ type conversationRequest struct {
 // converse holds one conversation with one role: a single message and its reply,
 // or the interactive conversation the operator stays inside.
 func converse(ctx context.Context, role domain.AgentRole, request conversationRequest, stdin io.Reader, stdout, stderr io.Writer) int {
-	session, lease, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, stderr)
+	session, hold, err := openChat(ctx, role, request.agentName, request.configPath, request.fresh, stderr)
 	if err != nil {
 		return reportChatFailure(stdout, stderr, request.jsonOutput, role, nil, err)
 	}
-	defer lease.Release()
+	defer hold.Release()
 
 	if request.message != "" {
 		return runChatMessage(ctx, session, role, request.message, request.jsonOutput, stdout, stderr)
@@ -316,15 +316,16 @@ func reportChatCommand(stdout, stderr io.Writer, jsonOutput bool, evidence chat.
 // openChat builds a role's conversation from configuration: the configured
 // agent filling that role, the repository's own Markdown, the tracker state as
 // it stands, the harness the operator steers work with, and the durable record a
-// previous process left behind. The returned lease is this process's exclusive
-// hold on that conversation.
+// previous process left behind. The returned hold is this process's claim on
+// that conversation: taken here, put down whenever nobody is talking to the
+// agent, and released for good by the caller.
 //
 // Everything the operator's own commands need is wired for every role, because
 // those commands are the operator's authority rather than the agent's and they
 // mean the same thing in every conversation. What differs between roles is what
 // the role itself may ask for, and that is the contract and the authority table
 // in the chat package rather than anything decided here.
-func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.Lease, error) {
+func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath string, fresh bool, stderr io.Writer) (*chat.Session, *runstate.ConversationHold, error) {
 	// The conversation is built over the same components a run is, because
 	// steering work from inside it means executing exactly the runs
 	// `yoyodyne run` would have executed.
@@ -366,7 +367,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// The conversation is held, recorded, and resumed under the agent that holds
 	// it, so two agents configured for one role are two conversations rather than
 	// one they would take turns overwriting.
-	lease, err := store.Hold(runstate.ConversationIdentity{Agent: name, Role: role})
+	hold, err := store.Claim(runstate.ConversationIdentity{Agent: name, Role: role})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -386,7 +387,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	ground := newConversationGround(parts, role)
 	briefing, err := ground.Gather(ctx)
 	if err != nil {
-		return nil, nil, errors.Join(err, lease.Release())
+		return nil, nil, errors.Join(err, hold.Release())
 	}
 	for _, problem := range briefing.Problems {
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
@@ -395,6 +396,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Role:    role,
 		Backend: provider,
 		Store:   store,
+		// This process's claim on the conversation, handed over so an interactive
+		// one can put it down while the operator is at the prompt. What has to be
+		// exclusive is a turn: an idle console that never let go was the reason
+		// nothing else could reach the product manager until the operator closed
+		// their window.
+		Hold: hold,
 		// The tracker and the harness behind the operator's commands are the
 		// harness's own hands, not the product manager's: they are used only
 		// where an operator approved a proposal or asked for something.
@@ -461,9 +468,9 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Fresh:        fresh,
 	})
 	if err != nil {
-		return nil, nil, errors.Join(err, lease.Release())
+		return nil, nil, errors.Join(err, hold.Release())
 	}
-	return session, lease, nil
+	return session, hold, nil
 }
 
 // conversationAgent picks the agent a conversation is actually held with, and

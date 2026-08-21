@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"bufio"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -360,6 +361,94 @@ func (s *ConversationStore) Hold(identity ConversationIdentity) (*Lease, error) 
 		return nil, fmt.Errorf("the %s conversation is %w", identity, ErrConversationHeld)
 	}
 	return &Lease{file: file}, nil
+}
+
+// ConversationHold is a claim on an agent's conversation that its holder may
+// put down and take up again. The plain lease above is right for a process that
+// owns a conversation from end to end, and wrong for the operator's console:
+// that process spends nearly all of its life waiting at a prompt, and while it
+// waits nobody is talking to the agent at all. Holding throughout made an idle
+// window the reason the harness and the operator's own assistant could not
+// reach the product manager until the operator closed it.
+//
+// What has to be exclusive is a turn rather than a session — two processes
+// resuming one provider session would interleave their turns and overwrite each
+// other's record of them — so that is the span this is held for. It is the same
+// advisory file lock underneath, so a holder that exits unexpectedly still
+// leaves the conversation immediately available.
+type ConversationHold struct {
+	store    *ConversationStore
+	identity ConversationIdentity
+	// lease is nil exactly while the conversation is put down.
+	lease *Lease
+}
+
+// Claim takes an agent's conversation and returns the hold that can put it down
+// and take it up again. The first claim asks what Hold asks — is anybody
+// talking to this agent right now — and fails the same way when somebody is.
+func (s *ConversationStore) Claim(identity ConversationIdentity) (*ConversationHold, error) {
+	lease, err := s.Hold(identity)
+	if err != nil {
+		return nil, err
+	}
+	return &ConversationHold{store: s, identity: identity, lease: lease}, nil
+}
+
+// Release puts the conversation down. Releasing one that is already down is a
+// no-op, and it has to be: the process that owns a conversation defers this for
+// the life of the command while the conversation is put down and taken up many
+// times underneath, so the deferred release routinely runs against a hold that
+// is already down — every conversation that ends at the prompt is one.
+//
+// The absent lease is answered here rather than left to the lease's own
+// nil-receiver guard. That guard makes this safe today, and a hold that depends
+// on how a type it merely refers to handles being nil is one sentence away from
+// not being safe tomorrow.
+func (h *ConversationHold) Release() error {
+	if h == nil || h.lease == nil {
+		return nil
+	}
+	lease := h.lease
+	h.lease = nil
+	return lease.Release()
+}
+
+// Held reports whether this process currently has the conversation.
+func (h *ConversationHold) Held() bool {
+	return h != nil && h.lease != nil
+}
+
+// Retake takes the conversation up again, waiting for whoever has it rather
+// than refusing. Refusing is right for the first claim, where the answer is
+// "somebody else is already talking to this agent, go and do something else",
+// and wrong here: the operator has already typed, there is nothing else for
+// them to do with what they said, and another process's turn is something that
+// ends on its own. Taking up a conversation this process already has is a
+// no-op.
+func (h *ConversationHold) Retake(ctx context.Context) error {
+	if h == nil {
+		return errors.New("there is no conversation hold to take up")
+	}
+	if h.lease != nil {
+		return nil
+	}
+	path, err := h.store.leaseFile(h.identity)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(h.store.root, 0o700); err != nil {
+		return fmt.Errorf("create conversation directory: %w", err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("open conversation lease: %w", err)
+	}
+	if err := lockStateFile(ctx, file); err != nil {
+		file.Close()
+		return fmt.Errorf("take up the %s conversation: %w", h.identity, err)
+	}
+	h.lease = &Lease{file: file}
+	return nil
 }
 
 // Load returns the conversation recorded for an agent, reporting
