@@ -142,6 +142,80 @@ func TestRetiringPreservedArtifactsTakesBothWhenTheWorkIsPromoted(t *testing.T) 
 	}
 }
 
+// A registration whose checkout somebody deleted by hand is the one no sweep
+// driven from run state can see, and it costs every later command a deny path
+// in its sandbox profile all the same. The prune is what reaches it, and it
+// reaches nothing else: a worktree that is still on disk survives it.
+func TestPruningRemovesRegistrationsWhoseCheckoutIsGone(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	abandoned := preservedWorktree(t, manager, "yoyodyne-abandoned")
+	live, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        "run-abcdef0123456789abcdef0123456789",
+		WorkItemID:   "yoyodyne-live",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// Somebody removed the directory without telling Git, which is exactly what
+	// leaves a registration nothing else knows to clean up.
+	if err := os.RemoveAll(abandoned.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	prune, err := manager.PruneRegistrations(context.Background())
+	if err != nil {
+		t.Fatalf("PruneRegistrations() error = %v", err)
+	}
+	// The manager's worktree root is symlink-resolved at construction, so the
+	// path it derived is the same one Git recorded — which is what every other
+	// registration lookup here already relies on.
+	if len(prune.Pruned) != 1 || prune.Pruned[0] != abandoned.Path {
+		t.Fatalf("pruned = %#v, want only %q", prune.Pruned, abandoned.Path)
+	}
+	registered, _, err := manager.registeredWorktree(context.Background(), abandoned.Path)
+	if err != nil || registered {
+		t.Fatalf("registered = %t, error = %v, want the stale registration gone", registered, err)
+	}
+	// The checkout that is still there is untouched: a prune only ever unregisters
+	// what is no longer on disk.
+	stillRegistered, _, err := manager.registeredWorktree(context.Background(), live.Path)
+	if err != nil || !stillRegistered {
+		t.Fatalf("registered = %t, error = %v, want the live worktree kept", stillRegistered, err)
+	}
+	// Pruning again is what every later sweep does, and a repository with nothing
+	// stale left reports nothing rather than repeating itself.
+	repeated, err := manager.PruneRegistrations(context.Background())
+	if err != nil || len(repeated.Pruned) != 0 {
+		t.Fatalf("second PruneRegistrations() = %#v, error = %v", repeated, err)
+	}
+}
+
+// Registered is what tells a checkout the sweep retired from one that was
+// already gone, which Removed cannot: both report Removed. A sweep that runs on
+// every pass needs the difference or it reports the same long-gone worktree
+// forever.
+func TestARemovalSaysWhetherThereWasAnythingRegisteredToRemove(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree := preservedWorktree(t, manager, "yoyodyne-registered")
+
+	removal, err := manager.RemovePreservedWorktree(context.Background(), worktree)
+	if err != nil || !removal.Registered || !removal.Removed {
+		t.Fatalf("removal = %#v, error = %v, want a registered worktree retired", removal, err)
+	}
+	repeated, err := manager.RemovePreservedWorktree(context.Background(), worktree)
+	if err != nil || repeated.Registered || !repeated.Removed {
+		t.Fatalf("second removal = %#v, error = %v, want nothing there to retire", repeated, err)
+	}
+}
+
 // The ownership rule every other removal here is held to: a worktree this
 // manager did not create is not this manager's to remove.
 func TestRetiringAWorktreeThisManagerDoesNotOwnIsRefused(t *testing.T) {

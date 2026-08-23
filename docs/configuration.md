@@ -2194,9 +2194,13 @@ lease, because its record is what `yoyo status` and the docket read to say
 whether its branch and worktree are still there. A stopped run promoted nothing,
 so the removal names the run that superseded it — `artifacts_retired_by` on the
 run's state — which is the second way a recorded removal is earned beside a
-promotion of the run's own. A retirement the harness could not write onto that
-run is reported rather than swallowed: the artifacts are gone and its record
-still says otherwise, which is a thing to go and correct.
+promotion of the run's own. The third is `worktree_swept_at`, written by the
+[convergence sweep](operations.md#recovering-interrupted-runs) when it retires
+an old stoppage's checkout to keep a machine's worktree registrations bounded;
+it earns the checkout alone, because that sweep never touches a branch. A
+retirement the harness could not write onto that run is reported rather than
+swallowed: the artifacts are gone and its record still says otherwise, which is
+a thing to go and correct.
 
 `yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
 half of the same pair, and it starts nothing over. It re-enters the stopped run's

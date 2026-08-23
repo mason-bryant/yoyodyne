@@ -900,6 +900,15 @@ that are gone. Anything that could not be retired is recorded as kept and why; a
 branch whose work nothing promoted is never deleted, so what survives is
 discoverable rather than orphaned.
 
+The worktree alone has one other way of going, on a stoppage nobody re-ran: once
+enough later runs have settled past it, the [convergence
+sweep](operations.md#recovering-interrupted-runs) unregisters the checkout so a
+machine's worktree registrations stay bounded. It records that removal the same
+way, and it takes nothing — a checkout holding uncommitted work is kept, and the
+branch, which is where everything else the run wrote lives, is untouched. What
+it costs is `/continue` on that run, which needs the checkout; `/rerun` and the
+branch are still there.
+
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
@@ -936,7 +945,11 @@ not be closed or waiting on other work. A grant of the development manager's has
 to be there and not already carried out. And **the preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so.
+committed — refuses to a person, leaves the item blocked, and says so. A checkout
+the [convergence sweep](operations.md#recovering-interrupted-runs) retired
+refuses here too, and for the same reason: there is nothing left to hand back.
+That is what the sweep's tail is for — a recent stoppage still has its checkout,
+and an old one is replanned or re-run from its branch instead.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

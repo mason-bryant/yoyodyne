@@ -1500,7 +1500,7 @@ func TestTheOperatorReadsItemsAndRunsFromInsideTheConversation(t *testing.T) {
 		}
 		transcript := out.String()
 		for _, required := range []string{
-			"removed when the run was cleaned up",
+			", removed\n",
 			"integrated into main at 0f1e2d3c",
 			"pull request: #19 https://forge/pull/19 (merged)",
 			"M internal/chat/chat.go",

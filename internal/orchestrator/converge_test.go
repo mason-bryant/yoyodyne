@@ -1,11 +1,18 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The seam the operator drew a line under: a merge the forge performs after its
@@ -224,6 +231,170 @@ func TestACatchupHeldDuringSettleIsFinishedByALaterSweep(t *testing.T) {
 	remote := publishedCommit(t, fixture.remote, "main")
 	if local := publishedCommit(t, fixture.repository, "main"); local != remote {
 		t.Errorf("local main = %q, want the remote tip %q after the sweep", local, remote)
+	}
+}
+
+// The accumulation this bound exists for: every worktree registration is a path
+// an agent's sandbox profile denies on every command it spawns, so a machine
+// that keeps them all eventually cannot spawn a command in the next worktree at
+// all. Only the most recent settled runs keep their checkout; the rest are past
+// the tail and swept.
+func TestSweepableWorktreesHoldsBackTheMostRecentSettledRuns(t *testing.T) {
+	t.Parallel()
+
+	stoppedAt := baseTime
+	settled := func(runID string) runstate.State {
+		stoppedAt = stoppedAt.Add(time.Minute)
+		completed := stoppedAt
+		return runstate.State{
+			RunID:        runID,
+			WorkItemID:   "yoyodyne-task",
+			Status:       runstate.StatusFailed,
+			CompletedAt:  &completed,
+			WorktreePath: "/worktrees/" + runID,
+			Branch:       "yoyodyne/" + runID,
+		}
+	}
+	// Three more settled runs than the tail holds, oldest first, so the store's
+	// order is not what decides which ones survive.
+	recorded := make([]runstate.State, 0, settledWorktreeTail+3)
+	for index := 0; index < settledWorktreeTail+3; index++ {
+		recorded = append(recorded, settled(fmt.Sprintf("run-%02d", index)))
+	}
+	// A run still in flight, a run whose record already says the checkout is
+	// gone, and a run that never had one are none of this sweep's business.
+	inFlight := settled("run-in-flight")
+	inFlight.Status = runstate.StatusRunning
+	inFlight.CompletedAt = nil
+	cleanedUp := settled("run-cleaned-up")
+	cleanedUp.WorktreeRemoved = true
+	neverHadOne := settled("run-no-worktree")
+	neverHadOne.WorktreePath = ""
+	recorded = append(recorded, inFlight, cleanedUp, neverHadOne)
+
+	swept := sweepableWorktrees(recorded)
+	if len(swept) != 3 {
+		t.Fatalf("sweepable = %#v, want the three runs past the tail", swept)
+	}
+	for _, state := range swept {
+		switch state.RunID {
+		case "run-00", "run-01", "run-02":
+		default:
+			t.Errorf("run %s was swept, want only the three oldest", state.RunID)
+		}
+	}
+	// Nothing past the tail means nothing to sweep, which is the ordinary state
+	// of a machine that is keeping up with itself.
+	if held := sweepableWorktrees(recorded[:settledWorktreeTail]); len(held) != 0 {
+		t.Fatalf("sweepable = %#v, want the whole tail held back", held)
+	}
+}
+
+// What the sweep may and may not take. A checkout holding uncommitted work is
+// the one thing nothing else records, so it is kept with the reason; one holding
+// nothing is debris, and every commit it carried is still on the branch this
+// deliberately does not touch.
+func TestSweepingAWorktreeKeepsUncommittedWorkAndRetiresTheRest(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+	}
+	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the interrupted run blocked with its artifacts preserved", results)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	reconciler := Reconciler{Tracker: tracker, Worktrees: newObserver(t, repository, worktreeRoot), Store: store}
+
+	kept, swept := reconciler.sweepWorktree(context.Background(), settled)
+	if !swept || kept.Removed || !strings.Contains(kept.Kept, "uncommitted work") {
+		t.Fatalf("sweep = %#v, swept = %t, want the developer's unsaved work kept", kept, swept)
+	}
+	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("the uncommitted work was removed: %v", err)
+	}
+
+	// Somebody took what they wanted out of it, so the checkout now holds
+	// nothing and the sweep may have it.
+	if err := os.Remove(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
+		t.Fatalf("Remove() error = %v", err)
+	}
+	retired, swept := reconciler.sweepWorktree(context.Background(), settled)
+	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" {
+		t.Fatalf("sweep = %#v, swept = %t, want the empty checkout retired", retired, swept)
+	}
+	if _, err := os.Stat(settled.WorktreePath); !os.IsNotExist(err) {
+		t.Errorf("the checkout is still on disk: %v", err)
+	}
+	// The branch is deliberately untouched: whether it may go is the branch
+	// sweep's question and it needs the target to answer it.
+	if branches := strings.TrimSpace(gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/heads/"+settled.Branch)); branches == "" {
+		t.Error("the branch was deleted with the checkout")
+	}
+
+	// The removal is written onto the run it belongs to. `yoyo status`, the
+	// docket, and a re-run all read that record as the answer to whether the
+	// directory is there, so one that still said "preserved" would send every one
+	// of them after a checkout that is gone.
+	recorded, err := store.Load(settled.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.WorktreeRemoved || recorded.WorktreeSweptAt == nil {
+		t.Fatalf("record = %#v, want the retirement written down", recorded)
+	}
+	if recorded.BranchRemoved {
+		t.Error("the record claims the branch was removed, which the sweep never touches")
+	}
+
+	// Asking again says there was nothing there, so a sweep that runs on every
+	// pass does not report the same long-gone checkout forever.
+	if again, swept := reconciler.sweepWorktree(context.Background(), recorded); swept {
+		t.Fatalf("sweep = %#v, want a checkout that is already gone reported as nothing to do", again)
+	}
+}
+
+// The registrations no sweep driven from run state can see: a checkout somebody
+// deleted without telling Git. It costs every later command a deny path in its
+// sandbox profile all the same, and the prune is what reaches it.
+func TestConvergePrunesARegistrationWhoseCheckoutIsGone(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+	stray := filepath.Join(t.TempDir(), "checkout-somebody-deleted")
+	runPipelineGit(t, fixture.repository, "worktree", "add", "--detach", stray, "HEAD")
+	if err := os.RemoveAll(stray); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	convergence := fixture.converge(t)
+	if convergence.Registrations.Failure != "" {
+		t.Fatalf("the prune failed: %s", convergence.Registrations.Failure)
+	}
+	if len(convergence.Registrations.Pruned) != 1 {
+		t.Fatalf("pruned = %#v, want only the stale registration", convergence.Registrations.Pruned)
+	}
+	// The recorded path is Git's own, which resolves the symlinks a temporary
+	// directory is reached through, so the name is what identifies it.
+	if pruned := filepath.Base(convergence.Registrations.Pruned[0]); pruned != filepath.Base(stray) {
+		t.Errorf("pruned %q, want the registration of %q", convergence.Registrations.Pruned[0], stray)
+	}
+	// Sweeping again finds nothing stale, so a sweep on every pass does not
+	// repeat itself.
+	repeated := fixture.converge(t)
+	if len(repeated.Registrations.Pruned) != 0 || repeated.Registrations.Failure != "" {
+		t.Fatalf("second prune = %#v, want nothing stale left", repeated.Registrations)
 	}
 }
 

@@ -85,6 +85,14 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			failed = true
 		}
 	}
+	for _, worktree := range convergence.Worktrees {
+		if worktree.Failure != "" {
+			failed = true
+		}
+	}
+	if convergence.Registrations.Failure != "" {
+		failed = true
+	}
 	if jsonOutput {
 		output := reconcileOutput{Runs: results, Convergence: convergence, Docketed: docketed}
 		if results == nil {
@@ -95,6 +103,12 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		if output.Convergence.Branches == nil {
 			output.Convergence.Branches = []orchestrator.BranchSweep{}
+		}
+		if output.Convergence.Worktrees == nil {
+			output.Convergence.Worktrees = []orchestrator.WorktreeSweep{}
+		}
+		if output.Convergence.Registrations.Pruned == nil {
+			output.Convergence.Registrations.Pruned = []string{}
 		}
 		if err != nil {
 			output.Error = err.Error()
@@ -151,9 +165,10 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 
 // printConvergence reports only what the sweep changed and what it could not
 // do. A repository already level with the forge says nothing here, and neither
-// does a branch kept for a good reason: both are the status quo, and a line per
-// target and per preserved branch on every sweep would bury the ones that
-// actually need reading. `--json` carries the whole sweep either way.
+// does a branch or a checkout kept for a good reason: all of them are the
+// status quo, and a line per target and per preserved artifact on every sweep
+// would bury the ones that actually need reading. `--json` carries the whole
+// sweep either way.
 func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Convergence) {
 	for _, target := range convergence.Targets {
 		switch {
@@ -165,6 +180,23 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case target.Held != "":
 			fmt.Fprintf(stderr, "%s not caught up: %s\n", target.TargetBranch, target.Held)
 		}
+	}
+	for _, worktree := range convergence.Worktrees {
+		switch {
+		case worktree.Failure != "":
+			fmt.Fprintf(stderr, "%s not retired: %s\n", worktree.Path, worktree.Failure)
+		case worktree.Removed:
+			fmt.Fprintf(stdout, "%s retired: run %s is settled and the checkout held nothing\n", worktree.Path, worktree.RunID)
+		}
+	}
+	// The prune says something only when it removed registrations or could not
+	// run. A repository with none to remove is the status quo, and a line about
+	// it on every sweep is a line nobody reads.
+	if failure := convergence.Registrations.Failure; failure != "" {
+		fmt.Fprintf(stderr, "stale worktree registrations not pruned: %s\n", failure)
+	}
+	if pruned := len(convergence.Registrations.Pruned); pruned > 0 {
+		fmt.Fprintf(stdout, "%d stale worktree registration(s) pruned\n", pruned)
 	}
 	for _, branch := range convergence.Branches {
 		switch {
@@ -183,6 +215,13 @@ Settles every run an interrupted process left outstanding, then converges local
 state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
+
+It also retires the leftover checkouts, so the worktree registrations a machine
+carries stay bounded rather than growing with the harness's history until a
+command in the next worktree cannot spawn. Settled runs past the most recent few
+have their checkout unregistered — one holding uncommitted work is always kept —
+and registrations whose checkout is no longer on disk are pruned, whichever run
+or person left them behind. No branch is touched by either.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

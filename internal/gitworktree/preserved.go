@@ -37,9 +37,16 @@ import (
 // removed and when there was nothing there to remove — Removed is what tells
 // those two apart.
 type WorktreeRemoval struct {
-	Path    string `json:"path"`
-	Removed bool   `json:"removed"`
-	Kept    string `json:"kept,omitempty"`
+	Path string `json:"path"`
+	// Registered reports that Git was still managing this checkout when the
+	// attempt began. It is what tells a worktree this retired from one that was
+	// already gone, which Removed cannot: both report Removed, because what a
+	// caller records either way is that nobody will find it. A sweep that runs
+	// on every pass needs the difference, or it reports the same long-gone
+	// worktree forever.
+	Registered bool   `json:"registered"`
+	Removed    bool   `json:"removed"`
+	Kept       string `json:"kept,omitempty"`
 }
 
 // Retirement is what became of both of the artifacts a stopped run preserved.
@@ -105,6 +112,7 @@ func (m *Manager) RemovePreservedWorktree(ctx context.Context, worktree Worktree
 	if err != nil {
 		return removal, err
 	}
+	removal.Registered = registered
 	info, statErr := os.Lstat(path)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return removal, fmt.Errorf("inspect worktree path: %w", statErr)
@@ -172,4 +180,71 @@ func (m *Manager) RemovePreservedWorktree(ctx context.Context, worktree Worktree
 	}
 	removal.Removed = true
 	return removal, nil
+}
+
+// Prune is what one repository-wide prune removed: the registrations whose
+// checkout was no longer on disk, named by the path they used to point at.
+type Prune struct {
+	Pruned []string `json:"pruned,omitempty"`
+}
+
+// PruneRegistrations removes every registration in this repository whose
+// checkout is already gone, whichever run or person left it behind.
+//
+// It is the one removal here that is not derived from a recorded worktree, and
+// it is safe to be: Git prunes a registration only where the directory it points
+// at does not exist, so there is nothing on disk left for it to lose. That is
+// also why it covers what the recorded sweeps cannot — a checkout somebody
+// deleted by hand, one belonging to a run record that is itself gone, one from
+// a product this harness no longer holds. Every one of those is invisible to a
+// sweep driven from run state and still costs every later command the deny path
+// its registration puts in the sandbox profile.
+//
+// The lease is what makes a prune safe to ask for at all. Git judges a
+// registration stale by whether its gitdir file is there, which is exactly what
+// a `git worktree add` has not written yet while it is filling the entry in, so
+// an unguarded prune deletes a registration out from under a run that is being
+// created beside it — the race maintenanceOptions exists to keep Git from
+// starting on its own. Taking the lease puts this prune in the same queue as
+// every creation and removal, which is the one place it cannot reach that
+// window.
+//
+// What was pruned is derived from the bookkeeping before and after rather than
+// from what Git printed, so it does not depend on the wording of a message.
+func (m *Manager) PruneRegistrations(ctx context.Context) (Prune, error) {
+	lease, err := m.leaseRegistry(ctx)
+	if err != nil {
+		return Prune{}, err
+	}
+	// Releasing is this process letting the next write in, and the operating
+	// system does it anyway when the process exits, so a close that failed says
+	// nothing about the registrations below.
+	defer func() { _ = lease.release() }()
+
+	before, err := m.listWorktrees(ctx)
+	if err != nil {
+		return Prune{}, err
+	}
+	pruned, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "prune")
+	if err != nil {
+		return Prune{}, err
+	}
+	if pruned.Status != execution.ProcessSucceeded {
+		return Prune{}, fmt.Errorf("prune stale worktree registrations failed with exit code %d: %s", pruned.ExitCode, strings.TrimSpace(pruned.Stderr))
+	}
+	after, err := m.listWorktrees(ctx)
+	if err != nil {
+		return Prune{}, fmt.Errorf("read the worktree registrations after pruning: %w", err)
+	}
+	remaining := make(map[string]struct{}, len(after))
+	for _, entry := range after {
+		remaining[entry.path] = struct{}{}
+	}
+	var gone []string
+	for _, entry := range before {
+		if _, still := remaining[entry.path]; !still {
+			gone = append(gone, entry.path)
+		}
+	}
+	return Prune{Pruned: gone}, nil
 }

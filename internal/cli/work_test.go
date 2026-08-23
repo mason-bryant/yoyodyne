@@ -692,7 +692,7 @@ func TestChangesAnswerFromTheRecordEvenAfterCleanup(t *testing.T) {
 		t.Fatalf("Changes() = %#v, want the published request to point at", changes)
 	}
 	rendered := changes.Render()
-	for _, required := range []string{"removed when the run was cleaned up", "pull request: #19", "M internal/chat/chat.go"} {
+	for _, required := range []string{", removed\n", "pull request: #19", "M internal/chat/chat.go"} {
 		if !strings.Contains(rendered, required) {
 			t.Fatalf("rendered changes = %q, want it to contain %q", rendered, required)
 		}

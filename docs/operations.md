@@ -387,6 +387,26 @@ branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
 
+The same sweep retires the leftover checkouts, which is what keeps the worktree
+registrations a machine carries bounded rather than growing with the harness's
+history. That growth is not cosmetic: an agent's sandbox profile denies every
+registered worktree path on every command it spawns, so a machine that keeps
+them all eventually cannot spawn a command in its next worktree at all — no
+`make check`, no `go test`, nothing. Settled runs past the most recent few have
+their checkout unregistered, and registrations whose checkout is no longer on
+disk are pruned, whichever run or person left them behind. Neither can lose
+anything: a checkout holding uncommitted work is always kept with the reason, a
+directory Git is not managing is never touched, no branch is touched by either,
+and pruning only unregisters checkouts that are not there any more. A run still
+in flight is never a candidate — that is a live developer's checkout. Each
+retirement is taken under the run's own lease and written onto its record, so
+`yoyo status` and the triage docket stop advertising a directory that is gone
+rather than sending you after it. The one thing it costs is `/continue` on a
+stoppage past the tail, which needs the checkout it was going to hand back; the
+branch is still there, so replanning or re-running the item is not affected.
+Because the sweep is part of `yoyo reconcile`, this is owned and recurring rather
+than something anybody has to remember.
+
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
 branch already level with the remote has nothing to catch up to, and cleanup
 over artifacts that are already gone does nothing. A run another process still holds

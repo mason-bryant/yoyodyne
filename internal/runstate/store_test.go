@@ -612,6 +612,40 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "names what it removed",
 		},
 		{
+			// The third way a removal is earned: the convergence sweep retired an
+			// old stoppage's empty checkout to keep the machine's worktree
+			// registrations bounded.
+			name: "checkout removal earned by the convergence sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+			},
+		},
+		{
+			// It earns the checkout and nothing else, because the sweep never
+			// touches a branch.
+			name: "a branch removal claimed on the checkout sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.BranchRemoved = true
+				state.WorktreeSweptAt = &swept
+			},
+			problem: "removed artifacts require recorded integration",
+		},
+		{
+			name: "a checkout sweep that removed nothing",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeSweptAt = &swept
+			},
+			problem: "a recorded checkout sweep names a checkout that was removed",
+		},
+		{
 			name: "a run recorded as superseding itself",
 			mutate: func(state *State) {
 				state.Integration = nil
