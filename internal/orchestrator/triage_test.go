@@ -287,6 +287,13 @@ func TestWorkOwedAContinuationIsNeverDocketed(t *testing.T) {
 			},
 		},
 		{
+			name: "waiting on unfinished work its item depends on",
+			state: func(state runstate.State) runstate.State {
+				state.DependencyPause = &runstate.DependencyPause{Blockers: []string{"yoyodyne-blocker"}}
+				return state
+			},
+		},
+		{
 			name: "parked because the operator paused the harness",
 			state: func(state runstate.State) runstate.State {
 				state.OperatorHeldSince = &heldSince
