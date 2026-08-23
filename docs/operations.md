@@ -528,12 +528,12 @@ above asking a different question: that reads back what the records hold now,
 and this follows the events as they arrive.
 
 ```sh
-./bin/yoyo status --follow           # follow the newest of any kind
-./bin/yoyo status --follow --latest  # follow the newest, and move on when a later one starts
-./bin/yoyo status --events           # a stream's recent events, without following
-./bin/yoyo status --list             # list recent runs, conversations, and reviews
-./bin/yoyo status --spend            # the last 7 days of spend, by day and in total
-./bin/yoyo status --spend 30         # that many days instead of 7
+yoyo status --follow           # follow the newest of any kind
+yoyo status --follow --latest  # follow the newest, and move on when a later one starts
+yoyo status --events           # a stream's recent events, without following
+yoyo status --list             # list recent runs, conversations, and reviews
+yoyo status --spend            # the last 7 days of spend, by day and in total
+yoyo status --spend 30         # that many days instead of 7
 ```
 
 Until it was folded in here this was `bin/yoyo-status`, a shell script that
@@ -541,6 +541,12 @@ lived only in a checkout of this repository: `go install` and a release download
 did not carry it, so the surface an operator watches the harness through was
 absent for everyone who had never seen the internals. It ships now, and it needs
 no `jq`.
+
+One thing the script did that this does not is take a `--product`. Which product
+is being read comes from the configuration, the same way it does for every other
+verb, so reading a second product's streams means pointing `--config` at that
+project's configuration or running from inside it — there is no way to name a
+product that the configuration in force does not.
 
 A conversation and a branch review each record the same kind of event stream a
 run does, and "is this alive" is the same question asked of all three, so every

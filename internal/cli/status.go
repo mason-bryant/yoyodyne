@@ -142,6 +142,15 @@ func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Write
 		fmt.Fprintln(stderr, "--failed selects among the recorded runs, so it cannot narrow a stream")
 		return 2
 	}
+	// Following emits the recorded events themselves, which are already the
+	// machine-readable form: --raw is what asks for them untouched. Like every
+	// other refusal here it is decided from the flags alone, so a request that
+	// cannot be honored is refused before any configuration is loaded or any
+	// state directory is opened to answer it.
+	if *jsonOutput && (mode == statusFollows || mode == statusShowsEvents) {
+		fmt.Fprintln(stderr, "a followed stream emits its own recorded events; --raw is what asks for them untouched")
+		return 2
+	}
 	if mode != statusReadsRecords {
 		options := streamOptions{
 			kinds:  kinds,
@@ -358,12 +367,8 @@ func reportStreamStatus(ctx context.Context, mode statusMode, options streamOpti
 	case statusPricesStreams:
 		return reportSpend(store, options, holds, time.Now(), jsonOutput, stdout, stderr)
 	default:
-		// Following emits the recorded events themselves, which are already the
-		// machine-readable form: --raw is what asks for them untouched.
-		if jsonOutput {
-			fmt.Fprintln(stderr, "a followed stream emits its own recorded events; --raw is what asks for them untouched")
-			return 2
-		}
+		// --json is refused for these two before anything is resolved, so by here
+		// there is nothing left to decide about the shape of what they emit.
 		return followStreams(ctx, store, options, stdout, stderr)
 	}
 }

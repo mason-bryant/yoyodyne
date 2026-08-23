@@ -307,9 +307,19 @@ func TestStatusAnnouncesWhatTheOperatorHasStopped(t *testing.T) {
 
 // The modes are different questions rather than different amounts of one, so
 // asking two of them is refused instead of getting a precedence nobody chose.
+//
+// Every refusal here is decided from the flags alone, and this asserts that
+// rather than assuming it: each is run against a configuration path that cannot
+// exist, so a refusal that had drifted below the point where the configuration
+// is loaded would report that failure and exit 1 instead of refusing with 2. It
+// is what keeps this test a fact about the code rather than about the machine —
+// without it a refusal decided later would resolve the real configuration and
+// the operator's own state root, and a `go test` run would read, and could
+// create directories under, the state directory of whoever ran it.
 func TestStatusRefusesStreamOptionsItCannotHonor(t *testing.T) {
 	t.Parallel()
 
+	unreadable := filepath.Join(t.TempDir(), "no-such-directory", "config.yaml")
 	for _, refusal := range []struct {
 		args []string
 		want string
@@ -320,16 +330,18 @@ func TestStatusRefusesStreamOptionsItCannotHonor(t *testing.T) {
 		{[]string{"status", "--kind", "runs"}, "--kind narrows which event streams are read"},
 		{[]string{"status", "--list", "--failed"}, "cannot narrow a stream"},
 		{[]string{"status", "--follow", "--json"}, "--raw is what asks for them untouched"},
+		{[]string{"status", "--events", "--json"}, "--raw is what asks for them untouched"},
 		{[]string{"status", "--kind", "sideways"}, "unknown kind"},
 		{[]string{"status", "--events", "--lines", "-1"}, "lines cannot be negative"},
 		{[]string{"status", "--spend", "0"}, "neither a positive number of days nor a stream id"},
 	} {
-		_, stderr, code := runCLI(t, refusal.args...)
+		args := append(append([]string{}, refusal.args...), "--config", unreadable)
+		_, stderr, code := runCLI(t, args...)
 		if code != 2 {
-			t.Fatalf("%v code = %d, want 2; stderr = %q", refusal.args, code, stderr)
+			t.Fatalf("%v code = %d, want 2; stderr = %q", args, code, stderr)
 		}
 		if !strings.Contains(stderr, refusal.want) {
-			t.Fatalf("%v stderr = %q, want it to contain %q", refusal.args, stderr, refusal.want)
+			t.Fatalf("%v stderr = %q, want it to contain %q", args, stderr, refusal.want)
 		}
 	}
 }
