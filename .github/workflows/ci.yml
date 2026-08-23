@@ -45,3 +45,10 @@ jobs:
       # built from.
       - name: Package a release and verify it names its version
         run: make dist-verify VERSION=v0.0.0-ci
+
+      # The release verb's value is the cuts it refuses, and a refusal nobody
+      # exercises is a refusal nobody has. This runs those against fabricated
+      # repositories rather than this one, so it needs no provider, no network,
+      # and no cross-compile.
+      - name: Check that the release verb refuses what it should
+        run: scripts/cut-release-test.sh

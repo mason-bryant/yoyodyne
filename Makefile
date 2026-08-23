@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist
+.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist release
 .NOTPARALLEL: check
 
 build:
@@ -96,3 +96,18 @@ dist-verify: dist
 		exit 1; \
 	fi; \
 	echo "$$stem reports version $$reported"
+
+# Cutting one release, gate included. `dist` is what a release consists of;
+# this is the one invocation around it that makes a daily cadence cheap enough
+# to keep and safe enough to trust: the adoption walkthrough and `check` green
+# first, then the archives and checksums for the tag, then the tag itself. A
+# red gate refuses the cut, names what was red, and writes nothing. Publishing
+# stays the operator's own `git push origin <tag>`, which the release workflow
+# acts on.
+#
+# VERSION carries a git-describe default so `build` and `dist` work from a
+# checkout, and that default is not a release tag. Pass it on only where
+# somebody actually set it, so `make release` with nothing set asks for a tag
+# rather than cutting whatever the checkout happens to describe itself as.
+release:
+	scripts/cut-release.sh $(if $(filter command line environment,$(origin VERSION)),$(VERSION))
