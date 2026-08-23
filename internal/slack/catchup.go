@@ -178,6 +178,13 @@ func digestible(delivery Delivery, horizon time.Time) bool {
 	if delivery.Silent() {
 		return false
 	}
+	// A message that is delivered to somebody rather than posted where they might
+	// look is never collapsed into a count. It is sent because the system has
+	// stopped on a person, and a digest of that is a notification saying an
+	// unspecified number of things needed them.
+	if delivery.Direct {
+		return false
+	}
 	event := delivery.Notification.Event
 	if event.Severity == report.SeverityCritical {
 		return false

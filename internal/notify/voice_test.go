@@ -64,6 +64,14 @@ func fullyRecorded(kind Kind) Event {
 			Since:           moment.Add(-3 * time.Hour),
 			Ready:           4,
 			Accumulated:     37,
+			Stopped:         "intake is held",
+			Record:          "`yoyo status`",
+			Options: []string{
+				"release intake and let the line choose again",
+				"keep it held until what stopped it is dealt with",
+				"something else, or you want more of the record first",
+			},
+			Recommendation: "(a), on the evidence there is",
 		},
 		Text: "the developer's own words, carried through",
 	}

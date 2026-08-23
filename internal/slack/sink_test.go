@@ -1056,6 +1056,12 @@ type recordedPosts struct {
 	// scanning the channel would see — which is the only thing that is wrong when
 	// a mark is orphaned.
 	wearing map[string]map[string]bool
+	// opened is every member a direct message was asked for, in order, which is
+	// what says a stopped system reached all of them rather than the first.
+	opened []string
+	// refuseDirects, when set, is the error every conversations.open is refused
+	// with — an app installed before the manifest asked for `im:write`.
+	refuseDirects string
 	// refuseMarks, when set, is the error every reaction call is refused with —
 	// an app installed before the manifest asked for the scope, which is what
 	// every workspace looks like the first time it runs a sink that marks.
@@ -1078,7 +1084,25 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
-	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
+	method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+	// Opening a direct message is the workspace handing back the conversation
+	// between this app and one person, which it does every time rather than only
+	// the first: the sink asks afresh whenever it needs one.
+	if method == "conversations.open" {
+		var opening directRequest
+		if err := json.Unmarshal(body, &opening); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseDirects != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseDirects})
+			return
+		}
+		r.opened = append(r.opened, opening.Users)
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": directChannel(opening.Users)}})
+		return
+	}
+	if strings.HasPrefix(method, "reactions.") {
 		var reaction reactionRequest
 		if err := json.Unmarshal(body, &reaction); err != nil {
 			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})

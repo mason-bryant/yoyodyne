@@ -38,6 +38,7 @@ const (
 	watchStream      = "watch"
 	usageLimitStream = "usage-limits"
 	heartbeatStream  = "heartbeat"
+	escalationStream = "escalations"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -64,6 +65,25 @@ type Delivery struct {
 	Stream       string
 	Cursor       Cursor
 	Notification notify.Notification
+	// Direct says this one is pushed to the operators themselves rather than
+	// posted in the channel. It is a property of the delivery rather than of the
+	// message because it is a fact about who has to see it: the same envelope, the
+	// same voice, the same severity, carried to somebody instead of left where
+	// somebody might look.
+	Direct bool
+	// InThread is what follows a direct message underneath it, in its own thread.
+	// It is here rather than as a second delivery because the two are one telling —
+	// the alarm and the ask beneath it — and a cursor that could advance between
+	// them would leave somebody interrupted by a question with no options under it.
+	// It is empty on everything that is not direct.
+	InThread notify.Notification
+	// Telling names which saying of one stopped state this is, and it is derived
+	// from the state and its age rather than from the moment of the pass — so a
+	// pass that failed halfway through the operators is the same telling when it is
+	// tried again, and the hour after it is a different one. It is what lets the
+	// surface not interrupt one person twice about the same thing while still
+	// interrupting them again about a thing that is still true.
+	Telling string
 }
 
 // Silent reports a delivery that advances a cursor and posts nothing.
@@ -126,11 +146,25 @@ type HarnessFeed struct {
 	// everything else and never says the line is waiting — which is silence over a
 	// held queue, so every sink the harness builds is given one.
 	Backlog Backlog
+	// Directives is what the harness has been told and nobody has settled, read for
+	// one purpose: an unresolved directive stops the work it names and only the
+	// operator can settle it, which is one of the three states that reach them
+	// directly. It is optional, and a feed assembled without one escalates the
+	// other two.
+	Directives Escalations
 	// Heartbeat is how often a line that is choosing nothing over ready work says
-	// so again. Zero takes DefaultHeartbeat. It is a cadence rather than a switch:
-	// there is deliberately no way to turn it off, because what it would buy is
-	// silence that means waiting-on-you, which is the state it exists to end.
+	// so again, and how often a state that has stopped the whole system is said
+	// again to the people it is stopped on. Zero takes DefaultHeartbeat. It is a
+	// cadence rather than a switch: there is deliberately no way to turn it off,
+	// because what it would buy is silence that means waiting-on-you, which is the
+	// state it exists to end.
 	Heartbeat time.Duration
+	// CapacityWait is how long everything in flight may be parked on provider
+	// capacity before the operators are told about it rather than left to find out.
+	// Zero takes DefaultCapacityWait. Below it there is nothing to decide — the
+	// runs resume from their own records when the provider serves again — and past
+	// it, carrying on waiting is a decision somebody is making by default.
+	CapacityWait time.Duration
 	// Now is read for the moment a hold was seen to have lifted, and for the age a
 	// heartbeat says a state has stood. Both are things no record holds — what
 	// lifts a hold is its absence, and what makes a state worth saying again is how
@@ -259,6 +293,15 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, beat...)
+
+	// The push half of the same principle, from the same readings: what the
+	// channel says to whoever looks, said to the people it is waiting on when what
+	// it is waiting on is the whole system.
+	escalated, err := f.escalationDeliveries(cursors.Streams[escalationStream], held, states, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, escalated...)
 	return batch, nil
 }
 

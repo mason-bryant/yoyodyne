@@ -35,6 +35,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -114,17 +115,32 @@ func newSteering(sink *Sink, directives Directives, operators []string) *steerin
 // handle reads one inbound envelope and, where it is a reply in a thread this
 // sink opened, answers it in that thread.
 //
+// Two kinds of thread qualify, and they are the same rule rather than two. A
+// work item's thread in the channel is where the harness reports; a direct
+// message is where it interrupts somebody because the system has stopped on
+// them. Both were opened by this sink, both are correlated back through what it
+// wrote down when it opened them, and the answer in either is recorded in the
+// same directive record with the same identity check in front of it. Anything in
+// a thread this sink did not open is somebody's own conversation.
+//
 // It reports nothing to its caller and stops nothing when it fails. Reporting is
 // an observation rather than a gate in both directions: a reply that could not be
 // recorded is said in the thread it arrived in and in the sink's own log, and the
 // connection carries on reading. What an operator must never get is silence, so
 // every path out of here either answers in the thread or says why it could not.
 func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
-	message, ok := readInbound(envelope, s.sink.channel)
+	message, ok := readInbound(envelope)
 	if !ok {
 		return
 	}
 	if !s.first(message.ts) {
+		return
+	}
+	// A message somewhere else in the workspace is not this sink's business even
+	// where one workspace runs two, and the only somewhere else it reads at all is
+	// a conversation it opened itself.
+	if message.channel != s.sink.channel {
+		s.decide(ctx, message)
 		return
 	}
 
@@ -148,6 +164,127 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	}
 
 	s.answer(ctx, threads, s.act(topic, message, time.Now()))
+}
+
+// decide reads a reply to a stopped system: an answer in the thread under a
+// direct message this sink sent, which is the decision rather than a message
+// about one.
+//
+// It is the same steering the channel's threads get, extended to the threads a
+// direct message opens, and it creates no more machinery than that did: the
+// answer is a directive in the record every run already consults, and what makes
+// it a decision rather than a remark is that it is recorded against the option it
+// named.
+func (s *steering) decide(ctx context.Context, message inboundMessage) {
+	// Read rather than written here, which is what keeps this goroutine off a
+	// record the delivery pass owns. The copy may already be behind — the pass
+	// could be telling somebody else about a state right now — and it does not
+	// matter: what is looked up is a message that was written before the reply
+	// answering it existed.
+	directs, err := s.sink.store.LoadDirects()
+	if err != nil {
+		s.sink.log("an answer arrived but what was asked could not be read, so it was not acted on: %v", err)
+		return
+	}
+	answering, found := directs.Answering(message.channel, message.threadTS)
+	if !found {
+		return
+	}
+	topic, err := notify.ParseTopic(answering.Topic)
+	if err != nil {
+		s.sink.log("an answer arrived to an ask recorded against %q, which names no topic: %v", answering.Topic, err)
+		return
+	}
+	decided := s.decided(topic, answering, message, time.Now())
+	if _, _, err := s.sink.tell(ctx, answering.Channel, answering.ThreadTS, decided); err != nil {
+		// Whatever was recorded is recorded; what failed is the receipt for it.
+		// `yoyo directive list` is where somebody who saw no answer finds out
+		// whether they were heard, and this line is what points them at it.
+		s.sink.log("an answer was acted on but could not be acknowledged where it was made; `yoyo directive list` says what was recorded: %v", err)
+	}
+}
+
+// decided decides what one answer does, and produces the receipt that says so.
+// Every branch produces one, for the reason every branch of a thread reply does:
+// the person reading it was interrupted by the harness and has nothing else to
+// tell them whether their answer counted.
+func (s *steering) decided(topic notify.Topic, answering Direct, message inboundMessage, at time.Time) notify.Notification {
+	// The identity check is the channel's, applied here explicitly rather than
+	// assumed away. A direct-message conversation has exactly two members and one
+	// of them is this app, so in practice the sender is the person who was asked —
+	// but "in practice" is not what an authority check is, and the grant can be
+	// taken away between the ask and the answer.
+	if !s.operators[message.user] {
+		return refused(topic, at, "the answer is from somebody this project has not granted direct-work with a bound Slack member id, so nothing was recorded; `operators` in .yoyodyne/config.yaml is where that grant lives")
+	}
+	if message.user != answering.Member {
+		return refused(topic, at, "this ask was put to somebody else, and what is recorded is which option the person it was put to chose; `yoyo directive record` is how a decision is recorded from outside a thread")
+	}
+	chosen, err := parseDecision(message.text, answering.Options)
+	if err != nil {
+		return refused(topic, at, err.Error())
+	}
+	_, receivedBy := addressed(message.text)
+	recorded, err := s.record(topic, steer{
+		kind:       directive.KindOperational,
+		receivedBy: receivedBy,
+		text:       chosen,
+	}, at)
+	if err != nil {
+		return refused(topic, at, err.Error())
+	}
+	// The receipt is the ordinary recorded-directive one rather than a shape of its
+	// own. It says which directive was written and what it says, and what it says
+	// is the option that was chosen — which is the whole of what "the settled
+	// receipt says what was decided" asks for, in vocabulary a reader has already
+	// met in the channel.
+	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at)
+}
+
+// parseDecision reads which option an answer chose, and whatever the operator
+// said beside it.
+//
+// The letter is required, and that is the whole of the grammar. What is recorded
+// has to say which option was chosen rather than only what somebody typed —
+// otherwise the record of a decision is a paragraph somebody has to interpret
+// later, which is the same problem the ask was written to end. The refusal names
+// the letters, because the person reading it is in a chat client rather than
+// looking at the message they are answering.
+func parseDecision(raw string, options []string) (string, error) {
+	text, _ := addressed(raw)
+	word, rest := firstWord(text)
+	letter := strings.ToLower(strings.Trim(word, "()[].,:;-—*_"))
+	option, named := notify.OptionAt(options, letter)
+	if !named {
+		return "", fmt.Errorf("say which option you are choosing — %s — because what is recorded is the option rather than the words around it; put the letter first and add whatever you want to say after it", offered(options))
+	}
+	decided := "chose (" + letter + ") " + option
+	// What somebody wrote after the letter is kept, with whatever they separated it
+	// from the letter with taken off: "b — because" and "b, because" are the same
+	// answer, and the record already has its own separator.
+	if extra := strings.TrimSpace(strings.TrimLeft(rest, "-—–:;,. ")); extra != "" {
+		decided += " — " + extra
+	}
+	return decided, nil
+}
+
+// offered names the letters an ask put on the table, so a refusal to read an
+// answer says what would have been readable.
+func offered(options []string) string {
+	letters := make([]string, 0, len(options))
+	for index := range options {
+		if letter := notify.OptionLetter(index); letter != "" {
+			letters = append(letters, "("+letter+")")
+		}
+	}
+	switch len(letters) {
+	case 0:
+		return "that ask offered nothing to choose between"
+	case 1:
+		return letters[0]
+	default:
+		return strings.Join(letters[:len(letters)-1], ", ") + " or " + letters[len(letters)-1]
+	}
 }
 
 // act decides what one reply does, and produces the message that says so. Every
@@ -186,10 +323,15 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 }
 
 // record writes one directive where every process that acts on this product's
-// work reads it. The scope is the thread's item and nothing wider: a reply in one
-// item's thread is about that item, and an unscoped directive — which is what an
-// empty scope means — would pause the whole product from a message about one
-// piece of it.
+// work reads it. The scope is the thread's own subject and nothing wider: a reply
+// in one item's thread is about that item, and an unscoped directive — which is
+// what an empty scope means — would reach the whole product from a message about
+// one piece of it.
+//
+// The one place an empty scope is the honest reading is an answer to something
+// that stopped the whole line. That ask was not about an item, it was about every
+// item, and a decision about it narrowed to one of them would be recorded against
+// work it was never about.
 func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (directive.Directive, error) {
 	id, err := directive.NewID()
 	if err != nil {
@@ -205,7 +347,7 @@ func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (direc
 		Text:          parsed.text,
 		Artifact:      parsed.artifact,
 		Unresolved:    parsed.unresolved,
-		Scope:         []string{topic.ID},
+		Scope:         scopeOf(topic),
 	}
 	// Every bound a directive is held to is the directive package's, checked on
 	// the way into the store. A reply too long to be one is refused in the thread
@@ -254,12 +396,16 @@ func (s *steering) first(ts string) bool {
 }
 
 // inboundMessage is one Slack message event reduced to what this reads: who said
-// it, what they said, and which thread they said it in.
+// it, what they said, and which thread of which conversation they said it in.
 type inboundMessage struct {
 	user     string
 	text     string
 	ts       string
 	threadTS string
+	// channel is which conversation it arrived in, which is what decides whether
+	// it is a reply about a work item or an answer to something the harness asked
+	// somebody directly.
+	channel string
 }
 
 // readInbound reads a message a person typed in one of this sink's threads, and
@@ -269,10 +415,14 @@ type inboundMessage struct {
 // or a bot id is not a person typing — an edit, a join, a file share, and above
 // all this sink's own posts, which arrive back on the same connection and would
 // otherwise be read as instructions the harness gave itself. A message with no
-// thread is somebody talking in the channel rather than steering a topic. And a
-// message in another channel is not this sink's business even when one workspace
-// runs two.
-func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool) {
+// thread is somebody talking rather than answering something: in the channel it
+// addresses no work item, and in a direct message it answers no ask.
+//
+// Which conversation it arrived in is carried out rather than checked here, and
+// the caller decides. A reply is only ever acted on inside a thread this sink
+// opened, and that is settled by looking the thread up rather than by the name of
+// the conversation it is in.
+func readInbound(envelope socketEnvelope) (inboundMessage, bool) {
 	if envelope.Type != socketEventsAPI || len(envelope.Payload) == 0 {
 		return inboundMessage{}, false
 	}
@@ -295,7 +445,7 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 	if event.Type != "message" || event.Subtype != "" || strings.TrimSpace(event.BotID) != "" {
 		return inboundMessage{}, false
 	}
-	if event.Channel != channel || strings.TrimSpace(event.User) == "" {
+	if strings.TrimSpace(event.Channel) == "" || strings.TrimSpace(event.User) == "" {
 		return inboundMessage{}, false
 	}
 	// A thread's own opening message carries its own timestamp as the thread's,
@@ -308,6 +458,7 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 		text:     event.Text,
 		ts:       event.TS,
 		threadTS: event.ThreadTS,
+		channel:  strings.TrimSpace(event.Channel),
 	}, true
 }
 
@@ -500,4 +651,13 @@ func workItemOf(topic notify.Topic) string {
 		return topic.ID
 	}
 	return ""
+}
+
+// scopeOf is the work a directive recorded from a thread reaches: the item the
+// thread is about, and every item where the thread was about the whole line.
+func scopeOf(topic notify.Topic) []string {
+	if item := workItemOf(topic); item != "" {
+		return []string{item}
+	}
+	return nil
 }

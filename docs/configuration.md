@@ -2580,7 +2580,7 @@ person.
 | grant | what it is |
 | --- | --- |
 | `own-intent` | stating and approving what the product is for: the brief, the goals, and the non-goals. **At most one human may hold it** — several people amending goals concurrently is conflict machinery nobody has designed. |
-| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on. |
+| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on. It is also who the sink messages directly when the whole system has stopped and is waiting on a person — the same list, because the people whose answer would count are the people worth interrupting. |
 
 The grants are checked where the act arrives rather than where it is recorded,
 which is what makes them worth stating: the point of attaching authority to a
@@ -2669,6 +2669,12 @@ derivation rather than a second list because a list maintained beside those
 grants is a list that disagrees with them — silently, and about authority. A
 human granted `direct-work` who has bound no member id simply is not on it: they
 hold the authority, and Slack is not a boundary they can reach it through.
+
+The same derivation decides **who is messaged directly when the whole system has
+stopped on a person** — the brake tripped, capacity gone past the point of waiting
+it out, a directive nobody has settled. All of them are, because the first to pick
+it up is the one who should; and a project that has granted nobody is messaged by
+nobody, which is what the sink says once when it starts.
 
 A reply from somebody on that list is recorded as a directive against the item
 whose thread it was said in, and reaches the work exactly as one typed at a

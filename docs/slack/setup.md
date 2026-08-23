@@ -51,6 +51,11 @@ terminal does; everybody else's is answered saying it was not acted on. A projec
 that has named nobody is steered by nobody, which is what every workspace is
 until you add yourself. See *Steering the work from a thread* below.
 
+One thing does not wait to be read at all. When the whole system has stopped and
+is waiting on a person, everybody on that list is **messaged directly**, with what
+stopped, the options, and a recommendation — and the reply is the decision. See
+*When the whole system stops on you*.
+
 Setting this up takes about five minutes and needs a Slack workspace you can
 install an app into.
 
@@ -86,12 +91,19 @@ step 2 and turn Socket Mode on there. Events without a request URL require
 Socket Mode, so they cannot go in until it is actually on. Once it is, paste
 the original manifest back in under *App Manifest*.
 
-The manifest says what each scope is for. The two that read messages —
-`channels:history` and `groups:history` — are what carries a thread reply back to
-your machine, which is how the harness is steered from the channel. An operator
-who would rather not steer from Slack at all can delete those two scopes and the
-two `message.*` events beside them: everything else in this document still works,
-and replies simply never arrive.
+The manifest says what each scope is for. The ones that read messages —
+`channels:history`, `groups:history`, and `im:history` — are what carries a reply
+back to your machine, which is how the harness is steered from the channel and how
+a stopped system is answered. `im:write` is what lets it message you at all. An
+operator who would rather not steer from Slack, and would rather not be messaged,
+can delete `im:write` and the three `*:history` scopes along with the three
+`message.*` events beside them: everything else in this document still works, and
+replies simply never arrive.
+
+**Installed this app before?** `im:write`, `im:history`, and `message.im` are new,
+and an app installed without them keeps reporting into the channel and never
+messages anybody. Reinstalling once from *OAuth & Permissions* is the whole of the
+fix, and it is one approval for all three.
 
 ## 2. Install it and take the two tokens
 
@@ -185,9 +197,11 @@ operators:
 
 The allow-list is then derived: the humans granted `direct-work` who have bound
 a member id, and nobody else. Until somebody is on it, every reply is answered
-saying it was not acted on, which is what a workspace gets by default. The member
-id lives in the configuration rather than in the environment because it is
-identity rather than a secret.
+saying it was not acted on, which is what a workspace gets by default — **and
+nobody is messaged when the system stops on a person**, since the same list is who
+would be told and whose answer would count. The member id lives in the
+configuration rather than in the environment because it is identity rather than a
+secret.
 [`docs/configuration.md`](../configuration.md#operators) has the rest of the
 mapping, including the other grant and the namespaces you can bind.
 
@@ -585,6 +599,74 @@ itself.
 `yoyo directive resolve` settles one from the terminal. The two surfaces are the
 same record.
 
+## When the whole system stops on you
+
+Everything above waits to be read. That is right for a narrative and wrong for
+the one condition under which nobody is going to read anything: the harness has
+stopped, and it stays stopped until a person decides something. The heartbeat says
+so in the channel, and a channel line is still something you find when you look.
+
+So three states go the other way. **Every human this project granted
+`direct-work` with a bound `slack_member_id` is messaged directly**, all of them,
+because the first one to pick it up is the one who should:
+
+- **the brake has tripped** — intake is held, or all harness activity is, so
+  nothing new is chosen until a person releases it. No role can.
+- **capacity has gone, past the point of waiting it out** — everything in flight
+  is parked on the provider, and has been for more than two hours. Below that
+  there is nothing to decide: the runs resume from their own records when the
+  provider serves again.
+- **a directive nobody has settled** — an `ambiguous:` or `artifact:` one, which
+  stops the work it names at its next gate and is settled by you and nobody else.
+
+One of them at a time, in that order, because a machine that has stopped once
+should interrupt somebody once. Each message says the same four things: what
+stopped, why it is yours rather than a role's, whose move follows, and where the
+whole of it is. Underneath it, in its own thread, is the ask: how long it has
+stood, the options in plain terms, and a recommendation.
+
+**A single blocked item is not one of these, deliberately.** It stays a `critical`
+in its own thread with :octagonal_sign: on the opener, because it has an owner —
+the development manager's triage docket — and something that messaged every
+operator for each of those would teach everybody to ignore the ones that matter.
+
+### Answering one
+
+Reply in the thread under the message, with the letter of the option you are
+choosing:
+
+```text
+b — leave it held until I've read what the brake caught
+```
+
+That reply **is** the decision. It is recorded as a directive in the same record
+[`yoyo directive record`](../conversation.md#directives-and-the-work-they-pause)
+writes and every run consults, and it is recorded against **which option you
+chose** rather than as the sentence you typed — so what the receipt says, and what
+a role reads afterwards, is the decision rather than something to interpret. The
+words after the letter are kept beside it.
+
+The letter is required, and a reply without one is answered saying so and naming
+the letters. That is not pedantry: an ask answered with prose is a decision nobody
+can name later, which is the thing the options exist to prevent. The last option
+is always *something else, or you want more of the record first* — that is where
+prose belongs, and choosing it records that you have not decided yet.
+
+Three things about it are worth knowing:
+
+- **It records the decision; it does not work the machine.** Choosing "release
+  intake" writes down that intake should be released, where every role reads it;
+  `yoyo release` is still what releases it, and the option says so. Directives
+  move intent and commands move the machine, and the machine is not driven from a
+  chat workspace.
+- **The identity check is the channel's.** An answer from somebody without
+  `direct-work`, or from somebody the ask was not put to, is answered saying it
+  was not acted on. Nothing else in the workspace can reach the record.
+- **Releasing cancels the follow-ups.** A state that is still stopped is said
+  again every `--heartbeat` while it stands. The moment it clears — the hold
+  released, the provider serving, the directive settled — nothing more is sent,
+  and nothing announces the clearing either: the channel already carries that.
+
 ## Coming back from a long gap
 
 A sink that was off overnight comes back to everything the harness recorded while
@@ -648,7 +730,10 @@ command line whenever the digest is not enough.
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
 | A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
-| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. |
+| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item, and a direct message that is not in the thread under one the harness sent answers nothing. Reply inside the thread. |
+| `slack refused conversations.open: missing_scope` | The app was installed before the manifest asked for `im:write`. Reinstall it from *OAuth & Permissions*; the channel is unaffected either way. |
+| `the system is stopped on a person and nobody was told` | Said in the sink's own log when one of the three states above stands and there is nobody to message: no human holds `direct-work` with a bound `slack_member_id`. Step 4 is where that is written. |
+| An answer is refused `say which option you are choosing` | The reply did not start with a letter the ask offered. What is recorded is which option was chosen, so the letter comes first and anything you want to say goes after it. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink
