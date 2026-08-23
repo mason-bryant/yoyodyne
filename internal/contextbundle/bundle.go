@@ -595,6 +595,7 @@ func renderWorkItem(item beads.WorkItem) string {
 ID: %s
 Title: %s
 Status: %s
+Depends on: %s
 
 ## Description
 
@@ -611,7 +612,39 @@ Status: %s
 ## Notes
 
 %s
-`, item.ID, item.Title, item.Status, emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
+`, item.ID, item.Title, item.Status, renderDependencies(item),
+		emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
+}
+
+// blocksDependency is the tracker relation that makes one item wait for another.
+const blocksDependency = "blocks"
+
+// renderDependencies states what the item waits on, on the same line whether it
+// waits on anything or not.
+//
+// Saying "nothing" is the half that matters. This context is what both the
+// developer and the reviewer read the item from, and a line that appeared only
+// when there were dependencies would leave them unable to tell an item nothing
+// blocks from an item whose blockers this context happens not to carry. A
+// reviewer judging a change against an item that waits on unfinished work needs
+// to be able to see that it does — a change written as if the work it depends on
+// were settled is judged differently from one written after it was.
+//
+// A dependency whose own item is closed is not something anybody is waiting for,
+// and it is left out rather than listed as satisfied: what this line is for is
+// what is still outstanding.
+func renderDependencies(item beads.WorkItem) string {
+	var waiting []string
+	for _, dependency := range item.Dependencies {
+		if dependency.Type == blocksDependency && dependency.Status != "closed" {
+			waiting = append(waiting, dependency.ID)
+		}
+	}
+	if len(waiting) == 0 {
+		return "nothing; no unfinished work blocks this item"
+	}
+	sort.Strings(waiting)
+	return strings.Join(waiting, ", ") + " (unfinished work this item waits on)"
 }
 
 func emptyFallback(value string) string {

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -992,6 +993,64 @@ func TestAWorkspaceThatRefusesAMarkStillGetsEveryMessage(t *testing.T) {
 		t.Fatalf("second pass() error = %v", err)
 	}
 	wantWearing(t, posts, posts.timestamps[0], notify.StatusBlocked)
+}
+
+// What became of a directive somebody asked for in a thread is the one message
+// the pass posts for a person rather than for the channel, and both halves of
+// that have to survive the pass: the text reaches them by name, and the reply
+// they typed stops wearing the thinking face at the moment the outcome is said.
+func TestAnOutcomeThePassSaysTagsWhoAskedAndSettlesTheMarkOnTheirReply(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	const askTS = "1750000001.000200"
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{outcome(1, member, askTS)}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the thread opened and the outcome said in it", posts.requests)
+	}
+	said := posts.requests[1]
+	if !strings.HasPrefix(said.Text, "<@"+member+"> ") {
+		t.Fatalf("said %q, want the outcome to reach the person who asked by name", said.Text)
+	}
+	if !strings.Contains(said.Text, "the second one, and the design says so") {
+		t.Fatalf("said %q, want the tag in front of what became of it rather than instead of it", said.Text)
+	}
+	if worn := posts.wearing[askTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that asked wears %#v, want the settled mark alone once the outcome was said", worn)
+	}
+}
+
+// outcome is what the feed hands the sink when the record says a directive
+// somebody asked for in a thread has been settled: said in their thread, tagged
+// to them, and carrying the reply that asked so its mark can move.
+func outcome(position uint64, member, replyTS string) Delivery {
+	settled := moment
+	recorded := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            "directive-" + strings.Repeat("f", 32),
+		ProductID:     testProduct,
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    moment,
+		Text:          "ambiguous: which of the two branches did you mean",
+		Unresolved:    "which of the two branches did you mean",
+		Scope:         []string{"yoyodyne-ifd.68.3"},
+		Resolution:    "the second one, and the design says so",
+		ResolvedAt:    &settled,
+	}
+	topic := notify.Topic{Kind: notify.TopicWorkItem, ID: "yoyodyne-ifd.68.3"}
+	return Delivery{
+		Stream:       directiveStream,
+		Cursor:       Cursor{Position: position},
+		Mention:      member,
+		Reply:        replyTS,
+		Notification: acknowledged(topic, notify.KindDirectiveResolved, recorded, settled),
+	}
 }
 
 func wantMarks(t *testing.T, got []mark, want ...mark) {
