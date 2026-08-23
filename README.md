@@ -1581,9 +1581,32 @@ sentence: what you have typed stays exactly as it is, and you carry on from
 where you were. The conversation is written into the terminal's ordinary output
 rather than an alternate screen, so scrollback, selection and copying, and
 resizing keep working on it as they would on any other command's output. Editing
-the line is deliberately small — the arrow keys, home and end, backspace and
-delete, and Ctrl-U and Ctrl-W — and Ctrl-C still interrupts the way it always
-did, because the terminal keeps its own signal keys.
+what you are composing is deliberately small — the arrow keys, home and end,
+backspace and delete, and Ctrl-U and Ctrl-W.
+
+Return sends the message, and shift-return puts a newline in it, so what you say
+can be more than one line. Whether shift-return reaches yoyo at all is the
+terminal's decision rather than yoyo's: in a terminal's legacy mode return and
+shift-return are the same byte, and a key that silently does nothing is worse
+than one you were never offered. So the terminal is asked when the conversation
+opens — the kitty keyboard protocol, or xterm's modifyOtherKeys — and where it
+answers, shift-return inserts a newline. Where it does not, **alt-return** does,
+and so does **ending a line with a backslash**, which asks the terminal for
+nothing at all and works on a redirected stream too. `/help` says which of these
+this terminal supports rather than listing all of them at you. The price of the
+backslash is that a message ending in one cannot be typed: the backslash is what
+carries the line on. What you compose is drawn in the same region, over as many
+rows as it has lines, and reaches the product manager with its lines where you
+put them.
+
+Ctrl-C still interrupts the way it always did, and Ctrl-Z still stops the
+conversation. A terminal that has agreed to report shift-return stops raising
+the signal keys itself, so yoyo raises what it reports — to the same process
+group the terminal would have. The keyboard is handed back exactly as it was
+found whenever the terminal changes hands: when the conversation ends, and when
+Ctrl-Z stops it, so the shell you drop into finds none of this on it. Resuming
+takes it back and asks again, because what a terminal agreed to before a stop is
+not what it is doing after one.
 
 While a turn is being answered, the line below the conversation says what it is
 doing: a spinner, the phase it has reached, and how long you have been waiting.

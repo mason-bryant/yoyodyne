@@ -322,6 +322,11 @@ type Session struct {
 	// be dressed. Its zero value dresses nothing, which is what everything but an
 	// interactive conversation on a colour terminal gets.
 	theme console.Theme
+	// composing is how that console said a message of more than one line is
+	// typed on it. It is empty until there is a console to ask, which is what a
+	// single message from a command line is: nothing is being composed there, so
+	// /help claims nothing about how it would be.
+	composing string
 }
 
 // proposalRecord is one proposal and whether the operator has finished with it.
@@ -1395,6 +1400,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 	// it always was.
 	var out io.Writer = screen
 	s.theme = screen.Theme()
+	// What /help says about typing a message of more than one line is what this
+	// console reports it supports, asked once here: a terminal that will not say
+	// whether shift was held must not be told it will.
+	s.composing = screen.Composing()
 	// What the harness says in answer to a command is dressed as its own kind of
 	// thing, because it is something the operator asked for and has to act on
 	// rather than part of the conversation.

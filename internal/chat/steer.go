@@ -124,6 +124,12 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		return true, nil
 	case "/help":
 		fmt.Fprint(out, commandHelp)
+		// How a message of more than one line is typed depends on what this
+		// console turned out to support, so it is said here rather than written
+		// into the list above, which is the same on every terminal there is.
+		if s.composing != "" {
+			fmt.Fprintln(out, s.composing)
+		}
 		fmt.Fprintln(out)
 		return false, nil
 	case "/status":
