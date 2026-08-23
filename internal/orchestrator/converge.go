@@ -175,17 +175,21 @@ type supersededPublication struct {
 // only the second one's open request is pending. When the request itself was
 // opened is not recorded, but it cannot precede the run that opened it, so the
 // run's start is the bound available and the one that errs the safe way.
+//
+// Where an item has more than one landing it is the latest that is named, which
+// is what makes that clause exact rather than merely safe: an earlier landing
+// tested against a later orphan would refuse an orphan the later landing really
+// does supersede.
 func supersededPublications(recorded []runstate.State) []supersededPublication {
 	landed := make(map[string]runstate.State, len(recorded))
 	for _, state := range recorded {
 		if state.Integration == nil {
 			continue
 		}
-		// Recorded runs arrive in a fixed order, so an item two runs landed —
-		// which nothing here has to arbitrate — names the same one every sweep.
-		if _, known := landed[state.WorkItemID]; !known {
-			landed[state.WorkItemID] = state
+		if known, seen := landed[state.WorkItemID]; seen && !laterLanding(state, known) {
+			continue
 		}
+		landed[state.WorkItemID] = state
 	}
 	superseded := make([]supersededPublication, 0)
 	for _, state := range recorded {

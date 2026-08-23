@@ -150,16 +150,40 @@ func retirablePublication(state runstate.State) bool {
 		strings.TrimSpace(published.Superseded) == ""
 }
 
-// landedAfter reports the landing run having got to its integration after some
-// moment. A run still finishing its own publication has no completion time yet,
-// so what it last recorded stands in for one: it has integrated either way,
-// which is the fact this is about.
-func landedAfter(landed runstate.State, moment time.Time) bool {
-	at := landed.UpdatedAt
+// landedAt is when a landing run got to where it now is. A run still finishing
+// its own publication has no completion time yet, so what it last recorded
+// stands in for one: it has integrated either way, which is the fact this is
+// about.
+func landedAt(landed runstate.State) time.Time {
 	if landed.CompletedAt != nil {
-		at = *landed.CompletedAt
+		return *landed.CompletedAt
 	}
-	return at.After(moment)
+	return landed.UpdatedAt
+}
+
+// landedAfter reports the landing run having got there after some moment.
+func landedAfter(landed runstate.State, moment time.Time) bool {
+	return landedAt(landed).After(moment)
+}
+
+// laterLanding reports one landing being the more recent of two.
+//
+// Which landing is named is not a presentational choice. The ordering rule this
+// feeds refuses a publication opened after the landing, so naming an earlier
+// landing than the one available would refuse orphans a later landing genuinely
+// supersedes — an item worked, closed, reopened and worked again has two, and
+// picking whichever was read first would skip the second run's orphan on the
+// strength of the first run's landing. Taking the latest removes the case
+// rather than failing safe through it.
+//
+// A tie is decided on the run identifier, so one sweep names what the next one
+// will rather than depending on the order records happened to be read in.
+func laterLanding(candidate, incumbent runstate.State) bool {
+	candidateAt, incumbentAt := landedAt(candidate), landedAt(incumbent)
+	if candidateAt.Equal(incumbentAt) {
+		return candidate.RunID > incumbent.RunID
+	}
+	return candidateAt.After(incumbentAt)
 }
 
 // retirePublication closes one superseded run's pull request and deletes the

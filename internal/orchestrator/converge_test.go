@@ -529,3 +529,63 @@ func TestConvergeReleasesTheWorktreeAndKeepsABranchNothingPromoted(t *testing.T)
 		t.Errorf("local branch %s was deleted, want the only copy of unpromoted work kept", orphan.Branch)
 	}
 }
+
+// An item can be landed twice — worked, closed, reopened, worked again — and
+// which landing is named decides whether a later run's orphan is seen at all.
+// The ordering rule refuses a publication opened after the landing, so naming
+// the earlier of the two would refuse an orphan the later one genuinely
+// supersedes. The records are ordered so that the earlier landing is the one a
+// sweep reads first, which is exactly the case that would go wrong.
+func TestSupersededPublicationsNamesTheLatestLandingOfAnItem(t *testing.T) {
+	t.Parallel()
+
+	at := func(offset time.Duration) time.Time {
+		return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC).Add(offset)
+	}
+	ended := func(state runstate.State, when time.Time) runstate.State {
+		state.UpdatedAt = when
+		state.CompletedAt = &when
+		return state
+	}
+	landing := func(runID string, when time.Time) runstate.State {
+		return ended(runstate.State{
+			RunID:      runID,
+			WorkItemID: "yoyodyne-task",
+			Status:     runstate.StatusSucceeded,
+			StartedAt:  when.Add(-time.Hour),
+			Integration: &runstate.Integration{
+				TargetBranch: "main",
+				SourceCommit: strings.Repeat(runID[len(runID)-1:], 40),
+				TargetCommit: strings.Repeat(runID[len(runID)-1:], 40),
+			},
+		}, when)
+	}
+	// Sorted by run identifier, which is the order Recorded() reports: the first
+	// landing is read before the orphan and before the landing that supersedes it.
+	recorded := []runstate.State{
+		landing("run-aaa1", at(0)),
+		ended(runstate.State{
+			RunID:      "run-bbb2",
+			WorkItemID: "yoyodyne-task",
+			Status:     runstate.StatusFailed,
+			StartedAt:  at(time.Hour),
+			Branch:     "yoyodyne/yoyodyne-task/bbb2",
+			PullRequest: &runstate.PullRequest{
+				Remote: "origin", Branch: "yoyodyne/yoyodyne-task/bbb2", Number: 77,
+				URL: "https://example.invalid/pull/77", HeadCommit: strings.Repeat("b", 40), State: "OPEN",
+			},
+		}, at(2*time.Hour)),
+		landing("run-ccc3", at(3*time.Hour)),
+	}
+
+	superseded := supersededPublications(recorded)
+	if len(superseded) != 1 {
+		t.Fatalf("superseded = %#v, want the orphan between the two landings selected", superseded)
+	}
+	if superseded[0].state.RunID != "run-bbb2" {
+		t.Fatalf("selected run = %q, want the orphan", superseded[0].state.RunID)
+	}
+	if superseded[0].by.RunID != "run-ccc3" {
+		t.Errorf("vehicle = %q, want the latest landing rather than whichever was read first", superseded[0].by.RunID)
+	}
+}
