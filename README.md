@@ -210,7 +210,8 @@ and personas.
 
 **Or have step 2 walked for you.** `yoyo setup` is that step and everything
 around it as questions — the tracker, the configuration, the checks read from
-what your repository already declares, the tracker's sync remote, and then the
+what your repository already declares, the tracker's sync remote, the index at
+the door of each artifact home, and then the
 optional offer of [reporting into Slack](#reporting-into-slack) — ending with
 `yoyo doctor`, which is what decides whether the installation actually works:
 
@@ -298,6 +299,19 @@ unless you pass `--product`. Nothing already there is overwritten without
 `--force`, and the refusal happens before any file is written, so a project is
 never left half-configured. See [Configuring a project](#configuring-a-project)
 for what is in the file.
+
+**It also puts a `README.md` at the door of every artifact home** — the
+specifications directory and the goals under it, the designs, the decision
+records, and the invariants — saying three things about that directory: what is
+filed there, which agent owns it, and whether you may edit one of those documents
+by hand. The answers are the ones the harness already enforces rather than a
+policy the file invents: a role that is not the owner proposes an amendment, your
+own edit is reported rather than refused, and what a change leaves stale
+downstream is what `yoyo stale` reports. An index that is already there is left
+exactly as it is, `--force` included, because it is your prose rather than
+something `init` generated. [`yoyo doctor`](#checking-the-installation) reports
+one that is missing or has stopped answering, and `yoyo setup` offers to write
+it, which is how a project configured before these existed gets them.
 
 **It also points the tracker at your Git remote**, so the backlog is shared
 rather than one per machine. Beads moves its data over an ordinary Git remote
@@ -441,7 +455,10 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 and it is what the conversation is for. An empty or missing specifications
 directory is reported as "product intent is not written down", which is a true
 statement about the repository rather than an error, and the product manager
-says exactly that rather than inferring what your product must be about. Tell it
+says exactly that rather than inferring what your product must be about. The
+`README.md` that `yoyo init` writes there does not change that answer: an index
+says what would be filed in a directory and states no intent, so it is carried
+under a heading of its own and never counted as a specification. Tell it
 what you are building and it will draft the brief and the goals with you.
 
 It cannot save them. The product manager runs with no tools at all — it manages
@@ -523,10 +540,12 @@ make build
 ```
 
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs. Some of what `test` runs reads this repository's own documents rather than
-its code: a documentation link that resolves to nothing, a goal written across
-more than one physical line, and a governed document whose place in the chain is
-wrong each fail a check rather than costing a reviewer a paragraph.
+runs. Some of what `test` runs is not about the Go code at all: it reads this
+repository's own documents and executes the part of the build that is shell, so
+a documentation link that resolves to nothing, a goal written across more than
+one physical line, a governed document whose place in the chain is wrong, and a
+claim in the release scripts' own suites that no longer holds each fail a check
+rather than costing a reviewer a paragraph.
 [Working on yoyo itself](docs/developing-yoyo.md#what-test-checks-besides-the-code)
 says what each one holds and why.
 
@@ -540,25 +559,44 @@ reruns a path that is already exercised rather than executing it for the first
 time when a failure would mean a botched or missing release.
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once this tag's notes are on
+`main`:
 
 ```sh
 make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+It gates on [this release's notes](docs/releases/README.md), walks [the
+documented adoption path](scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
 `vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
 that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
+over it. The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl`, which the walkthrough rewrites on its way through — do
+not count as a dirty tree: the cut commits them as their own housekeeping
+commit once every gate is green, so the tag still names a tree with nothing
+uncommitted in it, and on a day it had to it prints
+`git push --atomic origin main <tag>` instead, because the branch has to carry
+that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
+
+A tag whose notes are missing is the one refusal that leaves something behind:
+the cut drafts `docs/releases/<tag>.md` from the work items closed since the
+last tag and stops, so you read it, place each item under **key functionality**,
+**enhancements**, or **bug fixes**, and land it on `main` — the cut refuses a
+`HEAD` that `origin/main` does not have, so notes committed only in your
+checkout stop the next cut rather than that one. Cut again once `origin/main`
+carries them: the tag then names a commit carrying its own notes, and the
+release workflow publishes that file as the release page's body.
+[`scripts/release-notes-test.sh`](scripts/release-notes-test.sh) executes the
+drafting, the section shape, and that composition, and `make test` runs it too.
 
 ## The conversation
 
@@ -611,7 +649,13 @@ introduction before them, or an empty goals section is named on stderr when the
 conversation opens and listed for the product manager alongside the
 specifications themselves — and still read, because refusing to load it would
 silently lose intent somebody wrote down. A directory with nothing in it is
-reported the same way rather than treated as a product with no intent.
+reported the same way rather than treated as a product with no intent. A
+`README.md` is the one file the shape is not asked of: a directory index says
+what is filed beside it and states no intent of its own, which is the same reason
+artifact identity skips it, so there is no introduction for goals to serve and no
+goals to state. It is carried into the conversation under a heading of its own
+and is not counted as a specification, so a directory holding nothing but the
+indexes `yoyo init` wrote is still a repository that has recorded no intent.
 
 The context also says outright what those specifications record of the two
 documents intent is written in — the brief saying what the product is and who it
@@ -2367,7 +2411,9 @@ repository id follow from it. Editing a field is the whole of what changes the
 harness's behavior. `init` also points the tracker at a remote so the backlog is
 shared rather than per-machine — this project's Git remote by default, or the
 URL `--tracker-remote` names; see
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs) — and
+writes the `README.md` each artifact home gets, which says what is filed there,
+who owns it, and whether you may edit one by hand.
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated
@@ -2784,7 +2830,8 @@ yoyo doctor --json     # the same findings, for something automating the repair
 It looks at the `yoyo` on your `PATH` and whether it is the build you think it
 is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
-checks and whether this machine can run the programs they name, each provider
+checks and whether this machine can run the programs they name, whether each
+artifact home still says what is filed there and who owns it, each provider
 your agents name — installed always, and authenticated where the harness has an
 adapter that can ask, which today is Claude Code — forge access when the project
 publishes, and, when reporting is on, this project's own Slack secrets and the
@@ -2834,8 +2881,12 @@ What *does* change things is [`yoyo setup`](#getting-started), which is this
 command's other half: it walks the steps that reach the state described here,
 asking first, and then runs this diagnosis and takes its exit status from it. So
 a finding here is either something setup can offer to do — the tracker, the
-configuration, this project's Slack secrets — or something it deliberately
-leaves to you, which it hands over with the same command you see above.
+configuration, the index at the door of each artifact home, this project's Slack
+secrets — or something it deliberately
+leaves to you, which it hands over with the same command you see above. An index
+that is there and has stopped saying what is filed there is the one setup asks
+about twice: writing one that is missing loses nothing, and replacing one you
+wrote loses your prose, so that question defaults to no.
 
 The two checks worth calling out are the ones that catch an installation that
 was working and stopped. **A long-running sink is started from a binary that
@@ -3484,5 +3535,7 @@ is steered by nobody, which is what a workspace gets until you add yourself.
   inheritance, and inspection.
 - [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
   reporting in threads, with the app manifest checked in beside it.
+- [Release notes](docs/releases/README.md) — one file per tag, what each section
+  is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.

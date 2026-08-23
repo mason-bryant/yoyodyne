@@ -224,7 +224,13 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// time somebody reads it and silence has to keep meaning nothing to do.
 			Backlog:   readyBacklog{tracker: tracker},
 			Heartbeat: heartbeat,
-			Log:       log,
+			// What became of a directive somebody asked for in a thread, said in
+			// that thread and addressed to them. The same records the inbound half
+			// writes and reads: the product's directives, and the sink's own note of
+			// which of them were said into a thread.
+			Directives: directives,
+			Steers:     store,
+			Log:        log,
 		},
 		// The inbound half. Where a reply is recorded, and whose replies are acted
 		// on: the humans this project granted direct-work who bound a Slack member

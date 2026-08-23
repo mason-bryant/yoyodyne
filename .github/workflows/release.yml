@@ -46,12 +46,23 @@ jobs:
       - name: Build the release binaries and verify they name the tag
         run: make dist-verify VERSION="$TAG"
 
+      # The release page's body is the notes the repository already carries for
+      # this tag, so the two tell one story instead of two. The composition is a
+      # script rather than inline YAML because inline YAML in a tag-triggered
+      # workflow first executes against a real published release; that one is
+      # exercised by scripts/release-notes-test.sh on every change, including
+      # what it does for a tag whose notes file does not exist.
+      - name: Assemble the release notes
+        run: |
+          bash scripts/release-body.sh "$TAG" "$RUNNER_TEMP/release-body.md"
+          echo "NOTES_FILE=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes-file .github/release-notes-preamble.md \
+            --notes-file "$NOTES_FILE" \
             --generate-notes \
             dist/*.tar.gz dist/checksums.txt

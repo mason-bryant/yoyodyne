@@ -458,6 +458,11 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 		if notification, say := plan.say(index, delivery); say {
 			into.reached = false
+			// Almost every delivery is for whoever is reading the channel and carries
+			// nobody. The exception is what became of something one person asked for,
+			// which is said to them by name: it is set per delivery rather than per
+			// poster because the poster is one and the deliveries are many.
+			into.mention = delivery.Mention
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
@@ -468,6 +473,13 @@ func (s *Sink) pass(ctx context.Context) error {
 				// stream forever, so it is said once here and read past.
 				s.log("a notification could not be said and was skipped: %v", err)
 			}
+		}
+		// What became of a directive is the disposition of the reply that asked for
+		// it, so the message that asked stops wearing the thinking face at the
+		// moment the outcome is said and not a moment earlier. Every other delivery
+		// carries no reply to mark.
+		if delivery.Reply != "" {
+			s.settle(ctx, delivery.Reply)
 		}
 		if err := s.advance(&cursors, delivery); err != nil {
 			return err
@@ -604,6 +616,62 @@ func (s *Sink) remark(ctx context.Context, thread Thread, status notify.Status) 
 	return s.api.React(ctx, thread.Channel, thread.ThreadTS, status.Symbol())
 }
 
+// receipt marks one reply of somebody's with where its directive stands, on
+// their own message. It is the twin of the status a thread's opener wears: the
+// opener says what the item is doing, and this says what became of what they
+// said.
+//
+// The arrival mark goes on alone, because it goes on a message nothing has
+// marked yet and because the acknowledgment behind it is what the operator is
+// actually waiting for — two removals that hit nothing would put the pace's wait
+// between somebody typing and being answered. A disposition sweeps instead, for
+// the reason a status change does: what the message is wearing is the question,
+// and a sink killed between the workspace taking a mark and the disposition
+// landing leaves exactly that, so the sweep is what settles it.
+//
+// It reports its error rather than logging, because its callers are the two
+// halves that already know how to say what a reply could not be told.
+func (s *Sink) receipt(ctx context.Context, messageTS string, receipt notify.Receipt) error {
+	if !receipt.Valid() {
+		return fmt.Errorf("%q is not one of the marks a reply can wear", receipt)
+	}
+	if receipt != notify.ReceiptUnderConsideration {
+		for _, stale := range notify.Receipts() {
+			if stale == receipt {
+				continue
+			}
+			if err := s.pace.wait(ctx); err != nil {
+				return err
+			}
+			if err := s.api.Unreact(ctx, s.channel, messageTS, stale.Symbol()); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.pace.wait(ctx); err != nil {
+		return err
+	}
+	return s.api.React(ctx, s.channel, messageTS, receipt.Symbol())
+}
+
+// settle moves the mark on the message that asked for a directive now that what
+// became of it has been said in its thread. It is the far end of the receipt the
+// inbound half puts on as a reply arrives, and it is where the thinking face
+// stops being true.
+//
+// It is never a gate, for the reason the status marks are not: the outcome is
+// already in the thread in words, this pass's messages are posted, and failing
+// here would repeat all of them next time in exchange for an emoji.
+func (s *Sink) settle(ctx context.Context, messageTS string) {
+	if err := s.receipt(ctx, messageTS, notify.ReceiptSettled); err != nil {
+		// A sink being shut down mid-mark is not a workspace refusing anything.
+		if ctx.Err() != nil {
+			return
+		}
+		s.log("the reply that asked for this could not be marked as settled, so what became of it is only said in the thread: %v", err)
+	}
+}
+
 // post puts one message in the workspace at the pace the workspace sustains.
 // Every message the sink sends goes through here rather than to the client
 // directly, because what Slack suppresses is an application posting too fast and
@@ -643,6 +711,17 @@ type poster struct {
 	// is the one way this path could damage anything. It cannot, because it is not
 	// given the capability rather than because it never takes it.
 	opens bool
+	// mention is the Slack member id this message is for, empty for the ordinary
+	// message that is for whoever is reading the channel. It is set where a
+	// message answers one person — the acknowledgment of their reply, and what
+	// later became of what they asked for — because a thread they are not looking
+	// at is indistinguishable from silence, and being told is the whole point of
+	// both.
+	//
+	// It is carried here rather than in the envelope because it is Slack's own
+	// shape: who a message is about is the record's, and how a workspace pokes
+	// somebody is this surface's.
+	mention string
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -692,7 +771,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	emoji, url := icon(message.Identity.Avatar)
 	if _, err := sink.post(ctx, Message{
 		Channel:   sink.channel,
-		Text:      renderText(message),
+		Text:      tagged(p.mention, renderText(message)),
 		ThreadTS:  threadTS,
 		Broadcast: broadcast(message.Severity),
 		Username:  message.Identity.Name,
@@ -761,6 +840,21 @@ func (s *Sink) named(ctx context.Context, topic notify.Topic) notify.Topic {
 		return topic
 	}
 	return topic.WithTitle(title)
+}
+
+// tagged puts a Slack mention in front of a message that is for one person, and
+// leaves every other message exactly as it was rendered.
+//
+// The mention is the member id in Slack's own syntax, which is what makes the
+// workspace notify them: a message that named them in words would read the same
+// and reach nobody who was not already looking at the thread. A member id is
+// what the operators mapping binds, so nothing here has to resolve anybody.
+func tagged(member, text string) string {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return text
+	}
+	return "<@" + trimmed + "> " + text
 }
 
 // icon splits one avatar into the two fields Slack takes for it: a shortcode
