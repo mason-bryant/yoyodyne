@@ -526,7 +526,9 @@ make build
 runs. Some of what `test` runs reads this repository's own documents rather than
 its code: a documentation link that resolves to nothing, a goal written across
 more than one physical line, and a governed document whose place in the chain is
-wrong each fail a check rather than costing a reviewer a paragraph.
+wrong each fail a check rather than costing a reviewer a paragraph. It also runs
+the release verb's own suite, which is shell and which nothing else here
+executes.
 [Working on yoyo itself](docs/developing-yoyo.md#what-test-checks-besides-the-code)
 says what each one holds and why.
 
@@ -564,7 +566,7 @@ that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
 
 ## The conversation
 

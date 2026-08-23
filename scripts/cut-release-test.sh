@@ -48,9 +48,10 @@ missing() {
 
 # fabricate builds one scratch repository: $1 names it, $2 is "green", "red", or
 # "dirty-exports" for the walkthrough, $3 is "green", "check-red", or
-# "build-red" for make.
+# "build-red" for make, and $4 is "export-hook" for a repository whose tracker
+# installs a commit hook. It defaults to a repository with no hooks at all.
 fabricate() {
-  local name="$1" walk="$2" mk="$3"
+  local name="$1" walk="$2" mk="$3" hook="${4:-none}"
   local project="$scratch/$name"
 
   mkdir -p "$project/scripts"
@@ -122,6 +123,25 @@ SH
   git -C "$project" symbolic-ref HEAD refs/heads/main
   git -C "$project" add -A
   git -C "$project" commit -qm "the commit a release would name"
+
+  # Installed after that commit rather than before it, so the fixture's own
+  # setup is not the thing that fires the hook.
+  if [ "$hook" = "export-hook" ]; then
+    # Pinned absolutely, so a machine whose global config points core.hooksPath
+    # somewhere else does not quietly turn this fixture into no fixture. The
+    # cut's own `-c core.hooksPath=...` is on the command line and still wins.
+    git -C "$project" config core.hooksPath "$project/.git/hooks"
+    # What a tracker installs in a repository that has adopted it: a hook that
+    # exports after every commit. Left to run, it would dirty the tree the
+    # housekeeping commit exists to clean, which is the whole reason the cut
+    # turns hooks off for that one commit. The path is fixed at fabrication
+    # time, so the hook needs nothing of the environment git runs it in.
+    cat > "$project/.git/hooks/post-commit" <<SH
+#!/usr/bin/env bash
+printf 'the tracker exported after the commit\n' >> "$project/.beads/issues.jsonl"
+SH
+    chmod +x "$project/.git/hooks/post-commit"
+  fi
 
   printf '%s' "$project"
 }
@@ -247,6 +267,34 @@ if [ -z "$(git -C "$project" status --porcelain)" ]; then
   pass "the tag names a clean tree even though the gate itself dirtied one"
 else
   fail "the cut left the tree dirty: $(git -C "$project" status --porcelain)"
+fi
+
+step "the tracker's own commit hook does not undo the housekeeping commit"
+# A repository that has adopted a tracker has its commit hooks installed, and
+# the one that exports would rewrite these very files the moment the
+# housekeeping commit landed -- leaving the tag naming a tree that was dirty
+# again a millisecond after it was cleaned. The cut turns hooks off for that
+# commit, and this is what executes that.
+project="$(fabricate hooked-export green green export-hook)"
+printf 'churn\n' >> "$project/.beads/issues.jsonl"
+output="$(cut "$project" "v0.3.0")"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the cut proceeded and the tag was written"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+if [ -z "$(git -C "$project" status --porcelain)" ]; then
+  pass "the export hook did not run, so the tag still names a clean tree"
+else
+  fail "the export hook re-dirtied the tree: $(git -C "$project" status --porcelain)"
+fi
+# And the fixture is real: a commit that does not turn hooks off fires it, so
+# the claim above is about the cut rather than about a hook that never worked.
+git -C "$project" commit -q --allow-empty -m "a commit made with hooks left on"
+if [ -n "$(git -C "$project" status --porcelain)" ]; then
+  pass "the hook does fire when it is not turned off"
+else
+  fail "the fixture's hook never fires, so the case above proved nothing"
 fi
 
 step "a release comes off the branch integration lands on"
