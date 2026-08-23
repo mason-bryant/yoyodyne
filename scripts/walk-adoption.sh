@@ -94,6 +94,26 @@ case "$go_directive" in (1.24*) pass "README's \"Go 1.24 or newer\" matches go.m
   (*) fail "README says Go 1.24 or newer, go.mod declares $go_directive" ;; esac
 
 step "1. install the binary"
+# The README's first line is now a script fetched by URL, so the claim to check
+# is that the URL names something this checkout actually has and that what it
+# names runs. Whether raw.githubusercontent.com serves it needs the network,
+# which this script does not assume; scripts/install-test.sh executes what the
+# script does once it is running.
+bootstrap_url="$(sed -n 's|.*\(https://raw.githubusercontent.com/[^ )`]*install\.sh\).*|\1|p' "$repository/README.md" | head -1)"
+if [ -z "$bootstrap_url" ]; then
+  fail "the README names no install script URL"
+else
+  printf 'install script: %s\n' "$bootstrap_url"
+  bootstrap_path="${bootstrap_url#https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/}"
+  if [ -x "$repository/$bootstrap_path" ]; then
+    pass "the URL the README installs from names $bootstrap_path, which this checkout has (reachability not checked)"
+  else
+    fail "the README installs from $bootstrap_url, and $bootstrap_path is not an executable file here"
+  fi
+  bootstrap_help="$(bash "$repository/$bootstrap_path" --help 2>&1 || true)"
+  contains "$bootstrap_help" "--from-source" "the install script runs and documents its own flags"
+fi
+
 origin="$(git -C "$repository" remote get-url origin 2>/dev/null || echo "(none)")"
 printf 'origin: %s\n' "$origin"
 case "$origin" in (*mason-bryant/yoyodyne*) pass "README's clone URL names this checkout's origin (reachability not checked)" ;;

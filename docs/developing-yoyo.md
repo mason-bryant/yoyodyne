@@ -19,6 +19,15 @@ make build
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
 runs.
 
+[`scripts/install.sh`](../scripts/install.sh) is the one part of the install
+path that is not the binary, because it is the part that fetches the binary.
+[`scripts/install-test.sh`](../scripts/install-test.sh) runs it against a
+fabricated release and a fabricated machine — `curl` and `uname` are stubs on
+`PATH` — so a platform with no release binary, a download that does not match
+the published checksums, a `PATH` the binary is not on, and a missing
+prerequisite are executed rather than asserted. It needs no network and no
+published release, and CI runs it on every change.
+
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports

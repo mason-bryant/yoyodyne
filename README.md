@@ -83,20 +83,21 @@ waiting on a refusal the provider no longer makes, and letting the harness choos
 work again after intake was held — rather than as the way
 work normally happens.
 
-**Quick start.** With [Beads](https://github.com/gastownhall/beads) and
-[Claude Code](https://code.claude.com/docs) installed, and Go 1.24 or newer:
+**Quick start.** One script installs `yoyo`, tells you where it put it, and
+checks the two things it needs — [Beads](https://github.com/gastownhall/beads)
+(`bd`) and [Claude Code](https://code.claude.com/docs):
 
 ```sh
-go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
-yoyo version           # not found? see Install for the one PATH line
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
+yoyo version           # not found? the script printed the one PATH line
 cd path/to/your/project
 bd init && yoyo init   # then review the checks it proposed in .yoyodyne/config.yaml
 yoyo chat
 ```
 
 [Getting started](#getting-started) is the same three steps with what each one
-is for and what it needs; [Install](#install) has the release download and the
-from-source routes, for anyone who would rather not have Go.
+is for and what it needs; [Install](#install) has what that script does and the
+`go install`, release-download, and from-source routes it does it by.
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -123,10 +124,41 @@ rather than after:
 
 ## Install
 
-`yoyo` is one binary. Two of the three ways to get it need no checkout of this
+`yoyo` is one binary. Three of the four ways to get it need no checkout of this
 repository.
 
-**With Go 1.24 or newer**, which is the shortest path:
+**With one script**, which picks between the two routes below that need no
+checkout, and carries out the one it picked:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
+```
+
+[`scripts/install.sh`](scripts/install.sh) detects your platform, downloads the
+release binary for it and checks it against the release's own `checksums.txt`
+— or builds with `go install` where no release binary is published for your
+platform — installs it into `/usr/local/bin` if you can write there and
+`~/.local/bin` otherwise, runs it so the version you got is printed rather than
+assumed, and prints the `PATH` line for your shell if that directory is not
+already on it. Then it checks `bd` and `claude`, installing `claude` where it
+can and naming either one it could not, so what is still missing is on the
+screen rather than waiting to surface as a failed run.
+
+It edits no shell profile, uses no `sudo`, and touches nothing in a project:
+every change to your machine other than the binary itself is printed as a line
+for you to run. `--dir <path>` installs somewhere else, `--version <tag>` pins a
+release rather than taking the newest, `--from-source` builds with Go instead of
+downloading, and `--skip-prereqs` checks `bd` and `claude` without installing
+either. Pass them through the pipe with `bash -s --`:
+
+```sh
+curl -fsSL .../install.sh | bash -s -- --dir ~/bin --version v0.3.0
+```
+
+The routes themselves are worth knowing, since the script is a convenience over
+them rather than a fourth thing to maintain.
+
+**With Go 1.24 or newer**, which is the shortest path by hand:
 
 ```sh
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
@@ -239,9 +271,12 @@ that step, to a walk somebody is watching.
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
-authenticated, which executes every agent role. Go 1.24 or newer is needed only
-if you install with `go install` or build from source; a release download needs
-neither Go nor a checkout. Two more are needed **only if you want pull
+authenticated, which executes every agent role. Those last two are what the
+install script checks: it installs `claude` where it can, and names either one
+it could not, so the list is not one you have to work through before you start.
+Go 1.24 or newer is needed only if you install with `go install` or build from
+source — including when the script falls back to it, on a platform no release
+binary covers; a release download needs neither Go nor a checkout. Two more are needed **only if you want pull
 requests**: a Git remote, and [`gh`](https://cli.github.com) authenticated with
 `gh auth login`. Without them everything stays on your machine and nothing is
 pushed.
@@ -257,15 +292,16 @@ passing over it.
 ### 1. Install `yoyo`
 
 ```sh
-go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
 yoyo version
 ```
 
 If `yoyo version` prints a tag you have it; if the command is not found, the
-install directory is not on your `PATH`, and [Install](#install) above has the
-one line that fixes that, along with the release download and the from-source
-paths and which platforms are tested. Then change into your own project, since
-everything after this runs there:
+install directory is not on your `PATH`, and the script printed the one line
+that fixes that. [Install](#install) above has what the script does, the
+`go install` and from-source routes it chooses between, and which platforms are
+tested. Then change into your own project, since everything after this runs
+there:
 
 ```sh
 cd path/to/your/project

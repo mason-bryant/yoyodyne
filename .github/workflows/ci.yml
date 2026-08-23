@@ -52,3 +52,11 @@ jobs:
       # and no cross-compile.
       - name: Check that the release verb refuses what it should
         run: scripts/cut-release-test.sh
+
+      # The install script runs on machines nobody here controls, and the states
+      # worth testing -- a platform with no release binary, a download that is
+      # not what the release published, a PATH the binary is not on, a missing
+      # prerequisite -- are none of them this runner's. They are fabricated
+      # instead, so this needs no network and no published release.
+      - name: Check that the install script works on a machine that has nothing
+        run: scripts/install-test.sh
