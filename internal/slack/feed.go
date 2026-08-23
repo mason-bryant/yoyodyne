@@ -38,6 +38,7 @@ const (
 	watchStream      = "watch"
 	usageLimitStream = "usage-limits"
 	heartbeatStream  = "heartbeat"
+	directiveStream  = "directives"
 )
 
 func runStream(runID string) string { return "run:" + runID }
@@ -50,6 +51,10 @@ func conversationStream(conversationID string) string { return "chat:" + convers
 const (
 	intakeMark = "intake:"
 	holdMark   = "hold:"
+	// outcomeMark records having said what became of one directive somebody
+	// asked for in a thread. It names the directive, because a directive is
+	// settled once and what settled it is said once.
+	outcomeMark = "outcome:"
 )
 
 // Delivery is one step of one stream: what to say, and the cursor that records
@@ -64,6 +69,12 @@ type Delivery struct {
 	Stream       string
 	Cursor       Cursor
 	Notification notify.Notification
+	// Mention is the Slack member id this delivery is for, empty for the ordinary
+	// message that is for whoever is reading the channel. It is set on the one
+	// class of message that answers a person rather than reports to a channel:
+	// what became of something they asked for in a thread. Being told is the
+	// whole point of it, and a thread they are not looking at is silence.
+	Mention string
 }
 
 // Silent reports a delivery that advances a cursor and posts nothing.
@@ -126,6 +137,20 @@ type HarnessFeed struct {
 	// everything else and never says the line is waiting — which is silence over a
 	// held queue, so every sink the harness builds is given one.
 	Backlog Backlog
+	// Directives is the product's durable directive record, read for one thing
+	// only: what became of a directive somebody asked for in a thread. It is
+	// optional, and a feed assembled without one says nothing about any
+	// directive — which is silence exactly where somebody is waiting for an
+	// answer, so every sink the harness builds is given one.
+	//
+	// Nothing here writes it. Recording a directive is the inbound half's and
+	// resolving one is the operator's; this is a reading of what they did.
+	Directives *runstate.DirectiveStore
+	// Steers is the sink's own memory of which directives were said into a
+	// thread, and by whom. It is what separates a directive to answer somebody
+	// about from one typed at a terminal, which has no thread and nobody to tag,
+	// and it is read here and written only by the connection.
+	Steers *Store
 	// Heartbeat is how often a line that is choosing nothing over ready work says
 	// so again. Zero takes DefaultHeartbeat. It is a cadence rather than a switch:
 	// there is deliberately no way to turn it off, because what it would buy is
@@ -243,6 +268,12 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, refused...)
+
+	outcomes, err := f.directiveDeliveries(cursors, batch.Streams)
+	if err != nil {
+		return Batch{}, err
+	}
+	batch.Deliveries = append(batch.Deliveries, outcomes...)
 
 	// The operator's two switches are read once and used twice: for the messages
 	// that say they were placed and lifted, and for what has stopped the line when
@@ -378,6 +409,89 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 			notification, err := notify.FromUsageLimit(exhaustions[index])
 			return exhaustions[index].At, notification, err
 		})
+}
+
+// directiveDeliveries says what became of the directives somebody asked for in
+// a thread, in the thread they asked in and addressed to them by name.
+//
+// It is the other half of the acknowledgment the inbound half posts. That one
+// says what was recorded, which is a receipt rather than an answer: the person
+// who typed it is waiting to hear what came of it, and until now the only place
+// that was said was a terminal they are not at. So the record is read for the
+// one thing it holds about an outcome — the directive having been settled, and
+// what settled it — and that is said where they asked.
+//
+// Only directives said into a thread are read, because only those have a thread
+// to answer in and somebody to answer. One recorded at a terminal is not in the
+// steer map, and reporting on it here would be this feed announcing every
+// directive the product has ever had.
+//
+// A settlement the connection made itself is left alone. It has already been
+// said in the thread, by the reply that made it, and the two halves post from
+// different goroutines and cannot share a memory of what they have said.
+//
+// What was settled before the watermark is history, exactly as it is on every
+// stream that reads a record. The per-directive mark alone would not hold that
+// line: the marks live in the cursors, the steer map does not, and the setup
+// document tells an operator starting a channel over to delete one and keep the
+// other — which without this would answer them, by name, for every directive
+// they ever steered and settled. A flood of mentions about work that is long
+// over is the same trust erosion as silence, from the other side.
+func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
+	if f.Directives == nil || f.Steers == nil {
+		return nil, nil
+	}
+	streams[directiveStream] = struct{}{}
+	cursor := cursors.Streams[directiveStream]
+	steers, err := f.Steers.LoadSteers()
+	if err != nil {
+		return nil, fmt.Errorf("read which directives were said in a thread: %w", err)
+	}
+	if len(steers.Steers) == 0 {
+		// A product nobody has steered from a thread has nothing here to answer,
+		// which is every product until somebody replies to one.
+		return nil, nil
+	}
+	recorded, err := f.Directives.List()
+	if err != nil {
+		return nil, fmt.Errorf("read what became of the recorded directives: %w", err)
+	}
+	var deliveries []Delivery
+	advanced := cursor
+	for _, directed := range recorded {
+		steer, found := steers.Lookup(directed.ID)
+		if !found || steer.Said || !directed.Resolved() {
+			continue
+		}
+		if predates(cursors.Since, *directed.ResolvedAt) {
+			// Settled before this product's reporting began, or before it began
+			// again. It is read past on age rather than marked, because a mark is
+			// what a cursor reset just threw away and this has to hold without one.
+			continue
+		}
+		mark := outcomeMark + directed.ID
+		if advanced.Has(mark) {
+			continue
+		}
+		topic, err := notify.ParseTopic(steer.Topic)
+		if err != nil {
+			// The thread it was said in cannot be addressed, so there is nowhere to
+			// say this. It is said here once and read past rather than retried on
+			// every pass for as long as the sink runs.
+			f.say("directive %s is remembered against %q, which names no thread, so what became of it was not said there: %v", directed.ID, steer.Topic, err)
+			advanced = advanced.With(mark)
+			deliveries = append(deliveries, Delivery{Stream: directiveStream, Cursor: advanced})
+			continue
+		}
+		advanced = advanced.With(mark)
+		deliveries = append(deliveries, Delivery{
+			Stream:       directiveStream,
+			Cursor:       advanced,
+			Mention:      steer.Member,
+			Notification: acknowledged(topic, notify.KindDirectiveResolved, directed, *directed.ResolvedAt),
+		})
+	}
+	return deliveries, nil
 }
 
 // runDeliveries says what one run's record crossed since the reading already
