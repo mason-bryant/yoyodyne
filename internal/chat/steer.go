@@ -194,11 +194,18 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		fmt.Fprintln(out)
 		return false, nil
 	case "/reports":
-		reports, err := s.ReadReports()
-		if err != nil {
+		reports, handled, err := s.ReadReports()
+		// A pile that could not be read at all is the answer failing. A pile that
+		// was read while what became of it was not is the annotation failing, and
+		// the reports are still what the operator asked for: they are printed,
+		// with the gap named rather than shown as nothing having been handled.
+		if err != nil && reports == nil {
 			return false, err
 		}
-		fmt.Fprint(out, renderCollectedReports(reports))
+		if err != nil {
+			fmt.Fprintf(out, "none of these is shown as handled: %v\n", err)
+		}
+		fmt.Fprint(out, renderCollectedReports(reports, handled))
 		fmt.Fprintln(out)
 		return false, nil
 	case "/work":

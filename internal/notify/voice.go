@@ -161,7 +161,10 @@ var harnessVoice = voice{
 		KindItemReprioritized:   "{item} was set to {priority}.",
 		KindWorkApproved:        "The operator approved proposed work, and it was admitted as {item}: {title}. It serves: {goal}",
 		KindWorkDeclined:        "The operator declined proposed work — {title} — because: {why}",
-		KindRunStarted:          "{item} claimed and started as {run}. Selected by {by}: {reason}",
+		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
+		KindWorkPickedUp:        "{item} was taken up in conversation: {title}",
+		KindWorkCarriedOut:      "{item} was closed by the conversation carrying it: {why}",
+		KindRunStarted:          "{item} claimed and started as {run}, on account {account} at configuration {config}. Selected by {by}: {reason}",
 		KindChecksPassed:        "Checks passed on {item}.",
 		KindChecksFailed:        "Checks failed on {item}: {command} exited {exit}.",
 		KindReviewApproved:      "Review of {item} approved.",
@@ -204,7 +207,10 @@ var developerVoice = voice{
 		KindItemReprioritized:   "{item} sits at {priority} now. What I build doesn't change with the order it is queued in.",
 		KindWorkApproved:        "The operator approved that one, so {item} is work somebody will be given: {title}, for {goal}.",
 		KindWorkDeclined:        "Proposed work was turned down before it reached anybody — {title} — because: {why}",
-		KindRunStarted:          "I've picked up {item} as {run}. It came to me from {by}: {reason}",
+		KindWorkHandedOff:       "{item} will never reach me: it is carried by {executor} rather than by a run, because {why}",
+		KindWorkPickedUp:        "Somebody has started {item} in conversation: {title}. There is no worktree and no diff in that.",
+		KindWorkCarriedOut:      "{item} is finished without a change of mine ever being written: {why}",
+		KindRunStarted:          "I've picked up {item} as {run}, on account {account} at configuration {config}. It came to me from {by}: {reason}",
 		KindChecksPassed:        "Checks are green on {item}. I ran them before calling anything done.",
 		KindChecksFailed:        "Checks are red on {item}: {command} exited {exit}. That is my next attempt, not somebody else's problem.",
 		KindReviewApproved:      "The reviewer approved my change on {item}.",
@@ -247,7 +253,10 @@ var reviewerVoice = voice{
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:        "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
-		KindRunStarted:          "{item} is under way as {run}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
+		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
+		KindWorkPickedUp:        "{item} is under way in conversation: {title}. Nothing is coming to me for a verdict on it.",
+		KindWorkCarriedOut:      "{item} is done and was never judged, because there was no change to judge: {why}",
+		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
 		KindChecksPassed:        "The checks behind {item} pass. Passing checks are evidence, not a verdict.",
 		KindChecksFailed:        "The checks behind {item} fail: {command} exited {exit}. There is nothing for me to judge yet.",
 		KindReviewApproved:      "I approve {item}: correct and complete against the criteria it was given.",
@@ -289,7 +298,10 @@ var developmentManagerVoice = voice{
 		KindItemReprioritized:   "{item} is at {priority} now, so that is where it gets pulled from.",
 		KindWorkApproved:        "{item} was approved and is in my queue: {title}, for {goal}.",
 		KindWorkDeclined:        "{title} was declined, so nothing about it ever reaches my queue: {why}",
-		KindRunStarted:          "I've pulled {item} off the queue, and it is claimed and started as {run}: {reason}",
+		KindWorkHandedOff:       "{item} is out of what I pull: it is carried by {executor}, so a run would only spend itself on it — {why}",
+		KindWorkPickedUp:        "{item} is being carried in conversation now: {title}. It stays in flight until whoever holds it closes it.",
+		KindWorkCarriedOut:      "{item} is done, closed by the conversation that carried it rather than by a run: {why}",
+		KindRunStarted:          "I've pulled {item} off the queue, and it is claimed and started as {run}, on account {account} at configuration {config}: {reason}",
 		KindChecksPassed:        "{item} cleared its checks and is on to review.",
 		KindChecksFailed:        "{item} came back from its checks: {command} exited {exit}. It routes to repair with that intact.",
 		KindReviewApproved:      "{item} is approved and clear to integrate.",
@@ -332,7 +344,10 @@ var productManagerVoice = voice{
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
 		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted as {item}: {title}, serving {goal}.",
 		KindWorkDeclined:        "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
-		KindRunStarted:          "Work started on {item} as {run}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
+		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
+		KindWorkPickedUp:        "Somebody has taken {item} up: {title}. What the work serves is unchanged by who carries it.",
+		KindWorkCarriedOut:      "{item} is delivered, in a conversation rather than in a change: {why}",
+		KindRunStarted:          "Work started on {item} as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
 		KindChecksPassed:        "{item} passed its checks — progress on what it was admitted for.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. Nothing about what it is for has changed.",
 		KindReviewApproved:      "{item} was approved: what was admitted is what was built.",
@@ -375,7 +390,10 @@ var architectVoice = voice{
 		KindItemReprioritized:   "{item} moved to {priority}, which changes the order and nothing about the design it derives from.",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, under {goal}. What it may become is bounded by the design it derives from.",
 		KindWorkDeclined:        "{title} was declined, and the shape of the system is unchanged by work nobody started: {why}",
-		KindRunStarted:          "{item} is under way as {run}, chosen by {by}: {reason}. The design it derives from is unchanged.",
+		KindWorkHandedOff:       "{item} is executed by {executor} rather than by a run, and saying so is what keeps a run from discovering it by refusing an empty diff: {why}",
+		KindWorkPickedUp:        "{item} has been taken up in conversation: {title}. What it produces is a judgment rather than a diff.",
+		KindWorkCarriedOut:      "{item} is carried out, and what it settled is in the documents rather than in a promotion: {why}",
+		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. The design it derives from is unchanged.",
 		KindChecksPassed:        "{item} passed its checks. The gate held.",
 		KindChecksFailed:        "{item} failed its checks: {command} exited {exit}. A gate that catches this is a gate doing its job.",
 		KindReviewApproved:      "{item} was approved against the design it derives from.",
@@ -414,6 +432,131 @@ var voices = map[string]voice{
 	string(domain.RoleDevelopmentManager): developmentManagerVoice,
 	string(domain.RoleProductManager):     productManagerVoice,
 	string(domain.RoleArchitect):          architectVoice,
+}
+
+// Whose move it is, once this has been said.
+//
+// A thread is a narrative and a narrative goes quiet — a run takes an hour, a
+// handoff waits on a role opening a conversation, an item sits in the queue for
+// a night. The silence after the last message is the problem: it reads the same
+// whether somebody is working, somebody is waiting to be asked, or nobody at all
+// holds the ball. An operator reading a thread the morning after should never
+// have to reconstruct which of those it was.
+//
+// So every message says what follows it and whose it is to make. It is one table
+// keyed by the kind rather than a clause per persona, for the same reason the
+// severity mark is: whose move follows a promotion is a fact about the state of
+// the work, identical whoever is narrating it, and six paraphrases of one fact
+// are six chances to state it differently. The persona's own line is still the
+// whole of what the persona says.
+//
+// It is on every message rather than only on the ones that look final, because
+// which message turns out to be a thread's last is not knowable when it is
+// written: a run that dies, a sink that stops, a role that never picks the work
+// up. A guarantee that held only for the messages somebody predicted would be
+// last is not the guarantee.
+const nextMoveLead = " Next: "
+
+var nextMoves = map[Kind]string{
+	// Work sitting in the backlog. What follows is the harness choosing it, which
+	// is the one move in this whole table that happens without anybody deciding
+	// anything.
+	KindItemAdmitted:      "the harness's, when this reaches the top of the queue and a run is free.",
+	KindItemDecomposed:    "the harness's, when this reaches the top of the queue and a run is free.",
+	KindItemAttributed:    "the harness's, when this reaches the top of the queue and a run is free.",
+	KindItemReprioritized: "the harness's, and this is where it now gets pulled from.",
+	KindWorkApproved:      "the harness's, when this reaches the top of the queue and a run is free.",
+	KindWorkDeclined:      "nobody's — nothing was created, and nothing follows.",
+	// Work a conversation carries. The handoff is the one state where the thread
+	// waits on a person opening a conversation rather than on anything the harness
+	// will do by itself, which is exactly the silence this exists to name.
+	// The clause here is the one an item's marker does not name a role for, which
+	// is work marked before it could. Where the marker names one, handedOffMove
+	// says whose it is instead: the wait between the handoff and the pickup is the
+	// longest silence in any thread, and the role holding the item is the whole of
+	// what a reader wants from it.
+	KindWorkHandedOff:  "the role that carries it, in conversation — no run will ever be started for this.",
+	KindWorkPickedUp:   "the role carrying it, until the work is done and the item closed.",
+	KindWorkCarriedOut: "nobody's — the item is done.",
+	// One run's own arc. Each of these is followed by the next by itself, so what
+	// they say is who is working rather than who is being waited on.
+	KindRunStarted:     "the developer's, until the checks say otherwise.",
+	KindChecksPassed:   "the reviewer's — a verdict on the change.",
+	KindChecksFailed:   "the developer's — another attempt at the same item.",
+	KindReviewApproved: "the harness's — the promotion onto the target branch.",
+	KindReviewRepairs:  "the developer's — the findings as written.",
+	KindPromoted:       "the harness's — publishing the change where the product publishes.",
+	KindPublished:      "the forge's, until the request merges.",
+	KindMergeQueued:    "the forge's, until it settles.",
+	KindMergeCompleted: "nobody's — the item is done.",
+	KindRunParked:      "whatever it is waiting on; the run resumes from its own record once that clears.",
+	KindRunContinued:   "the developer's, from where the change stopped.",
+	// Work that stopped and stayed stopped, and capacity that ran out. Neither
+	// clears on its own, which is why naming who has to act on it is the whole of
+	// what a reader needs.
+	KindBlockerRecorded: "the development manager's, in triage — nothing moves this item until it is decided.",
+	// The clause deliberately says nothing about when. Whether the provider named a
+	// moment the capacity comes back is the message's own to say, and a whose-move
+	// clause that implied one would be the sink inventing the fact the record was
+	// careful not to claim.
+	KindUsageLimitExhausted: "the provider's — nothing here moves while the limit stands.",
+	// What an agent said in its own words. A report asks for nothing by design and
+	// says so; the other three are all waiting on the operator.
+	KindReportFiled:    "nobody's — a report asks for nothing, and the work carried on.",
+	KindProposalRaised: "the operator's — nothing reaches the document until they decide it.",
+	KindExchangeTurn:   "the operator's, until the exchange is answered.",
+	KindExchangeClosed: "back to the work the exchange was holding.",
+	// The operator's switches and the session that chooses work. These are about
+	// the whole line rather than one item, and every one of them is waiting on
+	// somebody by name.
+	KindIntakeHeld:     "the operator's — nothing new is chosen until intake is released.",
+	KindIntakeReleased: "the harness's — the backlog is being pulled from again.",
+	KindHoldPlaced:     "the operator's — nothing runs until the hold is lifted.",
+	KindHoldLifted:     "the harness's — every parked run resumes from its own record.",
+	KindWatchStarted:   "the harness's — the queue is pulled from until somebody stops it.",
+	KindWatchIdle:      "the product manager's — nothing is chosen until work that is ready is admitted.",
+	KindWatchBraked:    "the operator's — choosing resumes when intake is released.",
+	KindWatchResumed:   "the harness's — work is being chosen again.",
+	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
+	KindLineWaiting:    "the operator's — this stands until somebody clears what stopped it.",
+	KindCatchUpDigest:  "nobody's — the record holds all of it, and the thread carries on from here.",
+}
+
+// nextMove is whose move follows one event, and says whether anything does. A
+// kind nothing answers for is a kind added to the vocabulary without anybody
+// deciding what a reader is supposed to do about it, which is a mistake in this
+// table rather than in any record — so it is refused the way a missing voice line
+// is, rather than posted as a message that leaves the reader exactly where this
+// exists to stop leaving them.
+func nextMove(event Event) (string, bool) {
+	// Work already marked for a conversation is not queued for a run and never
+	// will be, so the queue's answer would be telling a reader to expect something
+	// that cannot come. The handoff's answer is the true one, whether the marker
+	// arrived with the admission or afterwards.
+	if strings.TrimSpace(event.Detail.Executor) != "" {
+		switch event.Kind {
+		case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized, KindWorkHandedOff:
+			return handedOffMove(event.Detail.Executor), true
+		}
+	}
+	move, ok := nextMoves[event.Kind]
+	return move, ok
+}
+
+// handedOffMove is whose move follows work only a conversation will carry. It
+// names the role the marker names, because nothing else in that stretch of the
+// thread does: the handoff is followed by however long it takes somebody to open
+// the conversation, and until the pickup says who started, this clause is the
+// only thing standing between a reader and an unattributed silence.
+//
+// A marker that names no role falls back to the clause that says a role carries
+// it without saying which. That is what the record holds, and a thread that
+// named a role the marker did not would send the operator to the wrong one.
+func handedOffMove(executor string) string {
+	if role := domain.WorkItemExecutor(strings.TrimSpace(executor)).Role(); role != "" {
+		return "the " + role.Title() + "'s, in conversation — no run will ever be started for this."
+	}
+	return nextMoves[KindWorkHandedOff]
 }
 
 // The words each severity is said in, and the decoration that is added to them.
@@ -474,6 +617,10 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 	if err != nil {
 		return Message{}, fmt.Errorf("render %s as the %s: %w", event.Kind, speaker.Key(), err)
 	}
+	move, ok := nextMove(event)
+	if !ok {
+		return Message{}, fmt.Errorf("render %s: nothing says whose move follows it", event.Kind)
+	}
 	message := Message{
 		SchemaVersion: SchemaVersion,
 		Kind:          event.Kind,
@@ -484,7 +631,7 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 		Speaker:    speaker.Key(),
 		Identity:   speaker.Identity(),
 		Severity:   event.Severity,
-		Body:       bound(severityMark(event.Severity)+said, event.Refs),
+		Body:       bound(ended(severityMark(event.Severity)+said), nextMoveLead+move, event.Refs),
 		Refs:       event.Refs,
 		At:         event.At.UTC(),
 	}
@@ -510,6 +657,8 @@ func (e Event) fields(topic Topic) map[string]string {
 		"item":     stated(itemOf(e.Refs, topic), "an unnamed work item"),
 		"run":      stated(e.Refs.RunID, "an unrecorded run"),
 		"by":       stated(detail.SelectedBy, "nobody the record names"),
+		"account":  stated(detail.Account, "an account the record does not name"),
+		"config":   stated(detail.Configuration, "a configuration the record does not name"),
 		"reason":   stated(detail.SelectionReason, "no reason recorded"),
 		"command":  stated(detail.Command, "a check the record does not name"),
 		"exit":     strconv.Itoa(detail.ExitCode),
@@ -529,6 +678,7 @@ func (e Event) fields(topic Topic) map[string]string {
 		"goal":     stated(detail.Goal, "no goal the record names"),
 		"parent":   stated(detail.Parent, "an item the record does not name"),
 		"priority": priorityOf(detail),
+		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),
 		"stopped":  stated(detail.Stopped, "nothing the record names has stopped it"),
 		"age":      ageOf(detail.Since, e.At),
 		"ready":    countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
@@ -560,6 +710,28 @@ func substitute(line string, fields map[string]string) (string, error) {
 		built.WriteString(value)
 		rest = remainder
 	}
+}
+
+// carrierOf is what a message calls the thing carrying an item, from the marker
+// the record holds. A marker that names the role is said as that role's
+// conversation, which is the whole of what the handoff was missing: a thread
+// that names who holds the work is one an operator can read without waiting for
+// the pickup to tell them.
+//
+// The bare marker is said as a role's conversation and no more, because that is
+// all it says. Work marked before the marker carried a role is not attributed by
+// this, and inventing a role for it would attribute it to the wrong one. A marker
+// that is neither is given exactly as it was written, for the reason reading one
+// is permissive at all: somebody meant it to be something other than a run.
+func carrierOf(executor string) string {
+	marker := domain.WorkItemExecutor(strings.TrimSpace(executor))
+	if role := marker.Role(); role != "" {
+		return "the " + role.Title() + "'s conversation"
+	}
+	if marker == domain.WorkItemExecutorConversation {
+		return "a role's conversation"
+	}
+	return string(marker)
 }
 
 func stated(value, absence string) string {
@@ -680,21 +852,46 @@ func shortCommit(commit string) string {
 	return trimmed[:12]
 }
 
+// ended closes the persona's own sentence before the whose-move clause is put
+// after it. Most voice lines finish on a substituted value — a reason somebody
+// typed, an agent's own words — and what somebody wrote rarely ends in a full
+// stop, so without this the clause runs straight into the last word of the
+// account and reads as part of what was said rather than as the harness's note
+// about where the thread stands.
+func ended(said string) string {
+	trimmed := strings.TrimRight(said, " \t\n")
+	if trimmed == "" {
+		return trimmed
+	}
+	switch trimmed[len(trimmed)-1] {
+	case '.', '!', '?':
+		return trimmed
+	default:
+		return trimmed + "."
+	}
+}
+
 // bound cuts a body that would not survive the surface it is posted to, and says
 // it was cut and where the whole is. Cutting rather than splitting is deliberate:
 // a message broken into four to fit is four messages in a narrative that had one
 // thing to say.
-func bound(body string, refs Refs) string {
-	if len(body) <= MaxBodyBytes {
-		return body
+//
+// The tail is the part that is kept whatever else goes. It is the whose-move
+// clause, and it is the one sentence a cut must not take: a reader given a
+// truncated account of what happened can go to the record for the rest, and a
+// reader given no idea who holds the ball has nothing to go to.
+func bound(body, tail string, refs Refs) string {
+	limit := MaxBodyBytes - len(tail)
+	if len(body) <= limit {
+		return body + tail
 	}
 	note := fmt.Sprintf(bodyCutNote, refs.Record())
-	cut := MaxBodyBytes - len(note)
+	cut := limit - len(note)
 	if cut < 0 {
 		cut = 0
 	}
 	for cut > 0 && !utf8.RuneStart(body[cut]) {
 		cut--
 	}
-	return strings.TrimRight(body[:cut], " \n\t") + note
+	return strings.TrimRight(body[:cut], " \n\t") + note + tail
 }

@@ -234,6 +234,20 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	// specifications directory. That is written down here rather than left
 	// implied, because a criterion nobody can see going unmet is one that goes
 	// unmet quietly.
+	//
+	// For the same reason: the displacement rule the bundle's copy of this
+	// persona now carries -- that a priority change names the item it pushed
+	// back -- is deliberately not asserted here, and this repository's product
+	// manager does not yet follow it. The persona read above is
+	// `.yoyodyne/personas/product-manager.md`, inside the configuration
+	// directory the protected-path gate refuses a developer's diff for, and
+	// yoyodyne-ifd.126 grants no exception: none of its title, description,
+	// design guidance, or acceptance criteria carries a `protected-path grant:`
+	// line, and nothing a run writes can add one. So that item shipped its
+	// bundle half and not this one. The assertion belongs here, beside the copy
+	// a run in this repository actually reads, the moment an item admits the
+	// path; until then this is the record that the silence is a decision
+	// somebody has to make rather than an omission nobody noticed.
 }
 
 func TestChatRefusesArgumentsItCannotHonor(t *testing.T) {
@@ -696,6 +710,20 @@ func TestConfigShowExplainsInheritance(t *testing.T) {
 	// The persona body belongs in a prompt, not in a diagnostic listing.
 	if strings.Contains(output, "You implement one bounded work item") {
 		t.Errorf("config show inlined a persona body:\n%s", output)
+	}
+	// The revision names these values as one thing, so what a run recorded and
+	// what the configuration says can be held up against each other.
+	resolved, err := config.LoadResolved(path)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	if !strings.Contains(output, "# revision: "+resolved.Config.Revision()) {
+		t.Errorf("config show does not name the revision in force:\n%s", output)
+	}
+	// A project that names no account runs under one all the same, and says so
+	// where an operator reads what is in force.
+	if !strings.Contains(output, "account: "+config.DefaultAccountAlias) {
+		t.Errorf("config show does not say which account the agents run under:\n%s", output)
 	}
 }
 

@@ -79,12 +79,21 @@ func TestScaffoldedProjectLoadsWithoutTheBundle(t *testing.T) {
 		if strings.HasPrefix(agent.Persona.Source, BuiltinV1) {
 			t.Errorf("agent %q persona source = %q, want the project directory", name, agent.Persona.Source)
 		}
-		for _, field := range []string{"role", "backend", "model", "instances", "persona"} {
+		// The account the agent runs under is stated in the generated file like
+		// everything else about it, rather than left to be derived from a mapping
+		// the operator would have to know exists.
+		if agent.Account != DefaultAccountAlias {
+			t.Errorf("agent %q account = %q, want %q", name, agent.Account, DefaultAccountAlias)
+		}
+		for _, field := range []string{"role", "backend", "model", "account", "instances", "persona"} {
 			key := "agents." + name + "." + field
 			if got := resolved.Origins[key]; got != resolved.Path {
 				t.Errorf("origin[%q] = %q, want %q", key, got, resolved.Path)
 			}
 		}
+	}
+	if aliases := resolved.Config.AccountAliases(); len(aliases) != 1 || aliases[0] != DefaultAccountAlias {
+		t.Errorf("accounts = %v, want the one account the generated file states", aliases)
 	}
 }
 
@@ -339,6 +348,43 @@ func TestScaffoldCarriesTheBriefingDiscipline(t *testing.T) {
 		"Ask exactly one question per reply",
 		"open with how many there are",
 		"say there are three, say the order you will ask them in",
+	} {
+		if !strings.Contains(persona, want) {
+			t.Errorf("generated product-manager persona does not carry %q", want)
+		}
+	}
+}
+
+// A priority change is where the human's directive meets everything already
+// queued behind it, and the item it pushed back is only cheap to argue about in
+// the reply that made the change. That the product manager names the
+// displacement has to ship with the bundle, for the same reason the briefing
+// discipline does: it is how the product manager behaves in every project, not
+// something this one taught it.
+//
+// This covers the bundle and nothing else. A run in this repository reads the
+// project's own persona copy rather than the bundle's, and that copy is a
+// protected path yoyodyne-ifd.126 grants no exception for, so it is unchanged
+// and no check here or anywhere else asserts on it.
+// TestChatResolvesTheConfiguredProductManager in internal/cli records why,
+// beside the copy that would carry the assertion.
+func TestScaffoldCarriesTheDisplacementRule(t *testing.T) {
+	t.Parallel()
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	var persona string
+	for _, agent := range generated.Agents {
+		if agent.Role == domain.RoleProductManager {
+			persona = agent.Persona.Text
+		}
+	}
+	if persona == "" {
+		t.Fatal("the generated project has no product-manager persona")
+	}
+	for _, want := range []string{
+		"Report what every priority change displaces",
+		"the item or items that were next and are no longer",
+		"Say plainly when a change displaces nothing",
 	} {
 		if !strings.Contains(persona, want) {
 			t.Errorf("generated product-manager persona does not carry %q", want)

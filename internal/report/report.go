@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -84,6 +85,26 @@ func (s Severity) Valid() bool {
 	}
 }
 
+// rank orders the severities by how much attention each asks for. It is what
+// lets a pile be read worst-first: a reader working through what nobody has
+// dealt with yet wants the thing already costing somebody before the thing that
+// asks for nothing.
+func (s Severity) rank() int {
+	switch s {
+	case SeverityCritical:
+		return 0
+	case SeverityWarning:
+		return 1
+	case SeverityNote:
+		return 2
+	default:
+		// A severity outside the vocabulary cannot be stored, so this is reached
+		// only by a caller ordering something it built itself. It sorts last
+		// rather than first: an unrecognized word is not evidence of urgency.
+		return 3
+	}
+}
+
 // Entry is one report exactly as an agent wrote it: a severity and the text.
 // Everything else about a report — which role, which run, which work item — is
 // what the harness knows and the agent does not get to assert.
@@ -139,6 +160,14 @@ type Report struct {
 }
 
 var idPattern = regexp.MustCompile(`^report-[a-f0-9]{32}$`)
+
+// ValidID reports whether an identifier names a report. It is exported because
+// the identifier travels now: a report is read out of the pile and named back by
+// whoever says what became of it, and a handling recorded against an identifier
+// nothing checked is a handling for a report that does not exist.
+func ValidID(id string) bool {
+	return idPattern.MatchString(strings.TrimSpace(id))
+}
 
 func NewID() (string, error) {
 	bytes := make([]byte, 16)
@@ -293,9 +322,166 @@ func Collect(entries []Entry, attribution Attribution, now time.Time) ([]Report,
 	return collected, nil
 }
 
+// HandlingSchemaVersion is versioned independently of the report it is about. A
+// handling is a different record with a different lifetime: the report is
+// written once by whoever noticed something, and what became of it is written
+// later by whoever dealt with it.
+const HandlingSchemaVersion = 1
+
+// MaxHandlingReasonBytes bounds what a handling may say became of a report. It
+// matches the bound on the report's own text, because saying what was done about
+// something is not a smaller statement than noticing it.
+const MaxHandlingReasonBytes = 4 << 10
+
+// Handling is what became of one collected report, recorded beside the pile
+// rather than on the report.
+//
+// The report itself stays exactly as it was written — that is what makes the
+// pile evidence rather than a worklist somebody has been editing — so a
+// disposition is its own append-only record keyed by the report it settles.
+// What it buys is the distinction the pile could not make before: a report
+// somebody has acted on and a report nobody has read look identical in a listing
+// of everything ever reported, and the second is the only one that still needs
+// anybody.
+//
+// It records no outcome vocabulary on purpose. "Admitted as work", "already
+// fixed", "not worth doing" are all the same fact to everything that reads this
+// — somebody looked and decided — and the reason says which, in the words of
+// whoever decided it.
+type Handling struct {
+	SchemaVersion int `json:"schema_version"`
+	// ReportID is the report this settles. It is the whole of the key: a report
+	// handled twice is two records and the later one is what is read, which is
+	// the right way round for an append-only log.
+	ReportID string `json:"report_id"`
+	// Role is the contract whoever handled it worked under and Agent the
+	// configured agent that filled it, recorded for the reason the report records
+	// them: "the product manager dealt with this" and "which product manager" are
+	// different questions in a project that configures two.
+	Role  domain.AgentRole `json:"role"`
+	Agent string           `json:"agent,omitempty"`
+	// RunID is the invocation the handling was recorded in, which for the role
+	// that triages the pile is a conversation. It leads back to what was said to
+	// arrive at it, which is the part the reason cannot carry.
+	RunID        string           `json:"run_id"`
+	ProductID    domain.ProductID `json:"product_id"`
+	RepositoryID string           `json:"repository_id"`
+	// Reason is what was done about the report, or why it needed nothing. It is
+	// required: a handling with no reason takes a report out of everybody's view
+	// and says nothing about why, which is worse than leaving it in.
+	Reason     string    `json:"reason"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// Validate reports every contract violation in the handling at once.
+func (h Handling) Validate() error {
+	var problems []error
+	if h.SchemaVersion != HandlingSchemaVersion {
+		problems = append(problems, fmt.Errorf("schema_version must be %d", HandlingSchemaVersion))
+	}
+	if !ValidID(h.ReportID) {
+		problems = append(problems, errors.New("report id is invalid"))
+	}
+	if err := domain.ValidateIdentifier("role", string(h.Role)); err != nil {
+		problems = append(problems, err)
+	}
+	if strings.TrimSpace(h.RunID) == "" {
+		problems = append(problems, errors.New("run id is required"))
+	}
+	if err := domain.ValidateIdentifier("product id", string(h.ProductID)); err != nil {
+		problems = append(problems, err)
+	}
+	if err := domain.ValidateIdentifier("repository id", h.RepositoryID); err != nil {
+		problems = append(problems, err)
+	}
+	switch reason := strings.TrimSpace(h.Reason); {
+	case reason == "":
+		problems = append(problems, errors.New("reason is required"))
+	case len(reason) > MaxHandlingReasonBytes:
+		problems = append(problems, fmt.Errorf("reason is %d bytes, limit is %d", len(reason), MaxHandlingReasonBytes))
+	}
+	if h.RecordedAt.IsZero() {
+		problems = append(problems, errors.New("recorded_at is required"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid report handling: %w", err)
+	}
+	return nil
+}
+
+// Handled indexes handlings by the report each is about, keeping the most
+// recently recorded one where a report has been handled more than once. The
+// later record is the current answer for the same reason the log is appended to
+// rather than rewritten: what was decided first is history, and history is not
+// what a listing is reporting.
+func Handled(handlings []Handling) map[string]Handling {
+	handled := make(map[string]Handling, len(handlings))
+	for _, handling := range handlings {
+		existing, seen := handled[handling.ReportID]
+		if seen && existing.RecordedAt.After(handling.RecordedAt) {
+			continue
+		}
+		handled[handling.ReportID] = handling
+	}
+	return handled
+}
+
+// Unhandled is the reports nobody has said what became of, in the order the pile
+// holds them. It is the working set: what a role that triages the pile is
+// actually being asked to look at, as opposed to everything that has ever been
+// reported.
+func Unhandled(reports []Report, handlings []Handling) []Report {
+	handled := Handled(handlings)
+	var open []Report
+	for _, reported := range reports {
+		if _, done := handled[reported.ID]; done {
+			continue
+		}
+		open = append(open, reported)
+	}
+	return open
+}
+
+// BySeverity orders reports worst first, and the most recent first within one
+// severity. It copies rather than sorting in place, because the pile's own order
+// is the order it was reported in and nothing that reads it may disturb that.
+//
+// Recency inside a severity is what makes a bounded listing cut the right end: a
+// critical report from this morning outranks a note from last week whichever way
+// the bound falls, and among criticals the one nobody has got to yet is the
+// newest.
+func BySeverity(reports []Report) []Report {
+	ordered := make([]Report, len(reports))
+	copy(ordered, reports)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Severity != ordered[j].Severity {
+			return ordered[i].Severity.rank() < ordered[j].Severity.rank()
+		}
+		return ordered[i].RecordedAt.After(ordered[j].RecordedAt)
+	})
+	return ordered
+}
+
+// Render describes what became of one report, for a listing that has just shown
+// the report itself. It is indented under it and folded to one line: the reason
+// came from whoever handled the report, and a listing is a listing.
+func (h Handling) Render() string {
+	handler := string(h.Role)
+	if h.Agent != "" && h.Agent != string(h.Role) {
+		handler = h.Agent + " (" + string(h.Role) + ")"
+	}
+	return fmt.Sprintf("      handled %s by the %s (%s): %s\n",
+		h.RecordedAt.UTC().Format(time.RFC3339), handler, h.RunID, strings.Join(strings.Fields(h.Reason), " "))
+}
+
 // Render describes one collected report for whoever is reading the pile. The
 // message came from a provider, so it is indented under the harness's own line
 // and never printed at the margin.
+//
+// The identifier leads the line because it is what a report is named by now.
+// Saying what became of one means naming it, and a listing that showed
+// everything about a report except the word for it would leave the reader
+// unable to act on what they had just read.
 func (r Report) Render() string {
 	var rendered strings.Builder
 	// The agent is named only where it says something the role does not, which
@@ -304,7 +490,7 @@ func (r Report) Render() string {
 	if r.Agent != "" && r.Agent != string(r.Role) {
 		reporter = r.Agent + " (" + string(r.Role) + ")"
 	}
-	fmt.Fprintf(&rendered, "  [%s] %s from the %s", r.Severity, r.RecordedAt.UTC().Format(time.RFC3339), reporter)
+	fmt.Fprintf(&rendered, "  %s [%s] %s from the %s", r.ID, r.Severity, r.RecordedAt.UTC().Format(time.RFC3339), reporter)
 	if r.WorkItemID != "" {
 		fmt.Fprintf(&rendered, " on %s", r.WorkItemID)
 	}
