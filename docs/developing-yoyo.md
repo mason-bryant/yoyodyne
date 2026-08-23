@@ -65,6 +65,17 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
+The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl` — do not count as a dirty tree. They are derived from a
+store that is authoritative elsewhere, nothing a release ships is built from
+them, and the walkthrough this gate runs rewrites them itself, so refusing on
+them would stall most days of a daily cadence. The cut commits them instead,
+as their own housekeeping commit placed after the last gate is green and before
+the tag, which keeps the tag naming a tree with nothing uncommitted in it
+rather than a clean tree with a footnote. On a day it had to make that commit
+it prints `git push --atomic origin main <tag>` as the publishing command,
+because origin does not have that commit and the branch has to carry it.
+
 It stops at the tag. Publishing is the `git push`, which is the irreversible
 half and what the release workflow acts on, so it stays something you do
 deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
