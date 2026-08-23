@@ -97,6 +97,24 @@ func Open(options Options) Console {
 	return terminal
 }
 
+// ThemeFor returns the theme a command that is not a conversation may dress its
+// output with. A conversation asks the console it opened, which knows what its
+// streams turned out to be; a command has only the writer it was handed, so this
+// asks that writer the same two questions — a terminal on the other end, and an
+// environment that permits dressing at all. Anything else, a redirected stream
+// or a buffer in a test among them, is the undressed theme, which is the same
+// answer `Open` gives for the same streams.
+func ThemeFor(out io.Writer, env func(string) string) Theme {
+	if env == nil {
+		env = os.Getenv
+	}
+	file, ok := out.(*os.File)
+	if !ok || !isTerminalStream(out) {
+		return Theme{}
+	}
+	return NewTheme(env, func() int { return terminalWidth(file.Fd()) })
+}
+
 // addressable reports whether these streams are a terminal this may draw a
 // composing region on.
 func addressable(in io.Reader, out io.Writer, env func(string) string) bool {

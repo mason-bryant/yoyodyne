@@ -1471,7 +1471,7 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// it is about to ask about, so the operator reads what already happened
 		// first and is not answering a prompt while unaware of it.
 		s.reportAdmitted(out, reply)
-		reportFiled(out, s.state.Role, reply)
+		reportFiled(out, s.theme, s.state.Role, reply)
 		// What the product manager would not propose is put to the operator before
 		// anything else about the turn is settled, including a turn that went on to
 		// fail: a question it declined to answer for itself is the one thing here
@@ -1657,9 +1657,9 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 	fmt.Fprintf(out, "The product manager will not propose %d thing(s) until you answer. Nothing here was proposed or created.\n\n", len(concerns))
 	for _, concern := range concerns {
 		// A concern is dressed as what it is: the question in it gets the colour
-		// questions get, and the text says what kind of concern it is without the
-		// colour.
-		fmt.Fprint(out, s.theme.Questions(concern.Render()))
+		// questions get, the whole of it is weighted by what its kind asks for, and
+		// the marker and the headline say both without the colour.
+		fmt.Fprint(out, concern.Render(s.theme))
 		fmt.Fprintln(out)
 		line, err := s.ask(ctx, screen, fmt.Sprintf(answerPrompt, concern.ID))
 		if errors.Is(err, io.EOF) {

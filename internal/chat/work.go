@@ -9,6 +9,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // maxSurveyItems bounds how many items of one kind a survey lists. What an
@@ -298,8 +299,15 @@ type RunReport struct {
 	// themselves are in the collected pile that /reports shows; the count is
 	// here because a run finishing is when the operator finds out there is
 	// something new in it.
-	Reported      int    `json:"reported,omitempty"`
-	ReportProblem string `json:"report_problem,omitempty"`
+	Reported int `json:"reported,omitempty"`
+	// ReportedWorst is the severity of the most attention-seeking of them. A
+	// count on its own reads the same for three notes and for something already
+	// costing somebody, which is how a critical report goes unread by an operator
+	// who was told about it. It is empty on a run that reported nothing, and on a
+	// record written before this was carried, which is why the line below falls
+	// back to the count alone rather than claiming a severity it does not have.
+	ReportedWorst report.Severity `json:"reported_worst,omitempty"`
+	ReportProblem string          `json:"report_problem,omitempty"`
 }
 
 // RunChanges is what one recorded run changed, as the durable record holds it.
@@ -754,7 +762,12 @@ func padLeft(value string, width int) string {
 // Render describes a finished run to the operator. It reports the artifacts a
 // failed run preserved as carefully as it reports a successful promotion:
 // either way they are what the operator's next decision is about.
-func (r RunReport) Render() string {
+//
+// One line in it is dressed: what the run's agents reported, by the worst of
+// what they reported. A finished run scrolls past in the middle of a
+// conversation the operator is holding about something else, and that is the
+// line they have to be able to catch without stopping to read the rest.
+func (r RunReport) Render(theme console.Theme) string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "%s\n", r.Headline())
 	if r.RunID != "" {
@@ -773,7 +786,9 @@ func (r RunReport) Render() string {
 		fmt.Fprintf(&rendered, "  relaunches after a provider death: %d\n", r.TransientRelaunches)
 	}
 	if r.Reported > 0 {
-		fmt.Fprintf(&rendered, "  reported %d thing(s) without stopping; /reports shows them\n", r.Reported)
+		rendered.WriteString(theme.Severity(console.Severity(r.ReportedWorst),
+			fmt.Sprintf("  %sreported %d thing(s) without stopping%s; /reports shows them\n",
+				r.ReportedWorst.Prefix(), r.Reported, worstReported(r.ReportedWorst))))
 	}
 	if r.ReportProblem != "" {
 		fmt.Fprintf(&rendered, "  %s\n", singleLine(r.ReportProblem, MaxOperatorMessageBytes))
@@ -782,6 +797,16 @@ func (r RunReport) Render() string {
 		fmt.Fprintf(&rendered, "  failure: %s\n", singleLine(r.Failure, MaxOperatorMessageBytes))
 	}
 	return rendered.String()
+}
+
+// worstReported names the worst severity a run reported anything at, and says
+// nothing where the record does not carry one — a run from before this was
+// recorded, which must read as a count rather than as a pile of notes.
+func worstReported(worst report.Severity) string {
+	if worst == "" {
+		return ""
+	}
+	return ", the worst of them " + string(worst)
 }
 
 // Headline states in one line what became of a run. It is what the operator

@@ -300,6 +300,83 @@ func TestARenderedReportNamesItselfAndWhatBecameOfIt(t *testing.T) {
 	}
 }
 
+// Colour is an addition everywhere in this harness and never the carrier of
+// meaning, so the severity a report was filed at has to be findable with every
+// escape stripped out of the listing: piped to a file, read under NO_COLOR, or
+// shown on a terminal that says it is dumb. The marker is what does that, and a
+// reader scanning the margin has to be able to stop at the critical one without
+// reading the note above it.
+func TestASeverityIsMarkedWhereNothingMayBeDressed(t *testing.T) {
+	t.Parallel()
+
+	critical := piledReport("report-00000000000000000000000000000001", SeverityCritical, 1).Render()
+	warning := piledReport("report-00000000000000000000000000000002", SeverityWarning, 2).Render()
+	note := piledReport("report-00000000000000000000000000000003", SeverityNote, 3).Render()
+	if !strings.HasPrefix(critical, "  !! report-") {
+		t.Fatalf("a critical report is not marked at the margin: %q", critical)
+	}
+	if !strings.HasPrefix(warning, "  !  report-") {
+		t.Fatalf("a warning is not marked at the margin: %q", warning)
+	}
+	// A note asks for nothing, and a mark on every line marks none of them.
+	if !strings.HasPrefix(note, "     report-") {
+		t.Fatalf("a note was marked as though it wanted attention: %q", note)
+	}
+	// The marker is padded rather than inserted, so the identifiers still read
+	// down the page as a column once the criticals are marked out of them.
+	columns := make(map[int]struct{})
+	for _, rendered := range []string{critical, warning, note} {
+		columns[strings.Index(rendered, "report-")] = struct{}{}
+	}
+	if len(columns) != 1 {
+		t.Fatalf("the identifiers no longer line up: %v", columns)
+	}
+	// The severity is still stated in words as well, so nothing rests on the
+	// reader knowing what the mark means.
+	if !strings.Contains(critical, "[critical]") || !strings.Contains(note, "[note]") {
+		t.Fatalf("a rendered report no longer says its severity in words: %q / %q", critical, note)
+	}
+}
+
+// A summary that names a pile without listing it owes the reader the one thing a
+// count cannot say: whether anything in there is already costing somebody.
+func TestASummaryOfAPileNamesTheWorstOfItAndHowManyOfWhat(t *testing.T) {
+	t.Parallel()
+
+	pile := []Report{
+		piledReport("report-00000000000000000000000000000001", SeverityNote, 1),
+		piledReport("report-00000000000000000000000000000002", SeverityWarning, 2),
+		piledReport("report-00000000000000000000000000000003", SeverityNote, 3),
+	}
+	if worst := Worst(pile); worst != SeverityWarning {
+		t.Fatalf("Worst() = %q, want %q", worst, SeverityWarning)
+	}
+	// Worst first, and a severity nothing was filed at is left out rather than
+	// counted at zero.
+	if tally := Tally(pile); tally != "warning 1, note 2" {
+		t.Fatalf("Tally() = %q", tally)
+	}
+	critical := piledReport("report-00000000000000000000000000000004", SeverityCritical, 4)
+	if worst := Worst(append(pile, critical)); worst != SeverityCritical {
+		t.Fatalf("Worst() = %q, want the critical one", worst)
+	}
+	// Nothing reported is not a severity, so a summary of it claims none.
+	if worst := Worst(nil); worst != "" {
+		t.Fatalf("Worst(nil) = %q, want no severity at all", worst)
+	}
+	if tally := Tally(nil); tally != "" {
+		t.Fatalf("Tally(nil) = %q", tally)
+	}
+	// A line of prose is marked with a separator where a listing pads a column,
+	// and a note is marked with nothing in either.
+	if prefix := SeverityCritical.Prefix(); prefix != "!! " {
+		t.Fatalf("Prefix() = %q", prefix)
+	}
+	if prefix := SeverityNote.Prefix(); prefix != "" {
+		t.Fatalf("a note carries a prefix: %q", prefix)
+	}
+}
+
 func piledReport(id string, severity Severity, minute int) Report {
 	return Report{
 		SchemaVersion: SchemaVersion,

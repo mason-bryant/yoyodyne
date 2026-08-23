@@ -12,6 +12,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -467,6 +468,8 @@ func checksBehind(state runstate.State) bool {
 // claims integration only from the recorded promotion itself, so a run that
 // ended any other way is never described as integrated.
 func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
+	// Read before the projection, which shadows the package this comes from.
+	worstReported := report.Worst(outcome.Reports)
 	report := chat.RunReport{
 		RunID:               outcome.RunID,
 		WorkItemID:          outcome.WorkItemID,
@@ -484,6 +487,7 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		ProviderStop:        outcome.ProviderStop,
 		Failure:             outcome.Failure,
 		Reported:            len(outcome.Reports),
+		ReportedWorst:       worstReported,
 		ReportProblem:       outcome.ReportProblem,
 	}
 	if outcome.Integration != nil {

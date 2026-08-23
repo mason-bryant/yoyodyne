@@ -1633,7 +1633,12 @@ than one wall of text; the frame is decoration exactly as the rule is, and where
 decoration is suppressed the same card is its heading with the body indented
 under it. The states work is in are coloured too, and the same way wherever they
 appear — running blue, blocked orange, done green, failed red — so `/status` is
-read down its aligned columns rather than picked out of ragged prose. Colour is
+read down its aligned columns rather than picked out of ragged prose. So is what
+a report or a concern is asking for: something already wrong is red and bold, a
+risk that has not cost anything yet is orange, and a note is left plain, because
+a listing where every line is coloured has no emphasis left for the line that
+matters. That one carries a mark as well as a colour, `!!` or `!` at the margin,
+which is the part that survives a terminal that cannot be dressed at all. Colour is
 an addition to the text and never what carries the meaning — the question still
 ends in a question mark, the proposal still says what it is proposing, the group
 still says "blocked (2)" in words — so a transcript with the escapes stripped
@@ -1715,6 +1720,20 @@ filtered; an agent that judges which of its own observations are worth your
 attention is a later question, and nothing here does it. The severities are
 deliberately not the reviewer's `blocker`/`major`/`minor`: a finding decides
 whether a change is repaired, and a report decides nothing.
+
+The severity is the one recorded signal of importance, so every surface that
+shows a report renders it rather than merely printing the word. In a listing it
+is a mark in the column before the identifier — `!!` for critical, `!` for
+warning, nothing for a note — and a colour where the terminal permits one, red
+and bold for critical and orange for warning. A run's closing lines carry the
+same signal without listing the pile: `!! reported 3 thing(s) without stopping
+the run (critical 1, note 2)`. The mark is the part that always holds — piped to
+a file, read under `NO_COLOR`, or shown on a terminal that says it is `dumb`, a
+critical report still does not read like a note — and `--json` carries none of
+it, because there the severity is a field. A concern the product manager stops
+to ask is marked the same way, by kind: work it says would cut against a goal is
+critical, and the two that are questions about incomplete goals or about its own
+judgement are warnings.
 
 Volume is the risk this design has, and the answer to it is in the role
 contracts rather than in a filter. Every contract says what merits a report — a

@@ -188,6 +188,23 @@ attention is a later question, and nothing here does it. The severities are
 deliberately not the reviewer's `blocker`/`major`/`minor`: a finding decides
 whether a change is repaired, and a report decides nothing.
 
+The severity is the one recorded signal of importance, so every surface that
+shows you a report renders it rather than merely printing the word. In a listing
+it is a mark in the column before the identifier — `!!` for critical, `!` for
+warning, nothing for a note — and a colour where the terminal permits one, red
+and bold for critical and orange for warning. The mark is the part that always
+holds: piped to a file, read under `NO_COLOR`, or shown on a terminal that says
+it is `dumb`, a critical report still does not read like a note. `--json` carries
+none of it, because there the severity is a field.
+
+A run's closing lines carry the same signal without listing the pile. Instead of
+"reported 3 thing(s)" they say how many of what and mark themselves by the worst
+of them — `!! reported 3 thing(s) without stopping the run (critical 1, note 2)`
+— which is the difference between a line an operator can skip and one they
+cannot. What became of a report is printed under it undressed, whatever it was
+filed at: a plain line beneath a loud one is what says somebody has already dealt
+with that one.
+
 Volume is the risk this design has, and the answer to it is in the role
 contracts rather than in a filter. Every contract says what merits a report — a
 risk worked around, an assumption that may not hold, a defect or a stale

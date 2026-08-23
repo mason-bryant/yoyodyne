@@ -12,6 +12,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -342,7 +343,11 @@ func reportedOn(subject report.Report) string {
 // operator scanning it needs to know which of these still needs anybody, and a
 // report that has been dealt with looks exactly like one nobody has read
 // otherwise.
-func renderCollectedReports(reports []report.Report, handled map[string]report.Handling) string {
+// Each report is dressed by the severity it was filed at and what became of it
+// is not, which is the second thing this listing is saying: a report somebody
+// has already decided about no longer needs the reader's eye, whatever it was
+// filed at, and the plain line under a loud one says exactly that.
+func renderCollectedReports(theme console.Theme, reports []report.Report, handled map[string]report.Handling) string {
 	if len(reports) == 0 {
 		return "reports: nothing has been reported.\n"
 	}
@@ -364,7 +369,7 @@ func renderCollectedReports(reports []report.Report, handled map[string]report.H
 		fmt.Fprintf(&rendered, "  %d earlier report(s) are not listed here.\n", len(reports)-len(listed))
 	}
 	for _, reported := range listed {
-		rendered.WriteString(reported.Render())
+		rendered.WriteString(theme.Severity(console.Severity(reported.Severity), reported.Render()))
 		if handling, done := handled[reported.ID]; done {
 			rendered.WriteString(handling.Render())
 		}
@@ -375,14 +380,14 @@ func renderCollectedReports(reports []report.Report, handled map[string]report.H
 // reportFiled tells the operator what the role reported while it was answering,
 // and what happened to a report that could not be kept. It prints nothing when
 // there was nothing to report, which is the ordinary case.
-func reportFiled(out io.Writer, role domain.AgentRole, reply Reply) {
+func reportFiled(out io.Writer, theme console.Theme, role domain.AgentRole, reply Reply) {
 	if len(reply.Reports) == 0 && reply.ReportProblem == "" {
 		return
 	}
 	if len(reply.Reports) > 0 {
 		fmt.Fprintf(out, "The %s reported %d thing(s) for you:\n", RoleTitle(role), len(reply.Reports))
 		for _, reported := range reply.Reports {
-			fmt.Fprint(out, reported.Render())
+			fmt.Fprint(out, theme.Severity(console.Severity(reported.Severity), reported.Render()))
 		}
 	}
 	if reply.ReportProblem != "" {

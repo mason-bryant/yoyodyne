@@ -5,12 +5,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 )
 
@@ -174,6 +177,7 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 		fmt.Fprintf(stderr, "branch review failed: %v\n", err)
 	}
 	if outcome.ReviewID != "" {
+		theme := console.ThemeFor(stdout, os.Getenv)
 		reviewed := "reviewed"
 		if outcome.Shadow {
 			reviewed = "shadow-reviewed"
@@ -204,8 +208,15 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 		if outcome.RecordFailure != "" {
 			fmt.Fprintf(stderr, "the verdict above was not recorded: %s\n", outcome.RecordFailure)
 		}
+		// Marked and dressed by the worst of them, for the reason a run's own
+		// closing line is: this is one line under a verdict and a list of findings,
+		// and a count alone reads the same whether the reviewer noticed three
+		// routine things or one that is already costing somebody.
 		if len(outcome.Reports) > 0 {
-			fmt.Fprintf(stdout, "reported %d thing(s) beside the verdict; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
+			worst := report.Worst(outcome.Reports)
+			fmt.Fprint(stdout, theme.Severity(console.Severity(worst), fmt.Sprintf(
+				"%sreported %d thing(s) beside the verdict (%s); `yoyo reports` shows them, as does /reports in `yoyo chat`\n",
+				worst.Prefix(), len(outcome.Reports), report.Tally(outcome.Reports))))
 		}
 		if outcome.ReportProblem != "" {
 			fmt.Fprintln(stdout, outcome.ReportProblem)

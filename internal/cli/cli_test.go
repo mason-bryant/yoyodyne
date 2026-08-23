@@ -398,7 +398,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 		},
 	}}
 	var oneShot bytes.Buffer
-	printChatConcerns(&oneShot, domain.RoleProductManager, concerns)
+	printChatConcerns(&oneShot, console.Theme{}, domain.RoleProductManager, concerns)
 	for _, required := range []string{
 		"Nothing was proposed or created",
 		"yoyodyne chat",
@@ -421,7 +421,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	}
 
 	var quiet bytes.Buffer
-	printChatConcerns(&quiet, domain.RoleProductManager, nil)
+	printChatConcerns(&quiet, console.Theme{}, domain.RoleProductManager, nil)
 	printOpenConcerns(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no concerns printed %q", quiet.String())

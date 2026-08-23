@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -222,15 +223,33 @@ func TestAFinishedRunSaysItReportedSomething(t *testing.T) {
 	// A run finishing is when the operator finds out there is something new in
 	// the pile; the count is named there rather than left for them to go looking.
 	rendered := RunReport{
-		WorkItemID: "yoyodyne-ifd.19",
-		Status:     "succeeded",
-		Reported:   2,
-	}.Render()
+		WorkItemID:    "yoyodyne-ifd.19",
+		Status:        "succeeded",
+		Reported:      2,
+		ReportedWorst: report.SeverityCritical,
+	}.Render(console.Theme{})
 	if !strings.Contains(rendered, "reported 2 thing(s) without stopping") || !strings.Contains(rendered, "/reports") {
 		t.Fatalf("run report = %q", rendered)
 	}
+	// A count alone reads the same for two notes and for something already
+	// costing somebody, so the worst of them is named and marked. Neither says
+	// anything in colour: this is the theme a redirected stream gets.
+	if !strings.Contains(rendered, "!! reported") || !strings.Contains(rendered, "the worst of them critical") {
+		t.Fatalf("a critical report was not marked out of the run's closing lines: %q", rendered)
+	}
+	// A note is real news and asks for nothing, so it is counted and left alone.
+	quietWorst := RunReport{WorkItemID: "yoyodyne-ifd.19", Status: "succeeded", Reported: 1, ReportedWorst: report.SeverityNote}.Render(console.Theme{})
+	if strings.Contains(quietWorst, "!") {
+		t.Fatalf("a note was marked as though it wanted attention: %q", quietWorst)
+	}
+	// A record written before the worst was carried says how many rather than
+	// claiming a severity it does not have.
+	older := RunReport{WorkItemID: "yoyodyne-ifd.19", Status: "succeeded", Reported: 2}.Render(console.Theme{})
+	if !strings.Contains(older, "reported 2 thing(s) without stopping;") {
+		t.Fatalf("an older run report = %q", older)
+	}
 	// A run that reported nothing says nothing about reports at all.
-	if quiet := (RunReport{WorkItemID: "yoyodyne-ifd.19", Status: "succeeded"}).Render(); strings.Contains(quiet, "reported") {
+	if quiet := (RunReport{WorkItemID: "yoyodyne-ifd.19", Status: "succeeded"}).Render(console.Theme{}); strings.Contains(quiet, "reported") {
 		t.Fatalf("a quiet run mentioned reports: %q", quiet)
 	}
 }
