@@ -933,6 +933,7 @@ func TestWatchingBrakesOnHeldIntakeAndResumesWhenItIsReleased(t *testing.T) {
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
 		ProductID:     "yoyodyne",
 		HeldAt:        time.Now().UTC(),
+		HeldBy:        runstate.IntakeHolderOperator,
 		Reason:        "the queue is being reordered",
 	}
 	sessions := &recordedSessions{}
@@ -955,8 +956,58 @@ func TestWatchingBrakesOnHeldIntakeAndResumesWhenItIsReleased(t *testing.T) {
 	if got := sessions.states(); !sameStates(got, want) {
 		t.Fatalf("recorded states = %v, want %v", got, want)
 	}
-	if reason := sessions.said(runstate.WatchBraked); !strings.Contains(reason, "the queue is being reordered") {
-		t.Fatalf("braked reason = %q, want the operator's own reason carried into it", reason)
+	if reason := sessions.said(runstate.WatchBraked); !strings.Contains(reason, "the operator placed it — the queue is being reordered") {
+		t.Fatalf("braked reason = %q, want the operator named as the holder with their own reason", reason)
+	}
+}
+
+// The misattribution from the other side. A session whose own brake trips while
+// the operator is already holding intake must not report its brake as what
+// stopped the line: the hold in force is theirs, and what an operator does about
+// a stopped queue depends entirely on which of the two placed it.
+func TestWatchingReportsTheOperatorsHoldWhenItsOwnBrakeTripsUnderOne(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two", "yoyodyne-three")...)
+	harness.blockedRuns = 3
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		h.retire(id)
+		// The operator holds intake while the third run is blocking, so the storm
+		// is complete and the hold is already in force when the brake reaches for
+		// it.
+		if id == "yoyodyne-three" {
+			h.mu.Lock()
+			h.held = &runstate.IntakeHold{
+				SchemaVersion: runstate.IntakeHoldSchemaVersion,
+				ProductID:     "yoyodyne",
+				HeldAt:        time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+				HeldBy:        runstate.IntakeHolderOperator,
+				Reason:        "something about these runs looks wrong",
+			}
+			h.mu.Unlock()
+		}
+		return Outcome{WorkItemID: id, Status: runstate.StatusFailed, Blocked: true}, nil
+	}
+	sessions := &recordedSessions{}
+	harness.onSleep = func(*scheduleHarness, int) bool { return false }
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Braked != nil {
+		t.Fatalf("schedule braked on %#v, want a hold this session did not place reported as somebody else's", schedule.Braked)
+	}
+	reason := sessions.said(runstate.WatchBraked)
+	if !strings.Contains(reason, "the operator placed it — something about these runs looks wrong") {
+		t.Fatalf("braked reason = %q, want the operator's hold reported as theirs", reason)
+	}
+	if strings.Contains(reason, "brake") {
+		t.Fatalf("braked reason = %q, want nothing claiming the session's own brake stopped the line", reason)
+	}
+	if rendered := schedule.Render(); strings.Contains(rendered, "this session's own brake held intake") {
+		t.Fatalf("rendered = %q, want the operator's hold never rendered as the session's own", rendered)
 	}
 }
 
@@ -1108,8 +1159,14 @@ func TestWatchingHoldsIntakeWhenRunsKeepBlocking(t *testing.T) {
 	if _, held, _ := harness.Held(); !held {
 		t.Fatal("intake is not held, want the brake to have placed the operator's own switch")
 	}
-	if reason := sessions.said(runstate.WatchBraked); !strings.Contains(reason, "blocking") {
-		t.Fatalf("braked reason = %q, want it to say the harness held intake after runs kept blocking", reason)
+	// The session says who stopped it and what caused it, in one sentence and
+	// without naming the operator for a hold they did not place.
+	reason := sessions.said(runstate.WatchBraked)
+	if !strings.Contains(reason, "the harness's own brake placed it after 3 run(s) blocked in a row") {
+		t.Fatalf("braked reason = %q, want the brake named as the holder and the storm as the cause", reason)
+	}
+	if strings.Contains(reason, "the operator") {
+		t.Fatalf("braked reason = %q, want a hold the brake placed never attributed to the operator", reason)
 	}
 }
 
@@ -1524,7 +1581,7 @@ func (h *scheduleHarness) sleep(context.Context, time.Duration) bool {
 
 // Hold is the brake placing the operator's own switch. Nothing in the scheduler
 // releases one, so this harness only ever has to place it.
-func (h *scheduleHarness) Hold(reason string, at time.Time) (runstate.IntakeHold, error) {
+func (h *scheduleHarness) Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.held != nil {
@@ -1534,6 +1591,7 @@ func (h *scheduleHarness) Hold(reason string, at time.Time) (runstate.IntakeHold
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
 		ProductID:     "yoyodyne",
 		HeldAt:        at,
+		HeldBy:        holder,
 		Reason:        reason,
 	}
 	h.held = &held

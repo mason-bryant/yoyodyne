@@ -235,8 +235,12 @@ func FromProposal(proposal amendment.Proposal) (Notification, error) {
 // Only the holds themselves are records; what lifts either is their absence, so
 // releasing takes the moment it was observed rather than a record of it.
 
+// The hold carries who placed it as well as why, and both are said: the same
+// switch is placed by the operator and by the harness's own failure-storm brake,
+// and a channel that named one for the other is a channel that sent somebody to
+// look at the wrong state.
 func FromIntakeHold(hold runstate.IntakeHold) Notification {
-	return productNotification(KindIntakeHeld, hold.HeldAt, Detail{Reason: hold.Reason})
+	return productNotification(KindIntakeHeld, hold.HeldAt, Detail{Reason: hold.Says()})
 }
 
 func IntakeReleased(at time.Time) Notification {

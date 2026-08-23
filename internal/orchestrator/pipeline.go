@@ -202,8 +202,9 @@ type OperatorHolds interface {
 //
 // It is satisfied by runstate.IntakeHoldStore.
 type IntakeHolds interface {
-	// Held reports whether the operator is holding intake for this product. Not
-	// held is the ordinary answer and means the harness may choose work.
+	// Held reports whether intake is held for this product, by the operator or by
+	// the harness's own brake. Not held is the ordinary answer and means the
+	// harness may choose work.
 	Held() (runstate.IntakeHold, bool, error)
 }
 
@@ -2222,7 +2223,7 @@ func (p Pipeline) holdIntake(workItemID string) (Outcome, bool, error) {
 	}
 	hold, held, err := p.Intake.Held()
 	if err != nil {
-		return Outcome{}, false, fmt.Errorf("read whether the operator has held intake: %w", err)
+		return Outcome{}, false, fmt.Errorf("read whether intake is held: %w", err)
 	}
 	if !held {
 		return Outcome{}, false, nil

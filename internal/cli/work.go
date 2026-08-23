@@ -504,13 +504,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 		heldAt := outcome.PausedByOperator.HeldAt
 		report.OperatorHeldSince = &heldAt
 	}
-	// A held intake is carried the same way, with the reason beside it: unlike the
-	// hold over spending, this one is usually placed because something looked
-	// wrong, and what that was is the whole of what makes it actionable later.
+	// A held intake is carried whole: unlike the hold over spending, this one is
+	// usually placed because something looked wrong, and who placed it and what
+	// that was are together the whole of what makes it actionable later.
 	if outcome.PausedByIntake != nil {
-		heldAt := outcome.PausedByIntake.HeldAt
-		report.IntakeHeldSince = &heldAt
-		report.IntakeHoldReason = outcome.PausedByIntake.Reason
+		hold := *outcome.PausedByIntake
+		report.IntakeHold = &hold
 	}
 	return report
 }

@@ -209,7 +209,8 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And the session records what it is
+whole backlog through a failed run overnight — and what reports that hold names
+the brake rather than you, because the hold records which of the two placed it. And the session records what it is
 doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
 Slack sink read it, because an idle session and a dead one are otherwise the same
 silence.

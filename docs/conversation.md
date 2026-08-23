@@ -454,8 +454,12 @@ is what you reach for when the queue looks wrong but nothing is on fire. It hold
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
 and `/release` lets the harness choose again. A held intake leads `/status` with
-its own banner saying when it was placed and why, beneath the PAUSED banner if
-both are in force. It is recorded per product, unlike
+its own banner saying when it was placed, who placed it, and why, beneath the
+PAUSED banner if both are in force. Who placed it is on the record rather than
+assumed: the harness's own failure-storm brake
+([`blocked_runs_before_intake_hold`](configuration.md#watching-instead-of-draining)) places
+the same hold, and a banner that called that one yours would send you looking for
+a decision you never made. It is recorded per product, unlike
 [`yoyo pause`](operations.md#pausing-everything-and-resuming-it), because what a development
 manager may pull is a fact about one backlog.
 

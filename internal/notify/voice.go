@@ -364,7 +364,7 @@ var productManagerVoice = voice{
 		KindProposalRaised:      "A change to {artifact} is proposed, and I decide it only where the document is mine: {text}",
 		KindExchangeTurn:        "The operator is being asked something, in {exchange} at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}. What it settles is product intent.",
-		KindIntakeHeld:          "The operator holds intake, so nothing new is chosen until they lift it: {why}",
+		KindIntakeHeld:          "Intake is held, so nothing new is chosen until somebody lifts it: {why}",
 		KindIntakeReleased:      "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:          "The operator holds all harness activity.",
 		KindHoldLifted:          "The operator lifted the hold.",

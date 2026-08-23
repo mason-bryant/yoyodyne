@@ -9,6 +9,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // maxSurveyItems bounds how many items of one kind a survey lists. What an
@@ -280,13 +281,14 @@ type RunReport struct {
 	// is a matter of waiting. It is the one pause that can appear without a run
 	// behind it, on work a directive stopped before it was ever claimed.
 	DirectivePause string `json:"directive_pause,omitempty"`
-	// IntakeHeldSince and IntakeHoldReason are set instead of any of the others
-	// when the work was never started because the operator is holding what the
-	// harness chooses for itself. It never appears on a run: nothing was claimed
-	// and nothing developed, so there is no worktree, no branch, and nothing to
-	// continue — only an item that was not picked up and says why.
-	IntakeHeldSince  *time.Time `json:"intake_held_since,omitempty"`
-	IntakeHoldReason string     `json:"intake_hold_reason,omitempty"`
+	// IntakeHold is set instead of any of the others when the work was never
+	// started because something is holding what the harness chooses for itself.
+	// It never appears on a run: nothing was claimed and nothing developed, so
+	// there is no worktree, no branch, and nothing to continue — only an item
+	// that was not picked up and says who stopped it and why. The hold is carried
+	// whole rather than as the parts a headline happens to want, because who
+	// placed it is a fact about the record and not one a report may infer.
+	IntakeHold *runstate.IntakeHold `json:"intake_hold,omitempty"`
 	// OperatorHeldSince is set instead of any of the others when what stopped the
 	// work was the operator pausing all harness activity. Like a directive pause
 	// it is lifted by a decision rather than by a clock, and it can appear with no
@@ -793,16 +795,18 @@ func (r RunReport) Headline() string {
 		item = "the work item"
 	}
 	switch {
-	case r.Paused && r.IntakeHeldSince != nil:
+	case r.Paused && r.IntakeHold != nil:
 		// Intake is held, so the harness declined to choose this item. It is the
 		// one pause an operator can walk straight past: nothing is running, nothing
 		// is claimed, and naming the item themselves runs it anyway — which is the
 		// distinction between holding what the harness picks and pausing everything.
-		held := fmt.Sprintf("%s was not started because you are holding intake, since %s",
-			item, r.IntakeHeldSince.UTC().Format(time.RFC3339))
-		if reason := strings.TrimSpace(r.IntakeHoldReason); reason != "" {
-			held += " (" + singleLine(reason, maxSurveyTitleBytes*2) + ")"
-		}
+		//
+		// Who is holding it comes off the record. The operator is the ordinary
+		// answer and was once the only one this said, which was wrong the moment
+		// the failure-storm brake placed a hold and this told them they had.
+		held := fmt.Sprintf("%s was not started because intake is held, since %s: %s",
+			item, r.IntakeHold.HeldAt.UTC().Format(time.RFC3339),
+			singleLine(r.IntakeHold.Says(), maxSurveyTitleBytes*2))
 		return held + fmt.Sprintf("; nothing is running it and nothing was claimed, /release lets the harness choose work again, and /work %s runs it now regardless", item)
 	case r.Paused && r.OperatorHeldSince != nil:
 		// The operator paused everything rather than this, so this says what they

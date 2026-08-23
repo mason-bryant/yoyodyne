@@ -30,7 +30,7 @@ import (
 // as a conversation reads and writes it. It is satisfied by
 // runstate.IntakeHoldStore.
 type IntakeHolds interface {
-	Hold(reason string, at time.Time) (runstate.IntakeHold, error)
+	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
 	Held() (runstate.IntakeHold, bool, error)
 	Release() (runstate.IntakeHold, bool, error)
 }
@@ -87,7 +87,7 @@ func (s *Session) HoldIntake(reason string) (IntakeReport, error) {
 	if err != nil {
 		return IntakeReport{}, fmt.Errorf("read whether intake is held: %w", err)
 	}
-	hold, err := s.options.Intake.Hold(s.intakeNote(trimmed), s.options.clock().Now())
+	hold, err := s.options.Intake.Hold(runstate.IntakeHolderOperator, s.intakeNote(trimmed), s.options.clock().Now())
 	if err != nil {
 		return IntakeReport{}, fmt.Errorf("hold what the harness starts on its own: %w", err)
 	}
@@ -128,13 +128,18 @@ func (s *Session) ReleaseIntake() (IntakeReport, error) {
 // named for the same reason a stopped item's note names them: the hold has to
 // trace back to the intent that placed it, and an operator coming back to a quiet
 // queue in the morning is exactly the person who needs that trail.
+//
+// What the operator said leads and the trail follows it, because this is the
+// cause half of the one sentence every surface composes about the hold — the
+// holder is recorded beside it — and a reader looking at a stopped queue wants
+// why before they want which conversation.
 func (s *Session) intakeNote(reason string) string {
-	note := fmt.Sprintf("held from product-manager conversation %s, after turn %d",
+	trail := fmt.Sprintf("(held from product-manager conversation %s, after turn %d)",
 		s.state.ConversationID, s.state.Turns)
-	if reason != "" {
-		note += ": " + reason
+	if reason == "" {
+		return "no reason given " + trail
 	}
-	return note
+	return reason + " " + trail
 }
 
 // intakeBanner is what a status report says about intake while it is held. It
@@ -158,11 +163,9 @@ func (s *Session) intakeBanner() string {
 	if !report.Held {
 		return ""
 	}
-	banner := "INTAKE HELD: the harness starts nothing more on its own, since " + report.Hold.HeldAt.Format(time.RFC3339) + "."
-	if reason := strings.TrimSpace(report.Hold.Reason); reason != "" {
-		banner += "\n" + singleLine(reason, MaxOperatorMessageBytes)
-	}
-	return banner + "\nWork already running carries on. /release lifts it, and /work <beads-id> still runs an item you name.\n\n"
+	banner := "INTAKE HELD since " + report.Hold.HeldAt.Format(time.RFC3339) + ": " +
+		singleLine(report.Hold.Says(), MaxOperatorMessageBytes) + "."
+	return banner + "\nThe harness starts nothing more on its own. Work already running carries on. /release lifts it, and /work <beads-id> still runs an item you name.\n\n"
 }
 
 // Render describes what intake is doing and what this command did about it.
@@ -174,12 +177,15 @@ func (r IntakeReport) Render() string {
 		rendered.WriteString(indent("work already running carries on and is not disturbed; /stop <beads-id> stops one of those, and /stop-everything stops them all."))
 		rendered.WriteString(indent("/work <beads-id> still runs an item you name, and /release lets the harness choose work again."))
 	case r.Lifted:
-		fmt.Fprintf(&rendered, "released the hold on intake, which you placed at %s. The harness may choose work again.\n", r.Hold.HeldAt.Format(time.RFC3339))
+		// What is lifted is named by whoever placed it rather than by whoever is
+		// lifting it: releasing the brake's hold is the ordinary way that one
+		// ends, and telling the operator they placed it would send them looking
+		// for a decision they never made.
+		fmt.Fprintf(&rendered, "released the hold on intake, placed at %s: %s. The harness may choose work again.\n",
+			r.Hold.HeldAt.Format(time.RFC3339), singleLine(r.Hold.Says(), MaxOperatorMessageBytes))
 	case r.Held:
-		fmt.Fprintf(&rendered, "intake is held, since %s, so the harness starts nothing on its own.\n", r.Hold.HeldAt.Format(time.RFC3339))
-		if reason := strings.TrimSpace(r.Hold.Reason); reason != "" {
-			rendered.WriteString(indent(singleLine(reason, MaxOperatorMessageBytes)))
-		}
+		fmt.Fprintf(&rendered, "intake is held, since %s, so the harness starts nothing on its own: %s.\n",
+			r.Hold.HeldAt.Format(time.RFC3339), singleLine(r.Hold.Says(), MaxOperatorMessageBytes))
 		rendered.WriteString(indent("this was already the case, so nothing changed. /release lifts it."))
 	default:
 		rendered.WriteString("intake is not held: the harness may choose work from the backlog on its own.\n")

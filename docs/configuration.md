@@ -1473,6 +1473,13 @@ between them, holds intake — the same hold you would place — and it stays he
 until you release it. Any run that lands clears the count, and `0` turns the
 brake off entirely, leaving you as the only thing that holds intake.
 
+The hold records which of you placed it, and everything that reports one says so:
+"the harness's own brake placed it after 3 run(s) blocked in a row with nothing
+landing between them, which is the configured brake at 3" rather than a hold
+attributed to you. It matters because what you do about a stopped line depends
+entirely on which of the two stopped it, and a brake that trips over a hold you
+already placed leaves yours in force and still yours.
+
 And the session says what it is doing, because an idle session and a dead one are
 otherwise the same silence. Each transition — watching, idle, braked, resumed,
 stopped — is recorded once, where `yoyo status` prints it and the Slack sink

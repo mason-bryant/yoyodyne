@@ -24,7 +24,7 @@ func TestWorkStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIntakeHoldStore() error = %v", err)
 	}
-	if _, err := intake.Hold("the queue needs reordering first", time.Now()); err != nil {
+	if _, err := intake.Hold(runstate.IntakeHolderOperator, "the queue needs reordering first", time.Now()); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 
@@ -32,7 +32,7 @@ func TestWorkStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("work code = %d, stderr = %q", code, stderr)
 	}
-	for _, want := range []string{"nothing was started", "holding intake", "the queue needs reordering first", "/release", "yoyo run"} {
+	for _, want := range []string{"nothing was started", "intake is held", "the operator placed it", "the queue needs reordering first", "/release", "yoyo run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("work stdout = %q, want it to mention %q", stdout, want)
 		}

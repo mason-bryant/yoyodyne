@@ -275,6 +275,49 @@ func TestHoldingIntakeStopsNothingThatIsRunning(t *testing.T) {
 	}
 }
 
+// The hold an operator finds in a conversation is not always their own: the
+// failure-storm brake places the same switch. Every surface that reports it
+// names whichever placed it, and none of them composes that out of what it
+// happens to know — the banner said "the operator" for a hold the brake placed,
+// which sent the operator diagnosing their own state instead of the line's.
+func TestAConversationNamesTheBrakeForAHoldTheBrakePlaced(t *testing.T) {
+	t.Parallel()
+
+	intake := &fakeIntake{}
+	if _, err := intake.Hold(runstate.IntakeHolderBrake,
+		"3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3",
+		fixedClock{}.Now()); err != nil {
+		t.Fatalf("Hold() error = %v", err)
+	}
+	options := testOptions(t, &fakeBackend{})
+	options.Work = &fakeWork{}
+	options.Intake = intake
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader(
+		"/status\n/hold\n/exit\n"), &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	transcript := out.String()
+	if !strings.Contains(transcript, "the harness's own brake placed it after 3 run(s) blocked in a row") {
+		t.Fatalf("transcript = %q, want the brake named as the holder, with the storm as the cause", transcript)
+	}
+	if strings.Contains(transcript, "the operator placed it") {
+		t.Fatalf("transcript = %q, want nothing attributing the brake's hold to the operator", transcript)
+	}
+
+	// Releasing it says what was lifted in the same words. Whoever lifts a hold,
+	// who placed it is what the record says.
+	lifted, err := session.ReleaseIntake()
+	if err != nil {
+		t.Fatalf("ReleaseIntake() error = %v", err)
+	}
+	if rendered := lifted.Render(); !strings.Contains(rendered, "the harness's own brake placed it") {
+		t.Fatalf("rendered = %q, want the lifted hold reported as the brake's", rendered)
+	}
+}
+
 // Releasing lets the harness choose work again, and releasing what is not held
 // changed nothing — which the report has to say rather than claiming an act that
 // never happened.
@@ -425,11 +468,12 @@ type fakeIntake struct {
 	mu     sync.Mutex
 	held   bool
 	heldAt time.Time
+	heldBy runstate.IntakeHolder
 	reason string
 	err    error
 }
 
-func (f *fakeIntake) Hold(reason string, at time.Time) (runstate.IntakeHold, error) {
+func (f *fakeIntake) Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
@@ -438,6 +482,7 @@ func (f *fakeIntake) Hold(reason string, at time.Time) (runstate.IntakeHold, err
 	if !f.held {
 		f.held = true
 		f.heldAt = at.UTC()
+		f.heldBy = holder
 		f.reason = reason
 	}
 	return f.hold(), nil
@@ -468,6 +513,7 @@ func (f *fakeIntake) hold() runstate.IntakeHold {
 		SchemaVersion: runstate.IntakeHoldSchemaVersion,
 		ProductID:     "yoyodyne",
 		HeldAt:        f.heldAt,
+		HeldBy:        f.heldBy,
 		Reason:        f.reason,
 	}
 }

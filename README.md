@@ -961,8 +961,10 @@ is what you reach for when the queue looks wrong but nothing is on fire. It hold
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
 and `/release` lets the harness choose again. A held intake leads `/status` with
-its own banner saying when it was placed and why, beneath the PAUSED banner if
-both are in force. It is recorded per product, unlike
+its own banner saying when it was placed, who placed it, and why, beneath the
+PAUSED banner if both are in force. Who placed it is on the record rather than
+assumed: the failure-storm brake below places the same hold, and a banner that
+called that one yours would send you looking for a decision you never made. It is recorded per product, unlike
 [`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
 manager may pull is a fact about one backlog.
 
@@ -1839,7 +1841,8 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And the session records what it is
+whole backlog through a failed run overnight — and what reports that hold names
+the brake rather than you, because the hold records which of the two placed it. And the session records what it is
 doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
 Slack sink read it, because an idle session and a dead one are otherwise the same
 silence.

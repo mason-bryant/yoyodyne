@@ -245,16 +245,47 @@ cat > "$intake_file" <<'JSON'
   "schema_version": 1,
   "product_id": "demo",
   "held_at": "2026-08-18T18:15:00Z",
+  "held_by": "operator",
   "reason": "the queue looks wrong"
 }
 JSON
 held_intake="$("$status" --product demo -l 2>&1)"
-contains "$held_intake" "INTAKE HELD: the harness starts nothing more on its own since 2026-08-18T18:15:00Z" \
-  "a held intake leads with when it was held"
-contains "$held_intake" "the queue looks wrong" "the banner says why intake was held"
+contains "$held_intake" "INTAKE HELD since 2026-08-18T18:15:00Z: the operator placed it — the queue looks wrong" \
+  "a held intake leads with when it was held, who held it, and why"
 contains "$held_intake" "$one_run" "the listing itself is still reported while intake is held"
 other_intake="$("$status" --product chatty -l 2>&1)"
 missing "$other_intake" "INTAKE HELD" "holding one product's intake says nothing about another's"
+
+# The same switch is placed by the harness's own failure-storm brake, and the
+# banner has to say which of the two it was: an operator told they held intake
+# when the brake did goes looking for a decision they never made.
+cat > "$intake_file" <<'JSON'
+{
+  "schema_version": 1,
+  "product_id": "demo",
+  "held_at": "2026-08-18T18:15:00Z",
+  "held_by": "brake",
+  "reason": "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3"
+}
+JSON
+braked_intake="$("$status" --product demo -l 2>&1)"
+contains "$braked_intake" "INTAKE HELD since 2026-08-18T18:15:00Z: the harness's own brake placed it after 3 run(s) blocked in a row" \
+  "a hold the brake placed names the brake and the storm that tripped it"
+missing "$braked_intake" "the operator placed it" "the brake's hold is never attributed to the operator"
+
+# A hold written before the holder was recorded is still a hold, and the banner
+# states the absence rather than picking the likelier of the two.
+cat > "$intake_file" <<'JSON'
+{
+  "schema_version": 1,
+  "product_id": "demo",
+  "held_at": "2026-08-18T18:15:00Z",
+  "reason": "the queue looks wrong"
+}
+JSON
+unattributed_intake="$("$status" --product demo -l 2>&1)"
+contains "$unattributed_intake" "INTAKE HELD since 2026-08-18T18:15:00Z: the record does not say who placed it — the queue looks wrong" \
+  "a hold with no recorded holder says so rather than naming one"
 rm "$intake_file"
 choosing="$("$status" --product demo -l 2>&1)"
 missing "$choosing" "INTAKE HELD" "a harness that may choose work says nothing about a hold"

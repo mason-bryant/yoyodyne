@@ -126,9 +126,12 @@ const (
 	// ScheduleDrained reports a scheduler that ran out of work to pull: nothing
 	// the tracker reports as ready is left that this pass has not already tried.
 	ScheduleDrained = "nothing more is ready to pull"
-	// ScheduleIntakeHeld reports the operator holding intake. Nothing further was
-	// chosen; whatever was already running carried on to its own end.
-	ScheduleIntakeHeld = "the operator is holding intake, so nothing more was chosen"
+	// ScheduleIntakeHeld reports intake being held. Nothing further was chosen;
+	// whatever was already running carried on to its own end. Who is holding it
+	// is on the hold this schedule carries rather than in this sentence: a
+	// constant cannot know whether the operator or the harness's own brake
+	// placed it, and one that named either would be wrong half the time.
+	ScheduleIntakeHeld = "intake is held, so nothing more was chosen"
 	// ScheduleLimitReached reports the requested number of runs having been
 	// started, which is the operator bounding one pass rather than the harness
 	// running out of anything.
@@ -195,7 +198,7 @@ type ScheduleStaleness interface {
 // exactly as long as it took the next run to fail, and what a held queue needs
 // is a person, which is the whole reason for tripping it.
 type ScheduleBrake interface {
-	Hold(reason string, at time.Time) (runstate.IntakeHold, error)
+	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
 }
 
 // ScheduleSpend prices what a session has spent, from the same recorded run
@@ -623,7 +626,7 @@ pulling:
 		// reading would keep choosing work for as long as it lasted.
 		hold, held, err := pull.Intake.Held()
 		if err != nil {
-			failure = fmt.Errorf("read whether the operator has held intake: %w", err)
+			failure = fmt.Errorf("read whether intake is held: %w", err)
 			schedule.Stopped = ScheduleUnreadable
 			break
 		}
@@ -637,7 +640,7 @@ pulling:
 			// polling and chooses nothing, and resumes in place when it is
 			// released. That is what makes holding intake something an operator
 			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, brakedReason(schedule.Braked != nil, hold)) {
+			if !wait(pull, runstate.WatchBraked, brakedReason(hold)) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -929,17 +932,30 @@ func fingerprint(item beads.WorkItem) string {
 // operator arriving at a stopped line finds one thing to understand and one
 // thing to lift, rather than a second mechanism that stops work in a way only
 // this package knows how to undo.
+// What it records is the cause alone — who placed it is the holder beside it —
+// because every surface that prints a hold composes those two itself, and a
+// reason that also named the holder is what stacked three accounts of one hold
+// into a line nobody could read.
 func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
-	reason := fmt.Sprintf(
-		"the harness held intake: %d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d. Nothing further is chosen until this is released; runs already going carry on.",
+	reason := fmt.Sprintf("%d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d",
 		blocked, pull.BlockedRunsBeforeIntakeHold)
 	if pull.Brake == nil {
-		schedule.BrakeProblem = "runs kept blocking and nothing was wired to hold intake, so the line was left choosing work: " + reason
+		schedule.BrakeProblem = fmt.Sprintf(
+			"runs kept blocking and nothing was wired to hold intake, so the line was left choosing work: %s", reason)
 		return
 	}
-	held, err := pull.Brake.Hold(reason, s.now())
+	at := s.now().UTC()
+	held, err := pull.Brake.Hold(runstate.IntakeHolderBrake, reason, at)
 	if err != nil {
 		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
+		return
+	}
+	// Holding what is already held leaves the hold that was there, so this is
+	// this session's brake only when this call is what placed it. A pass that
+	// took an operator's standing hold for its own would report the line as
+	// braked to a reader whose queue was stopped for an entirely different
+	// reason.
+	if !held.HeldAt.Equal(at) || held.HeldBy != runstate.IntakeHolderBrake {
 		return
 	}
 	schedule.Braked = &held
@@ -1027,16 +1043,16 @@ func conversationExecutedReason(executor domain.WorkItemExecutor) string {
 }
 
 // brakedReason says which brake stopped the line, because what an operator does
-// about it depends entirely on which one it was.
-func brakedReason(ownBrake bool, hold runstate.IntakeHold) string {
-	if ownBrake {
-		return "the harness held intake after runs kept blocking; the session polls and chooses nothing until it is released"
-	}
-	reason := strings.TrimSpace(hold.Reason)
-	if reason == "" {
-		return "the operator is holding intake; the session polls and chooses nothing until it is released"
-	}
-	return "the operator is holding intake: " + reason
+// about it depends entirely on which one it was. It reads that off the hold
+// rather than off whether this session happens to have braked: a session that
+// answered from its own state named the operator for a hold its own brake had
+// placed, and named its brake for a hold the operator had placed before it
+// tripped.
+func brakedReason(hold runstate.IntakeHold) string {
+	// What the surfaces reading this already say is that the session is choosing
+	// nothing, so this adds the one thing they do not: the hold does not clear
+	// itself, whichever of the two placed it.
+	return hold.Says() + ", and it stays held until somebody releases it"
 }
 
 // opening says what the session was started to do, which is the first thing its
@@ -1334,11 +1350,8 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
 	}
 	if s.IntakeHeld != nil {
-		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))
-		if reason := strings.TrimSpace(s.IntakeHeld.Reason); reason != "" {
-			fmt.Fprintf(&rendered, ": %s", reason)
-		}
-		rendered.WriteString("\n")
+		fmt.Fprintf(&rendered, "intake has been held since %s: %s\n",
+			s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"), s.IntakeHeld.Says())
 	}
 	// A session that waited says how long it was alive for, because the whole
 	// point of watching is that nothing happening is not the same as nothing
@@ -1347,7 +1360,7 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
 	}
 	if s.Braked != nil {
-		fmt.Fprintf(&rendered, "the harness held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
+		fmt.Fprintf(&rendered, "this session's own brake held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
 	}
 	if s.BrakeProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)
