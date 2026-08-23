@@ -30,6 +30,14 @@ revisions:
       by: architect
       at: 2026-08-19T22:05:06Z
       reason: decided in the yoyodyne-ifd.102.1 triage review and transcribed as yoyodyne-ifd.107 - the reconciliation section's flat not-by-asking-again narrowed - administrator override never, a requirement only a person can satisfy never re-asked, and one re-arm per publication of the identical verified-unchanged already-authorized request permitted for a transient drop under the development manager's triage with its durable counter; a second drop escalates. Unblocks yoyodyne-ifd.102.7
+    - action: amended
+      by: architect
+      at: 2026-08-23T16:29:31Z
+      reason: the security section's path-validation bullet implied lexical checking suffices; the repository-confined-writes design supersedes that, and the bullet now points at it. Recorded during the 2026-08-22 scope-reconciliation promotions
+    - action: amended
+      by: architect
+      at: 2026-08-23T16:29:31Z
+      reason: the deferred list's unqualified "rich graphical interfaces" is contradicted by the operator's amended non-goals and the reduced-dashboard promotion; the bullet now bounds what stays deferred and points at the observability-and-dashboard design. Recorded during the 2026-08-22 scope-reconciliation promotions
 approvals:
     - revision: 0
       by: operator
@@ -522,7 +530,10 @@ This sequence keeps the first bootstrap small, exercises real subprocess and Git
 
 - Default each backend to the least filesystem and command permissions compatible with its role.
 - Keep credentials in provider-managed stores and redact environment values and event payloads before persistence.
-- Validate repository and worktree paths before every mutating Git or filesystem action.
+- Confine every mutating filesystem action physically, not lexically: harness-owned
+  writes pass through the shared safe-write primitive and its declared root, per
+  [repository-confined writes](repository-confined-writes.md), and path-string
+  validation is not accepted as proof of containment.
 - Never allow an agent response to select an arbitrary cleanup path or bypass checks, review, or directive reconciliation.
 - Never route a push or a merge through an agent. The developer and reviewer phases cause publishing and merging; the harness performs the pushes and makes the merge request to the forge itself, and no role is given a credential or a tool for either. Withholding forge credentials from the developer process is the enforcement this still lacks, and is deferred.
 - Record the commands and result summaries used for deterministic verification.
@@ -547,7 +558,10 @@ Each decision should be captured in the owning design artifact and linked from t
 - Multiple simultaneously active products and repositories.
 - Cross-host worktree and lease management.
 - Provider API backends and non-CLI model integrations.
-- Rich graphical interfaces.
+- Rich graphical interfaces beyond the reduced, read-only, locally hosted
+  dashboard, which [observability-and-dashboard](observability-and-dashboard.md)
+  brings into v1 as a projection of the shared read model - never a workflow
+  store or control plane.
 - Organization-level policy, audit, and multi-user access controls.
 
 ## References
