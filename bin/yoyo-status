@@ -14,8 +14,9 @@
 #   yoyo-status -L               follow the newest, and switch when a later one starts
 #   yoyo-status 40b68275         follow one by id or unique id prefix
 #   yoyo-status -l               list recent runs and conversations and exit
-#   yoyo-status -c               report token spend and cost for each, and in total
-#   yoyo-status -c 40b68275      report spend for one run or conversation
+#   yoyo-status -c               report the last 7 days of spend, by day and in total
+#   yoyo-status -c 30            report that many days instead of 7
+#   yoyo-status -c 40b68275      report spend for one run or conversation, any day
 #   yoyo-status -n 200           replay the last 200 events before following
 #   yoyo-status --runs           runs only
 #   yoyo-status --chats          conversations only
@@ -37,6 +38,11 @@ follow=1
 follow_latest=0
 list_only=0
 cost_only=0
+# How many local-timezone days a cost report covers when nobody says. A week is
+# what an operator budgets against, and a report that reached back over every
+# run the machine has ever done would bury the days they are actually deciding
+# about under months of settled ones.
+cost_days=7
 raw=0
 include_all=0
 want_runs=1
@@ -245,11 +251,13 @@ status_of() {
   fi
 }
 
-# When it started, in local time, to the minute. A run records that in its state
-# file; a conversation's and a branch review's are the timestamp of their first
-# event, which is the same moment and needs no state file to find.
-started_of() {
-  command -v jq >/dev/null 2>&1 || { echo "-"; return; }
+# When it started, as the three things a cost report asks of that moment: the
+# epoch second it began, the local day it belongs to, and the local time to the
+# minute as a row displays it. A run records the moment in its state file; a
+# conversation's and a branch review's is the timestamp of their first event,
+# which is the same moment and needs no state file to find. All three come from
+# one jq invocation because the report asks this of every row.
+started_fields_of() {
   local stamp="" state
   if [ "$(kind_of "$1")" != "run" ]; then
     stamp="$(head -1 "$1" 2>/dev/null | jq -r '.timestamp // empty' 2>/dev/null || true)"
@@ -259,13 +267,32 @@ started_of() {
       stamp="$(jq -r '.started_at // empty' "$state" 2>/dev/null || true)"
     fi
   fi
-  [ -n "$stamp" ] || { echo "-"; return; }
+  # Something whose moment cannot be read still cost money, so it is reported
+  # rather than dropped: it groups under "undated", ahead of every dated day,
+  # and no window excludes it, because it has no day to be outside of.
+  [ -n "$stamp" ] || { printf '0\tundated\t-\n'; return; }
   # The stored timestamp is UTC with fractional seconds, which fromdateiso8601
   # will not parse, so drop them first.
   jq -rn --arg stamp "$stamp" '$stamp
          | sub("\\.[0-9]+";"")
          | fromdateiso8601
-         | strflocaltime("%m %d %Y %H:%M")' 2>/dev/null || echo "-"
+         | [ tostring, strflocaltime("%Y-%m-%d"), strflocaltime("%m %d %Y %H:%M") ]
+         | @tsv' 2>/dev/null || printf '0\tundated\t-\n'
+}
+
+# Today, in the timezone the operator's day happens in.
+today_local() { jq -rn 'now | floor | strflocaltime("%Y-%m-%d")'; }
+
+# The oldest local day a report of $1 days covers, today counting as the first
+# of them, so 7 is today and the six before it. The arithmetic is anchored at
+# local noon rather than at the current moment, so a daylight-saving shift can
+# move the answer by an hour without ever moving it by a day.
+oldest_day() {
+  jq -rn --argjson days "$1" '
+    (now | floor) as $moment
+    | ($moment | strflocaltime("%H %M %S") | split(" ") | map(tonumber)) as $clock
+    | ($moment - ($clock[0] * 3600 + $clock[1] * 60 + $clock[2]) + 43200) as $noon
+    | ($noon - ($days - 1) * 86400) | strflocaltime("%Y-%m-%d")'
 }
 
 if [ "$list_only" = "1" ]; then
@@ -283,11 +310,20 @@ fi
 # which are provider invocations like any other and are recorded the same way,
 # so leaving them out understated every total they belonged in. Cost is what the
 # provider reported, not an estimate.
+#
+# The rows are grouped by the local-timezone day the work started on and each
+# group closes with that day's spend, because "what did today cost" is the axis
+# an operator budgets on and the day it asks about is the one their own clock
+# is keeping. Today's group is last, where the eye already is.
 cost_report() {
   command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
-  local files
-  files=$(event_logs "${1:-}" -tr)
+  local pattern="${1:-}" days="${2:-}" files
+  files=$(event_logs "$pattern" -tr)
   [ -n "$files" ] || { echo "no runs, conversations, or branch reviews found" >&2; exit 1; }
+
+  local today oldest=""
+  today="$(today_local)"
+  [ -z "$days" ] || oldest="$(oldest_day "$days")"
 
   # Aggregate per run at full precision first. Totalling the displayed values
   # instead would accumulate the rounding error from each row.
@@ -297,6 +333,11 @@ cost_report() {
   tmp="$(mktemp "${TMPDIR:-/tmp}/yoyo-status.XXXXXX")"; trap 'rm -f "$tmp"' RETURN
   printf '%s\n' "$files" | while read -r f; do
     [ -n "$f" ] || continue
+    local epoch day ts
+    IFS=$'\t' read -r epoch day ts <<<"$(started_fields_of "$f")"
+    # Decided before the event log is read rather than after, so the days a
+    # report does not cover cost it nothing to leave out.
+    if [ -n "$oldest" ] && [ "$day" != "undated" ] && [[ "$day" < "$oldest" ]]; then continue; fi
     jq -r 'select(.type=="run.completed")
            | [ (.payload.total_cost_usd // 0),
                (.payload.usage.input_tokens // 0),
@@ -304,23 +345,50 @@ cost_report() {
                (.payload.usage.cache_creation_input_tokens // 0),
                (.payload.usage.cache_read_input_tokens // 0) ]
            | @tsv' "$f" 2>/dev/null \
-    | awk -v id="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" -v ts="$(started_of "$f")" '
+    | awk -v id="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" \
+          -v day="$day" -v epoch="$epoch" -v ts="$ts" '
         { n++; cost+=$1; in_+=$2; out+=$3; cw+=$4; cr+=$5 }
-        END { if (n>0) printf "%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
-                            id, ts, n, in_, out, cw, cr, cost, st }'
+        END { if (n>0) printf "%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
+                            day, epoch, id, ts, n, in_, out, cw, cr, cost, st }'
   done > "$tmp"
 
+  # An empty report says which of the two empties it is: nothing has been spent
+  # at all, or nothing was spent in the days asked about, which a wider window
+  # would answer differently.
+  if [ ! -s "$tmp" ]; then
+    if [ -n "$oldest" ]; then
+      echo "no completed provider invocations since $oldest; pass a number of days to reach further back"
+    else
+      echo "no completed provider invocations yet"
+    fi
+    return 0
+  fi
+
   printf '%-39s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
-  awk -F'\t' '{ printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $1,$2,$3,$4,$5,$6,$7,$8,$9 }' "$tmp"
-  awk -F'\t' '
-    { n+=$3; in_+=$4; out+=$5; cw+=$6; cr+=$7; cost+=$8;
-      if ($1 ~ /^chat-/) { chats+=$3; chat_cost+=$8 }
-      else if ($1 ~ /^review-/) { revs+=$3; rev_cost+=$8 }
-      else { plain+=$3; run_cost+=$8 } }
+  # Ordered by when the work started rather than by when its log was last
+  # written, which is what makes a day's rows contiguous and puts today last.
+  sort -t$'\t' -k2,2n -k3,3 "$tmp" | awk -F'\t' -v today="$today" '
+    function close_day() {
+      if (day == "") return;
+      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", day " total", "", dn, din, dout, dcw, dcr, dcost;
+      print "";
+    }
+    $1 != day {
+      close_day();
+      day=$1; dn=din=dout=dcw=dcr=dcost=0;
+      printf "%s%s\n", day, (day==today ? "  (today)" : "");
+    }
+    { printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $3,$4,$5,$6,$7,$8,$9,$10,$11;
+      dn+=$5; din+=$6; dout+=$7; dcw+=$8; dcr+=$9; dcost+=$10 }
+    END { close_day() }'
+  awk -F'\t' -v window="${days:+ (last $days days)}" '
+    { n+=$5; in_+=$6; out+=$7; cw+=$8; cr+=$9; cost+=$10;
+      if ($3 ~ /^chat-/) { chats+=$5; chat_cost+=$10 }
+      else if ($3 ~ /^review-/) { revs+=$5; rev_cost+=$10 }
+      else { plain+=$5; run_cost+=$10 } }
     END {
-      if (n==0) { print "no completed provider invocations yet"; exit }
       print  "----------------------------------------------------------------------------------------------------------------";
-      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL", "", n, in_, out, cw, cr, cost;
+      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL" window, "", n, in_, out, cw, cr, cost;
       t=in_+out+cw+cr;
       printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
       # Split the total only when it is actually mixed, so the one number is
@@ -339,7 +407,27 @@ cost_report() {
 }
 
 if [ "$cost_only" = "1" ]; then
-  cost_report "$run_arg"
+  # The one argument the report takes is either a number of days or the thing
+  # to price, and a purely numeric one is the count: nothing else about a run
+  # is only digits, and an operator asking for a fortnight would not otherwise
+  # have a way to say so. Naming one run, conversation, or review prices it
+  # whatever day it ran on -- the window is for the report that chooses what to
+  # show, and an id has already chosen.
+  case "$run_arg" in
+    ''|*[!0-9]*) ;;
+    *)
+      # Leading zeros are dropped rather than refused; a count of nothing but
+      # them is the one numeric argument there is no report for.
+      cost_days="${run_arg#"${run_arg%%[!0]*}"}"
+      run_arg=""
+      [ -n "$cost_days" ] || { echo "-c needs a positive number of days" >&2; exit 2; }
+      ;;
+  esac
+  if [ -n "$run_arg" ]; then
+    cost_report "$run_arg" ""
+  else
+    cost_report "" "$cost_days"
+  fi
   exit 0
 fi
 

@@ -531,7 +531,8 @@ copy the single file out of it, if you want it:
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind
 ./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
+./bin/yoyo-status -c 30    # report that many days instead of 7
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -560,6 +561,16 @@ reporting requires it. What it prices is one row per run, per conversation, and
 per branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
+
+The rows are grouped by the local-timezone day the work started on, each day's
+group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. A report covers the last seven such days, today
+counting as the first of them. A number asks for a different count — `-c 30` —
+and naming a run, a conversation, or a review prices that one whatever day it
+ran on, because an id has already chosen what to show. A window with nothing in
+it says so and says since when, rather than reading like a machine that spent
+nothing.
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the
