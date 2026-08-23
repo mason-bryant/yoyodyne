@@ -608,6 +608,86 @@ func TestARecordedDecisionTheGuardWouldRefuseAgainShowsOnTheDocket(t *testing.T)
 	}
 }
 
+// The third recurrence of the same divergence, replayed: a repair grant the
+// round cap cut from two rounds to one, reported back with that detail as it was
+// recorded, and a docket entry that carried a bare count of it — so the same
+// decision was made again and refused by the budget rather than by the docket it
+// was read off.
+//
+// What the entry has to carry is every figure the guard refused against, which
+// is more than the count: what the grant came to, that the cap cut it, and what
+// the item now stands committed to. The rounds counted alone say three of four
+// used, which reads as room the guard does not have.
+func TestAGrantTheRoundCapCutShowsOnTheDocketWithWhatARepeatWouldMeet(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	decisions, err := runstate.NewTriageStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewTriageStore() error = %v", err)
+	}
+	claimed, err := runstate.NewRerunStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewRerunStore() error = %v", err)
+	}
+	docketer := docketerDeciding([]runstate.State{stoppedState()}, &memoryDocket{}, decisions, claimed)
+
+	// The item has cost three of the four rounds its cap permits, one for each
+	// developer attempt its runs were judged on.
+	for _, attempt := range []string{"attempt-1", "attempt-2", "attempt-3"} {
+		if _, err := decisions.RecordReviewRound(context.Background(), docketedItem, attempt, docketedNow); err != nil {
+			t.Fatalf("RecordReviewRound(%s) error = %v", attempt, err)
+		}
+	}
+	// The development manager decides a repair. The configured grant is two
+	// rounds and the cap has room for one, so the harness records the cut and
+	// says so — which is the sentence the next docket contradicted.
+	granted, err := decisions.GrantRepair(context.Background(), docketedItem,
+		TriageRepairGrantRounds(docketedTriage), docketedNow, docketedCaps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if !granted.Truncated || granted.Requested != 2 || granted.Rounds != 1 {
+		t.Fatalf("grant = %#v, want the round cap cutting two rounds to one", granted)
+	}
+	// The resubmission is refused by the guard, which is the proof the decision is
+	// really recorded and the round-trip the docket is meant to save.
+	var refused runstate.TriageCapError
+	_, err = decisions.GrantRepair(context.Background(), docketedItem,
+		TriageRepairGrantRounds(docketedTriage), docketedNow, docketedCaps)
+	if !errors.As(err, &refused) || refused.Spent != 1 || refused.Cap != 1 {
+		t.Fatalf("second GrantRepair() error = %v, want the repair grant budget refusing it", err)
+	}
+
+	built, err := docketer.Build()
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if len(built.Entries) != 1 {
+		t.Fatalf("build = %#v, want the one stoppage docketed", built)
+	}
+	entry := built.Entries[0]
+	if entry.Counters.RepairGrants != refused.Spent || entry.Counters.RepairGrantsCap != refused.Cap {
+		t.Fatalf("counters = %#v, want the %d of %d the guard refused against", entry.Counters, refused.Spent, refused.Cap)
+	}
+	if entry.Counters.GrantedRounds != 1 || entry.Counters.TruncatedGrants != 1 {
+		t.Fatalf("counters = %#v, want the one round the cap cut the grant down to", entry.Counters)
+	}
+	if entry.Counters.CommittedRounds != 4 || entry.Counters.RoundsUncommitted() != 0 || !entry.Counters.Exhausted() {
+		t.Fatalf("counters = %#v, want the whole cap committed, as the guard reads it", entry.Counters)
+	}
+	rendered := entry.Render()
+	for _, want := range []string{
+		"1 of 1 repair grant(s) worth 1 review round(s), 1 of them cut down to the room the cap still had",
+		"4 of 4 are committed by a grant not yet spent",
+		"A further repair grant for " + docketedItem + " is refused: 1 of 1 permitted grant(s) are already recorded",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the entry does not say %q:\n%s", want, rendered)
+		}
+	}
+}
+
 // A stoppage the harness has already run again is the other half of the same
 // gate: the decision is spent and so is the one re-run this entry gets, and an
 // entry that still read as re-runnable is an entry somebody acts on and the
