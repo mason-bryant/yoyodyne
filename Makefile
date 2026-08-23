@@ -70,6 +70,15 @@ dist: clean-dist
 	else \
 		echo "dist needs shasum or sha256sum to write checksums" >&2; exit 1; \
 	fi
+	@# This path has consumers outside this file: the release workflow publishes
+	@# it by name, and `make release` reports the cut's checksums from it. A
+	@# rename that missed them would otherwise surface as a published release
+	@# with no checksums, or a cut that prints none, so it fails here instead --
+	@# in the target CI runs on every change.
+	@if [ ! -f $(DIST)/checksums.txt ]; then \
+		echo "dist: no $(DIST)/checksums.txt; the checksum step wrote somewhere the release does not read" >&2; \
+		exit 1; \
+	fi
 	@echo "wrote $(DIST)/checksums.txt"
 
 # A release whose binaries do not name the tag they were built from is worse
