@@ -61,8 +61,8 @@ const (
 	// conflict machinery nobody has designed (docs/team-mode-scope.md).
 	GrantOwnIntent Grant = "own-intent"
 	// GrantDirectWork is the authority to steer work already in flight: the
-	// directives that reach a run, and the thread replies the Slack sink acts on
-	// once the inbound half exists. Every collaborator who runs their own harness
+	// directives that reach a run, and the thread replies the Slack sink records
+	// as directives. Every collaborator who runs their own harness
 	// holds it; owning intent is the narrower thing.
 	GrantDirectWork Grant = "direct-work"
 )

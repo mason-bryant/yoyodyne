@@ -181,6 +181,9 @@ var harnessVoice = voice{
 		KindProposalRaised:      "A change to {artifact} is proposed: {text}",
 		KindExchangeTurn:        "{exchange}, {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}.",
+		KindDirectiveRecorded:   "{directive} was recorded from this thread, received by the {receiver}: {text} — {effect}",
+		KindDirectiveResolved:   "{directive} is resolved: {text}",
+		KindDirectiveRefused:    "Nothing was recorded from that reply: {why}",
 		KindIntakeHeld:          "Intake is held for this product: {why}",
 		KindIntakeReleased:      "Intake is released for this product.",
 		KindHoldPlaced:          "All harness activity is held.",
@@ -227,6 +230,9 @@ var developerVoice = voice{
 		KindProposalRaised:      "{artifact} isn't mine to edit, so I'm proposing the change instead: {text}",
 		KindExchangeTurn:        "On {exchange}, {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}. Back to the change.",
+		KindDirectiveRecorded:   "I've been told something about this item, and it is written down as {directive} rather than left in a thread: {text} — {effect}",
+		KindDirectiveResolved:   "{directive} is settled: {text}. I pick the change up from where it stopped.",
+		KindDirectiveRefused:    "That reply changed nothing about what I'm building: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:      "Intake is open again; I'll take what I'm given.",
 		KindHoldPlaced:          "Held before my next provider call. Nothing of the change is lost.",
@@ -273,6 +279,9 @@ var reviewerVoice = voice{
 		KindProposalRaised:      "{artifact} is not mine to change, so this is an argument about it: {text}",
 		KindExchangeTurn:        "In {exchange}, at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}; I judge the change against what that leaves.",
+		KindDirectiveRecorded:   "{directive} is recorded against this item, and I judge the change against it exactly as against one typed at a terminal: {text} — {effect}",
+		KindDirectiveResolved:   "{directive} is settled: {text}. What I judge against is settled with it.",
+		KindDirectiveRefused:    "Nothing in that reply reaches what I judge this against: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:      "Intake is open; work will reach me again.",
 		KindHoldPlaced:          "Held before my next review. Nothing already judged changes.",
@@ -318,6 +327,9 @@ var developmentManagerVoice = voice{
 		KindProposalRaised:      "{artifact} isn't mine to change, so here is the case for changing it: {text}",
 		KindExchangeTurn:        "{exchange} is at {rounds} and the item waits on it: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}, and the item it held moves accordingly.",
+		KindDirectiveRecorded:   "Direction came in on this thread and is recorded against the item as {directive}: {text} — {effect}",
+		KindDirectiveResolved:   "{directive} is settled: {text}. The item it held moves again.",
+		KindDirectiveRefused:    "That reply is not direction anything can act on, so nothing about this item moved: {why}",
 		KindIntakeHeld:          "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:      "Intake is released; I'm pulling from the top of the backlog again.",
 		KindHoldPlaced:          "Everything is held. Nothing new starts, and nothing in flight is lost.",
@@ -364,6 +376,9 @@ var productManagerVoice = voice{
 		KindProposalRaised:      "A change to {artifact} is proposed, and I decide it only where the document is mine: {text}",
 		KindExchangeTurn:        "The operator is being asked something, in {exchange} at {rounds}: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}. What it settles is product intent.",
+		KindDirectiveRecorded:   "The operator has directed this work from the thread, and it is recorded as {directive} for the {receiver}: {text} — {effect}",
+		KindDirectiveResolved:   "The operator settled {directive}: {text}",
+		KindDirectiveRefused:    "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
 		KindIntakeHeld:          "The operator holds intake, so nothing new is chosen until they lift it: {why}",
 		KindIntakeReleased:      "The operator released intake; the backlog is being pulled from again.",
 		KindHoldPlaced:          "The operator holds all harness activity.",
@@ -410,6 +425,9 @@ var architectVoice = voice{
 		KindProposalRaised:      "{artifact} should change, and this is the case: {text}",
 		KindExchangeTurn:        "{exchange}, {rounds}, on what the design left open: {text}",
 		KindExchangeClosed:      "{exchange} closed {outcome}, which is where the design stops being ambiguous.",
+		KindDirectiveRecorded:   "{directive} arrived through a thread rather than a terminal, and is the same record with the same force either way: {text} — {effect}",
+		KindDirectiveResolved:   "{directive} is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
+		KindDirectiveRefused:    "The channel refused that reply rather than inferring a directive from it: {why}",
 		KindIntakeHeld:          "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:      "Intake is released; selection resumes.",
 		KindHoldPlaced:          "All harness activity is held, at the provider-call boundary rather than mid-generation.",
@@ -506,6 +524,13 @@ var nextMoves = map[Kind]string{
 	KindProposalRaised: "the operator's — nothing reaches the document until they decide it.",
 	KindExchangeTurn:   "the operator's, until the exchange is answered.",
 	KindExchangeClosed: "back to the work the exchange was holding.",
+	// What a reply did. The recorded clause is the pausing one, because a
+	// directive that stopped work is the one a reader has to do something about;
+	// directiveInForceMove is the other case, and nextMove chooses between them
+	// from what the record left unsettled.
+	KindDirectiveRecorded: "the operator's — the work this affects waits until the directive is resolved.",
+	KindDirectiveResolved: "the harness's — the work this held carries on from where it stopped.",
+	KindDirectiveRefused:  "the operator's — nothing was recorded, so nothing about the work has changed.",
 	// The operator's switches and the session that chooses work. These are about
 	// the whole line rather than one item, and every one of them is waiting on
 	// somebody by name.
@@ -528,6 +553,13 @@ var nextMoves = map[Kind]string{
 // table rather than in any record — so it is refused the way a missing voice line
 // is, rather than posted as a message that leaves the reader exactly where this
 // exists to stop leaving them.
+// directiveInForceMove is whose move follows a directive that stopped nothing.
+// An operational directive takes effect the moment it is recorded, so there is
+// nobody to wait for — and a thread that told a reader to wait for a resolution
+// would be naming a move nobody has to make, on the ordinary case rather than
+// the rare one.
+const directiveInForceMove = "the harness's — the directive is in force from now, and no work is waiting on it."
+
 func nextMove(event Event) (string, bool) {
 	// Work already marked for a conversation is not queued for a run and never
 	// will be, so the queue's answer would be telling a reader to expect something
@@ -538,6 +570,12 @@ func nextMove(event Event) (string, bool) {
 		case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized, KindWorkHandedOff:
 			return handedOffMove(event.Detail.Executor), true
 		}
+	}
+	// A recorded directive that left nothing unsettled is in force already rather
+	// than holding anything up, and the two are opposite answers to the question
+	// this clause exists to answer.
+	if event.Kind == KindDirectiveRecorded && strings.TrimSpace(event.Detail.Unresolved) == "" {
+		return directiveInForceMove, true
 	}
 	move, ok := nextMoves[event.Kind]
 	return move, ok
@@ -654,35 +692,38 @@ func Render(topic Topic, speaker Speaker, event Event) (Message, error) {
 func (e Event) fields(topic Topic) map[string]string {
 	detail := e.Detail
 	return map[string]string{
-		"item":     stated(itemOf(e.Refs, topic), "an unnamed work item"),
-		"run":      stated(e.Refs.RunID, "an unrecorded run"),
-		"by":       stated(detail.SelectedBy, "nobody the record names"),
-		"account":  stated(detail.Account, "an account the record does not name"),
-		"config":   stated(detail.Configuration, "a configuration the record does not name"),
-		"reason":   stated(detail.SelectionReason, "no reason recorded"),
-		"command":  stated(detail.Command, "a check the record does not name"),
-		"exit":     strconv.Itoa(detail.ExitCode),
-		"findings": countOf(detail.Findings, "finding", "findings", "findings the record does not count"),
-		"branch":   stated(detail.TargetBranch, "an unnamed branch"),
-		"commit":   stated(shortCommit(detail.Commit), "an unrecorded commit"),
-		"pr":       stated(detail.PullRequest, "an unrecorded pull request"),
-		"cause":    stated(detail.Cause, "something the record does not name"),
-		"waiting":  stated(detail.Waiting, "something the record does not name"),
-		"rounds":   roundsOf(detail),
-		"why":      stated(detail.Reason, "no reason given"),
-		"text":     stated(e.Text, "nothing the record could carry"),
-		"artifact": stated(detail.Artifact, "an unnamed artifact"),
-		"outcome":  outcomeOf(detail),
-		"exchange": stated(exchangeOf(e.Refs, topic), "an unnamed exchange"),
-		"title":    stated(detail.Title, "a title the record does not carry"),
-		"goal":     stated(detail.Goal, "no goal the record names"),
-		"parent":   stated(detail.Parent, "an item the record does not name"),
-		"priority": priorityOf(detail),
-		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),
-		"stopped":  stated(detail.Stopped, "nothing the record names has stopped it"),
-		"age":      ageOf(detail.Since, e.At),
-		"ready":    countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
-		"events":   countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
+		"item":      stated(itemOf(e.Refs, topic), "an unnamed work item"),
+		"run":       stated(e.Refs.RunID, "an unrecorded run"),
+		"by":        stated(detail.SelectedBy, "nobody the record names"),
+		"account":   stated(detail.Account, "an account the record does not name"),
+		"config":    stated(detail.Configuration, "a configuration the record does not name"),
+		"reason":    stated(detail.SelectionReason, "no reason recorded"),
+		"command":   stated(detail.Command, "a check the record does not name"),
+		"exit":      strconv.Itoa(detail.ExitCode),
+		"findings":  countOf(detail.Findings, "finding", "findings", "findings the record does not count"),
+		"branch":    stated(detail.TargetBranch, "an unnamed branch"),
+		"commit":    stated(shortCommit(detail.Commit), "an unrecorded commit"),
+		"pr":        stated(detail.PullRequest, "an unrecorded pull request"),
+		"cause":     stated(detail.Cause, "something the record does not name"),
+		"waiting":   stated(detail.Waiting, "something the record does not name"),
+		"rounds":    roundsOf(detail),
+		"why":       stated(detail.Reason, "no reason given"),
+		"text":      stated(e.Text, "nothing the record could carry"),
+		"artifact":  stated(detail.Artifact, "an unnamed artifact"),
+		"directive": stated(e.Refs.DirectiveID, "a directive the record does not name"),
+		"receiver":  stated(detail.ReceivedBy, "a role the record does not name"),
+		"effect":    effectOf(detail),
+		"outcome":   outcomeOf(detail),
+		"exchange":  stated(exchangeOf(e.Refs, topic), "an unnamed exchange"),
+		"title":     stated(detail.Title, "a title the record does not carry"),
+		"goal":      stated(detail.Goal, "no goal the record names"),
+		"parent":    stated(detail.Parent, "an item the record does not name"),
+		"priority":  priorityOf(detail),
+		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
+		"stopped":   stated(detail.Stopped, "nothing the record names has stopped it"),
+		"age":       ageOf(detail.Since, e.At),
+		"ready":     countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
+		"events":    countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
 	}
 }
 
@@ -830,6 +871,19 @@ func priorityOf(detail Detail) string {
 		return "a priority the record does not state"
 	}
 	return "priority " + strconv.Itoa(detail.Priority)
+}
+
+// effectOf says what a recorded directive did to the work it names. The two
+// cases are opposite facts rather than degrees of one — an operational directive
+// is in force the moment it is recorded, and an unresolved one has stopped the
+// work until somebody settles it — so the sentence says which, and says what is
+// waiting where anything is. A reader who had to infer that from a severity mark
+// would be inferring the whole of what a directive did.
+func effectOf(detail Detail) string {
+	if unresolved := strings.TrimSpace(detail.Unresolved); unresolved != "" {
+		return "the work it affects waits until this is settled: " + unresolved
+	}
+	return "it is in force from now, and nothing waits on it"
 }
 
 // outcomeOf says how an exchange ended. Closing unresolved at the round cap is

@@ -1157,9 +1157,11 @@ it again with `/work` when you want it retried.
 A redirection is about one item. A directive is about the product: it is
 recorded for the product rather than for the agent you happened to say it to, so
 it reaches every run of every item, in this process and in any other. That is
-what `yoyo directive` and `/directive` write, and it is the same record every
-run reads before it starts, before it resumes, and before it puts a change
-through the gate that would integrate it.
+what `yoyo directive`, `/directive`, and a reply in a work item's
+[Slack thread](#reporting-into-slack) write, and it is the same record every run
+reads before it starts, before it resumes, and before it puts a change through
+the gate that would integrate it. Which of the three it arrived through changes
+nothing about it downstream.
 
 Most directives are operational. They take effect from the moment they are
 recorded, and nothing waits for them:
@@ -3316,9 +3318,20 @@ returns. The moment its history starts from is written down the first time you
 ever run it and never taken again, so time the sink itself spent stopped is a gap
 it reads across rather than a gap in what it says. It is also the reason no run
 holds a Slack token — one separate process posts, so no agent's subprocess tree
-ever has a credential for your workspace in it. Replies are acknowledged and
-nothing acts on them yet; steering the harness from a thread is designed and not
-built.
+ever has a credential for your workspace in it.
+
+**Replies go the other way.** A reply in a work item's thread is recorded as a
+[directive](#directives-and-the-work-they-pause) against that item — the same
+record `yoyo directive record` writes, with the same pause semantics and the same
+resolution, so a run meets it whichever way it arrived. Plain words are an
+operational directive; a reply opening `ambiguous:` or `artifact: <name>` states
+the kinds that pause the work, and `resolve <id> <how>` lifts one. Every reply is
+answered in its thread with what was recorded or why nothing was.
+
+Who may do it is not configured beside the channel: it is derived from the humans
+[`operators`](docs/configuration.md#operators) grants `direct-work` who have
+bound a `slack_member_id`, and nobody else — so a project that has granted nobody
+is steered by nobody, which is what a workspace gets until you add yourself.
 
 ## Further reading
 

@@ -94,6 +94,17 @@ const (
 	KindProposalRaised Kind = "proposal.raised"
 	KindExchangeTurn   Kind = "exchange.turn"
 	KindExchangeClosed Kind = "exchange.closed"
+	// What a reply in a topic's thread did. They are the acknowledgment the
+	// inbound half owes every message it reads: the directive as recorded with
+	// its identifier, the resolution that lifted one, or the refusal with its
+	// reason. Three kinds rather than one, because they are the three different
+	// things an operator has to know — the work is now steered, the work is
+	// moving again, or nothing was recorded at all — and a reader who could not
+	// tell them apart at a glance would have to open the record to find out
+	// whether they had been heard.
+	KindDirectiveRecorded Kind = "directive.recorded"
+	KindDirectiveResolved Kind = "directive.resolved"
+	KindDirectiveRefused  Kind = "directive.refused"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -160,6 +171,9 @@ func Kinds() []Kind {
 		KindProposalRaised,
 		KindExchangeTurn,
 		KindExchangeClosed,
+		KindDirectiveRecorded,
+		KindDirectiveResolved,
+		KindDirectiveRefused,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -187,6 +201,7 @@ func (k Kind) Valid() bool {
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
+		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindLineWaiting, KindCatchUpDigest:
@@ -483,9 +498,22 @@ type Detail struct {
 	// Unresolved is what an exchange closed without settling, read by
 	// KindExchangeClosed. Empty means it closed resolved, which is the ordinary
 	// way for one to end.
+	//
+	// It is read a second time by KindDirectiveRecorded, where it is what the
+	// recorded directive left for somebody to settle — and therefore the whole of
+	// what says whether the work it affects is paused. Empty there is the
+	// operational directive, which is in force already and stops nothing.
 	Unresolved string `json:"unresolved,omitempty"`
-	// Artifact is the document a proposal is about, read by KindProposalRaised.
+	// Artifact is the document a proposal is about, read by KindProposalRaised,
+	// and the governed document an artifact-changing directive rewrites, read by
+	// KindDirectiveRecorded.
 	Artifact string `json:"artifact,omitempty"`
+	// ReceivedBy is the role a directive was addressed to, read by
+	// KindDirectiveRecorded. It is attribution rather than routing — the record
+	// reaches every role whichever one is named — and it is said because an
+	// operator who addressed the reviewer wants to see that the reviewer is who
+	// the record says they told.
+	ReceivedBy string `json:"received_by,omitempty"`
 	// Title is what an item is called, read by the kinds that report one arriving
 	// in the backlog. An identifier says which item; the title is what makes a
 	// thread readable by somebody who has not read the tracker.
@@ -528,8 +556,9 @@ type Detail struct {
 	// the durable record rather than in the channel.
 	Accumulated int `json:"accumulated,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
-	// a role changed the backlog, read by the tracker kinds; and why proposed work
-	// was turned down, read by KindWorkDeclined. An operator who holds in a hurry
+	// a role changed the backlog, read by the tracker kinds; why proposed work
+	// was turned down, read by KindWorkDeclined; and why a thread reply recorded
+	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
 	// owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
 }

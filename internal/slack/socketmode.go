@@ -9,12 +9,13 @@ package slack
 // than a transport redesign — the websocket that posts is the websocket replies
 // will arrive on.
 //
-// Today nothing acts on what arrives. Every inbound envelope is acknowledged, so
-// Slack stops redelivering it, and then handed to a handler the sink can be
-// given. The default handler does nothing, which is the honest shape of one-way
-// reporting: the connection is open, the messages are seen, and no reply steers
-// anything until the inbound mapping exists and an operator has named themselves
-// in the allow-list.
+// Every inbound envelope is acknowledged before anything is done with it, so
+// Slack stops redelivering it, and is then handed to the sink's handler. What
+// that handler does is inbound.go's: a reply in a thread becomes a directive
+// where the person who sent it holds direct-work, and is answered in its thread
+// either way. A sink assembled without the directive record has no handler at
+// all, which is the honest shape of one-way reporting — the connection is open,
+// the messages are seen, and nothing is steered.
 
 import (
 	"context"
@@ -67,10 +68,9 @@ const (
 )
 
 // InboundHandler is what the sink does with a message that arrives on the
-// connection. It exists as a seam rather than as behavior: the inbound half maps
-// a thread reply onto the existing directive record, and until it does, a sink
-// that quietly did something with replies would be a channel doing more than its
-// documentation says.
+// connection. It is a seam rather than behavior: what the harness puts here is
+// the steering in inbound.go, and a test puts its own to drive the connection
+// without a workspace.
 type InboundHandler func(ctx context.Context, envelope socketEnvelope)
 
 // connection keeps one Socket Mode connection open for as long as its context
