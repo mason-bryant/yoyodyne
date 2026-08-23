@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -143,24 +144,52 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, single bool) {
 		printPriceBreakdown(writer, prices[0])
 		return
 	}
-	fmt.Fprintf(writer, "%-38s %6s %9s %12s\n", "item", "runs", "unpriced", "cost")
+	fmt.Fprintf(writer, ledgerRow, "item", "runs", "unpriced", "develop", "review", "repair", "cost", "waited")
 	total := 0.0
 	runs, unpriced := 0, 0
+	var phases runstate.PhaseSpend
 	for _, price := range prices {
 		if !price.Recorded() {
 			continue
 		}
-		fmt.Fprintf(writer, "%-38s %6d %9d %12s\n", price.WorkItemID, len(price.Runs), price.UnknownRuns, renderTotal(price.TotalUSD, price.UnknownRuns))
+		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases)
 		total += price.TotalUSD
 		runs += len(price.Runs)
 		unpriced += price.UnknownRuns
+		phases.Merge(price.Phases)
 	}
-	fmt.Fprintf(writer, "%-38s %6d %9d %12s\n", "TOTAL", runs, unpriced, renderTotal(total, unpriced))
+	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases)
 	if unpriced > 0 {
 		fmt.Fprintln(writer, "a run with no surviving record is counted as unpriced and left out of the total,")
 		fmt.Fprintln(writer, "so every total it touches is a floor rather than a price")
 	}
+	// The split is said to be exhaustive rather than said to add up, because each
+	// column is rounded to the cent on its own and three of them can land a penny
+	// away from the total they came from. What matters is that nothing is missing
+	// from them, which is the claim the rounding cannot make false.
+	fmt.Fprintln(writer, "develop, review and repair account for every priced invocation; waited is time rather than money")
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
+}
+
+// ledgerRow is the shape of every line of the ledger, header and total
+// included, so the columns cannot drift apart between them.
+const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %9s\n"
+
+// printLedgerRow writes one item's line. Each phase carries the same floor
+// marker the total does, for the reason the total carries it: a column that read
+// as exact because the count saying otherwise is elsewhere on the line is the
+// mistake the marker exists to stop.
+func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend) {
+	fmt.Fprintf(writer, ledgerRow,
+		label,
+		strconv.Itoa(runs),
+		strconv.Itoa(unpriced),
+		renderTotal(phases.Development.CostUSD, unpriced),
+		renderTotal(phases.Review.CostUSD, unpriced),
+		renderTotal(phases.Repair.CostUSD, unpriced),
+		renderTotal(total, unpriced),
+		renderWait(phases.Waits.Total()),
+	)
 }
 
 func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
@@ -169,10 +198,71 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 		return
 	}
 	fmt.Fprintf(writer, "%s: %s across %d run(s)\n", price.WorkItemID, renderTotal(price.TotalUSD, price.UnknownRuns), len(price.Runs))
+	fmt.Fprintf(writer, "  %s\n", renderPhaseSplit(price.Phases, price.UnknownRuns))
 	for _, run := range price.Runs {
 		fmt.Fprintf(writer, "  %s started %s [%s] %s\n", run.RunID, run.StartedAt.UTC().Format(time.RFC3339), renderRunOutcome(run), renderRunPrice(run))
+		// A run nothing survives to price has no split to show, but it still
+		// waited for as long as it waited: that came from the run's own record
+		// rather than from the log that is gone.
+		if run.Known() {
+			fmt.Fprintf(writer, "    %s\n", renderPhaseSplit(run.Phases, 0))
+		} else if wait := renderWaits(run.Phases.Waits); wait != "" {
+			fmt.Fprintf(writer, "    %s\n", wait)
+		}
 	}
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
+}
+
+// renderPhaseSplit says where a price went. Every phase is named even when it
+// cost nothing, because a review that never happened and a review that was free
+// read identically in a line that leaves the empty ones out, and telling those
+// two apart is what splitting the price up is for.
+func renderPhaseSplit(phases runstate.PhaseSpend, unpriced int) string {
+	split := fmt.Sprintf("development %s from %d invocation(s), review %s from %d, repair %s from %d",
+		renderTotal(phases.Development.CostUSD, unpriced), phases.Development.Invocations,
+		renderTotal(phases.Review.CostUSD, unpriced), phases.Review.Invocations,
+		renderTotal(phases.Repair.CostUSD, unpriced), phases.Repair.Invocations)
+	if waits := renderWaits(phases.Waits); waits != "" {
+		split += "; " + waits
+	}
+	return split
+}
+
+// renderWaits says how long work was held up and by what. The two waits are
+// named apart because they are somebody's decision and nobody's respectively: a
+// provider that would not serve the account is a thing to spend money on, and an
+// operator's hold is a thing the operator already knows about.
+func renderWaits(waits runstate.Waits) string {
+	provider := time.Duration(waits.UsageLimitSeconds) * time.Second
+	operator := time.Duration(waits.OperatorHoldSeconds) * time.Second
+	switch {
+	case provider > 0 && operator > 0:
+		return fmt.Sprintf("waited %s (%s for the provider, %s on the operator's hold)",
+			renderWait(waits.Total()), renderWait(provider), renderWait(operator))
+	case provider > 0:
+		return "waited " + renderWait(provider) + " for the provider"
+	case operator > 0:
+		return "waited " + renderWait(operator) + " on the operator's hold"
+	}
+	return ""
+}
+
+// renderWait puts a wait in the units somebody reads it in. A run that waited
+// four hours and a run that waited four seconds are different problems, and
+// neither is helped by six digits of precision.
+func renderWait(waited time.Duration) string {
+	waited = waited.Round(time.Second)
+	if waited <= 0 {
+		return ""
+	}
+	switch {
+	case waited >= time.Hour:
+		return fmt.Sprintf("%dh%02dm", int(waited/time.Hour), int(waited%time.Hour/time.Minute))
+	case waited >= time.Minute:
+		return fmt.Sprintf("%dm%02ds", int(waited/time.Minute), int(waited%time.Minute/time.Second))
+	default:
+		return fmt.Sprintf("%ds", int(waited/time.Second))
+	}
 }
 
 // printRecordedPrices says what reached the tracker. A price that could not be
@@ -243,7 +333,10 @@ func printCostUsage(writer io.Writer) {
 
 Prices work items from the runs the harness recorded for them: every run made
 for an item, the failed attempts and the reviewer's invocations included, at the
-cost the provider itself reported. Naming an item breaks its price down by run.
+cost the provider itself reported. Every price is split by where it went --
+making the change, reviewing it, and repairing it -- with the time the work
+spent waiting on a provider or on the operator beside it. Naming an item breaks
+its price down by run.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
