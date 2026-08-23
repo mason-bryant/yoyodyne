@@ -228,8 +228,10 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 			return refused(topic, at, err.Error())
 		}
 		// What became of it is said here, by this reply, so the delivery pass must
-		// not say it again when it reads the same settlement out of the record.
-		s.said(resolved.ID)
+		// not say it again when it reads the same settlement out of the record —
+		// unless this is not the thread that asked for it, in which case the thread
+		// that did has still heard nothing and is still owed the outcome.
+		s.said(resolved.ID, topic)
 		return acknowledged(topic, notify.KindDirectiveResolved, resolved, at)
 	}
 	recorded, err := s.record(topic, message.user, parsed, at)
@@ -302,18 +304,23 @@ func (s *steering) remember(recorded directive.Directive, topic notify.Topic, me
 	}
 }
 
-// said marks a directive whose outcome this half has already put in the thread,
-// so the delivery pass reading the same settlement out of the record leaves it
-// alone. A directive nothing here recorded is not in the map and needs no mark:
-// it was settled from a thread that never asked for it.
-func (s *steering) said(directiveID string) {
+// said marks a directive whose outcome this half has already put in the thread
+// that asked for it, so the delivery pass reading the same settlement out of the
+// record leaves it alone.
+//
+// Which thread the settlement was said in is the whole of the test. A directive
+// nothing here recorded is not in the map and needs no mark. One settled from
+// some other item's thread is answered there, where somebody asked about it, and
+// the thread that actually asked for it has heard nothing — so it is left unsaid
+// and the pass still owes it the outcome, which is the case this exists for.
+func (s *steering) said(directiveID string, topic notify.Topic) {
 	steers, err := s.sink.store.LoadSteers()
 	if err != nil {
 		s.sink.log("directive %s was settled from a thread, but what this sink has already said could not be read, so the settlement may be said there twice: %v", directiveID, err)
 		return
 	}
 	steer, found := steers.Lookup(directiveID)
-	if !found {
+	if !found || steer.Topic != topic.Key() {
 		return
 	}
 	steer.Said = true

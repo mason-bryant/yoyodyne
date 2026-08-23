@@ -4,10 +4,11 @@ package slack
 // it has read each durable stream, and which directives were said to it in a
 // thread rather than at a terminal.
 //
-// Both live at the state root beside the runs, conversations, and reports they
-// are read from, per product, and both are owned by the sink alone. A restart
-// therefore posts into the same threads and resumes from the same place, which
-// is the whole of what makes an outage a delay rather than a gap.
+// All three live at the state root beside the runs, conversations, and reports
+// they are read from, per product, and each is owned by the sink alone. A
+// restart therefore posts into the same threads, resumes from the same place,
+// and still knows who asked for what, which is the whole of what makes an outage
+// a delay rather than a gap.
 //
 // Known limit, stated rather than solved: the thread map is per machine. Two
 // collaborators' harnesses against one shared repository would open two threads

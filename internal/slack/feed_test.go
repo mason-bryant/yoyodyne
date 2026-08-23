@@ -498,6 +498,56 @@ func TestWhatBecomesOfADirectiveSaidInAThreadIsSaidInThatThread(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// A settlement that happened before this product's reporting began is history,
+// exactly as everything else read from a record is. The per-directive marks live
+// in the cursors and the steer map does not, so an operator who starts the
+// channel over by deleting one and keeping the other must not be answered by
+// name for every directive they ever steered and settled: a flood of mentions
+// about work that is long over is the same trust erosion as silence.
+func TestASettlementFromBeforeTheWatermarkIsNotSaidAgain(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment.Add(time.Hour))
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", "U0OPERATOR")
+	if _, err := harness.directives.Resolve(recorded.ID, "settled long before the channel existed", moment); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	// The cursors a sink has when it has read nothing at all, which is exactly
+	// what deleting them leaves behind.
+	harness.poll(t, harness.start())
+}
+
+// A settlement the connection already said in the thread is not said a second
+// time by the delivery pass. The two halves post from different goroutines, so
+// what the connection wrote down is what stops the pass repeating it.
+func TestASettlementTheThreadWasAlreadyToldIsNotSaidByThePass(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", "U0OPERATOR")
+	if _, err := harness.directives.Resolve(recorded.ID, "the one already on the target branch", moment); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	steers, err := harness.steers.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	steer, found := steers.Lookup(recorded.ID)
+	if !found {
+		t.Fatalf("steer for %s is missing, want the one the harness recorded", recorded.ID)
+	}
+	// What a reply that resolved it in its own thread leaves behind.
+	steer.Said = true
+	steers.Record(recorded.ID, steer)
+	if err := harness.steers.SaveSteers(steers); err != nil {
+		t.Fatalf("SaveSteers() error = %v", err)
+	}
+
+	harness.poll(t, harness.start())
+}
+
 // A directive recorded at a terminal has no thread to answer in and nobody to
 // tag, so nothing is said about it here. Reporting on every directive the
 // product has would be a channel narrating a record nobody asked it to.

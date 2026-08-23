@@ -269,7 +269,7 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, refused...)
 
-	outcomes, err := f.directiveDeliveries(cursors.Streams[directiveStream], batch.Streams)
+	outcomes, err := f.directiveDeliveries(cursors, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
@@ -429,11 +429,20 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 // A settlement the connection made itself is left alone. It has already been
 // said in the thread, by the reply that made it, and the two halves post from
 // different goroutines and cannot share a memory of what they have said.
-func (f *HarnessFeed) directiveDeliveries(cursor Cursor, streams map[string]struct{}) ([]Delivery, error) {
+//
+// What was settled before the watermark is history, exactly as it is on every
+// stream that reads a record. The per-directive mark alone would not hold that
+// line: the marks live in the cursors, the steer map does not, and the setup
+// document tells an operator starting a channel over to delete one and keep the
+// other — which without this would answer them, by name, for every directive
+// they ever steered and settled. A flood of mentions about work that is long
+// over is the same trust erosion as silence, from the other side.
+func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]struct{}) ([]Delivery, error) {
 	if f.Directives == nil || f.Steers == nil {
 		return nil, nil
 	}
 	streams[directiveStream] = struct{}{}
+	cursor := cursors.Streams[directiveStream]
 	steers, err := f.Steers.LoadSteers()
 	if err != nil {
 		return nil, fmt.Errorf("read which directives were said in a thread: %w", err)
@@ -452,6 +461,12 @@ func (f *HarnessFeed) directiveDeliveries(cursor Cursor, streams map[string]stru
 	for _, directed := range recorded {
 		steer, found := steers.Lookup(directed.ID)
 		if !found || steer.Said || !directed.Resolved() {
+			continue
+		}
+		if predates(cursors.Since, *directed.ResolvedAt) {
+			// Settled before this product's reporting began, or before it began
+			// again. It is read past on age rather than marked, because a mark is
+			// what a cursor reset just threw away and this has to hold without one.
 			continue
 		}
 		mark := outcomeMark + directed.ID

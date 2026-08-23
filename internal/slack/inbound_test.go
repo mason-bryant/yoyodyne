@@ -151,6 +151,55 @@ func TestASettlementMadeFromAThreadIsNotSaidTwice(t *testing.T) {
 	}
 }
 
+// Settling a directive from somewhere other than the thread that asked for it
+// answers where it was settled, and leaves the thread that asked still owed what
+// became of it. Marking it said there would be the sink concluding somebody had
+// been told because somebody else was.
+func TestASettlementSaidInAnotherThreadStillOwesTheThreadThatAsked(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, _ := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	// A second item, with a thread of its own: the operator settles it from
+	// wherever they happen to be reading.
+	threads, err := sink.store.LoadThreads()
+	if err != nil {
+		t.Fatalf("LoadThreads() error = %v", err)
+	}
+	elsewhere, err := notify.WorkItem("yoyodyne-ifd.68.20")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	threads.Record(elsewhere.Key(), Thread{Channel: "C1", ThreadTS: "1750000003.000400"})
+	if err := sink.store.SaveThreads(threads); err != nil {
+		t.Fatalf("SaveThreads() error = %v", err)
+	}
+
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "channel": "C1",
+		"text": "resolve " + recorded.ID[:16] + " the one already on the target branch",
+		"ts": "1750000004.000500", "thread_ts": "1750000003.000400",
+	}))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() {
+		t.Fatalf("settled = %+v, want it settled from whichever thread said so", settled)
+	}
+	steers, err := sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	if steer, _ := steers.Lookup(recorded.ID); steer.Said {
+		t.Fatalf("steer = %#v, want the thread that asked still owed what became of it", steer)
+	}
+}
+
 // The pausing kinds are stated rather than inferred, and a stated one pauses the
 // work exactly as one recorded at a terminal does. Nothing about arriving through
 // a chat workspace makes it a weaker record.
