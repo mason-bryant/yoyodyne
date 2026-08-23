@@ -1002,6 +1002,19 @@ than as stating more of them. Attributing work to a non-goal is worse than
 attributing it to nothing, so that bound does not depend on how the document was
 nested.
 
+**A wrapped goal is recorded whole and reported anyway.** Rejoining is what
+closed the silent truncation that recorded only a goal's first line, so nothing
+is refused over a wrap and work naming the whole statement still resolves. What
+`yoyo goals list` says on stderr about one is that the rejoining is a reading of
+the file rather than something the file states: the words an attribution has to
+match exist only once the wrap is put back together, and an indent, or a wrapped
+line that reads as the `Supports:` trailer, changes the recorded goal without
+changing a word of it. A goal written on one physical line cannot be changed that
+way, which is why the convention is worth holding rather than merely tolerating
+the wrap. Only a goal in a document still in force is reported, for the same
+reason a broken link upstream is only reported for one: a goal in a superseded
+document is not one work can name.
+
 | Reported as | What it is | What it means for the work |
 | --- | --- | --- |
 | `attributed` | Names a goal an in-force goals artifact states. | The chain holds. |

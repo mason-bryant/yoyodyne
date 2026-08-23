@@ -40,6 +40,7 @@ type goalsOutput struct {
 	BriefGoals   []goal.BriefGoal   `json:"brief_goals,omitempty"`
 	Problems     []goal.Problem     `json:"problems,omitempty"`
 	LinkProblems []goal.LinkProblem `json:"link_problems,omitempty"`
+	WrapProblems []goal.WrapProblem `json:"wrap_problems,omitempty"`
 	// Attributions are the admitted work items and what each says it is for.
 	Attributions []itemAttribution `json:"attributions,omitempty"`
 	// Witnessed are the items a sweep recorded a witness on, and the goal each
@@ -104,6 +105,7 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 			BriefGoals:   goals.BriefGoals,
 			Problems:     goals.Problems,
 			LinkProblems: goals.LinkProblems,
+			WrapProblems: goals.WrapProblems,
 		})
 	}
 	if reason, uncheckable := goals.Uncheckable(); uncheckable {
@@ -166,6 +168,7 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 			Problems:     goals.Problems,
 			BriefGoals:   goals.BriefGoals,
 			LinkProblems: goals.LinkProblems,
+			WrapProblems: goals.WrapProblems,
 		}); code != 0 {
 			return code
 		}
@@ -385,6 +388,13 @@ func printGoalsProblems(stderr io.Writer, goals goal.Set) {
 	// what is wrong is the chain above it.
 	for _, problem := range goals.LinkProblems {
 		fmt.Fprintf(stderr, "goal not linked to the brief: %s\n", problem)
+	}
+	// A hard-wrapped goal is reported for the same reason and in the same place:
+	// the statement was rejoined and work can be attributed to it, and what is
+	// wrong is that the goal the file records is the rejoining rather than
+	// anything the file says outright.
+	for _, problem := range goals.WrapProblems {
+		fmt.Fprintf(stderr, "goal not written on one line: %s\n", problem)
 	}
 }
 
