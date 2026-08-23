@@ -16,6 +16,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/mason-bryant/yoyodyne/internal/console"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // concernFence opens the one block a reply may raise concerns in. It is a
@@ -92,6 +95,24 @@ func (k ConcernKind) Headline() string {
 	default:
 		return "a concern the harness does not recognize"
 	}
+}
+
+// Severity is how much attention this kind of concern asks for, in the same
+// vocabulary every report is filed under. It is deliberately the one vocabulary:
+// a conversation shows reports and concerns in the same scroll, and two schemes
+// of emphasis side by side is neither of them.
+//
+// A conflict is critical because it is the kind that says something is already
+// wrong — work that would cut against a goal the product has written down. The
+// other two are warnings: work it cannot place usually means the goals are
+// incomplete, and a judgement is an opinion the operator may simply overrule.
+// All three stop and wait either way, and the headline under the marker says so;
+// this decides only which of them a reader finds first.
+func (k ConcernKind) Severity() report.Severity {
+	if k == ConcernConflict {
+		return report.SeverityCritical
+	}
+	return report.SeverityWarning
 }
 
 // Concern is one thing the product manager will not propose until the operator
@@ -276,16 +297,24 @@ func boundConcernText(field, value string) error {
 // Render describes one concern for an operator who is about to answer it. The
 // kind is the harness's own line and everything under it came from the
 // provider, so provider text is indented and never printed at the margin.
-func (c PendingConcern) Render() string {
+//
+// It is dressed twice, and the two say different things. The question inside it
+// gets the colour every question gets, because that is what the operator has to
+// answer; the whole of it is weighted by the severity its kind asks for, so a
+// conflict is picked out of a run of concerns without any of them being read.
+// The marker at the margin is what says the same thing on a terminal that cannot
+// be dressed at all, and the headline says it in words under either.
+func (c PendingConcern) Render(theme console.Theme) string {
+	severity := c.Concern.Kind.Severity()
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "[%s] %s\n", c.ID, c.Concern.Kind.Headline())
+	fmt.Fprintf(&rendered, "%-*s [%s] %s\n", report.MarkerWidth, severity.Marker(), c.ID, c.Concern.Kind.Headline())
 	rendered.WriteString(indent("about: " + strings.TrimSpace(c.Concern.Subject)))
 	if goal := strings.TrimSpace(c.Concern.Goal); goal != "" {
 		rendered.WriteString(indent("goal: " + goal))
 	}
 	rendered.WriteString(indent(c.Concern.Detail))
 	rendered.WriteString(indent(strings.TrimSpace(c.Concern.Question)))
-	return rendered.String()
+	return theme.Severity(console.Severity(severity), theme.Questions(rendered.String()))
 }
 
 // answered is what the record keeps about a concern the operator settled: the

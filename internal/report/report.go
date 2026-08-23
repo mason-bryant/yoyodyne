@@ -85,6 +85,40 @@ func (s Severity) Valid() bool {
 	}
 }
 
+// MarkerWidth is the column a severity's marker occupies in a listing, so that
+// what follows it lines up whether or not the line carries one.
+const MarkerWidth = 2
+
+// Marker is the mark a severity is picked out by where nothing may be dressed:
+// a listing redirected to a file, a terminal that says it is dumb, an operator
+// who set NO_COLOR. Colour is an addition everywhere in this harness and never
+// the carrier of meaning, so this is what has to do the work on its own.
+//
+// It sits at the left of the line, because a reader scanning a pile is reading
+// down the margin rather than across every line, and a note is marked with
+// nothing at all: a mark on every line marks none of them.
+func (s Severity) Marker() string {
+	switch s {
+	case SeverityCritical:
+		return "!!"
+	case SeverityWarning:
+		return "!"
+	default:
+		return ""
+	}
+}
+
+// Prefix is the marker and the space that separates it from what follows, or
+// nothing where the severity carries no marker. It is what a line of prose is
+// marked with, as opposed to a listing, which pads the marker to MarkerWidth so
+// its identifiers line up.
+func (s Severity) Prefix() string {
+	if marker := s.Marker(); marker != "" {
+		return marker + " "
+	}
+	return ""
+}
+
 // rank orders the severities by how much attention each asks for. It is what
 // lets a pile be read worst-first: a reader working through what nobody has
 // dealt with yet wants the thing already costing somebody before the thing that
@@ -462,6 +496,42 @@ func BySeverity(reports []Report) []Report {
 	return ordered
 }
 
+// Worst is the severity of the most attention-seeking report in a set, and the
+// empty severity where there are none.
+//
+// It is what a summary that names a pile without listing it is marked and
+// dressed by. "This run reported three things" says nothing about whether one of
+// them is already costing somebody, and a closing line that read the same way
+// for three notes and for a critical is exactly how a critical report goes
+// unread.
+func Worst(reports []Report) Severity {
+	var worst Severity
+	for _, reported := range reports {
+		if worst == "" || reported.Severity.rank() < worst.rank() {
+			worst = reported.Severity
+		}
+	}
+	return worst
+}
+
+// Tally says how many reports of each severity a set holds, worst first, for
+// that same summary. A severity nothing was filed at is left out rather than
+// counted at zero: what the line is for is saying which of these there are, and
+// three zeroes to read past is the noise this is trying to cut.
+func Tally(reports []Report) string {
+	counts := make(map[Severity]int, 3)
+	for _, reported := range reports {
+		counts[reported.Severity]++
+	}
+	var parts []string
+	for _, severity := range []Severity{SeverityCritical, SeverityWarning, SeverityNote} {
+		if counts[severity] > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", severity, counts[severity]))
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
 // Render describes what became of one report, for a listing that has just shown
 // the report itself. It is indented under it and folded to one line: the reason
 // came from whoever handled the report, and a listing is a listing.
@@ -478,10 +548,17 @@ func (h Handling) Render() string {
 // message came from a provider, so it is indented under the harness's own line
 // and never printed at the margin.
 //
-// The identifier leads the line because it is what a report is named by now.
-// Saying what became of one means naming it, and a listing that showed
-// everything about a report except the word for it would leave the reader
-// unable to act on what they had just read.
+// The marker leads the line, before the identifier, because the two are read
+// differently: the identifier is what a reader who has stopped at a report needs
+// in order to act on it, and the marker is what stops them at that one rather
+// than at the note above it. It is padded to a fixed width so the identifiers
+// still line up in a column, which is what makes the rest of a listing readable
+// once the criticals are marked out of it.
+//
+// The identifier is otherwise still what a report is named by. Saying what
+// became of one means naming it, and a listing that showed everything about a
+// report except the word for it would leave the reader unable to act on what
+// they had just read.
 func (r Report) Render() string {
 	var rendered strings.Builder
 	// The agent is named only where it says something the role does not, which
@@ -490,7 +567,8 @@ func (r Report) Render() string {
 	if r.Agent != "" && r.Agent != string(r.Role) {
 		reporter = r.Agent + " (" + string(r.Role) + ")"
 	}
-	fmt.Fprintf(&rendered, "  %s [%s] %s from the %s", r.ID, r.Severity, r.RecordedAt.UTC().Format(time.RFC3339), reporter)
+	fmt.Fprintf(&rendered, "  %-*s %s [%s] %s from the %s",
+		MarkerWidth, r.Severity.Marker(), r.ID, r.Severity, r.RecordedAt.UTC().Format(time.RFC3339), reporter)
 	if r.WorkItemID != "" {
 		fmt.Fprintf(&rendered, " on %s", r.WorkItemID)
 	}

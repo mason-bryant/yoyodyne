@@ -24,6 +24,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -91,10 +92,16 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	// The whole pile, oldest first, unlike `/reports` in a conversation: that is a
 	// listing beside an ongoing conversation and lists the twenty most recent,
 	// and this is a command whose output can be paged, filtered, or piped.
+	//
+	// Each one is dressed by the severity it was filed at, and what became of it
+	// is not: a pile printed oldest first is the surface where a critical report
+	// is furthest from the reader's eye, and the plain line under a loud one is
+	// what says somebody has already dealt with that one.
 	handled := report.Handled(handlings)
+	theme := console.ThemeFor(stdout, os.Getenv)
 	fmt.Fprintf(stdout, "reports (%d collected, %d unhandled):\n", len(collected), len(collected)-len(handled))
 	for _, reported := range collected {
-		fmt.Fprint(stdout, reported.Render())
+		fmt.Fprint(stdout, theme.Severity(console.Severity(reported.Severity), reported.Render()))
 		if handling, done := handled[reported.ID]; done {
 			fmt.Fprint(stdout, handling.Render())
 		}
@@ -155,6 +162,13 @@ decided about carries what it decided, under it; everything else is still
 waiting on somebody. The whole pile is printed, oldest first; `+"`/reports`"+` in
 `+"`yoyo chat`"+` shows the same reports beside the conversation, listing the
 twenty most recent.
+
+A report filed at `+"`critical`"+` or `+"`warning`"+` is marked at the left margin, with
+`+"`!!`"+` and `+"`!`"+`, and coloured where the terminal permits colour — so a pile can be
+scanned for what is already costing somebody without every line being read. The
+marker is the part that survives: a listing piped to a file, read where
+`+"`NO_COLOR`"+` is set, or shown on a terminal that says it is dumb still says which
+reports are which. `+"`--json`"+` carries none of it and is unchanged.
 
 A report decides nothing and nothing waits on it, so this is read-only: it
 retires nothing, handles nothing, and changes no work. Deciding what becomes of

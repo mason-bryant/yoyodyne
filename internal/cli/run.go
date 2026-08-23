@@ -16,12 +16,14 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/cost"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -577,7 +579,7 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 	if !jsonOutput {
 		// What the run's agents reported is collected whichever way the run went,
 		// so it is named whichever way this reports.
-		reportCollectedReports(stdout, outcome)
+		reportCollectedReports(stdout, console.ThemeFor(stdout, os.Getenv), outcome)
 		// And so is what they proposed changing in a document they do not own: it
 		// is waiting on a person either way, and a proposal nobody is told about is
 		// one nobody decides.
@@ -707,9 +709,18 @@ func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
 // stopping their work. The reports themselves are read from the pile, either
 // from a command line or from the conversation the operator may already be in;
 // what this owes them is to say there is something new to read, and where.
-func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
+//
+// It says how many of what rather than only how many, and is marked and dressed
+// by the worst of them. This is the last line of a run that has just printed a
+// screen of branches, worktrees and prices, and an operator who is only going to
+// read one of those lines has to be told from it whether anything in that pile
+// is already costing them.
+func reportCollectedReports(writer io.Writer, theme console.Theme, outcome orchestrator.Outcome) {
 	if len(outcome.Reports) > 0 {
-		fmt.Fprintf(writer, "reported %d thing(s) without stopping the run; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
+		worst := report.Worst(outcome.Reports)
+		fmt.Fprint(writer, theme.Severity(console.Severity(worst), fmt.Sprintf(
+			"%sreported %d thing(s) without stopping the run (%s); `yoyo reports` shows them, as does /reports in `yoyo chat`\n",
+			worst.Prefix(), len(outcome.Reports), report.Tally(outcome.Reports))))
 	}
 	if outcome.ReportProblem != "" {
 		fmt.Fprintln(writer, outcome.ReportProblem)

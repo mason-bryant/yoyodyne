@@ -946,7 +946,17 @@ than one wall of text; the frame is decoration exactly as the rule is, and where
 decoration is suppressed the same card is its heading with the body indented
 under it. The states work is in are coloured too, and the same way wherever they
 appear — running blue, blocked orange, done green, failed red — so `/status` is
-read down its aligned columns rather than picked out of ragged prose. Colour is
+read down its aligned columns rather than picked out of ragged prose. So is what
+a report or a concern is asking for: something already wrong is red and bold,
+a risk that has not cost anything yet is orange, and a note is left plain,
+because a listing where every line is coloured has no emphasis left for the line
+that matters. That one carries a mark as well as a colour — `!!` at the left
+margin for critical and `!` for warning, in the column before the identifier —
+so the pile can be scanned down its margin, and so the distinction is the one
+thing here that survives a terminal which cannot be dressed at all. A concern is
+marked the same way, by kind: work the product manager says would cut against a
+goal is the critical one, and the two that are questions about incomplete goals
+or about its own judgement are warnings. Colour is
 an addition to the text and never what carries the meaning — the question still
 ends in a question mark, the proposal still says what it is proposing, the group
 still says "blocked (2)" in words — so a transcript with the escapes stripped
