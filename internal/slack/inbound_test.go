@@ -178,10 +178,10 @@ func TestASettlementSaidInAnotherThreadStillOwesTheThreadThatAsked(t *testing.T)
 		t.Fatalf("SaveThreads() error = %v", err)
 	}
 
+	settle := "resolve " + recorded.ID[:16] + " the one already on the target branch"
 	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
-		"type": "message", "user": testOperator, "channel": "C1",
-		"text": "resolve " + recorded.ID[:16] + " the one already on the target branch",
-		"ts": "1750000004.000500", "thread_ts": "1750000003.000400",
+		"type": "message", "user": testOperator, "text": settle,
+		"ts": "1750000004.000500", "thread_ts": "1750000003.000400", "channel": "C1",
 	}))
 
 	settled, err := directives.Load(recorded.ID)
