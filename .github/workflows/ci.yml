@@ -52,3 +52,9 @@ jobs:
       # and no cross-compile.
       - name: Check that the release verb refuses what it should
         run: scripts/cut-release-test.sh
+
+      # And that the notes it gates on say what landed, in the shape the
+      # operator asked for. Fabricated repository, stub tracker: no provider, no
+      # network, and this repository's own history is never read.
+      - name: Check that a release's notes are written from what landed
+        run: bash scripts/release-notes-test.sh

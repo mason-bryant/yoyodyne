@@ -8,11 +8,17 @@
 # The verb's whole value is that it refuses, so the refusals are what needs
 # testing, and testing them against this repository would mean a real
 # walkthrough and a real cross-compile for each one. What cut-release.sh needs
-# is a git repository with a walkthrough and a Makefile beside it, so each case
-# builds one: a scratch repository holding a copy of the script, a stub
-# walkthrough that is green or red on request, and a stub Makefile whose
-# `check` and `dist-verify` targets do the same. Everything the script does to
-# a repository -- reading it, tagging it -- then happens to the scratch one.
+# is a git repository with a walkthrough, a notes writer, and a Makefile beside
+# it, so each case builds one: a scratch repository holding a copy of the
+# script, a stub walkthrough that is green or red on request, a stub notes
+# writer, and a stub Makefile whose `check` and `dist-verify` targets do the
+# same. Everything the script does to a repository -- reading it, drafting a
+# release's notes into it, tagging it -- then happens to the scratch one.
+#
+# The real scripts/release-notes.sh is stubbed rather than copied, because what
+# cut-release.sh is gated on is a file being there and a writer that can say it
+# failed; what that writer puts in the file is
+# scripts/release-notes-test.sh's claim.
 #
 # Everything lives under one temporary root that is removed on exit. No tag is
 # written anywhere but there, and nothing is pushed.
@@ -47,13 +53,47 @@ missing() {
 }
 
 # fabricate builds one scratch repository: $1 names it, $2 is "green" or "red"
-# for the walkthrough, $3 is "green", "check-red", or "build-red" for make.
+# for the walkthrough, $3 is "green", "check-red", or "build-red" for make, and
+# $4 is "present" (the default), "absent", or "draft-red" for this release's
+# notes. Most cases want notes already committed, because the gate they are
+# about is further down.
 fabricate() {
-  local name="$1" walk="$2" mk="$3"
+  local name="$1" walk="$2" mk="$3" notes="${4:-present}"
   local project="$scratch/$name"
 
   mkdir -p "$project/scripts"
   cp "$repository/scripts/cut-release.sh" "$project/scripts/cut-release.sh"
+
+  # A stub notes writer, so the notes gate is exercised without a tracker. The
+  # real scripts/release-notes.sh reads bd and renders with python3; what
+  # cut-release.sh needs from it is that it writes docs/releases/<tag>.md under
+  # its own repository and says whether it could, and that is what this does.
+  if [ "$notes" = "draft-red" ]; then
+    cat > "$project/scripts/release-notes.sh" <<'SH'
+#!/usr/bin/env bash
+echo "release-notes: bd is not installed" >&2
+exit 1
+SH
+  else
+    cat > "$project/scripts/release-notes.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mkdir -p "$repository/docs/releases"
+printf '# %s\n\n## Key functionality\n\n- **The scratch release** (`stub-1`)\n' "$1" \
+  > "$repository/docs/releases/$1.md"
+echo "wrote docs/releases/$1.md from 1 closed work item(s)"
+SH
+  fi
+  chmod +x "$project/scripts/release-notes.sh"
+
+  # The notes a cut is gated on are committed with the commit the tag names, so
+  # a repository that has them has them in its history rather than beside it.
+  if [ "$notes" = "present" ]; then
+    mkdir -p "$project/docs/releases"
+    printf '# v0.3.0\n\n## Key functionality\n\n- **The scratch release** (`stub-1`)\n' \
+      > "$project/docs/releases/v0.3.0.md"
+  fi
 
   if [ "$walk" = "green" ]; then
     cat > "$project/scripts/walk-adoption.sh" <<'SH'
@@ -199,6 +239,49 @@ else
   fail "the cut pushed a tag to origin: $(git -C "$origin" tag --list)"
 fi
 
+step "a release with no notes drafts them and refuses, and cuts once they are committed"
+project="$(fabricate no-notes green green absent)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "has no notes yet" "says the notes are missing"
+contains "$output" "drafted docs/releases/v0.3.0.md" "names the file it drafted"
+contains "$output" "commit it, then cut v0.3.0 again" "names what to do with it"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+missing "$output" "stub built" "refuses before building anything"
+if [ -f "$project/docs/releases/v0.3.0.md" ]; then
+  pass "the draft is really on disk, which is the one thing the refusal left behind"
+else
+  fail "the refusal claimed a draft that is not there"
+fi
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+# The second half of the same story: the operator reads the draft, places each
+# item, commits it, and the cut goes through. This is the daily loop.
+git -C "$project" add -A
+git -C "$project" commit -qm "v0.3.0 release notes"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "docs/releases/v0.3.0.md is present" "the gate passes once the notes are committed"
+contains "$output" "documented adoption path works" "and the walkthrough runs after it"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag was written, and it names a commit carrying its own notes"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+
+step "a cut whose notes cannot be drafted refuses rather than cutting without them"
+project="$(fabricate undraftable-notes green green draft-red)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "notes could not be drafted" "refuses the cut"
+contains "$output" "bd is not installed" "the drafting failure is shown rather than swallowed"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
 step "a red walkthrough refuses the cut and names the failure"
 project="$(fabricate red-walk red green)"
 output="$(cut "$project" "v0.3.0")"
@@ -238,6 +321,7 @@ step "green all the way through: one invocation, a tagged build with checksums"
 project="$(fabricate green green green)"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "SKIPPED: origin is unreachable" "an origin it cannot reach is named as unchecked rather than passed over"
+contains "$output" "docs/releases/v0.3.0.md is present" "the notes gate ran"
 contains "$output" "documented adoption path works" "the walkthrough ran"
 contains "$output" "stub check passed" "the checks ran"
 contains "$output" "stub built v0.3.0" "the archives were built for the tag"
@@ -290,6 +374,10 @@ wiring="$(make -C "$repository" -n release VERSION=v9.9.9 2>&1 || true)"
 contains "$wiring" "scripts/cut-release.sh v9.9.9" "make release VERSION=<tag> reaches the verb with the tag"
 wiring="$(make -C "$repository" -n release 2>&1 || true)"
 missing "$wiring" "cut-release.sh v" "make release with no VERSION passes no tag, so the verb asks for one"
+wiring="$(make -C "$repository" -n release-notes VERSION=v9.9.9 2>&1 || true)"
+contains "$wiring" "scripts/release-notes.sh v9.9.9" "make release-notes VERSION=<tag> reaches the notes writer with the tag"
+wiring="$(make -C "$repository" -n release-notes 2>&1 || true)"
+missing "$wiring" "release-notes.sh v" "make release-notes with no VERSION passes no tag either"
 
 printf '\n=== result\n'
 if [ "$failures" = "0" ]; then

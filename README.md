@@ -547,18 +547,25 @@ make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](scripts/walk-adoption.sh), runs
-`check`, builds and verifies the archives for `<tag>`, then tags the commit
-they were built from — in that order, so a red gate refuses the cut, names what
-was red, and leaves nothing to undo. It also refuses a tag that is not
-`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
-that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
-origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
-irreversible half and what the release workflow acts on, so it stays something
-you do deliberately.
+It gates on [this release's notes](docs/releases/README.md), walks [the
+documented adoption path](scripts/walk-adoption.sh), runs `check`, builds and
+verifies the archives for `<tag>`, then tags the commit they were built from —
+in that order, so a red gate refuses the cut, names what was red, and leaves
+nothing to undo. It also refuses a tag that is not `vMAJOR.MINOR.PATCH` or that
+already exists, a dirty working tree, a checkout that is not on `main`, and a
+`HEAD` that is not where `origin/main` is; where origin is unreachable it says
+that last one went unchecked rather than passing over it. It stops at the tag:
+publishing is the `git push`, which is the irreversible half and what the
+release workflow acts on, so it stays something you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
 of those refusals against fabricated repositories.
+
+A tag whose notes are missing is the one refusal that leaves something behind:
+the cut drafts `docs/releases/<tag>.md` from the work items that landed since
+the last tag and stops, so you read it, place each item under **key
+functionality**, **enhancements**, or **bug fixes**, commit it, and cut again.
+The tag then names a commit carrying its own notes, and the release workflow
+publishes that file as the release page's body.
 
 ## The conversation
 

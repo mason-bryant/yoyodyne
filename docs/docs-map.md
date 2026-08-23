@@ -65,8 +65,9 @@ repository cannot rewrite:
     by `internal/cli/init_test.go:214`. Every `.yoyodyne/config.yaml` that
     `yoyo init` has ever generated points at it, in a file its owner edits.
   - `README.md#getting-started` — `.github/release-notes-preamble.md:28`, as the
-    repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`,
-    which `.github/workflows/release.yml:55` passes to `gh release create
+    repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`.
+    `.github/workflows/release.yml:54` appends that preamble to the tag's own
+    `docs/releases/<tag>.md` and passes the pair to `gh release create
     --notes-file`. It is in the notes of every release already published, and
     published release notes cannot be corrected by a change to this repository.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,

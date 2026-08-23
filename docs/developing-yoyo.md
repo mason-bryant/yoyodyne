@@ -56,16 +56,52 @@ make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](../scripts/walk-adoption.sh), runs
-`check`, builds and verifies the archives for `<tag>`, then tags the commit
-they were built from — in that order, so a red gate refuses the cut, names what
-was red, and leaves nothing to undo. It also refuses a tag that is not
-`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
-that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
-origin is unreachable it says that last one went unchecked rather than passing
-over it.
+It gates on [this release's notes](releases/README.md), walks [the documented
+adoption path](../scripts/walk-adoption.sh), runs `check`, builds and verifies
+the archives for `<tag>`, then tags the commit they were built from — in that
+order, so a red gate refuses the cut, names what was red, and leaves nothing to
+undo. It also refuses a tag that is not `vMAJOR.MINOR.PATCH` or that already
+exists, a dirty working tree, a checkout that is not on `main`, and a `HEAD`
+that is not where `origin/main` is; where origin is unreachable it says that
+last one went unchecked rather than passing over it.
 
 It stops at the tag. Publishing is the `git push`, which is the irreversible
 half and what the release workflow acts on, so it stays something you do
 deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
 executes every one of those refusals against fabricated repositories.
+
+## Every cut writes its notes
+
+A release nobody can read is a release nobody adopts, so
+[`docs/releases/<tag>.md`](releases/README.md) is a gate rather than a courtesy.
+The cut checks for it before it spends the walkthrough, and a tag with no notes
+is the one refusal that leaves something behind: it drafts them and stops.
+
+```sh
+make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
+$EDITOR docs/releases/v0.3.1.md    # place each item; the judgement is yours
+git commit -am "v0.3.1 release notes"
+make release VERSION=v0.3.1        # green, and the tag carries its own notes
+git push origin v0.3.1
+```
+
+The draft comes from the tracker rather than the commit log:
+[`scripts/release-notes.sh`](../scripts/release-notes.sh) reads the work items
+closed between the previous tag and this one and carries their titles, their
+types, and the goals they served. A commit message says what one change did; the
+item behind it says what somebody wanted, which is the difference between notes
+and a changelog. `make release-notes VERSION=<tag>` drafts one on its own, and
+`scripts/release-notes.sh <tag> --print` shows one without writing it.
+
+Where the draft puts each item is placed from its type, and **that placement is
+a starting point rather than an answer**: which work is key functionality, which
+is an enhancement, and which fix is critical enough to go up to the top is the
+product manager's judgement until the post-v1 release-manager role exists. The
+three sections and their order are the operator's and are not the draft's to
+change. [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh)
+executes the placement rule, the section order, and the refusals against a
+fabricated repository and a stub tracker.
+
+The release workflow publishes that same file as the release page's body, with
+the install preamble under it, so the release page and the repository tell one
+story rather than two.

@@ -46,12 +46,32 @@ jobs:
       - name: Build the release binaries and verify they name the tag
         run: make dist-verify VERSION="$TAG"
 
+      # The release page's body is the notes the repository already carries for
+      # this tag, so the two tell one story instead of two. A tag cut before the
+      # notes home existed carries no file and publishes the preamble alone
+      # rather than failing the workflow: a release with thin notes is worth
+      # more than a pushed tag with no release behind it.
+      - name: Assemble the release notes
+        run: |
+          notes="$RUNNER_TEMP/release-notes.md"
+          : > "$notes"
+          if [ -f "docs/releases/$TAG.md" ]; then
+            # The page is already titled with the tag, so the file's own heading
+            # would be the same words twice.
+            sed '1{/^# /d;}' "docs/releases/$TAG.md" >> "$notes"
+            printf '\n' >> "$notes"
+          else
+            echo "no docs/releases/$TAG.md, so this release publishes the preamble alone" >&2
+          fi
+          cat .github/release-notes-preamble.md >> "$notes"
+          echo "NOTES_FILE=$notes" >> "$GITHUB_ENV"
+
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$TAG" \
             --title "$TAG" \
-            --notes-file .github/release-notes-preamble.md \
+            --notes-file "$NOTES_FILE" \
             --generate-notes \
             dist/*.tar.gz dist/checksums.txt
