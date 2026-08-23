@@ -28,6 +28,17 @@ type terminal struct {
 	out     io.Writer
 	input   <-chan chunk
 	restore func() error
+	// modes puts this conversation's own terminal settings on again after
+	// something took them off, and hands back what restores the operator's. It
+	// exists because Ctrl-Z hands the terminal to the shell and then takes it
+	// back, so entering cbreak cannot be something that happens only once. It is
+	// nil where there is no terminal to set — a console over pipes in a test —
+	// and nothing there was handed over to begin with.
+	modes func() (func() error, error)
+	// raise delivers a signal the terminal used to raise for itself. It is a
+	// field so a test can watch what a key was turned into without stopping the
+	// process it is running in.
+	raise func(signalKey)
 	// width is asked for at every draw rather than remembered, so a window the
 	// operator resized is drawn at the size it is now.
 	width func() int
@@ -93,6 +104,7 @@ func openTerminal(in, out *os.File, env func(string) string) (*terminal, error) 
 	}
 	width := func() int { return terminalWidth(out.Fd()) }
 	terminal := newTerminal(in, out, width, restore)
+	terminal.modes = func() (func() error, error) { return enterCBreak(in.Fd()) }
 	terminal.theme = NewTheme(env, width)
 	// What the terminal will say about a keystroke is settled before the first
 	// prompt is drawn, because it decides both what shift-return does and what
@@ -108,6 +120,7 @@ func newTerminal(in io.Reader, out io.Writer, width func() int, restore func() e
 		out:     out,
 		input:   readInput(in),
 		restore: restore,
+		raise:   raiseSignal,
 		width:   width,
 	}
 }
@@ -257,7 +270,7 @@ func (t *terminal) drawRegion() string {
 	// many rows as it has lines, and the rest of the region is measured from the
 	// same text, so what is erased is what was drawn.
 	out.WriteString(composed)
-	endRow, endColumn := place(composed, visibleWidth(composed), width)
+	endRow, endColumn := place(composed, utf8.RuneCountInString(composed), width)
 	// A row that exactly fills the width leaves the cursor in the terminal's
 	// deferred-wrap state, where it is neither on this row nor the next. One
 	// space commits the wrap and the carriage return puts it at the start of the
@@ -267,7 +280,12 @@ func (t *terminal) drawRegion() string {
 		endRow++
 		endColumn = 0
 	}
-	cursor := visibleWidth(t.promptText) + t.cursor
+	// Where the cursor is in the composed text, counted in runes, because that is
+	// what `place` steps through. It is not the same as the columns the prompt
+	// occupies: a prompt with colour in it carries runes that take no room at
+	// all, and counting those as columns would put the cursor past the end of
+	// what the operator can see.
+	cursor := utf8.RuneCountInString(t.promptText) + t.cursor
 	targetRow, targetColumn := place(composed, cursor, width)
 	if targetColumn >= width {
 		targetRow++
@@ -288,15 +306,23 @@ func (t *terminal) drawRegion() string {
 
 // place is where the cursor sits once the first index runes of text have been
 // written: the row, counted from the row the text began on, and the column
-// across it. A row that is exactly full is reported as the column past its end,
-// which is the terminal's deferred-wrap state — neither on that row nor the
-// next until something else is written — and is what its callers resolve.
+// across it. Runes go in and columns come out, and the two differ — an escape
+// sequence is several runes and no columns at all, because it dresses what
+// follows it rather than taking room on the screen — so a caller counts what it
+// passes in with RuneCountInString and reads what it gets back as the screen.
+//
+// A row that is exactly full is reported as the column past its end, which is
+// the terminal's deferred-wrap state — neither on that row nor the next until
+// something else is written — and is what its callers resolve.
 func place(text string, index, width int) (int, int) {
-	row, column, position := 0, 0, 0
-	for _, character := range text {
-		if position >= index {
-			break
+	runes := []rune(text)
+	row, column := 0, 0
+	for position := 0; position < index && position < len(runes); {
+		if runes[position] == 0x1b {
+			position += escapeRunes(runes[position:])
+			continue
 		}
+		character := runes[position]
 		position++
 		if character == '\n' {
 			row++
@@ -310,6 +336,21 @@ func place(text string, index, width int) (int, int) {
 		column++
 	}
 	return row, column
+}
+
+// escapeRunes is how many runes the escape sequence at the start of the runes
+// occupies. What it names is what the region steps over rather than counts: the
+// dressing a theme wrote is not somewhere the cursor can be.
+func escapeRunes(runes []rune) int {
+	if len(runes) < 2 || (runes[1] != '[' && runes[1] != 'O') {
+		return 1
+	}
+	for position := 2; position < len(runes); position++ {
+		if runes[position] >= 0x40 && runes[position] <= 0x7e {
+			return position + 1
+		}
+	}
+	return len(runes)
 }
 
 // cursorRow is how many rows below the start of the text the cursor is, which
@@ -447,9 +488,50 @@ func (t *terminal) feed(data []byte) (string, bool, error) {
 	// here, with the screen let go of: one of them stops this process, and doing
 	// that while holding the console would stop it mid-draw.
 	for _, pressed := range raised {
-		raiseSignal(pressed)
+		if pressed == signalSuspend {
+			// Stopping is the one that has to hand the terminal over first and take
+			// it back afterwards, so it is not simply raised.
+			t.suspend()
+			continue
+		}
+		t.raise(pressed)
 	}
 	return line, submitted, err
+}
+
+// suspend is Ctrl-Z where the terminal reports the key instead of stopping the
+// process itself. The terminal is handed back exactly as closing hands it
+// back — the region taken down, the negotiated keyboard popped, the operator's
+// own modes restored — so the shell that takes the foreground finds none of this
+// conversation's settings on it. Coming back is the same in reverse, and the
+// keyboard is negotiated again rather than assumed: what was agreed before a
+// stop is not still agreed after one, and shift-return that silently stopped
+// working for the rest of a session is exactly what this whole negotiation
+// exists to prevent.
+func (t *terminal) suspend() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.closed {
+		return
+	}
+	io.WriteString(t.out, t.eraseRegion()+t.restoreKeyboard)
+	t.restoreKeyboard = ""
+	if t.restore != nil {
+		t.restore()
+	}
+	// The process stops inside this and comes back when the operator resumes it.
+	t.raise(signalSuspend)
+	if t.modes != nil {
+		if restore, err := t.modes(); err == nil {
+			t.restore = restore
+		}
+		// A terminal that will not be put back into cbreak leaves the conversation
+		// readable a line at a time rather than a keystroke at a time. It is worse
+		// than it was and better than a conversation that ends because the operator
+		// stopped it, so it carries on and the region is drawn on what there is.
+	}
+	t.negotiateKeyboard(keyboardReplyTimeout)
+	t.redraw()
 }
 
 // consume is feed under the lock: everything that changes what is on screen,
@@ -464,7 +546,7 @@ func (t *terminal) consume(data []byte) (string, bool, []signalKey, error) {
 		t.line = nil
 		t.cursor = 0
 		t.redraw()
-		return "", false, raised, fmt.Errorf("the operator sent more than %d bytes without a newline", MaxLineBytes)
+		return "", false, raised, fmt.Errorf("the operator sent more than %d bytes without ending the message", MaxLineBytes)
 	}
 	for len(t.keys) > 0 {
 		pressed, size, complete := decodeKey(t.keys)
@@ -609,8 +691,22 @@ func indexNewline(text []byte) int {
 	return -1
 }
 
-// visibleWidth counts the columns text occupies. Every rune is counted as one
-// column: this is what the composing region positions the cursor by, and a
-// double-width rune in a typed line will therefore be one column out until
-// somebody needs it to be otherwise.
-func visibleWidth(text string) int { return utf8.RuneCountInString(text) }
+// visibleWidth counts the columns text occupies on the row it is written on.
+// Every rune is counted as one column and an escape sequence as none, which is
+// the same measure `place` takes, so the region has one idea of what a column
+// is rather than two that agree until a themed line arrives. A double-width
+// rune in a typed line will be one column out until somebody needs it to be
+// otherwise.
+func visibleWidth(text string) int {
+	runes := []rune(text)
+	columns := 0
+	for position := 0; position < len(runes); {
+		if runes[position] == 0x1b {
+			position += escapeRunes(runes[position:])
+			continue
+		}
+		position++
+		columns++
+	}
+	return columns
+}

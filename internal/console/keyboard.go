@@ -83,7 +83,12 @@ const (
 const keyboardReplyTimeout = 250 * time.Millisecond
 
 // negotiateKeyboard asks the terminal whether it will report the modifiers held
-// with a keystroke, and turns that reporting on where it will.
+// with a keystroke, and turns that reporting on where it will. It is asked
+// again after anything that hands the terminal over and takes it back, because
+// what a terminal agreed to before is not what it is doing now.
+//
+// It takes no lock, and both of its callers are why: one runs before the
+// console is anybody's, and the other holds it. Nothing else may call it.
 func (t *terminal) negotiateKeyboard(timeout time.Duration) {
 	if _, err := io.WriteString(t.out, kittyQuery+modifyOtherQuery+identityQuery); err != nil {
 		return
@@ -111,8 +116,7 @@ func (t *terminal) negotiateKeyboard(timeout time.Duration) {
 }
 
 // applyKeyboard turns on what the terminal said it has, and remembers what puts
-// it back. It runs before anything else can reach the terminal, so it takes no
-// lock: the console is not yet anybody's.
+// it back. Like the negotiation it belongs to, it takes no lock.
 func (t *terminal) applyKeyboard(replies keyboardReplies) {
 	// Anything the terminal sent that was not an answer is the operator typing
 	// ahead of the conversation, and it is theirs: it waits for the first prompt

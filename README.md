@@ -1599,10 +1599,14 @@ carries the line on. What you compose is drawn in the same region, over as many
 rows as it has lines, and reaches the product manager with its lines where you
 put them.
 
-Ctrl-C still interrupts the way it always did. A terminal that has agreed to
-report shift-return stops raising the signal keys itself, so yoyo raises what it
-reports — to the same process group the terminal would have — and hands the
-keyboard back exactly as it was found when the conversation ends.
+Ctrl-C still interrupts the way it always did, and Ctrl-Z still stops the
+conversation. A terminal that has agreed to report shift-return stops raising
+the signal keys itself, so yoyo raises what it reports — to the same process
+group the terminal would have. The keyboard is handed back exactly as it was
+found whenever the terminal changes hands: when the conversation ends, and when
+Ctrl-Z stops it, so the shell you drop into finds none of this on it. Resuming
+takes it back and asks again, because what a terminal agreed to before a stop is
+not what it is doing after one.
 
 While a turn is being answered, the line below the conversation says what it is
 doing: a spinner, the phase it has reached, and how long you have been waiting.

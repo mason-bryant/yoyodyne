@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -361,6 +362,47 @@ func TestOutputArrivingUnderAMultiLineRegionKeepsBothWhole(t *testing.T) {
 	}
 }
 
+// TestADressedPromptIsMeasuredByWhatItShows is the region's arithmetic on a
+// prompt a theme has coloured. The escape sequences are runes that occupy no
+// columns at all, so counting them as columns would put the cursor past the end
+// of the prompt and, worse, leave the erase climbing the wrong number of rows
+// and a row of the region behind in the transcript.
+func TestADressedPromptIsMeasuredByWhatItShows(t *testing.T) {
+	t.Parallel()
+
+	console, keys, out := terminalUnderTest(t, 20)
+	io.WriteString(console, "product-manager> Two goals.\n")
+	// The prompt a dressed terminal draws: colour on, five columns of text,
+	// colour off.
+	lines := prompting(context.Background(), console, "\x1b[33myou> \x1b[0m", nil)
+	// Long enough that counting the dressing as columns would have the region
+	// believe the first line wrapped when on screen it did not.
+	keys.Write([]byte("first line\x1b[13;2usecond"))
+	out.await(t, "the composed message", func(s *screen) bool { return s.lastLine() == "second" })
+
+	// Something arrives above a region whose rows come from the operator's own
+	// newline rather than from the width.
+	io.WriteString(console, "harness> yoyodyne-1 finished.\n")
+	rendered := out.screen()
+	want := strings.Join([]string{
+		"product-manager> Two",
+		" goals.",
+		"harness> yoyodyne-1",
+		"finished.",
+		"you> first line",
+		"second",
+	}, "\n")
+	if got := rendered.text(); got != want {
+		t.Fatalf("screen =\n%s\nwant\n%s", got, want)
+	}
+	// The cursor is where the prompt shows it to be, so what is typed next lands
+	// at the end of what was typed before rather than a few columns off it.
+	keys.Write([]byte("!\r"))
+	if line := lines.line(t); line != "first line\nsecond!" {
+		t.Fatalf("line = %q", line)
+	}
+}
+
 // TestEditingAMultiLineMessage keeps the small editing the region has working
 // once there is more than one line to do it on.
 func TestEditingAMultiLineMessage(t *testing.T) {
@@ -415,6 +457,83 @@ func TestAPartLineIsHeldBackUntilItIsWhole(t *testing.T) {
 	console.Close()
 	if rendered := out.screen(); !strings.Contains(rendered.text(), "and nothing else") {
 		t.Fatalf("a held line was dropped on close:\n%s", rendered.text())
+	}
+}
+
+// TestSuspendingHandsTheTerminalOverAndTakesItBack covers Ctrl-Z on a terminal
+// that reports the key instead of stopping the process for itself. The shell
+// that takes the foreground must find none of this conversation's settings on
+// the terminal, and the conversation that comes back must not be left composing
+// on a keyboard that stopped reporting what it negotiated.
+func TestSuspendingHandsTheTerminalOverAndTakesItBack(t *testing.T) {
+	t.Parallel()
+
+	reader, keys := io.Pipe()
+	out := newRecorder(40)
+	console := newTerminal(reader, out, func() int { return 40 }, nil)
+	t.Cleanup(func() {
+		console.Close()
+		keys.Close()
+	})
+	// A conversation that negotiated a keyboard and can take its modes back.
+	console.keyboard = keyboardKitty
+	console.restoreKeyboard = kittyPop
+	var handedBack, taken atomic.Int64
+	console.restore = func() error { handedBack.Add(1); return nil }
+	console.modes = func() (func() error, error) {
+		taken.Add(1)
+		return func() error { handedBack.Add(1); return nil }, nil
+	}
+	stopped := make(chan string, 1)
+	console.raise = func(pressed signalKey) {
+		if pressed != signalSuspend {
+			t.Errorf("raised %v, want the suspend", pressed)
+		}
+		// What the screen holds at the moment the process stops: this is what the
+		// shell is about to be handed.
+		stopped <- out.raw()
+	}
+	// The terminal answers the negotiation the resumed conversation makes.
+	go func() {
+		for !strings.Contains(out.raw(), kittyQuery) {
+			time.Sleep(time.Millisecond)
+		}
+		keys.Write([]byte("\x1b[?0u\x1b[?62;c"))
+	}()
+
+	lines := prompting(context.Background(), console, "you> ", nil)
+	keys.Write([]byte("half a thought"))
+	out.await(t, "the typed text", func(s *screen) bool { return s.lastLine() == "you> half a thought" })
+	// Ctrl-Z, as a negotiated keyboard reports it rather than as a signal the
+	// terminal raised.
+	keys.Write([]byte("\x1b[122;5u"))
+
+	select {
+	case screen := <-stopped:
+		if !strings.HasSuffix(screen, kittyPop) {
+			t.Fatalf("the keyboard was still this conversation's when the process stopped: %q", screen)
+		}
+		if handedBack.Load() != 1 {
+			t.Fatalf("the terminal's own modes were not restored before the stop")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Ctrl-Z did not stop the conversation")
+	}
+
+	// Resumed: the modes are taken again, the keyboard is negotiated again
+	// rather than assumed, and what was being composed is drawn back.
+	out.await(t, "the region drawn again", func(s *screen) bool {
+		return s.lastLine() == "you> half a thought"
+	})
+	keys.Write([]byte(" of it\r"))
+	if line := lines.line(t); line != "half a thought of it" {
+		t.Fatalf("line = %q", line)
+	}
+	if taken.Load() != 1 {
+		t.Fatalf("the terminal's modes were taken back %d time(s), want 1", taken.Load())
+	}
+	if console.keyboard != keyboardKitty || console.restoreKeyboard != kittyPop {
+		t.Fatalf("the keyboard was not negotiated again: %v/%q", console.keyboard, console.restoreKeyboard)
 	}
 }
 
