@@ -101,6 +101,33 @@ func TestARepositoryNothingHasMovedUnderSaysSo(t *testing.T) {
 	}
 }
 
+func TestStaleNamesTheIdentityNothingReads(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+
+	// A document nothing governs is never reported as stale however far its
+	// upstream has moved, because nothing upstream reaches it. Saying so here is
+	// what stops a clean staleness report reading as one that covered it.
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md",
+		revisedArtifact("brief", "brief", nil, revision("created", "2026-08-01T00:00:00Z", "recorded"))+"\nIntent in, software out.\n")
+	writeArtifact(t, project, "docs/beside-the-homes.md",
+		revisedArtifact("beside-the-homes", "design", []string{"brief"}, revision("created", "2026-08-02T00:00:00Z", "recorded")))
+
+	stdout, stderr, code := runCLI(t, "stale", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("stale code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stderr, "identity nothing reads (outside-every-home): docs/beside-the-homes.md") {
+		t.Fatalf("stale stderr = %q", stderr)
+	}
+	// It is a condition to look at rather than a failure, exactly like everything
+	// else this command reports.
+	if strings.Contains(stdout, "beside-the-homes") {
+		t.Fatalf("stale stdout = %q, want an ungoverned document left out of the reading", stdout)
+	}
+}
+
 func TestStaleWorkIsReportedWithWhatMovedAndWhatWasNotJudged(t *testing.T) {
 	t.Parallel()
 

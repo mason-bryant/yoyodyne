@@ -52,7 +52,12 @@ type artifactOutput struct {
 	Approvals         map[string]artifactApproval `json:"approvals,omitempty"`
 	Problems          []artifact.Problem          `json:"problems,omitempty"`
 	ReferenceProblems []artifact.ReferenceProblem `json:"reference_problems,omitempty"`
-	Error             string                      `json:"error,omitempty"`
+	// Ungoverned is identity nothing reads: a document carrying artifact
+	// frontmatter outside every home, and frontmatter on a directory index. It is
+	// reported rather than refused, and it is not a problem with the set — it is
+	// what the set never covered.
+	Ungoverned []artifact.Ungoverned `json:"ungoverned,omitempty"`
+	Error      string                `json:"error,omitempty"`
 }
 
 // artifactApproval is what a machine-readable listing says about one document's
@@ -118,6 +123,7 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 			Approvals:         artifactApprovals(listed, policy),
 			Problems:          set.Problems,
 			ReferenceProblems: set.ReferenceProblems,
+			Ungoverned:        set.Ungoverned,
 		})
 	}
 	if len(listed) == 0 {
@@ -141,6 +147,14 @@ func listArtifacts(args []string, stdout, stderr io.Writer) int {
 	// them and resolves to nothing.
 	for _, problem := range set.ReferenceProblems {
 		fmt.Fprintf(stderr, "%s: %s\n", problem.Kind, problem)
+	}
+	// Identity nothing reads is reported here rather than left to be noticed,
+	// which is the whole of what separates it from the two above: a document
+	// outside every home and frontmatter on an index are not in the set and were
+	// never judged, so a listing that said nothing about them would be a clean
+	// report of a document nothing governs.
+	for _, reported := range set.Ungoverned {
+		fmt.Fprintf(stderr, "identity nothing reads (%s): %s\n", reported.Kind, reported)
 	}
 	return 0
 }
@@ -413,6 +427,14 @@ entry naming an id no artifact answers to, and an artifact nothing connects back
 to the brief, are named on stderr beside a set that still holds every document
 it read. The brief is the root and the decision records are not downstream of
 it, so neither is reported for supporting nothing.
+
+Identity nothing reads is reported too, and refused nowhere. A document carrying
+artifact frontmatter outside every configured home is governed by nothing -- no
+reference resolves to it and nothing traces through it -- and frontmatter on a
+README is inert, because a directory index is skipped by name. Both are named on
+stderr. What is looked at is what sits beside the homes -- docs/ in the
+recommended layout -- so fixtures and vendored documents elsewhere are not
+reported.
 
 Who changed each document is reported the same way. The product manager owns the
 brief and the goals and the architect owns the designs, specifications, and

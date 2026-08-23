@@ -41,6 +41,19 @@ func TestThisRepositoryOwnArtifactsAreReadableByTheHarness(t *testing.T) {
 	}
 }
 
+func TestThisRepositoryFilesNoIdentityNothingReads(t *testing.T) {
+	t.Parallel()
+
+	// The two ways a document in this repository can look governed while nothing
+	// governs it: filed beside an artifact home rather than in one, and
+	// frontmatter written on a directory index, which is skipped by name. Neither
+	// is refused, so the load being clean is not evidence about either — this is
+	// what asks the harness's own report rather than reading the tree by hand.
+	for _, reported := range repositoryArtifacts(t).Ungoverned {
+		t.Errorf("a document carries identity nothing reads: %s", reported)
+	}
+}
+
 func TestThisRepositoryOwnArtifactsRecordAnOwnerForEveryKind(t *testing.T) {
 	t.Parallel()
 

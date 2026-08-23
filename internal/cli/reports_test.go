@@ -56,7 +56,7 @@ func TestReportsReadsTheSamePileTheConversationShows(t *testing.T) {
 		t.Fatalf("reports code = %d, stderr = %q", code, stderr)
 	}
 	for _, want := range []string{
-		"reports (1 collected)",
+		"reports (1 collected, 1 unhandled)",
 		"critical",
 		"from the developer on yoyodyne-ifd.70",
 		"bd lint could not run",
@@ -82,6 +82,46 @@ func TestReportsReadsTheSamePileTheConversationShows(t *testing.T) {
 	collected := decoded.Reports[0]
 	if collected.Role != "developer" || collected.WorkItemID != "yoyodyne-ifd.70" || collected.Severity != report.SeverityCritical {
 		t.Fatalf("collected = %#v", collected)
+	}
+	if len(decoded.Handlings) != 0 {
+		t.Fatalf("handlings = %#v, want none before anybody has decided", decoded.Handlings)
+	}
+
+	// Once the product manager has decided what becomes of it, the listing says
+	// so. A report somebody dealt with and one nobody has read look identical
+	// otherwise, and the second is the only one that still needs anybody.
+	if err := store.Handle(report.Handling{
+		SchemaVersion: report.HandlingSchemaVersion,
+		ReportID:      "report-0123456789abcdef0123456789abcdef",
+		Role:          "product-manager",
+		Agent:         "product-manager",
+		RunID:         "chat-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Reason:        "admitted as yoyodyne-ifd.150",
+		RecordedAt:    time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC),
+	}); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	stdout, stderr, code = runCLI(t, "reports", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("reports code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{"reports (1 collected, 0 unhandled)", "handled", "admitted as yoyodyne-ifd.150"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+	stdout, stderr, code = runCLI(t, "reports", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("reports --json code = %d, stderr = %q", code, stderr)
+	}
+	decoded = reportsOutput{}
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if len(decoded.Handlings) != 1 || decoded.Handlings[0].ReportID != "report-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("handlings = %#v", decoded.Handlings)
 	}
 }
 

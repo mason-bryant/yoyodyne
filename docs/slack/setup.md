@@ -4,7 +4,9 @@ Work the harness runs on its own is acceptable only while it is visible, and
 today "visible" means a terminal somebody is sitting at. This is the same
 account of the work, in a Slack workspace: **one thread per work item, one
 message per milestone**, and every report an agent files carried through, as the
-agent wrote it, at the severity it was filed under.
+agent wrote it, at the severity it was filed under. Each thread's opening message
+also carries **what its item is doing right now**, as a reaction, so the top of
+the channel reads as a status board — see *The channel as a status board* below.
 
 Who each message is from is worth being precise about. Each persona speaks under
 its own name and face: the developer talks about the change it is making, the
@@ -343,7 +345,9 @@ rather than any one item: the operator holding and releasing intake, the
 operator holding and lifting all harness activity, proposed work you turned
 down — there is no item, because nothing was created — and anything an agent
 filed with no work item attached. Burying those in one item's thread would
-misfile them.
+misfile them. That list is what is *addressed* to the channel rather than
+everything that appears in it: a thread reply asking for attention is shown there
+as well, which is what the severity rule below does.
 
 A provider refusing the harness for want of capacity goes there too, wherever it
 happened. The harness asks a provider for work in three places, and each one
@@ -424,6 +428,16 @@ Severity is said in words rather than only in colour: a `critical` says
 still shows them for what they are. An ordinary fact carries no marker, because a
 label on everything is a label that means nothing.
 
+**Severity also decides where a message is seen.** Slack's main channel view
+hides thread replies, which is right for a routine note and wrong for a warning:
+a run parked out of tokens can sit unseen inside a thread while the channel looks
+quiet. So a `note` stays thread-only, and a `warning` or a `critical` is also
+sent to the channel — Slack's own also-send-to-channel — while still being a
+reply in its item's thread, so the narrative there is unbroken. Nothing new
+judges this: it is the severity the record was already filed under, so the
+channel view shows exactly the messages whose severity says somebody should see
+them without opening threads.
+
 Each transition is said once. A thread is a narrative rather than an event log
 scrolling sideways, so a restart does not repeat what it already said — how far
 each record has been read is written down as each message goes out and survives
@@ -439,6 +453,54 @@ built.** Every persona has words ready for a turn of one and for one closing,
 including one closing unresolved at its round cap, but nothing produces them yet,
 so no `exchange:` thread is ever opened. When that work lands it adds messages to
 this channel and changes nothing about your setup.
+
+## The channel as a status board
+
+Messages say what happened; they cannot say what is happening. Each transition is
+said once — correctly, because a thread is a narrative — so the state an item is
+in right now is somewhere inside a thread rather than on it, and finding which of
+twelve threads needs you means opening twelve threads.
+
+So the message each thread hangs from carries one reaction, and it is the item's
+current status. There are four, and they are the whole vocabulary:
+
+| Mark | Status | What it means |
+| --- | --- | --- |
+| :hammer_and_wrench: | working | A run is in flight on the item — developing, at the checks, repairing, being integrated. |
+| :eyes: | in review | The change is with the reviewer. |
+| :octagonal_sign: | blocked | The run stopped: failed, cancelled, timed out, or waiting on a provider, on your hold, or on a directive nobody has resolved. |
+| :white_check_mark: | completed | The run finished and succeeded. |
+
+The mark is replaced as the record moves and the one that has stopped being true
+comes off, so a scan of the channel's top level answers what is working, what is
+blocked, and what landed without a thread being opened. Nothing else is ever
+added to an opener: **a status is about the item and a severity is about one
+message**, and they never share a symbol, so a reader never has to work out which
+of the two a mark is talking about. Anyone reacting to a thread themselves is
+untouched — the sink only ever adds and removes those four.
+
+Three things are worth knowing about it:
+
+- **It is read from the item's latest run.** An item whose second attempt is in
+  flight reads as working, whatever the first attempt did; what the first one did
+  is in the thread. An item with no run yet — a thread opened by the backlog
+  moving, or by a report — carries no mark at all.
+- **It is reconciled rather than posted.** The status is worked out afresh from
+  the durable records on every pass, so a run that finished with nothing left to
+  say still stops reading as working. A change takes the other three marks off
+  before putting the true one on — the opener wears at most one of them, so the
+  rest of those calls hit nothing — which is what makes a sink killed mid-change
+  settle instead of leaving a mark behind: whatever the opener is wearing when
+  the next change comes, it is one of the four and it is not the one being set,
+  so it comes off.
+- **It is never a gate, and not even a message.** A workspace that refuses the
+  reaction costs the channel its status board and not one message: the sink says
+  so once in its own log and keeps posting.
+
+That last one is the case to expect if you installed the app before this existed:
+the marks need the `reactions:write` scope, which the checked-in manifest asks
+for. **An app installed from an older manifest keeps reporting and silently marks
+nothing** until you reinstall it from *OAuth & Permissions*.
 
 ## Coming back from a long gap
 
@@ -487,6 +549,7 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: not_in_channel` | The app was never invited to the channel. `/invite @yoyodyne` in it. |
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
+| `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |

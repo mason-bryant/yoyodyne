@@ -116,10 +116,10 @@ a run finishing overnight needs: it says it reported something, and reading it
 must not cost an interactive conversation with a provider behind it. It prints
 the whole pile rather than the most recent twenty, because a command's output
 can be paged and piped where a listing beside a conversation cannot, and
-`--json` hands a script the collected records themselves. Like `/reports` it is
-read-only in the strongest sense the design allows: a report is written once and
-never revised, and nothing retires one, marks one read, or decides anything
-about the pile.
+`--json` hands a script the collected records themselves. Both listings are
+read-only, and both say which reports somebody has already decided about: a
+report is written once and never revised, and neither of them retires one,
+handles one, or decides anything at all.
 
 ```sh
 ./bin/yoyo reports                 # the whole pile, oldest first
@@ -156,6 +156,56 @@ The pile lives outside the repository under the operating system's state
 directory, beside the run and conversation records rather than among them. It
 outlives them: a run is settled and its worktree and branch are removed, and
 what it reported is still there for you to read.
+
+One entry in the pile is filed by the harness rather than by an agent: an
+[inter-role ask exchange](conversation.md#roles-asking-each-other-things) that reached the
+round limit it was opened with closes as unresolved and escalates itself here, at
+`warning` severity, naming the two roles, the question, the rounds it spent, and
+what it cost. It is a report rather than a blocker for the same reason everything
+else here is — nothing was stopped, and two roles simply did not settle something
+one of them needed — and it is filed at all because an exchange that ended in a
+silent limit is exactly the failure nobody would otherwise see.
+
+
+### Who reads them, and what became of each one
+
+A report that only you can read is a report that reaches triage when you happen
+to be reading. That was the whole of it until recently — you read the channel,
+noticed something, and repeated it to the product manager yourself — which routes
+an agent's escalation through you rather than through the role the goals put in
+front of it. The product manager could not have read the pile if it wanted to:
+its evidence is the specifications, Beads state, and the documentation of what
+ships, and the pile is none of those.
+
+So the reports nobody has decided about are carried into its conversation, the
+way changes proposed to its documents already are. They arrive worst first —
+`critical`, then `warning`, then `note`, and the most recent first inside each —
+each naming itself, the role and agent that filed it, the work item where there
+was one, and the run or conversation it came out of. That is enough to act on
+without going and fetching anything. They are bounded: at most ten in one turn,
+with the rest counted and offered later, because a pile nobody has worked through
+must not become the whole of a turn.
+
+Deciding what becomes of one is a product decision and it is the product
+manager's: work to admit, a proposal to put to you, a concern to raise, or
+nothing at all — a report that asks for nothing is handled by saying so. It
+records the decision with a `handle` action, the same bounded, recorded mechanism
+it acts on the queue through, and that record is the only thing that takes a
+report out of the pile. A report it read and did not handle comes back to the
+next conversation. No other role has the action.
+
+What is recorded is a second file beside the pile rather than a change to it. The
+report stays exactly as its author wrote it — that is what makes the pile evidence
+rather than a worklist somebody has been editing — and the handling beside it
+carries who decided, when, in which conversation, and why. Deciding twice is two
+records and the later one is what is read. There is no vocabulary of outcomes:
+"admitted as ifd.150", "already fixed", "not worth doing" are the same fact to
+everything that reads this, and the reason says which.
+
+That is what `/reports` and `yoyo reports` are showing you when they count the
+unhandled ones and print what was decided under the rest. It is also the honest
+limit of it: the harness carries reports to the role that decides, and nothing
+here judges whether it decided well.
 
 ## What agents propose changing, and who decides
 
@@ -253,6 +303,15 @@ how the sink records whose secrets it was launched with, so
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
 
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
+
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
 everything held, the watch session idle, or no session running — says so again
@@ -264,6 +323,31 @@ and the silence after it is indistinguishable from a healthy queue or a dead sin
 It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
+
+Every message ends by saying whose move follows it. A thread is a narrative and a
+narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
+work routed to a role waits on somebody opening a conversation — and the silence
+after the last message reads the same whether somebody is working, somebody is
+waiting to be asked, or nobody at all holds the ball. So each message closes on
+one clause: `Next: the reviewer's — a verdict on the change.` It is the same
+clause whoever is speaking, because whose move follows a promotion is a fact about
+the state of the work rather than an opinion a persona has about it, and it is on
+every message rather than only the ones that look final — which message turns out
+to be a thread's last is not knowable when it is written.
+
+The work that most needed it is the work no run ever touches. An item
+[marked for a conversation](work.md#letting-the-harness-choose-the-work) is never
+selected, so no run reports anything about it, and its thread used to show the run
+that could not carry it and then nothing for the rest of the item's life. Three
+messages carry that journey now: the item being handed to a role's conversation,
+that role's first act on it, and the close that finishes it. The handoff names
+which role's conversation, taken from the marker on the item, so the wait between
+being handed over and being taken up belongs to somebody by name rather than to
+the anonymous role that carries it. Work marked before the marker named a role
+still says only that a conversation carries it, because that is all its record
+holds and a thread that guessed would name the wrong person. The close is reported
+here and nowhere else, because everywhere else the run that landed the work
+already says it, and this is the work with no run to say anything.
 
 [`docs/slack/setup.md`](slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest

@@ -2,7 +2,7 @@
 
 **A Yoyodyne project owns its configuration outright.** `yoyo init` writes a
 complete `.yoyodyne/config.yaml` — every agent, backend, model selector,
-instance count, and persona reference stated in the file — and copies the
+provider account, instance count, and persona reference stated in the file — and copies the
 personas themselves into `.yoyodyne/personas/`. Nothing is inherited at load
 time, so what the file says is what runs, and an edit to it is an edit to the
 harness's behavior with nothing in between.
@@ -150,11 +150,15 @@ approvals:
 
 checks: []          # yours to write; a run with none is refused
 
+accounts:
+  default: {}       # the provider account the agents below run under
+
 agents:
   product-manager:
     role: product-manager
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -163,8 +167,9 @@ agents:
 ```
 
 Five agents — product manager, architect, development manager, developer, and
-reviewer — each with a role, a backend, a model selector, an instance count, and
-a persona file that is in the repository beside the configuration. Change one by
+reviewer — each with a role, a backend, a model selector, the [provider
+account](#provider-accounts) it runs under, an instance count, and a persona file
+that is in the repository beside the configuration. Change one by
 editing it. Remove one by deleting its block. Nothing has to be expressed as a
 deviation from something invisible.
 
@@ -439,7 +444,9 @@ than intent anything refers to, and everything inside the invariants directory,
 which sits inside the decisions home by default and carries
 [its own identity scheme](#architectural-invariants). A home that does not exist
 is not an error — a project that has not written its designs down yet records no
-design artifacts.
+design artifacts. Frontmatter written on a skipped index, and a document
+carrying identity outside every home, are
+[reported rather than governed](#identity-the-homes-do-not-reach).
 
 The metadata is the model the invariants already use, deliberately rather than a
 second scheme beside it: **the file name is the id**, a frontmatter id that
@@ -504,6 +511,47 @@ yoyo artifact list                  # the recorded artifacts; what is not one go
 yoyo artifact list --kind decision  # one kind
 yoyo artifact show v1-goals         # one artifact, its revisions, and your approvals
 ```
+
+### Identity the homes do not reach
+
+A file the homes contain is either an artifact or a named refusal, and either
+way something looked at it. Two documents are neither, because nothing walked
+them, and both read as governed to whoever opens the file:
+
+- **Artifact frontmatter outside every home.** Nothing resolves a reference to
+  it, nothing traces through it, and no staleness or proposal reaches it.
+- **Artifact frontmatter on a `README.md`.** An index is skipped by name
+  wherever it sits, so the identity written on it is inert.
+
+Both are reported by `yoyo artifact list` and `yoyo stale` on stderr, and carried
+in `yoyo artifact list --json` under `ungoverned`, with a `kind` of
+`outside-every-home` or `directory-index`. **Neither is ever refused.** Nothing
+is added to the set, no exit status moves, and an index stays an index — what the
+report buys is that identity nothing reads stops looking like identity that
+works.
+
+Two bounds decide what is looked at, and both are deliberate:
+
+- **Where.** The parent of each configured home — `docs/` in the recommended
+  layout — walked to any depth, minus the directories that carry an identity
+  scheme of their own (`product.invariants`) and any directory whose name begins
+  with a dot. A document filed beside the homes is the case worth reporting; a
+  test fixture or a vendored document three directories away is not. A project
+  that configures a home at the top of its repository is therefore scanned
+  repository-wide, which is what that bound means there. A directory the scan
+  cannot read is itself reported, with a `kind` of `unread`, rather than passed
+  over.
+- **What counts as identity.** An `id` and a `kind` declared together, read
+  leniently — so a document that would have been refused inside a home for a
+  mistyped field is still reported outside one, while an invariant's own scheme
+  (an id and no kind) and the frontmatter conventions other tools write are not
+  read as governed documents somebody misfiled.
+
+A directory index is ungoverned by design rather than by omission, and it stays
+that way: it is navigation rather than authority, `README` is not a usable id,
+and a governed index would be stale by construction — it describes a directory
+whose contents change without it. Normative prose therefore belongs in a
+governed document, with the index keeping pointers to it.
 
 There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
 artifact's content is written by the role that owns it, and its frontmatter is
@@ -1465,7 +1513,7 @@ touching the item, is what asks for another attempt.
 different thing from that cooldown: it is aimed at a broken machine rather than a
 broken item. That many runs blocking one after another, with nothing landing
 between them, holds intake — the same hold you would place — and it stays held
-until you release it. Any run that lands clears the count, and `0` turns the
+until you release it, with `yoyo release` or the conversation's `/release`. Any run that lands clears the count, and `0` turns the
 brake off entirely, leaving you as the only thing that holds intake.
 
 And the session says what it is doing, because an idle session and a dead one are
@@ -1912,6 +1960,46 @@ compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
 
+## How long one role may ask another
+
+Roles can put a question to each other through the harness — the product manager
+asking the architect what a goal costs before it orders the backlog, the
+architect asking the product manager whether a trade-off is one a user would
+accept before it settles a design. Every exchange is recorded where you can read
+it with `yoyo exchange`, both halves are toolless so an ask moves opinion and
+never evidence, and no authority moves through one. What is configurable is how
+long a single exchange may go on:
+
+```yaml
+exchange:
+  max_rounds: 10             # the hard limit on rounds in one exchange thread
+```
+
+**It is a hard limit and it is durable with the exchange.** The number is copied
+onto an exchange as it opens rather than read afresh each round, so a process
+dying part way through, a second process picking the thread up, and an edit to
+this setting all leave a thread already in flight bounded by what it started
+with. A cap a crash could reset is not a cap.
+
+**Reaching it is not a silent cutoff.** The exchange closes as
+`unresolved-after-rounds`, and it is escalated to you as a report at warning
+severity naming the two roles, the question, the rounds, and what the exchange
+cost — so it reaches [the pile you read](reporting.md#what-agents-report-and-where-it-reaches-you)
+rather than ending in a record nobody opens. The failure this bounds is two
+judgement models deferring to each other politely for ever, which is rare,
+expensive, and invisible without the number.
+
+**Zero is refused**, unlike the triage caps above. An exchange allowed no round
+at all is a channel that is off, and turning the channel off is a matter of
+nobody using it rather than of configuring a limit nothing can be spent against.
+One is the floor.
+
+One further bound is the harness's rather than yours: a single thing you say to a
+conversation sets off at most as many rounds of asking as one exchange is
+allowed, however many exchanges it spreads them over. That bounds a reply
+opening thread after thread, which is a different question from how long one
+thread may run.
+
 ## Triage thresholds
 
 Triage is what looks at work that has stopped moving. Its numbers are
@@ -1966,10 +2054,13 @@ refused once the budget it spends is gone, and the three do not share one — th
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 
-Recording a decision and carrying it out are two steps, and one of the six
-decisions has an action for the second: `yoyo triage rerun <run-id> --reason
-"<the recorded decision>"` starts a fresh run of the item whose stopped run the
-docket entry names. It is refused unless that run is terminally recorded with
+Recording a decision and carrying it out are two steps, and two of the six
+decisions have an action for the second. They are the two opposite answers to a
+run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
+repair` continues the run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
+run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded with
 its blocker standing — read from the run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
 budget still says. It is also refused unless a decision of the development
@@ -2039,12 +2130,56 @@ promotion of the run's own. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 
-The other five decisions still carry themselves out no further than the record:
-a repair grant is followed by `yoyo run <id>`, and nothing in the harness repeats
-a merge request the forge dropped. The budget is spent when the decision is
-recorded, which is the same order every counter here is written in — an attempt
-nobody took rather than one nobody counted — so a decision nobody acts on has
-still cost the item its budget.
+`yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
+half of the same pair, and it starts nothing over. It re-enters the stopped run's
+own repair loop: the same branch, the same worktree, the same developer session,
+and the reviewer's findings handed back exactly as they were written.
+
+**What it may hand the run is the grant the development manager already
+recorded**, and it spends nothing of its own. Deciding `repair` is what takes the
+item's grant — `repair_grant_attempts` rounds, truncated there to what the round
+cap had room for — so this reads that record for how many attempts it is worth
+and hands the run exactly that. An item nobody granted a repair is one nobody
+decided this about, and it is refused; so is an item whose grant the harness has
+already carried out, which it counts from the continuations the item's runs
+record. Past the once-per-item cap a second is an escalation rather than a larger
+budget, and an item with no rounds left never gets a grant to carry out at all.
+
+Three more things refuse it. The stopped run has to be really over, terminal with
+its blocker standing, read from the run's own record rather than from the docket
+entry. The run has to have recorded a repair input — a run whose provider kept
+refusing, or whose replay conflicted, never had a failure returned to its
+developer, so there is no repair loop to re-enter. And the preserved worktree has
+to be as the harness left it: what a continued developer is handed back is
+whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
+agent that committed — is a person's to decide about, and the refusal leaves the
+item blocked and says so. The intake hold applies for the reason it applies to a
+re-run: this spends on a provider, and the development manager naming the item is
+not the operator naming it.
+
+**A repair supersedes the blocker rather than needing somebody to remember to.**
+The run that stopped blocked its item and recorded the blocker on its own state,
+which `yoyo status`, `yoyo reconcile`, and the docket all read as the fact that
+it has stopped. So re-entry clears both at the moment it happens: the item is put
+back with the decision recorded on it first, and the run's blocker is cleared onto
+the continuation that supersedes it, which keeps the words it was recorded in and
+the grant that bought the attempt. The order is the item first, because a run
+recorded as running behind an item that still says it is blocked is the one
+half-finished state nothing else here would notice, and every refusal is asked
+before either write, so a refused re-entry leaves the grant exactly where it was.
+
+The continuations are recorded on the run itself, under `repair_continuations` in
+its state file, and they are what the continued run's repair loop adds to
+`execution.repair_attempts_before_replan` to know what it may spend. They are
+also how the harness knows what a grant has already bought: summed across an
+item's runs, they are what a second re-entry is refused against.
+
+The other four decisions still carry themselves out no further than the record:
+nothing in the harness repeats a merge request the forge dropped, and a re-scope,
+a wait, and an escalation ask for no action at all. The budget is spent when the
+decision is recorded, which is the same order every counter here is written in —
+an attempt nobody took rather than one nobody counted — so a decision nobody acts
+on has still cost the item its budget.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -2142,7 +2277,7 @@ Which threshold refuses which action:
 
 | Action | Refused by |
 | --- | --- |
-| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
+| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
 | another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back — against the re-runs already claimed for the item — as the proof that a decision is there to carry out |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
 
@@ -2259,7 +2394,50 @@ These are all errors, reported before any work is claimed:
 - an `operators` entry that binds no namespace at all, binds one that is not an
   address, a forge account, or a Slack member id, names a grant the harness does
   not have, or binds an identifier a second human already bound — and two humans
-  holding `own-intent`, since intent has one owner.
+  holding `own-intent`, since intent has one owner;
+- an `accounts` alias that is not an identifier, a description longer than 200
+  bytes, an agent whose `account` names an alias the mapping does not declare,
+  or a second account — pooling work across accounts is not implemented, and a
+  project that declared two would have every run recording one of them while
+  both were being spent.
+
+## Provider accounts
+
+`accounts` is the provider accounts this project runs its agents under, keyed by
+the alias each one is known by here. Yoyodyne runs one:
+
+```yaml
+accounts:
+  default:
+    description: the Claude subscription this machine is signed in to
+
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    account: default
+```
+
+The whole mapping is optional. A project that names none runs under the alias
+`default`, every agent is assigned to it, and nothing about a single-account
+project has to be written down for its runs to say what they ran under.
+
+**An entry is a name and nothing else.** There is deliberately no key here that
+selects a login: the harness invokes the provider with the credentials the
+machine is already signed in with, so a `credentials` key would be configuration
+nothing reads. What the alias buys is that every run record and every surface
+that reports one already names the account it ran under — `yoyo status` says it,
+and so does the message that opens a run's Slack thread.
+
+**A second alias is refused, for now.** Running work across a pool of accounts is
+post-v1, and it arrives here: a second entry, and a rule for which roles run on
+which. Everything downstream of that — the per-agent `account`, the run record,
+the listings — is already the shape it needs, so nothing recorded between now and
+then has to be guessed at afterwards.
+
+**Which roles run where is yours and it is fixed.** An agent runs under the
+account its entry names, and nothing chooses at run time.
 
 ## Operators
 
@@ -2556,9 +2734,18 @@ yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable
 ```
 
-`config show` prints the layers it applied, the effective configuration as YAML,
-and, with `--origins`, one line per value. Persona bodies are reported as a
-source and a byte count rather than inlined, so the output stays readable.
+`config show` prints the layers it applied, the revision of the configuration in
+force, the effective configuration as YAML, and, with `--origins`, one line per
+value. Persona bodies are reported as a source and a byte count rather than
+inlined, so the output stays readable.
+
+The revision — `cfg-` and a digest, printed by `config validate` as well — is
+what a run record names when it says which configuration set it up. It is derived
+from the effective values rather than declared, so nobody has to remember to bump
+it: two configurations whose effective values agree share a revision however
+differently their files are written, a bundle upgrade that moves a default moves
+the revision with it, and a changed persona moves it too, because a persona is
+what every prompt is written against.
 
 Origins use these values:
 
@@ -2568,6 +2755,7 @@ Origins use these values:
 | `builtin:v1` | Inherited from the built-in bundle, by a project that uses `extends`. |
 | a file path | Supplied by that project configuration file. |
 | `derived:product.id` | Computed from another configured value. |
+| `derived:accounts` | An agent's `account` no layer stated, which follows the single account the mapping declares. |
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.

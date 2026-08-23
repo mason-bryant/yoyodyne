@@ -73,12 +73,14 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume`
+`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, `yoyo resume`, and
+`yoyo release`
 sit beside that conversation as administrative and recovery entry points — one
 named item, one branch judged as a whole, what became of the runs already made
 and why one of them failed, settling what a killed process left behind, stopping
-everything the harness would spend until you say otherwise, and releasing a run
-waiting on a refusal the provider no longer makes — rather than as the way
+everything the harness would spend until you say otherwise, releasing a run
+waiting on a refusal the provider no longer makes, and letting the harness choose
+work again after intake was held — rather than as the way
 work normally happens.
 
 **Quick start.** With [Beads](https://github.com/gastownhall/beads) and
@@ -233,6 +235,16 @@ already true and what would still have to be done, so reading the report is
 never consent to alter the machine. `yoyo setup --yes --json` is what carries a
 walk out with nobody at the terminal — it leaves the keychain step, and only
 that step, to a walk somebody is watching.
+
+**Or have your own agent walk it.**
+[`skills/yoyo-setup/SKILL.md`](skills/yoyo-setup/SKILL.md) is a prompt rather
+than a document to read: paste it into your own coding session, or install it
+into `~/.claude/skills/` with the one command at the top of it, and ask for yoyo
+to be set up here. It walks the same path — and repairs an installation that
+used to work and stopped — acting on the structured findings `yoyo setup --json`
+and `yoyo doctor --json` return, which is what keeps it running the commands
+those reports carry rather than commands it invented. It asks before each one,
+and hands you back anything that needs your editor, a login, or a credential.
 
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
@@ -503,11 +515,32 @@ runs.
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports
-`<tag>`. That target is the whole of what a release is: the release workflow
-runs it for a pushed tag and publishes what it produced, and CI runs the same
-target on every change with a placeholder version, so a tag push reruns a path
-that is already exercised rather than executing it for the first time when a
-failure would mean a botched or missing release.
+`<tag>`. That target is the whole of what a release consists of: the release
+workflow runs it for a pushed tag and publishes what it produced, and CI runs
+the same target on every change with a placeholder version, so a tag push
+reruns a path that is already exercised rather than executing it for the first
+time when a failure would mean a botched or missing release.
+
+`make release VERSION=<tag>` is that build with its gate in front, so a daily
+cadence costs two commands rather than a procedure:
+
+```sh
+make release VERSION=v0.3.0
+git push origin v0.3.0
+```
+
+It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+`check`, builds and verifies the archives for `<tag>`, then tags the commit
+they were built from — in that order, so a red gate refuses the cut, names what
+was red, and leaves nothing to undo. It also refuses a tag that is not
+`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
+that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
+origin is unreachable it says that last one went unchecked rather than passing
+over it. It stops at the tag: publishing is the `git push`, which is the
+irreversible half and what the release workflow acts on, so it stays something
+you do deliberately.
+[`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
+of those refusals against fabricated repositories.
 
 ## The conversation
 
@@ -596,7 +629,9 @@ It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](docs/reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -939,7 +974,10 @@ the harness *choosing* new work, and lets everything already running finish. It
 is what you reach for when the queue looks wrong but nothing is on fire. It holds
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
-and `/release` lets the harness choose again. A held intake leads `/status` with
+and `/release` lets the harness choose again — as does `yoyo release` at a
+terminal, which lifts the same record, for when the hold is the one the
+failure-storm brake placed overnight and no conversation is open. A held intake
+leads `/status` with
 its own banner saying when it was placed and why, beneath the PAUSED banner if
 both are in force. It is recorded per product, unlike
 [`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
@@ -1218,6 +1256,68 @@ invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for.
 
+### Roles asking each other things
+
+A question one role cannot answer itself used to cost you one of two things:
+relaying it between two conversations by hand, or a whole work-item cycle. Now
+the role asks directly and the harness carries it. The product manager asking the
+architect *what does this goal cost, and what am I missing?* before it orders the
+backlog, and the architect asking the product manager *if we sacrifice some
+performance, is that an unacceptable trade-off from the user's standpoint?*
+before it settles a design, are the two cases it exists for. They are one
+mechanism with the parties swapped, and everything below holds identically in
+both directions.
+
+Three things are true of every exchange, and each is enforced rather than asked
+for:
+
+- **It is durable and visible.** An exchange is a record of its own under the
+  product's state, written before each round is taken, and `yoyo exchange list`
+  and `yoyo exchange show <id>` read the whole thread. Two roles cannot say
+  anything to each other that you cannot read afterwards, which is the
+  no-side-conversations property traceability implies. The conversation that
+  asked tells you at the time as well, and where the project reports to Slack
+  each round arrives in a thread of its own.
+- **It is judgment-only.** Both halves are toolless: the role being asked has no
+  filesystem, no commands, and nothing to check anything against, so an ask moves
+  opinion and never evidence. An answer reaching for any harness block at all is
+  refused whole and the asker is told its question went unanswered. Work that
+  needs something verified is still commissioned as bounded developer work.
+- **It is decisionless.** No authority moves through an ask. Nothing an answering
+  role says admits work, orders a backlog, edits a document, or resolves
+  anything, and decisions still land as amendments, proposals, and directives.
+
+```sh
+./bin/yoyo exchange list           # every exchange, the open ones first, with what each cost
+./bin/yoyo exchange show <id>      # one exchange in full: every question and every answer
+./bin/yoyo exchange list --json    # the records themselves, for a script
+```
+
+The channel runs between the three roles that hold judgement about the product —
+the product manager, the architect, and the development manager. The developer
+and the reviewer are not on it: their judgement is exercised inside a run,
+against a change and a worktree, and an opinion from either with none of that in
+front of it is worth less than the round it would cost.
+
+The answer comes back inside the reply you were already waiting for, as a further
+round of it, and the asking role then either asks again in the same thread or
+closes it with what it took from the exchange. Closing is the ordinary ending.
+
+**Every exchange is opened with a hard limit on rounds**, which is
+[`exchange.max_rounds`](docs/configuration.md#how-long-one-role-may-ask-another) and defaults
+to ten. The limit is copied onto the exchange as it opens and is durable with it,
+so neither a process dying nor an edit to the configuration lengthens a thread
+that is already running long. Reaching it is not a silent cutoff: the exchange
+closes as unresolved and is escalated to you as a report at warning severity,
+naming what the two roles did not settle. That is the one way this fails — two
+judgement models deferring to each other politely for ever — and a limit that
+ended the conversation quietly would hide exactly the case worth seeing.
+
+**What an exchange cost is reported beside the rounds it took**, wherever one is
+read. Rounds alone say how long a conversation went on and cost alone says what
+it came to; the question you actually have — was that worth it — is answerable
+only from the two together.
+
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
@@ -1296,8 +1396,12 @@ were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 
-Recording a decision is not carrying it out, and one of the six now has an
-action that does. `yoyo triage rerun <run-id> --reason "<what the development
+Recording a decision is not carrying it out, and two of the six now have an
+action that does. They are the two opposite answers to a run that stopped:
+`yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
+run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<what the development
 manager decided>"` starts a fresh run of the item whose stopped run the docket
 entry names — the case where the ground moved under a change that was never
 wrong. The run records the development manager as having chosen the work and the
@@ -1358,10 +1462,40 @@ grant](docs/configuration.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
-The harness carries out none of the other five. Two of them ask for something
-and it is still yours to do: `yoyo run <id>` after a repair grant, and for a
-re-arm, asking the forge to merge the pull request again yourself —
-nothing in the harness repeats a merge request the forge dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
+`yoyo triage repair <run-id> --reason "<what the development manager decided>"`
+is the other one, and it is the answer to the opposite case: the change is nearly
+right and the run ran out of attempts. It starts nothing over. The stopped run
+goes on — same branch, same worktree, the developer session that already holds
+the context, and the reviewer's findings handed back exactly as they were
+written — under the grant the development manager already recorded. Deciding
+`repair` is what takes that grant and sizes it; this reads that record for what
+it is worth and hands the run exactly that, so it can never give a run more
+attempts than the round cap let the item have. **Your hold on intake applies to
+this too**, for the same reason it applies to a re-run.
+
+**It supersedes the blocker rather than needing you to remember to.** The run
+that stopped blocked its item and recorded the blocker on its own state, which
+`/status`, `yoyo reconcile`, and the docket all read as the fact that it stopped.
+Re-entry clears both as it happens: the item is put back with the decision
+recorded on it, and the run's blocker is cleared onto the continuation that
+supersedes it, keeping the words it was recorded in. So a repair does not need
+the reopening a re-run does.
+
+Five things refuse it, and every one of them is asked before either of those
+writes, so a refused re-entry leaves the grant exactly where it was. The stopped
+run has to be really over. It has to have recorded a failure that was actually
+returned to its developer — findings, a failing check, or refused paths — because
+a run whose provider kept refusing has no repair loop to re-enter. The item must
+not be closed or waiting on other work. A grant of the development manager's has
+to be there and not already carried out. And **the preserved worktree has to be
+as the harness left it**: what a continued developer is handed back is whatever is
+in that worktree, so a HEAD that moved — you mid-surgery, an agent that
+committed — refuses to a person, leaves the item blocked, and says so.
+
+The harness carries out none of the other four. One of them asks for something
+and it is still yours to do: for a re-arm, asking the forge to merge the pull
+request again yourself — nothing in the harness repeats a merge request the forge
+dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
 recorded whether or not you or the harness act on it, which is the same direction
 every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that
@@ -1530,6 +1664,16 @@ The pile lives outside the repository under the operating system's state
 directory, beside the run and conversation records rather than among them. It
 outlives them: a run is settled and its worktree and branch are removed, and
 what it reported is still there for you to read.
+
+One entry in the pile is filed by the harness rather than by an agent: an
+[inter-role ask exchange](#roles-asking-each-other-things) that reached the
+round limit it was opened with closes as unresolved and escalates itself here, at
+`warning` severity, naming the two roles, the question, the rounds it spent, and
+what it cost. It is a report rather than a blocker for the same reason everything
+else here is — nothing was stopped, and two roles simply did not settle something
+one of them needed — and it is filed at all because an exchange that ended in a
+silent limit is exactly the failure nobody would otherwise see.
+
 
 ### What agents propose changing, and who decides
 
@@ -1957,8 +2101,8 @@ A project owns its configuration outright. `yoyo init` writes it:
 ```
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
-backend, model selector, instance count, and persona reference, plus the
-execution, approval, and product settings — and copies the five personas into
+backend, model selector, provider account, instance count, and persona
+reference, plus the execution, approval, and product settings — and copies the five personas into
 `.yoyodyne/personas/`, where they are ordinary Markdown files in your
 repository. Nothing is inherited when the file loads, so
 `yoyo config show --origins` names the project file for every configured value —
@@ -1985,11 +2129,15 @@ checks:
   - go test ./...
   - go vet ./...
 
+accounts:
+  default: {}                       # the provider account the agents run under
+
 agents:
   developer:
     role: developer
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -2089,6 +2237,20 @@ stderr rather than governed under a guessed id, so a home you have not given
 identity to yet says so. Nothing else changes for it: a specification with no
 frontmatter is still read as product intent, because refusing intent somebody
 wrote down is worse than reading it and saying its identity is missing.
+
+**Identity nothing reads is named too**, and it is the opposite failure: a
+document the loader never looked at, so nothing was refused and nothing was
+reported. Two shapes of it, both printed on stderr beside the listing and
+neither of them a refusal. **A document carrying artifact frontmatter outside
+every home** reads as governed to whoever opens it and is governed by nothing —
+no `supports` entry resolves to it, no staleness reaches it, and no proposal can
+be made against it, which is exactly how the v1 harness design sat in a
+repository whose every check was green. And **frontmatter on a `README.md`** is
+inert: a directory index is skipped by name wherever it sits, deliberately and
+permanently, because it says what is filed beside it rather than stating intent
+and a governed index would be stale by construction. What is looked at is what
+sits beside the homes — `docs/` in the recommended layout — so a fixture or a
+vendored document elsewhere is not reported.
 
 Who may change one of these documents is in the code rather than in a persona.
 The product manager owns the brief and the goals, the architect owns the designs,
@@ -2306,7 +2468,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](skills/yoyo-setup/SKILL.md) has your own agent session act on rather than
+parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
@@ -2412,6 +2577,22 @@ they have; the conversation's [`/hold`](#steering-the-work-from-the-conversation
 stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
+
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
 
 ### Waiting out a provider usage limit
 
@@ -2685,9 +2866,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -2698,6 +2881,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -2790,7 +2984,8 @@ copy the single file out of it, if you want it:
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind
 ./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
+./bin/yoyo-status -c 30    # report that many days instead of 7
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -2815,10 +3010,26 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run, per conversation, and
-per branch review, and a mixed total says how much of it was each — a
+reporting requires it. What it prices is every run, every conversation, and
+every branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
+
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `-c 30` — and naming a run,
+a conversation, or a review prices that one whatever day it ran on, because an
+id has already chosen what to show; an id prefix that is all digits has to carry
+its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
+count of days. A window with nothing in it says so and says since when, rather
+than reading like a machine that spent nothing.
+
 [`yoyo cost`](#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the
@@ -2884,6 +3095,15 @@ how the sink records whose secrets it was launched with, so
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
 
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
+
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
 everything held, the watch session idle, or no session running — says so again
@@ -2913,6 +3133,10 @@ built.
 
 ## Further reading
 
+- [Setting up and repairing an installation with your own agent](skills/yoyo-setup/SKILL.md)
+  — the shipped prompt that walks a blank or broken installation to a passing
+  `yoyo doctor`, acting on what `yoyo setup --json` and `yoyo doctor --json`
+  report.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.

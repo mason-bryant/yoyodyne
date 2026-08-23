@@ -23,6 +23,7 @@ const (
 	phaseThinking  = "thinking about it"
 	phaseWriting   = "writing the reply"
 	phaseTracker   = "carrying out the tracker actions it asked for"
+	phaseExchange  = "putting its question to the other role"
 	phaseRecording = "recording the turn"
 )
 

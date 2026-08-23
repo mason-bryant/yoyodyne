@@ -57,6 +57,32 @@ identity to yet says so. Nothing else changes for it: a specification with no
 frontmatter is still read as product intent, because refusing intent somebody
 wrote down is worse than reading it and saying its identity is missing.
 
+**Identity nothing reads is named too**, and it is the opposite failure: a
+document the loader never looked at, so nothing was refused and nothing was
+reported until now. Two shapes of it, both printed on stderr beside the listing
+and neither of them a refusal:
+
+- **A document carrying artifact frontmatter outside every home.** It reads as
+  governed to whoever opens it and is governed by nothing — no `supports` entry
+  resolves to it, no staleness reaches it, and no proposal can be made against
+  it. That is exactly how the v1 harness design sat, in a repository whose every
+  check was green, until somebody noticed by hand.
+- **Frontmatter on a `README.md`.** A directory index is skipped by name
+  wherever it sits, deliberately and permanently: it says what is filed beside
+  it rather than stating intent, `README` is not a usable id, and a governed
+  index would be stale by construction. So identity written on one is inert
+  rather than nearly working, which is worse than absent because it reads as
+  working. Normative prose belongs in a governed document; the index keeps the
+  pointers to it.
+
+What is looked at is what sits beside the homes — `docs/` in the recommended
+layout — so a fixture or a vendored document carrying frontmatter somewhere else
+in the repository is not reported. A project that configures a home at the top of
+the repository is scanned repository-wide, which is what that bound means there.
+Identity is an id and a kind together, so an invariant's own scheme and the
+frontmatter conventions other tools write are not read as governed documents
+filed in the wrong place.
+
 Who may change one of these documents is in the code rather than in a persona.
 The product manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no

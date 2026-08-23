@@ -57,6 +57,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
 		return runDirective(args[1:], stdout, stderr)
+	case "exchange":
+		return runExchange(ctx, args[1:], stdout, stderr)
 	case "reports":
 		return readReports(args[1:], stdout, stderr)
 	case "run":
@@ -71,6 +73,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return pauseHarness(args[1:], stdout, stderr)
 	case "resume":
 		return resumeWorkItem(args[1:], stdout, stderr)
+	case "release":
+		return releaseIntake(args[1:], stdout, stderr)
 	case "review":
 		return reviewBranch(ctx, args[1:], stdout, stderr)
 	case "cost":
@@ -161,9 +165,10 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 			"sources":    resolved.Sources,
 			"product_id": resolved.Config.Product.ID,
 			"agents":     len(resolved.Config.Agents),
+			"revision":   resolved.Config.Revision(),
 		})
 	}
-	fmt.Fprintf(stdout, "configuration valid: %s\n", resolved.Path)
+	fmt.Fprintf(stdout, "configuration valid: %s (revision %s)\n", resolved.Path, resolved.Config.Revision())
 	return 0
 }
 
@@ -206,6 +211,10 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 		payload := map[string]any{
 			"config":  resolved.Path,
 			"sources": resolved.Sources,
+			// The revision names these values as one thing, so a run record and the
+			// configuration it was made under can be held up against each other
+			// without diffing two files.
+			"revision": resolved.Config.Revision(),
 		}
 		if showEffective {
 			payload["effective"] = resolved.Config
@@ -220,6 +229,7 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	for _, source := range resolved.Sources {
 		fmt.Fprintf(stdout, "# layer: %s\n", source)
 	}
+	fmt.Fprintf(stdout, "# revision: %s\n", resolved.Config.Revision())
 	if showEffective {
 		encoded, err := yaml.Marshal(resolved.Config)
 		if err != nil {
@@ -294,6 +304,7 @@ Commands:
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
+  exchange          read what the roles have asked each other, and what it cost
   reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
@@ -301,6 +312,7 @@ Commands:
   status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider
+  release           lift a hold on intake, so the harness chooses work again
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
   reconcile         settle interrupted runs, then converge local state on the forge

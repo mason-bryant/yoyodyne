@@ -109,6 +109,14 @@ type Conversation struct {
 	// It is bounded, and an id dropped from it is delivered once more rather
 	// than lost, which is the right way for this to fail.
 	DeliveredAmendmentIDs []string `json:"delivered_amendment_ids,omitempty"`
+	// DeliveredReportIDs are the collected reports this conversation has already
+	// carried into a turn. A report stays in the pile until somebody records what
+	// became of it, so without this the same unhandled reports would be delivered
+	// again every turn. It is durable and bounded for exactly the reasons the
+	// amendment ids above are, and an id dropped from it is offered once more
+	// rather than lost — which is the right way for this to fail, because the
+	// failure it must never have is a report nobody is ever shown.
+	DeliveredReportIDs []string `json:"delivered_report_ids,omitempty"`
 	// PendingProposals are the work items an agent proposed that nobody has
 	// decided yet. They are durable for the reason the provider session is, and
 	// the reason is sharper here than anywhere else in this record: a proposal
@@ -185,6 +193,11 @@ const MaxPendingNotices = 20
 // cannot grow without limit on a queue nobody works through.
 const MaxDeliveredAmendmentIDs = 256
 
+// MaxDeliveredReportIDs bounds the record of reports already carried into a
+// turn, for the reason the amendment bound exists: a conversation's state file
+// cannot be allowed to grow without limit on a pile nobody works through.
+const MaxDeliveredReportIDs = 256
+
 // MaxPendingTrackerResultBytes bounds the results a conversation may carry
 // forward. The record has to stay reloadable, so what waits inside it is bounded
 // well below the state file's own limit rather than growing with the tracker.
@@ -242,6 +255,10 @@ func (c Conversation) Validate() error {
 	if len(c.DeliveredAmendmentIDs) > MaxDeliveredAmendmentIDs {
 		problems = append(problems, fmt.Errorf("%d delivered amendment ids are recorded, limit is %d",
 			len(c.DeliveredAmendmentIDs), MaxDeliveredAmendmentIDs))
+	}
+	if len(c.DeliveredReportIDs) > MaxDeliveredReportIDs {
+		problems = append(problems, fmt.Errorf("%d delivered report ids are recorded, limit is %d",
+			len(c.DeliveredReportIDs), MaxDeliveredReportIDs))
 	}
 	if len(c.PendingProposals) > MaxPendingProposals {
 		problems = append(problems, fmt.Errorf("%d undecided proposals are recorded, limit is %d",

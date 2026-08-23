@@ -18,6 +18,14 @@
 #                          under its own name and face, and what no persona did
 #                          arrives from the harness itself; without this scope
 #                          the voice would be the only thing telling them apart.
+#   reactions:write        mark the message a thread hangs from with what its
+#                          item is doing — working, with the reviewer, blocked,
+#                          landed — and take the mark off again as the record
+#                          moves. It is what makes the channel's top level a
+#                          status board that answers which threads need somebody
+#                          without any of them being opened. Without it the
+#                          messages are unaffected and the marks are simply
+#                          absent.
 #   channels:history       read replies in the thread the sink opened, in public
 #                          channels. Nothing acts on a reply today: the sink
 #                          acknowledges what arrives so Slack stops redelivering
@@ -57,6 +65,7 @@ oauth_config:
     bot:
       - chat:write
       - chat:write.customize
+      - reactions:write
       - channels:history
       - groups:history
 settings:

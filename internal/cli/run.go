@@ -699,7 +699,7 @@ func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintln(stdout, reason)
 	}
 	fmt.Fprintf(stdout, "nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
-	fmt.Fprintf(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "`yoyo release` lets the harness choose work again, as does /release in a conversation, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
 }
 
 // reportCollectedReports names what this run's agents reported without it
