@@ -2898,7 +2898,10 @@ waited out and when the turn will ask again; `yoyo chat --message` waits the sam
 way, because an unattended caller is exactly the one who cannot retry by hand. The
 budget covers the message the operator is waiting for rather than each wait inside
 it, so a provider that keeps refusing reaches the configured maximum instead of
-walking one message past it a wait at a time.
+walking one message past it a wait at a time. The refusal is written down once for
+as long as one message is waiting it out, so a wait is one warning in the channel
+rather than one per probe — a limit whose quoted reset moves is written down
+again, because that is the provider saying something new about it.
 
 What a conversation cannot do is what a run does when the wait is one the harness
 will not take — a reset already behind us, or a wait past

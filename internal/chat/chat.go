@@ -140,8 +140,11 @@ type Options struct {
 	// record to cross, so without this a limit that stops one is said to whoever
 	// typed the message and to nobody else — and an exhausted limit is hours in
 	// which nothing will happen anywhere, which is exactly what somebody who is
-	// not at this terminal needs to be told. It is optional like the rest, and a
-	// conversation without one fails a refused turn exactly as it always did.
+	// not at this terminal needs to be told. It is optional like the rest, and
+	// what a conversation without one loses is only that: the refusal reaches the
+	// terminal and no further. What the turn then does about the refusal is
+	// UsageLimitPause's to say and never this field's — recording is observation,
+	// and a wait does not depend on somebody having wired a log to it.
 	UsageLimits UsageLimits
 	// UsageLimitPause is how long a turn the provider refused may wait for it to
 	// serve again before being asked a second time. It is the same bounds a run
@@ -326,6 +329,12 @@ type Session struct {
 	// its own would let a provider that keeps refusing walk one message far past
 	// what the operator configured, one acceptable-looking wait at a time.
 	usageLimitWaited time.Duration
+	// notedRefusal is the provider refusal this message has already written down,
+	// as the limit and the reset time together. It is kept for the same span as
+	// the budget above and for a related reason: the probes a wait takes all meet
+	// the same refusal, and one stoppage somebody needs to be told about is one
+	// entry in the log rather than one per probe.
+	notedRefusal string
 	// titled says a run this conversation reported renamed the operator's
 	// terminal window, so the conversation knows to put the name back when it
 	// ends rather than leaving it announcing work that finished.
@@ -581,8 +590,11 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	s.turnCostUSD = 0
 	// What this message may spend waiting out a refusing provider is counted from
 	// here for the same reason and over the same span: the budget covers the answer
-	// the operator is waiting for rather than any one round of it.
+	// the operator is waiting for rather than any one round of it. What it has
+	// already said about a refusal is scoped the same way, so a limit met again
+	// under a later message is told again rather than passed over as old news.
 	s.usageLimitWaited = 0
+	s.notedRefusal = ""
 	prompt := s.turnPrompt(trimmed)
 	// chargeTo is the exchange the next invocation belongs to, set when a round of
 	// asking is delivered into it. asksTaken bounds how much asking one message
@@ -848,7 +860,11 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		// A provider that declined this turn for want of capacity is recorded
 		// before anything is decided about waiting, because the refusal is a fact
 		// about the whole product rather than about this conversation, and nothing
-		// else in the record would ever say it happened.
+		// else in the record would ever say it happened. One limit is recorded once
+		// however many probes a wait takes, so this accumulates at most a refusal
+		// per distinct limit rather than one per attempt — and a turn that goes on
+		// to complete drops it, because failing a turn the provider served over a
+		// log write is the report deciding something, which it never does.
 		refusal = errors.Join(refusal, s.noteUsageLimit(*limit))
 		if !s.options.UsageLimitPause.waits() {
 			break

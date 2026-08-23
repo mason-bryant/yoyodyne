@@ -300,6 +300,59 @@ func TestAWaitingTurnSaysSoOnTheDisplay(t *testing.T) {
 	}
 }
 
+// A wait probes the same closed window at the configured interval and is refused
+// again every time. One limit is written down once for as long as one message is
+// waiting it out, because each record is reported into Slack as a warning meaning
+// hours in which nothing will happen — and a dozen of those reads as a dozen
+// separate stoppages rather than one that is still going. A refusal that says
+// something new is new information and is written down.
+func TestOneLimitIsRecordedOnceHoweverManyProbesAWaitTakes(t *testing.T) {
+	t.Parallel()
+
+	clock := &waitingClock{now: fixedClock{}.Now()}
+	limits := newTestUsageLimits(t)
+	// The window stays closed under three probes and then the provider quotes a
+	// reset that has moved, which is the one thing here somebody has not been told.
+	moved := clock.now.Add(4 * time.Hour)
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		refusedForCapacity(clock.now.Add(3 * time.Hour)),
+		refusedForCapacity(clock.now.Add(3 * time.Hour)),
+		refusedForCapacity(clock.now.Add(3 * time.Hour)),
+		refusedForCapacity(moved),
+		{SessionID: "session-1", FinalText: "Two goals, then."},
+	}}
+	options := waitingOptions(testOptions(t, provider), clock)
+	options.UsageLimits = limits
+	session := openTestSession(t, options)
+
+	if _, err := session.Send(context.Background(), "what is next?"); err != nil {
+		t.Fatalf("Send() error = %v, want the turn waited out the limit and completed", err)
+	}
+	if len(provider.requests) != 5 {
+		t.Fatalf("invocations = %d, want each probe to have been a real attempt", len(provider.requests))
+	}
+	recorded, err := limits.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 2 {
+		t.Fatalf("recorded = %#v, want the repeated refusal written down once and the moved reset written down", recorded)
+	}
+	if recorded[1].ResetsAt == nil || !recorded[1].ResetsAt.Equal(moved.UTC()) {
+		t.Fatalf("second record = %#v, want the reset the provider moved to", recorded[1])
+	}
+
+	// A later message meets the limit again, and is told about it again: the same
+	// window is a fresh stoppage once the operator is waiting on something else.
+	provider.results = append(provider.results, refusedForCapacity(moved), backendapi.RunResult{SessionID: "session-1", FinalText: "Still there."})
+	if _, err := session.Send(context.Background(), "and after that?"); err != nil {
+		t.Fatalf("Send() second error = %v", err)
+	}
+	if recorded, err = limits.List(); err != nil || len(recorded) != 3 {
+		t.Fatalf("recorded = %#v, error %v, want the next message told about the limit it met", recorded, err)
+	}
+}
+
 // A wait lasts hours, which is exactly long enough for the operator to pause the
 // harness while one is happening. Every provider call this conversation makes
 // reads that pause first, and a reissue is one — otherwise a wait would be a

@@ -70,6 +70,13 @@ type UsageLimitPause struct {
 	// attempts, whether or not the provider named a reset time. A quoted reset
 	// bounds the wait rather than gating it, because a reset time is a claim
 	// about the provider and claims go stale in both directions.
+	//
+	// The name is older than the rule and describes only the case it started
+	// with. What it means now is the whole polling discipline, and a run applies
+	// it exactly this way — orchestrator.activeRun.awaitRecordedUsageLimit sleeps
+	// min(time left, this) and reissues, whether or not a reset was named. So
+	// this is the run's interval reused rather than a second interval that
+	// happens to be read from the same setting.
 	Probe time.Duration
 }
 
@@ -121,8 +128,21 @@ func (e *UsageLimitError) Error() string {
 // nothing and says nothing: the caller is already deciding what to do about the
 // refusal itself, and this adds a durable trace of it rather than another way for
 // the turn to fail.
+//
+// One limit is written down once for as long as one message is waiting it out. A
+// wait probes the same closed window at the configured interval and is refused
+// again by every probe, so recording each of them would tell somebody who is not
+// at this terminal about one limit a dozen times — at the severity that means
+// hours in which nothing will happen, which a dozen of reads as a dozen separate
+// stoppages rather than as one that is still going. What is new information is a
+// refusal naming a different limit, or the same limit with a reset that has
+// moved, and either is written down.
 func (s *Session) noteUsageLimit(limit backend.UsageLimit) error {
 	if s.options.UsageLimits == nil {
+		return nil
+	}
+	noted := describeRefusal(limit)
+	if noted == s.notedRefusal {
 		return nil
 	}
 	exhaustion := runstate.UsageLimitExhaustion{
@@ -141,9 +161,24 @@ func (s *Session) noteUsageLimit(limit backend.UsageLimit) error {
 		exhaustion.ResetsAt = &resetsAt
 	}
 	if err := s.options.UsageLimits.Record(exhaustion); err != nil {
+		// A refusal that was not written down is not one this message has said, so
+		// the next probe tries again rather than treating the failed write as one.
 		return fmt.Errorf("record the provider's refusal: %w", err)
 	}
+	s.notedRefusal = noted
 	return nil
+}
+
+// describeRefusal is one refusal as the thing to be told about once: the limit
+// the provider named and when it said it lifts. Two refusals that agree on both
+// are the same closed window met twice, which is what a wait does by design; a
+// reset that has moved is the provider saying something new about it.
+func describeRefusal(limit backend.UsageLimit) string {
+	described := limit.Kind
+	if limit.ResetsAt.IsZero() {
+		return described + "|no reset time"
+	}
+	return described + "|" + limit.ResetsAt.UTC().Format(time.RFC3339)
 }
 
 // waitOutUsageLimit waits for a provider that refused this turn, and reports
