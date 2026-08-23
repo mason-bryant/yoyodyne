@@ -309,9 +309,12 @@ the command that ends it.
 Each thread is headed by the item it is about — its identifier and what the item
 is called, as `yoyodyne-ifd.118 — Slack thread headers carry the item's title` —
 so a channel scrolls as a list of subjects rather than a list of identifiers. The
-title comes from the durable record whatever opened the thread was read from, so
-work the harness ran before it started recording titles is headed by the
-identifier alone, and threads that are already open stay exactly as they are.
+title comes from the durable record whatever opened the thread was read from.
+Where that record carried none — an item whose first appearance in the channel is
+its priority changing, which is every item admitted before you had a channel —
+the tracker is asked what the item is called, once, as the thread is opened. A
+tracker that will not answer costs that header its title and nothing else: the
+thread opens either way. Threads that are already open stay exactly as they are.
 
 Into the work item's thread, as they happen:
 

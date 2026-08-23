@@ -71,6 +71,13 @@ type Options struct {
 	API *API
 	// Feed says what there is to post.
 	Feed Feed
+	// Titles is what an item is called, asked for at the one moment no record can
+	// answer: opening a thread for an item whose first appearance in the channel
+	// is an event that carried no title. It is optional, and a sink assembled
+	// without one heads such a thread with the identifier alone — which is a name
+	// somebody has to go and resolve, so every sink the harness builds is given
+	// one.
+	Titles Titles
 	// Poll is the interval between passes; zero takes the default.
 	Poll time.Duration
 	// Log is where the sink says what it is doing. It is the operator's only
@@ -99,6 +106,15 @@ type Options struct {
 	Now func() time.Time
 }
 
+// Titles says what one work item is called. It is the sink's last resort for
+// naming a thread, asked once per thread and never on the path of anything: the
+// durable records carry titles, and this is for the items whose first mention in
+// the channel is a record that carried none. A tracker that will not answer
+// costs a header its title and nothing else.
+type Titles interface {
+	Title(ctx context.Context, workItemID string) (string, error)
+}
+
 // Sink is the long-running reporting process for one product.
 type Sink struct {
 	channel string
@@ -108,7 +124,11 @@ type Sink struct {
 	store      *Store
 	api        *API
 	feed       Feed
-	poll       time.Duration
+	// titles resolves what an item is called for a thread whose record carried no
+	// title. It is optional, and nil is a sink that heads such a thread by the
+	// identifier alone.
+	titles Titles
+	poll   time.Duration
 	// identity is what this sink records about itself while it runs.
 	identity Presence
 	// refusal is how long to wait after a refusal only a person can clear. It is
@@ -171,6 +191,7 @@ func New(options Options) (*Sink, error) {
 		store:    options.Store,
 		api:      options.API,
 		feed:     options.Feed,
+		titles:   options.Titles,
 		poll:     poll,
 		identity: options.Identity,
 		refusal:  refusalBackoff,
@@ -489,6 +510,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // happened to speak first, because opening a thread is not anybody's account of
 // anything.
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
+	topic = s.named(ctx, topic)
 	identity := s.appearance.Identity(notify.Harness())
 	emoji, url := icon(identity.Avatar)
 	ts, err := s.post(ctx, Message{
@@ -502,6 +524,34 @@ func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, erro
 		return Thread{}, fmt.Errorf("open the thread for %s: %w", topic.Key(), err)
 	}
 	return Thread{Channel: s.channel, ThreadTS: ts, OpenedAt: time.Now().UTC()}, nil
+}
+
+// named is the topic with a name on it, resolved from the tracker where the
+// record that reached here carried none. Most records carry one and this does
+// nothing; what it is for is the item whose first appearance in the channel is a
+// bookkeeping event — a priority changed, a goal recorded — which says what
+// happened to an item without saying what the item is. Every item admitted
+// before the channel existed is one of those, so leaving it to the records would
+// leave a live class of threads named by an identifier alone.
+//
+// It is asked at most once per thread, because the thread map is durable and a
+// thread is opened once. A tracker that will not answer costs the header its
+// title and nothing else: the thread opens either way, since reporting is never
+// a gate and a thread nobody opened is a whole narrative missing rather than a
+// name.
+func (s *Sink) named(ctx context.Context, topic notify.Topic) notify.Topic {
+	// An exchange is addressed by an identifier the tracker has never heard of,
+	// and the product opens no thread at all, so the work item is the one topic
+	// there is anywhere to ask about.
+	if s.titles == nil || topic.Kind != notify.TopicWorkItem || topic.Title != "" {
+		return topic
+	}
+	title, err := s.titles.Title(ctx, topic.ID)
+	if err != nil {
+		s.log("the tracker would not say what %s is called, so its thread is headed by the identifier alone: %v", topic.ID, err)
+		return topic
+	}
+	return topic.WithTitle(title)
 }
 
 // icon splits one avatar into the two fields Slack takes for it: a shortcode

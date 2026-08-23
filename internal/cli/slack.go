@@ -163,6 +163,10 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	log := func(format string, args ...any) {
 		fmt.Fprintf(stdout, format+"\n", args...)
 	}
+	// One tracker for the two questions the sink asks it, neither of which is on
+	// the path of anything: how much work is ready, and what an item nothing named
+	// is called.
+	tracker := beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}
 	sink, err := slack.New(slack.Options{
 		Channel: settings.Channel,
 		// What the project configured is the picture beside each name and nothing
@@ -175,6 +179,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Avatars: notify.Avatars(settings.Avatars),
 		Store:   store,
 		API:     api,
+		// A thread is named from the record that opened it wherever that record
+		// carried a name. Where it did not — an item whose first appearance in the
+		// channel is its priority changing, which is every item admitted before
+		// there was a channel — the tracker is asked, once, rather than the thread
+		// being headed by an identifier somebody has to go and resolve.
+		Titles: trackerTitles{tracker: tracker},
 		// What this process is, for whoever asks later whether the sink reporting
 		// for this product is the right one. The namespace is taken from the
 		// environment rather than assumed to be this product: what it records is
@@ -204,7 +214,7 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// A held or idle line with work ready to pull says so again while it
 			// stands, because the message that said it began is hours stale by the
 			// time somebody reads it and silence has to keep meaning nothing to do.
-			Backlog:   readyBacklog{tracker: beads.Client{Runner: execution.OSProcessRunner{}, Dir: repository}},
+			Backlog:   readyBacklog{tracker: tracker},
 			Heartbeat: heartbeat,
 			Log:       log,
 		},
@@ -225,6 +235,22 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 // scheduler asks for it rather than inferring it.
 type readyBacklog struct {
 	tracker beads.Client
+}
+
+// trackerTitles is what the tracker calls one item, which is the whole of what
+// the sink asks it about any item at all. It is a title rather than the item
+// because a header is a line: everything else an item holds is in the tracker,
+// and the thread is what leads a reader there.
+type trackerTitles struct {
+	tracker beads.Client
+}
+
+func (t trackerTitles) Title(ctx context.Context, workItemID string) (string, error) {
+	item, err := t.tracker.Show(ctx, workItemID)
+	if err != nil {
+		return "", err
+	}
+	return item.Title, nil
 }
 
 func (b readyBacklog) Ready(ctx context.Context) (int, error) {
