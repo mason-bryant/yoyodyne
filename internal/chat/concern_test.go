@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 func TestExtractConcernsSeparatesProseFromWhatItWillNotPropose(t *testing.T) {
@@ -176,7 +178,7 @@ func TestConcernRenderingKeepsTheCasesApart(t *testing.T) {
 			Question: "Do you want that goal changed?",
 		},
 	}
-	rendered := pending.Render()
+	rendered := pending.Render(console.Theme{})
 	for _, required := range []string{
 		"[c2.1] " + ConcernConflict.Headline(),
 		"about: Let the reviewer merge its own work",
@@ -193,6 +195,67 @@ func TestConcernRenderingKeepsTheCasesApart(t *testing.T) {
 		if !strings.HasPrefix(line, "    ") {
 			t.Fatalf("rendered concern line %q is not indented", line)
 		}
+	}
+}
+
+// All three kinds stop and wait, and one of them says something is already
+// wrong: work that would cut against a goal the product has written down. A
+// listing that dressed all three alike would hide exactly the distinction the
+// operator reads first, and the emphasis is the one every report is filed under
+// because reports and concerns share the same scroll.
+func TestAConcernIsEmphasizedByWhatItsKindAsksFor(t *testing.T) {
+	t.Parallel()
+
+	if severity := ConcernConflict.Severity(); severity != report.SeverityCritical {
+		t.Fatalf("a conflict is filed at %q, want %q", severity, report.SeverityCritical)
+	}
+	for _, kind := range []ConcernKind{ConcernUnplaceable, ConcernJudgement} {
+		if severity := kind.Severity(); severity != report.SeverityWarning {
+			t.Fatalf("%s is filed at %q, want %q", kind, severity, report.SeverityWarning)
+		}
+	}
+
+	conflict := pendingConcern("c1.1", ConcernConflict)
+	unplaceable := pendingConcern("c1.2", ConcernUnplaceable)
+	// The theme a redirected stream gets dresses nothing, so what is left is the
+	// marker and the headline — which is the whole of what a dumb terminal has.
+	plain := conflict.Render(console.Theme{})
+	if !strings.HasPrefix(plain, "!! [c1.1] ") {
+		t.Fatalf("a conflict is not marked at the margin: %q", plain)
+	}
+	if quieter := unplaceable.Render(console.Theme{}); !strings.HasPrefix(quieter, "!  [c1.2] ") {
+		t.Fatalf("work it cannot place is not marked at the margin: %q", quieter)
+	}
+	theme := dressedTheme()
+	if dressed := conflict.Render(theme); dressed == unplaceable.Render(theme) || dressed == plain {
+		t.Fatalf("a conflict reads like the other kinds: %q", dressed)
+	}
+	// The question inside it still gets the colour every question gets, under the
+	// severity the whole of it is weighted by: what the operator has to do about
+	// a concern is answer it.
+	question, _, _ := strings.Cut(theme.Questions("?"), "?")
+	if !strings.Contains(conflict.Render(theme), question+"    Do you want that goal changed?") {
+		t.Fatalf("the question in a concern lost its own colour: %q", conflict.Render(theme))
+	}
+}
+
+func pendingConcern(id string, kind ConcernKind) PendingConcern {
+	concern := Concern{
+		Kind:     kind,
+		Subject:  "Let the reviewer merge its own work",
+		Goal:     "No agent pushes or merges.",
+		Detail:   "This is the thing that goal exists to prevent.",
+		Question: "Do you want that goal changed?",
+	}
+	// Work that traces to no goal is the one case with no goal to name.
+	if kind == ConcernUnplaceable {
+		concern.Goal = ""
+	}
+	return PendingConcern{
+		ID:             id,
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		Turn:           1,
+		Concern:        concern,
 	}
 }
 

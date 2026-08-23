@@ -813,7 +813,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
-			protectedpath.Protect(p.Config), p.Config.Execution.RepairAttemptsBeforeReplan)
+			protectedpath.Protect(p.Config), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -874,10 +874,13 @@ type activeRun struct {
 	// this run proposes a change to one and kept so a second proposal in the same
 	// run does not read the repository again. Nil means nothing has needed it.
 	artifactSet *artifact.Set
-	// proposedAmendments is the changes this run has already recorded, by document
-	// and change, so a developer that makes the same argument again on a repair
-	// attempt raises one proposal rather than one per attempt.
-	proposedAmendments map[string]bool
+	// proposedAmendments is the changes this run has already recorded, reduced to
+	// the document each names and the words the change is made of, so a developer
+	// that makes the same argument again on a repair attempt raises one proposal
+	// rather than one per attempt. It is a list rather than a lookup because what
+	// makes two of them the same argument is how alike they are rather than
+	// whether they match.
+	proposedAmendments []amendmentRequest
 	// inProcessWait is how long this process has already slept waiting out usage
 	// limits for this run, across every probe and every phase. It is what the
 	// in-process bound is measured against, because that bound is on how long a
@@ -1192,7 +1195,7 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 // an approval always belongs to a change that passed them, and nothing an
 // earlier attempt was granted carries forward.
 func (a *activeRun) repairLoop(ctx context.Context) error {
-	limit := a.pipeline.Config.Execution.RepairAttemptsBeforeReplan
+	limit := a.repairBudget()
 	for {
 		// Every round of the gate asks what the operator has directed, because a
 		// round is another developer invocation and a directive recorded while one
@@ -1250,6 +1253,14 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// repairBudget is how many repair attempts this run may make: what the project
+// configured, plus whatever triage has granted it to continue on. A run nothing
+// continued is the configured budget unchanged, which is every run until triage
+// re-enters one.
+func (a *activeRun) repairBudget() int {
+	return a.state.RepairBudget(a.pipeline.Config.Execution.RepairAttemptsBeforeReplan)
 }
 
 // repair records one attempt against the budget and then hands the failure back

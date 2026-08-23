@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -53,6 +54,33 @@ type Authority struct {
 	// proposing. Both belong to the role that decides what is admitted.
 	Proposals bool
 	Concerns  bool
+	// Research is whether this role may have the harness gather evidence from
+	// outside the repository on its behalf, and Evaluations whether it may record
+	// a durable recommendation about an idea. Both belong to the role the
+	// operator brings an idea to, which is the product manager: an evaluation is
+	// a judgement about product intent, and research that nothing evaluates is a
+	// bill with no answer at the end of it.
+	//
+	// They are two flags rather than one because they are two capabilities and
+	// keeping them apart is the point. Research reaches outside this machine and
+	// decides nothing; recording an evaluation decides nothing either but is
+	// authority over what the product's own record says it was advised. A role
+	// that could do the first without the second, or the second without the
+	// first, is a coherent thing to configure — and neither of them is authority
+	// to admit work or change a document, which stays where it already is.
+	Research    bool
+	Evaluations bool
+	// Asks is whether this role is on the inter-role ask channel — both ends of
+	// it, because the two are the same judgement: a role worth asking for an
+	// opinion is one whose own opinion is worth asking for. It is not the
+	// authority to decide anything, since an ask carries none; it is whether the
+	// harness will carry a question to or from this role at all.
+	//
+	// The roles that hold judgement about the product have it. The developer and
+	// the reviewer do not: their judgement is exercised inside runs, against a
+	// change and a worktree, and an opinion from one of them with none of that in
+	// front of it is worth less than the round it would cost.
+	Asks bool
 }
 
 // MayAct reports whether this role may ask for one tracker action.
@@ -73,10 +101,13 @@ var authorities = map[domain.AgentRole]Authority{
 		TrackerActions: []string{
 			actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate,
 			actionReparent, actionReprioritize, actionLink, actionUnlink,
-			actionClose, actionRetire,
+			actionClose, actionRetire, actionHandle,
 		},
-		Proposals: true,
-		Concerns:  true,
+		Proposals:   true,
+		Concerns:    true,
+		Research:    true,
+		Evaluations: true,
+		Asks:        true,
 	},
 	domain.RoleArchitect: {
 		Role:           domain.RoleArchitect,
@@ -84,6 +115,7 @@ var authorities = map[domain.AgentRole]Authority{
 		Owns:           "the designs, the decision records, and the architectural invariants",
 		Contract:       architectContract,
 		TrackerActions: []string{actionRead, actionSurvey},
+		Asks:           true,
 	},
 	domain.RoleDevelopmentManager: {
 		Role:     domain.RoleDevelopmentManager,
@@ -95,6 +127,7 @@ var authorities = map[domain.AgentRole]Authority{
 			actionReparent, actionLink, actionUnlink, actionTriage,
 		},
 		ParentRequired: true,
+		Asks:           true,
 	},
 	domain.RoleDeveloper: {
 		Role:           domain.RoleDeveloper,
@@ -187,6 +220,27 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Refused: "a concern to be put to the operator",
 			Reason:  "stopping work over a goal belongs to the product manager, and this role raises what it found in prose instead",
 		}
+	}
+	if len(parsed.Queries) > 0 && !authority.Research {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "evidence to be gathered from outside the repository",
+			Reason:  "research is the product manager's, and this role reasons over the evidence it was given",
+		}
+	}
+	if parsed.Evaluation != nil && !authority.Evaluations {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "an evaluation to be recorded",
+			Reason:  "judging an idea the operator brought is the product manager's, and this role says what it thinks in prose instead",
+		}
+	}
+	// An ask is refused above the tracker rather than beside it, because it is
+	// the one block that most replies carrying it carry alone: checking it after
+	// the early return below would leave a role asking whatever it liked as long
+	// as it acted on nothing.
+	if err := refuseUnauthorizedAsk(authority, parsed); err != nil {
+		return err
 	}
 	if len(parsed.Actions) == 0 {
 		return nil
@@ -397,6 +451,8 @@ Some turns carry changes other roles have proposed to documents you own. Each on
 
 ` + readOnlyTrackerClause + `
 
+` + exchange.AskingContract + `
+
 ` + reportClause
 
 // developmentManagerContract is the harness policy every development-manager
@@ -424,8 +480,8 @@ To act on the work tracker, end your reply with exactly one block, after the pro
 {"actions":[
   {"action":"read","id":"beads-id"},
   {"action":"survey"},
-  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation","reason":"why you are doing this"},
-  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","executor":"conversation","reason":"why"},
+  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation:architect","reason":"why you are doing this"},
+  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","executor":"conversation:architect","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
   {"action":"link","id":"beads-id","depends_on":"the item this one waits for","reason":"why"},
   {"action":"unlink","id":"beads-id","depends_on":"beads-id","reason":"why"},
@@ -437,7 +493,7 @@ That example lists every action you have. There is no close, no retire, and no r
 
 "create" and "reparent" both require a parent, and the harness refuses either without one. That is the boundary between decomposing work and admitting it: everything you create hangs underneath an item the product manager has already admitted, so a decomposition can never quietly become new scope. "goal" is required on a creation and names the goal the work serves, in the words the goals document states it in; name the goal the parent serves, because a child that serves a different one is not decomposition. "priority" is 0 to 4 and orders your own children among themselves, which is what sequencing a decomposition is; it is not a claim about the backlog the parent sits in. Every identifier but the one a creation is given must name an item that already exists; never invent one.
 
-"executor" says what carries a piece of work where a developer run does not. The one executor there is is "conversation", and it means the work happens in a conversation with a role — a document the architect owns, a decision recorded with the product manager — rather than in a run with a worktree, a diff, and a reviewer. Decomposition is where this is usually noticed: a child that is somebody's judgement rather than somebody's diff carries it, and a child that is a change to the repository does not. "update" takes it as well, for a piece of work already broken out before you saw it that way. An item carrying it keeps its place in the order and is never selected for a developer run; an item left without one that a run cannot execute spends a run and two review rounds producing an empty diff, and those rounds count against its cap. Work that names no executor is a developer run, which is nearly all of it.
+"executor" says what carries a piece of work where a developer run does not, and it names whose conversation carries it: "conversation:architect", "conversation:product-manager", "conversation:development-manager", "conversation:developer", or "conversation:reviewer". It means the work happens in a conversation with that role — a document the architect owns, a decision recorded with the product manager — rather than in a run with a worktree, a diff, and a reviewer. Name the role rather than the bare word "conversation", which is refused: until whoever holds the work starts on it, the role you named is the only thing that says who has it. Decomposition is where this is usually noticed: a child that is somebody's judgement rather than somebody's diff carries it, and a child that is a change to the repository does not. "update" takes it as well, for a piece of work already broken out before you saw it that way. An item carrying it keeps its place in the order and is never selected for a developer run; an item left without one that a run cannot execute spends a run and two review rounds producing an empty diff, and those rounds count against its cap. Work that names no executor is a developer run, which is nearly all of it.
 
 The harness carries out your actions, records each one, tells the operator what you did, and then tells you what each action actually did. An action reported as failed changed nothing: report it as failed rather than describing it as done, and never describe any action as done before you have been told that it was.
 
@@ -453,7 +509,9 @@ An unfinished publication is decided like this. A merge the forge still has queu
 
 Escalating is what reaches the operator, and it is the decision to be sparing with: the whole point of this workflow is that stopped work is yours rather than theirs. An escalation is a durable blocker on the item and a report at "warning" severity or above in the same reply. Prose alone is not one, and the harness refuses an escalation that carries no such report — nothing is carried out, and the item is not blocked. Escalate a dispute about the design or the goals, work that needs new scope admitted, an item triage has already been round once, a capacity or account limit, and anything that needs a repository setting changed.
 
-Recording the decision is what you do; the harness does not carry it out. A repair, a re-run, and a re-arm each spend the item's durable budget as they are recorded, and each is refused once that budget is gone: you get one repair and one re-run per item, a repair grant is cut down to the review rounds the cap still has room for, and past the round cap neither is given at all. A refusal is not something to work around — it is your evidence for escalating instead. Starting the run itself is the operator's, so say plainly what you decided and what it now needs from them. One decision per entry, and never a decision on work that is closed.
+Recording the decision is what you do; the harness does not carry it out until the operator asks it to. A repair, a re-run, and a re-arm each spend the item's durable budget as they are recorded, and each is refused once that budget is gone: you get one repair and one re-run per item, a repair grant is cut down to the review rounds the cap still has room for, and past the round cap neither is given at all. A refusal is not something to work around — it is your evidence for escalating instead. The run you name has to be that item's own stopped work: the harness reads the run's record and refuses a decision whose run was made for another item, which is what two docket entries read across each other look like. Carrying the decision out is the operator's, and a repair and a re-run are different acts they ask for differently — "yoyo triage repair" continues the stopped run on the change it already has, and "yoyo triage rerun" starts the item over — so say plainly which of them you decided and what it now needs from them. A re-arm is still theirs to do by hand. One decision per entry, and never a decision on work that is closed.
+
+` + exchange.AskingContract + `
 
 ` + reportClause
 

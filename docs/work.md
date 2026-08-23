@@ -38,7 +38,17 @@ treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
 `execution.repair_attempts_before_replan` attempts, before the run gives up and
-records a blocker.
+records a blocker. That budget is not always the last word: a development
+manager who decides the change is worth another go can hand the item a grant of
+further attempts, and [`yoyo triage
+repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
+run's repair loop on the change it already has rather than starting the item
+over. Its opposite is `yoyo triage rerun`, which starts the item over for a
+change whose ground moved. **The two are different acts with different
+accounting** — one spends the item's repair grant and the review rounds that
+grant buys, the other spends its re-run budget — and neither of them is `yoyo
+run <beads-id>`, which is you naming an item rather than carrying out a decision
+somebody recorded about a run that stopped.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the
@@ -153,14 +163,18 @@ spent run, two review rounds, and two rounds counted against that item's cap, so
 an item mis-selected twice reaches its cap having done nothing and escalates work
 nobody ever started.
 
-So an item says what carries it. The product manager sets `executor` on the item
-as it is admitted — `conversation` is the only value there is — and `update`
-takes it too, for work already in the queue. An item carrying it keeps its place
-in the order, is reported in the queue with what carries it, and is never
-selected for a developer run. It is not a wait, and the pass says so rather than
-counting it among the items that are about to become pullable: nothing clears,
-and what moves it is somebody opening the conversation the item names. Work that
-says nothing is a developer run, which is nearly all of it.
+So an item says what carries it, and whose conversation that is. The product
+manager sets `executor` on the item as it is admitted — `conversation:` followed
+by the role, as in `conversation:architect` — and `update` takes it too, for work
+already in the queue. The bare word `conversation` is refused: from the handoff
+until whoever holds the item starts on it, the role named here is the only thing
+that says who has it, and a marker that named none left exactly that stretch
+unattributed. An item carrying it keeps its place in the order, is reported in
+the queue with what carries it, and is never selected for a developer run. It is
+not a wait, and the pass says so rather than counting it among the items that are
+about to become pullable: nothing clears, and what moves it is somebody opening
+the conversation the item names. Work that says nothing is a developer run, which
+is nearly all of it.
 
 Naming the item yourself is unaffected. `yoyo run <id>` is you deciding, and the
 marker steers what the harness chooses rather than what you may ask for.
@@ -278,6 +292,76 @@ accumulated change, and `yoyo review` exits non-zero on anything else — a repa
 verdict, a review that never answered, a change too large to be seen in full. The
 findings are then work, and admitting work to the backlog is the product
 manager's.
+
+### Measuring the reviewer against itself
+
+A branch review is a replayable function of a branch state: the same commits over
+the same base, described the same way, judged under the same contract. That is
+what makes a *shadow* review possible — the same review, made to measure the
+reviewer rather than to judge the branch:
+
+```sh
+./bin/yoyo review --shadow --model sonnet --base main --branch milestone
+./bin/yoyo review --compare                   # what the collected ones amount to
+```
+
+A shadow verdict approves nothing, whatever it decided, and that is enforced in
+the record rather than remembered by whoever reads it: the durable review is
+marked, and `Approved` answers no for a shadow verdict exactly as it does for a
+repair one. That is what makes the measurement free of risk — a cheaper reviewer
+pointed at a branch cannot leave an approval of it behind. `--model` is refused
+without `--shadow` for the same reason: a review whose reviewer was chosen at a
+terminal rather than by the configuration is a measurement and only ever that.
+Because it decides nothing about the branch, a shadow review exits on the
+question it was actually asked — whether it produced a verdict — so a shadow
+`repair` verdict is a successful measurement rather than a failure.
+
+The baselines are the branch reviews already recorded. Every verdict `yoyo
+review` has ever given is in the `branch-reviews` log with the base commit and
+head commit it was given on, and `--compare` pairs on those two — so a branch
+state the configured reviewer has already judged can be shadowed without paying
+for its baseline again. What that costs is one shadow review per state and
+nothing else.
+
+Reaching one of those states is the only manual step. `--branch` takes a local
+branch name, so a state that is still a branch head is shadow-reviewable as it
+stands; an earlier state needs a local branch pointed at the head commit the
+recorded verdict names (`git branch <name> <commit>`), and `--base` takes the
+base commit from the same record. That new branch name is deliberately not part
+of the pairing: the same commits reached under a second name are the same code,
+so the two reviews still pair, and each side's own branch name is reported so the
+one thing the reviewers were told differently is visible. A state nothing has
+reviewed has no baseline at all, and there an ordinary `yoyo review` is what
+makes one first.
+
+`--compare` reads what was recorded and invokes nothing. For each shadow review
+it reports, per severity, how many of the baseline reviewer's findings the shadow
+also anchored to, how many it missed, and how many it raised alone, with what
+each of the two reviews cost beside it. Findings are paired by the file each
+anchors to, which is the only thing two reviewers reliably agree on — they will
+differ on the line and always on the wording — so a finding that names no file
+cannot be paired at all, and the count of those is reported rather than folded
+silently into the miss rate. Every finding is listed under its comparison for the
+same reason: whether a missed finding was a local, mechanical catch or one that
+only exists in the accumulated shape of the branch is a judgement about its
+content, and the numbers cannot make it. A finding only the shadow raised is a
+candidate false positive rather than a proven one — what this measures against is
+the other reviewer, not what is true of the branch.
+
+A shadow review costs money like any other provider invocation, and is priced
+where every other branch review is: it records the same event stream, so
+[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) counts it
+under `branch reviews`, and `--compare` reports each side's own cost from that
+same log. It is not in `yoyo cost`, which prices work items from the runs made
+for them — a branch review belongs to no run, and a shadow review belongs to no
+work item either. So measuring a reviewer is spend an operator can see, but not
+under the item that prompted it, and it is indistinguishable in the status total
+from a review that gated something.
+
+The first use of this is recorded in
+[the ifd.92 experiment note](experiments/yoyodyne-ifd-92-shadow-review.md): what the
+instrument is, which recorded verdicts are the benchmark, and what has not been
+measured yet.
 
 ## Publishing, and the merge that follows it
 

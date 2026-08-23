@@ -149,6 +149,28 @@ below it. Nothing is refused over a broken link: the goal is still what the
 document states and work naming it still resolves, because what is wrong is the
 chain above it rather than the goal.
 
+The listing itself is laid out to be read: one goal to an entry, a blank line
+between entries, and where the goal is stated indented under it. On a terminal
+the statement is bold and the lines about it italic, and that emphasis is an
+addition and never the meaning — the same discipline everything else the harness
+dresses holds to. What separates two goals is the blank line, what says a line is
+about the goal above it is the indent and its label, and what says a goal is no
+longer in force is said in words, so a listing piped to a file, read with
+`NO_COLOR` set, or shown on a terminal that says it is dumb says exactly what it
+says dressed. `--json` carries none of it. The listing closes with a line naming
+what these goals sit underneath — the goals the product brief states, and the
+file to open for them — because read on its own it stops one link short of where
+the chain begins.
+
+A goal hard-wrapped across physical lines is reported on stderr the same way,
+and is likewise not refused. The statement is rejoined and work naming it still
+resolves — recording only the first line was a silent truncation that corrupted
+every wrapped goal at once, and rejoining is what closed it. What the report says
+is that the rejoining is a reading of the file rather than something the file
+states: an indent, or a wrapped line that reads as the `Supports:` trailer,
+changes the recorded goal without changing a word of it, and a goal written on
+one line cannot be changed that way.
+
 ## What a change upstream leaves stale
 
 Amend a goal and the documents that serve it, and the work admitted under its

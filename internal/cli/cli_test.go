@@ -181,6 +181,44 @@ func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testin
 	}
 }
 
+// A settle catches its target branch up itself, so the report says so on the
+// run that did it. A catch-up it held is the fact somebody has to read, which
+// is why it goes to stderr — and why it is still not a failure: the branch is
+// behind, nothing is owed, and the next sweep takes it.
+func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	results := []orchestrator.Reconciliation{
+		{
+			RunID:      "run-advanced",
+			WorkItemID: "yoyodyne-task",
+			Action:     orchestrator.ActionCompleted,
+			Catchup:    &gitworktree.Catchup{TargetBranch: "main", RemoteCommit: "abc1234", Advanced: true},
+		},
+		{
+			RunID:      "run-held",
+			WorkItemID: "yoyodyne-other",
+			Action:     orchestrator.ActionCompleted,
+			Catchup:    &gitworktree.Catchup{TargetBranch: "main", Held: "the primary checkout has unsaved changes"},
+		},
+	}
+	code := reportReconcileResult(&stdout, &stderr, false, results, orchestrator.Convergence{}, 0, nil)
+	if code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "main caught up to abc1234") {
+		t.Errorf("stdout = %q, want the catch-up the settle made", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "not caught up") {
+		t.Errorf("stdout = %q, want the held catch-up kept off stdout", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "main not caught up: the primary checkout has unsaved changes") {
+		t.Errorf("stderr = %q, want the held catch-up and why", stderr.String())
+	}
+}
+
 // Chat talks to whichever agent fills the product-manager role, with the
 // persona that role resolved to. In this repository both are stated in the
 // project configuration and read from the project's own personas directory.
@@ -398,7 +436,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 		},
 	}}
 	var oneShot bytes.Buffer
-	printChatConcerns(&oneShot, domain.RoleProductManager, concerns)
+	printChatConcerns(&oneShot, console.Theme{}, domain.RoleProductManager, concerns)
 	for _, required := range []string{
 		"Nothing was proposed or created",
 		"yoyodyne chat",
@@ -421,7 +459,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	}
 
 	var quiet bytes.Buffer
-	printChatConcerns(&quiet, domain.RoleProductManager, nil)
+	printChatConcerns(&quiet, console.Theme{}, domain.RoleProductManager, nil)
 	printOpenConcerns(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no concerns printed %q", quiet.String())
@@ -769,6 +807,51 @@ func TestConfigValidateReportsAMissingConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no Yoyodyne configuration found") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// Every command that takes an id reads its flags after that id, because that is
+// the order the usage texts and the documentation say to type and the order
+// anybody types when they have just read an id out of a listing. Go's flag
+// package stops at the first word that is not a flag, so each of these was
+// refused for naming two things.
+//
+// The assertion is the exit code: a command that parsed what it was given gets
+// as far as loading the configuration and fails at 1 on a path that is not
+// there, and one that did not refuses at 2 with a usage error before it looks at
+// anything. Nothing here has to reach a provider or a tracker to say which
+// happened.
+func TestFlagsAreReadAfterTheIdEveryCommandThatTakesOne(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	for name, args := range map[string][]string{
+		"artifact show":     {"artifact", "show", "brief", "--config", missing},
+		"artifact approve":  {"artifact", "approve", "brief", "--config", missing, "--reason", "approved in conversation"},
+		"amendment show":    {"amendment", "show", "amendment-0123456789abcdef0123456789abcdef", "--config", missing},
+		"amendment approve": {"amendment", "approve", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the ordering was never settled"},
+		"amendment decline": {"amendment", "decline", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the design is right"},
+		"invariant show":    {"invariant", "show", "one-writer-per-item", "--config", missing, "--json"},
+		"invariant create":  {"invariant", "create", "one-writer-per-item", "--config", missing, "--title", "one writer", "--statement", "one writer", "--rationale", "one writer", "--established-by", "yoyodyne-ifd.2.7", "--reason", "extracted"},
+		"invariant amend":   {"invariant", "amend", "one-writer-per-item", "--config", missing, "--scope", "internal/runstate", "--reason", "the other half moved"},
+		"invariant retire":  {"invariant", "retire", "one-writer-per-item", "--config", missing, "--reason", "the reservation moved into the store"},
+		"directive record":  {"directive", "record", "do publishing differently", "--config", missing, "--kind", "ambiguous", "--unresolved", "which behaviour was meant"},
+		"directive resolve": {"directive", "resolve", "directive-0123456789abcdef0123456789abcdef", "--config", missing, "--resolution", "the second behaviour was meant"},
+		"exchange show":     {"exchange", "show", "exchange-0123456789abcdef0123456789abcdef", "--config", missing, "--json"},
+		"agent show":        {"agent", "show", "developer", "--config", missing, "--json"},
+		"agent chat":        {"agent", "chat", "developer", "--config", missing, "--message", "what are you working on?"},
+		"run":               {"run", "yoyodyne-ifd.74", "--config", missing, "--json"},
+		"triage rerun":      {"triage", "rerun", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the ground moved"},
+		"triage repair":     {"triage", "repair", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the findings still stand"},
+		"status":            {"status", "yoyodyne-ifd.74", "--config", missing, "--failed"},
+		"cost":              {"cost", "yoyodyne-ifd.74", "--config", missing, "--record"},
+		"resume":            {"resume", "yoyodyne-ifd.74", "--config", missing},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(args, &stdout, &stderr, "test")
+		if code != 1 {
+			t.Fatalf("%s: code = %d, want 1 — the flags after the id were not read; stderr = %q", name, code, stderr.String())
+		}
 	}
 }
 

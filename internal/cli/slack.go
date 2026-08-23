@@ -158,6 +158,14 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 	if err != nil {
 		return nil, "", err
 	}
+	// The same product-scoped directive records `yoyo directive` writes and every
+	// run consults. A directive recorded from a thread lands there rather than in
+	// a second pile beside it, which is the whole of what makes a reply reach the
+	// work exactly as a directive typed at a terminal does.
+	directives, err := runstate.NewDirectiveStore(stateRoot, productID)
+	if err != nil {
+		return nil, "", err
+	}
 	// One window onto a process that otherwise runs silently, shared by the
 	// reading and the posting so an operator watching it sees one account.
 	log := func(format string, args ...any) {
@@ -218,8 +226,15 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			Heartbeat: heartbeat,
 			Log:       log,
 		},
-		Poll: poll,
-		Log:  log,
+		// The inbound half. Where a reply is recorded, and whose replies are acted
+		// on: the humans this project granted direct-work who bound a Slack member
+		// id, derived from the operators mapping rather than authored beside it. A
+		// project that has granted nobody gets an empty list, which is a sink that
+		// acknowledges every reply and acts on none.
+		Directives: directives,
+		Operators:  resolved.Config.SlackOperators(),
+		Poll:       poll,
+		Log:        log,
 	})
 	if err != nil {
 		return nil, "", err
@@ -298,6 +313,13 @@ cursors when it returns. Catching up is paced to what Slack keeps accepting, and
 a backlog too deep to post one message at a time is said once per thread --
 how much accumulated, over what span -- with the durable records holding the
 whole of it. What is recent, and anything critical, is always said in full.
+
+Replies go the other way. A reply in a work item's thread, from somebody this
+project granted direct-work with a bound Slack member id, is recorded as a
+directive against that item -- the same record `+"`yoyo directive record`"+` writes, with
+the same pause semantics and the same resolution. Every reply is answered in its
+thread with what was recorded or why nothing was, and a project that has granted
+nobody is steered by nobody. What a reply may say is in `+"`docs/slack/setup.md`"+`.
 
 One thing it says is a state rather than an event. A line that is choosing
 nothing -- intake held, everything held, the watch session idle, or no session

@@ -58,6 +58,36 @@ carries every proposal with the artifact it came from, in the three lists the
 generated file keeps apart — `checks` written, `candidates` found and not
 settled, `alternatives` read and deliberately left out.
 
+### When the repository ignores the configuration
+
+`init` and `yoyo config validate` both ask Git whether the configuration they
+just wrote or just read is matched by an ignore rule, and say so when it is.
+Nothing fails: the files are there and valid, the exit code is what it would have
+been, and the warning goes to standard error.
+
+It is worth saying because nothing else announces it. A project whose
+`.yoyodyne` is ignored is configured on the machine that ran `init` and nowhere
+else — this checkout keeps reading the configuration off disk while every clone,
+every collaborator, and every dev worktree, which check out tracked files only,
+get a project with no configuration at all. The warning names the rule in Git's
+own `<file>:<line>:<pattern>` form, so the line is findable rather than
+searchable for.
+
+A configuration that is already tracked is not ignored however loudly a
+`.gitignore` names it — Git applies ignore rules to untracked paths only — so a
+project that committed its configuration and later added the rule is left alone.
+A rule that is local to the checkout, in `.git/info/exclude` or a
+`core.excludesFile`, is reported differently: that is the supported way to keep
+tool config out of a repository that is not yours to commit it to, so it is
+acknowledged rather than argued with, and what the warning names is `--config`
+for keeping the configuration outside the repository. Nothing is said where Git
+could not be asked — a project that is not a repository, a configuration kept
+outside the one it describes, a Git that would not run.
+
+`init --json` and `config validate --json` both report it under `ignored`, with
+the `path` that was asked about, the `rule` Git answered with, and the `source`
+file that rule lives in.
+
 ### Where the tracker syncs
 
 `init` also points the tracker at a remote, because a tracker that syncs
@@ -109,6 +139,12 @@ control. Run state, provider event streams, locks, worktrees, and the reports
 agents file while their work carries on live outside the repository under an
 operating-system state directory, so nothing there depends on where the project
 is checked out.
+
+Committing it is the default rather than a requirement, and a contributor to a
+repository they do not own has two supported ways not to: the README's
+[Keeping the configuration out of the repository](../README.md#keeping-the-configuration-out-of-the-repository)
+covers a `.yoyodyne` listed in `.git/info/exclude` and a configuration kept
+outside the repository behind `--config`.
 
 What `init` writes looks like this, with the explanatory comments trimmed:
 
@@ -900,8 +936,18 @@ A developer that could not be talked out of its argument makes it again on every
 repair attempt, and the second and later copies within one run are dropped: one
 disagreement is one proposal, rather than one per attempt for whoever decides to
 answer several times over. Two proposals count as the same argument when they
-ask for the same change to the same document; restating the reasoning does not
-make a new one.
+ask for the same change to the same document, and the comparison is how much
+wording the two changes share rather than whether they match — restating the
+reasoning does not make a new one, and neither does moving a clause or swapping
+a word between attempts.
+
+What the comparison deliberately will not do is guess. A developer that makes
+its case over from scratch on the next attempt writes something that shares no
+more with its own first draft than two genuinely different changes to one
+document share with each other, so that one reaches you as a second proposal
+rather than being dropped on a resemblance. One more proposal to read is the
+cheaper of the two mistakes: the other one drops an argument silently, which is
+the thing this whole channel exists to prevent.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The
@@ -1001,6 +1047,19 @@ under its goals rather than beside them is read as ending the goals there rather
 than as stating more of them. Attributing work to a non-goal is worse than
 attributing it to nothing, so that bound does not depend on how the document was
 nested.
+
+**A wrapped goal is recorded whole and reported anyway.** Rejoining is what
+closed the silent truncation that recorded only a goal's first line, so nothing
+is refused over a wrap and work naming the whole statement still resolves. What
+`yoyo goals list` says on stderr about one is that the rejoining is a reading of
+the file rather than something the file states: the words an attribution has to
+match exist only once the wrap is put back together, and an indent, or a wrapped
+line that reads as the `Supports:` trailer, changes the recorded goal without
+changing a word of it. A goal written on one physical line cannot be changed that
+way, which is why the convention is worth holding rather than merely tolerating
+the wrap. Only a goal in a document still in force is reported, for the same
+reason a broken link upstream is only reported for one: a goal in a superseded
+document is not one work can name.
 
 | Reported as | What it is | What it means for the work |
 | --- | --- | --- |
@@ -1917,6 +1976,106 @@ compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
 
+## How long one role may ask another
+
+Roles can put a question to each other through the harness — the product manager
+asking the architect what a goal costs before it orders the backlog, the
+architect asking the product manager whether a trade-off is one a user would
+accept before it settles a design. Every exchange is recorded where you can read
+it with `yoyo exchange`, both halves are toolless so an ask moves opinion and
+never evidence, and no authority moves through one. What is configurable is how
+long a single exchange may go on:
+
+```yaml
+exchange:
+  max_rounds: 10             # the hard limit on rounds in one exchange thread
+```
+
+**It is a hard limit and it is durable with the exchange.** The number is copied
+onto an exchange as it opens rather than read afresh each round, so a process
+dying part way through, a second process picking the thread up, and an edit to
+this setting all leave a thread already in flight bounded by what it started
+with. A cap a crash could reset is not a cap.
+
+**Reaching it is not a silent cutoff.** The exchange closes as
+`unresolved-after-rounds`, and it is escalated to you as a report at warning
+severity naming the two roles, the question, the rounds, and what the exchange
+cost — so it reaches [the pile you read](reporting.md#what-agents-report-and-where-it-reaches-you)
+rather than ending in a record nobody opens. The failure this bounds is two
+judgement models deferring to each other politely for ever, which is rare,
+expensive, and invisible without the number.
+
+**Zero is refused**, unlike the triage caps above. An exchange allowed no round
+at all is a channel that is off, and turning the channel off is a matter of
+nobody using it rather than of configuring a limit nothing can be spent against.
+One is the floor.
+
+One further bound is the harness's rather than yours: a single thing you say to a
+conversation sets off at most as many rounds of asking as one exchange is
+allowed, however many exchanges it spreads them over. That bounds a reply
+opening thread after thread, which is a different question from how long one
+thread may run.
+
+## Research sources
+
+The product manager can have the harness find something out for it, so an idea
+you bring it is evaluated against evidence rather than against what a model
+remembers. **The capability is off until you name a source**, and a project that
+names none has a product manager that says it could not check rather than
+answering from memory as though it had.
+
+```yaml
+research:
+  max_queries_per_turn: 4    # how many questions one reply may set off
+  timeout: 60s               # how long one source has to answer
+  sources:
+    - name: web              # what the role names, and what every record cites
+      command: my-search     # run with the question on standard input
+      describes: public web search, no login
+```
+
+**A source is a command you wrote.** The harness runs it with the question on
+standard input and reads its standard output as the evidence — nothing else is
+passed, and the question is never part of a command line the shell parses. That
+is the same arrangement `checks` uses, and for the same reason: what the harness
+may run is a thing you write down in the file you write everything else in, so
+what it can reach is exactly what you named. There is no built-in provider and no
+default source, deliberately. A conversational role reaching the network is
+something you turn on, not something you acquire by extending a bundle or
+upgrading the executable.
+
+**The role still has no network.** It names a question and one of these sources;
+it does not choose what runs, where the command reaches, or how often. Only the
+question leaves your machine, redacted with the same values every other
+provider-facing path is redacted with and bounded at 512 bytes — generous for a
+sentence somebody would type into a search box, and far too small to carry a
+document out inside one. Which sources exist is delivered to the role with each
+turn rather than written into its contract, so a source you add or remove is in
+force on the next thing you say.
+
+**What comes back is untrusted.** It is delivered framed as evidence about the
+world and never as instruction, exactly as your repository documents and your
+work items already are, and it is bounded at 4KB per answer with any cut
+declared. A source that fails, times out, or answers with nothing produces a
+finding that says so rather than silence — a role that gets silence for an answer
+concludes there was nothing to find, which is the one conclusion it must never
+draw from a source that broke. Every question and what it returned is printed to
+you as it happens.
+
+**The bounds are yours and the protocol has its own.** `max_queries_per_turn`
+narrows how many questions one reply may ask and cannot widen it past four, which
+is what the block itself permits; `timeout` is per question. Both take a harness
+default when you leave them out, so naming a source is enough to have the
+capability rather than something you configure twice. Zero is a choice for each —
+it takes the default — and a negative number is refused. One further bound is the
+harness's rather than yours: one thing you say sets off at most two rounds of
+gathering, so a message cannot spend itself searching its way around a question.
+
+What the product manager does with the evidence is an evaluation, which is
+advice and nothing else: recording one admits no work, changes no document, and
+approves nothing. That path, and how to read the evaluations back, is described
+in [the conversation guide](conversation.md#bringing-it-an-idea-rather-than-a-work-item).
+
 ## Triage thresholds
 
 Triage is what looks at work that has stopped moving. Its numbers are
@@ -1966,15 +2125,20 @@ bounds the [per-item counters](#what-one-work-item-has-been-given) below, which
 every run writes to and `yoyo status <id>` reports. The development manager's
 triage decisions spend them: a decision of `repair` takes a grant of
 `repair_grant_attempts` rounds truncated to what the cap has room for, and
-`rerun` and `rearm` each spend a budget of their own. Every one of the three is
-refused once the budget it spends is gone, and the three do not share one — the
+`rerun` and `rearm` each spend a budget of their own. Every one of the three has
+a budget nothing else spends, and is refused once that budget is gone; the two
+that buy review rounds — a repair grant and a re-run — are bounded again by the
+round cap, which they share with each other and with every run of the item. The
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 
-Recording a decision and carrying it out are two steps, and one of the six
-decisions has an action for the second: `yoyo triage rerun <run-id> --reason
-"<the recorded decision>"` starts a fresh run of the item whose stopped run the
-docket entry names. It is refused unless that run is terminally recorded with
+Recording a decision and carrying it out are two steps, and two of the six
+decisions have an action for the second. They are the two opposite answers to a
+run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
+repair` continues the run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
+run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded with
 its blocker standing — read from the run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
 budget still says. It is also refused unless a decision of the development
@@ -2044,12 +2208,56 @@ promotion of the run's own. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 
-The other five decisions still carry themselves out no further than the record:
-a repair grant is followed by `yoyo run <id>`, and nothing in the harness repeats
-a merge request the forge dropped. The budget is spent when the decision is
-recorded, which is the same order every counter here is written in — an attempt
-nobody took rather than one nobody counted — so a decision nobody acts on has
-still cost the item its budget.
+`yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
+half of the same pair, and it starts nothing over. It re-enters the stopped run's
+own repair loop: the same branch, the same worktree, the same developer session,
+and the reviewer's findings handed back exactly as they were written.
+
+**What it may hand the run is the grant the development manager already
+recorded**, and it spends nothing of its own. Deciding `repair` is what takes the
+item's grant — `repair_grant_attempts` rounds, truncated there to what the round
+cap had room for — so this reads that record for how many attempts it is worth
+and hands the run exactly that. An item nobody granted a repair is one nobody
+decided this about, and it is refused; so is an item whose grant the harness has
+already carried out, which it counts from the continuations the item's runs
+record. Past the once-per-item cap a second is an escalation rather than a larger
+budget, and an item with no rounds left never gets a grant to carry out at all.
+
+Three more things refuse it. The stopped run has to be really over, terminal with
+its blocker standing, read from the run's own record rather than from the docket
+entry. The run has to have recorded a repair input — a run whose provider kept
+refusing, or whose replay conflicted, never had a failure returned to its
+developer, so there is no repair loop to re-enter. And the preserved worktree has
+to be as the harness left it: what a continued developer is handed back is
+whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
+agent that committed — is a person's to decide about, and the refusal leaves the
+item blocked and says so. The intake hold applies for the reason it applies to a
+re-run: this spends on a provider, and the development manager naming the item is
+not the operator naming it.
+
+**A repair supersedes the blocker rather than needing somebody to remember to.**
+The run that stopped blocked its item and recorded the blocker on its own state,
+which `yoyo status`, `yoyo reconcile`, and the docket all read as the fact that
+it has stopped. So re-entry clears both at the moment it happens: the item is put
+back with the decision recorded on it first, and the run's blocker is cleared onto
+the continuation that supersedes it, which keeps the words it was recorded in and
+the grant that bought the attempt. The order is the item first, because a run
+recorded as running behind an item that still says it is blocked is the one
+half-finished state nothing else here would notice, and every refusal is asked
+before either write, so a refused re-entry leaves the grant exactly where it was.
+
+The continuations are recorded on the run itself, under `repair_continuations` in
+its state file, and they are what the continued run's repair loop adds to
+`execution.repair_attempts_before_replan` to know what it may spend. They are
+also how the harness knows what a grant has already bought: summed across an
+item's runs, they are what a second re-entry is refused against.
+
+The other four decisions still carry themselves out no further than the record:
+nothing in the harness repeats a merge request the forge dropped, and a re-scope,
+a wait, and an escalation ask for no action at all. The budget is spent when the
+decision is recorded, which is the same order every counter here is written in —
+an attempt nobody took rather than one nobody counted — so a decision nobody acts
+on has still cost the item its budget.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -2147,7 +2355,7 @@ Which threshold refuses which action:
 
 | Action | Refused by |
 | --- | --- |
-| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
+| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
 | another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back — against the re-runs already claimed for the item — as the proof that a decision is there to carry out |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
 
@@ -2332,7 +2540,9 @@ operators:
 
 The whole mapping is optional, and a project that names nobody recognizes
 nobody — which is every project until it names somebody, and is closed rather
-than open.
+than open. `yoyo init` writes an example of it commented out, beside the
+[`slack`](#reporting-to-slack) block, so a generated file shows what an entry
+looks like without recognizing anybody.
 
 It is **top level rather than under any one surface**, because a human is known
 by more than one. An act carries an identifier and never a person: a commit
@@ -2374,7 +2584,7 @@ person.
 | grant | what it is |
 | --- | --- |
 | `own-intent` | stating and approving what the product is for: the brief, the goals, and the non-goals. **At most one human may hold it** — several people amending goals concurrently is conflict machinery nobody has designed. |
-| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on once the inbound half exists. |
+| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on. |
 
 The grants are checked where the act arrives rather than where it is recorded,
 which is what makes them worth stating: the point of attaching authority to a
@@ -2397,6 +2607,13 @@ slack:
 The whole block is optional, and a project that omits it reports nothing — which
 is every project until it opts in. `channel` takes a channel id or a name;
 an id is worth preferring because renaming the channel does not break it.
+
+**`yoyo init` writes it commented out**, together with the
+[`operators`](#operators) example beside it, so the generated file shows the
+shape and says the capability exists rather than leaving both to be found in
+[`docs/slack/setup.md`](slack/setup.md). Deleting the leading `# ` from each
+line is the whole of turning it on; `yoyo setup` does the same edit for you, and
+replaces the commented example rather than writing a second block under it.
 
 ### Avatars
 
@@ -2456,8 +2673,13 @@ derivation rather than a second list because a list maintained beside those
 grants is a list that disagrees with them — silently, and about authority. A
 human granted `direct-work` who has bound no member id simply is not on it: they
 hold the authority, and Slack is not a boundary they can reach it through.
-**Nothing reads a reply today** either way; the inbound half is designed and not
-built.
+
+A reply from somebody on that list is recorded as a directive against the item
+whose thread it was said in, and reaches the work exactly as one typed at a
+terminal does. A reply from anybody else is answered in the thread saying it was
+not acted on — visibly, because a channel that silently ignores some people looks
+broken rather than closed. What a reply may say is in
+[`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
 
 An earlier shape put this list under `slack` as `slack.operators`. It is gone,
 and a file that still carries it is refused when the configuration loads, with a

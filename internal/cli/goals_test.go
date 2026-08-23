@@ -5,13 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
+
+// ansiEscapes is what a theme adds and nothing else, so a test can check that a
+// listing with the dressing stripped out is the listing that was written.
+var ansiEscapes = regexp.MustCompile("\x1b\\[[0-9;]*[a-zA-Z]")
 
 // listingRunner answers each bd listing with the slice it asked for, so a test
 // can exercise a read path that consults more than one of them. What it answers
@@ -56,14 +62,24 @@ An introduction.
 	if code != 0 {
 		t.Fatalf("list code = %d, stderr = %q", code, stderr)
 	}
-	for _, want := range []string{
-		"Maintain a traceable chain from the brief through to verification.",
-		"stated by: v1-goals (docs/product/goals/v1-goals.md)",
-		"Isolate implementation tasks in harness-managed worktrees.",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("list stdout = %q, want it to contain %q", stdout, want)
-		}
+	// The listing is laid out to be read: one goal to an entry, a blank line
+	// between entries, where it is stated indented under it, and a closing line
+	// saying where the chain goes above these goals. None of that is dressing —
+	// this is a buffer rather than a terminal, and it is the whole of what the
+	// listing says.
+	want := `Maintain a traceable chain from the brief through to verification.
+  stated by: v1-goals (docs/product/goals/v1-goals.md)
+
+Isolate implementation tasks in harness-managed worktrees.
+  stated by: v1-goals (docs/product/goals/v1-goals.md)
+
+upstream: these goals support the goals the product brief states, in docs/product/brief.md
+`
+	if stdout != want {
+		t.Fatalf("list stdout = %q, want %q", stdout, want)
+	}
+	if strings.Contains(stdout, "\x1b") {
+		t.Fatalf("a listing written to something that is not a terminal carried escapes: %q", stdout)
 	}
 
 	stdout, stderr, code = runCLI(t, "goals", "list", "--config", configPath, "--json")
@@ -82,6 +98,99 @@ An introduction.
 	}
 	if len(listed.Goals) != 2 || listed.Goals[0].ArtifactID != "v1-goals" || !listed.Goals[0].InForce {
 		t.Fatalf("listed = %#v", listed.Goals)
+	}
+	// What is read by a program carries none of what was laid out for a person:
+	// no escapes, and no closing line to be parsed as a goal.
+	if strings.Contains(stdout, "\x1b") || strings.Contains(stdout, "upstream:") {
+		t.Fatalf("--json carried the listing's presentation: %q", stdout)
+	}
+}
+
+// The dressing the listing is read with on a terminal, and the promise it is
+// held to: the statement weighted, the lines about it slanted, and every
+// distinction still there once the escapes are gone. What separates two goals is
+// the blank line, what says a line is about the goal above it is the indent, and
+// what says a goal is no longer in force is said in words — so the listing on a
+// terminal that cannot be dressed is the same listing.
+func TestTheGoalsListingIsDressedWithoutTheDressingCarryingAnything(t *testing.T) {
+	t.Parallel()
+
+	goals := goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals: []goal.Goal{
+			{
+				Statement:  "Maintain a traceable chain from the brief through to verification.",
+				Supports:   "Every change traces to intent somebody approved",
+				ArtifactID: "v1-goals",
+				Path:       "docs/product/goals/v1-goals.md",
+				InForce:    true,
+			},
+			{
+				Statement:  "Ship the first version by hand.",
+				ArtifactID: "v0-goals",
+				Path:       "docs/product/goals/v0-goals.md",
+			},
+		},
+		BriefPath: "docs/product/brief.md",
+	}
+
+	var plain strings.Builder
+	printGoals(&plain, console.Theme{}, goals)
+
+	var dressed strings.Builder
+	printGoals(&dressed, console.NewTheme(
+		func(name string) string { return map[string]string{"TERM": "xterm-256color"}[name] },
+		func() int { return 80 },
+	), goals)
+
+	if !strings.Contains(dressed.String(), "\x1b") {
+		t.Fatal("a terminal that permits dressing was written an undressed listing")
+	}
+	if stripped := ansiEscapes.ReplaceAllString(dressed.String(), ""); stripped != plain.String() {
+		t.Fatalf("stripping the escapes changed the listing:\n%q\nwant\n%q", stripped, plain.String())
+	}
+	// The statement is the entry and the lines under it are about it, and the two
+	// are dressed as what they are rather than alike.
+	lines := strings.Split(dressed.String(), "\n")
+	if !strings.HasPrefix(lines[0], "\x1b[1m") {
+		t.Fatalf("the statement was not weighted: %q", lines[0])
+	}
+	for _, index := range []int{1, 2} {
+		if !strings.HasPrefix(lines[index], "\x1b[3m") {
+			t.Fatalf("a line about the goal was not slanted: %q", lines[index])
+		}
+	}
+	// The listing without any dressing at all is the whole of what it says: the
+	// blank line between entries, the marker on a goal nobody may name now, and
+	// the closing line naming the brief upstream.
+	want := `Maintain a traceable chain from the brief through to verification.
+  stated by: v1-goals (docs/product/goals/v1-goals.md)
+  supports: Every change traces to intent somebody approved
+
+Ship the first version by hand. [no longer in force]
+  stated by: v0-goals (docs/product/goals/v0-goals.md)
+
+upstream: these goals support the goals the product brief states, in docs/product/brief.md
+`
+	if plain.String() != want {
+		t.Fatalf("undressed listing = %q, want %q", plain.String(), want)
+	}
+}
+
+// A repository that records no brief is still told what these goals are for. It
+// is not sent to a file that is not there — what is wrong is reported with the
+// other broken links upstream, and inventing a path would send a reader looking
+// for a document nobody wrote.
+func TestTheClosingLineNamesNoBriefWhereTheRepositoryRecordsNone(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	printGoals(&out, console.Theme{}, goal.Set{
+		Sources: []string{"v1-goals"},
+		Goals:   []goal.Goal{{Statement: "Run development nearly autonomously.", ArtifactID: "v1-goals", Path: "docs/product/goals/v1-goals.md", InForce: true}},
+	})
+	if !strings.HasSuffix(out.String(), "\nupstream: these goals support the goals the product brief states\n") {
+		t.Fatalf("listing = %q", out.String())
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/research"
 )
 
 const (
@@ -215,6 +216,7 @@ func newResolution() *resolution {
 				StuckMergeAge:   defaultStuckMergeAge,
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
+			Exchange: Exchange{MaxRounds: defaultExchangeMaxRounds},
 			// Publishing and work_items are the approvals with a harness default,
 			// because they are the ones added after configurations existed: a file
 			// mentioning neither loads rather than failing over a key that did not
@@ -264,6 +266,7 @@ func newResolution() *resolution {
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
+			"exchange.max_rounds":                                 OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -302,6 +305,20 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)
 		setValue(r.origins, "triage.review_rounds_cap", triage.ReviewRoundsCap, &r.config.Triage.ReviewRoundsCap, applied.origin)
 		setValue(r.origins, "triage.repair_grant_attempts", triage.RepairGrantAttempts, &r.config.Triage.RepairGrantAttempts, applied.origin)
+	}
+	if asks := document.Exchange; asks != nil {
+		setValue(r.origins, "exchange.max_rounds", asks.MaxRounds, &r.config.Exchange.MaxRounds, applied.origin)
+	}
+	if evidence := document.Research; evidence != nil {
+		// Copied rather than aliased, like the check list: a layer's own slice must
+		// not become the resolved configuration's, or a later layer would be editing
+		// what an earlier document holds.
+		if evidence.Sources != nil {
+			r.config.Research.Sources = append([]research.Source(nil), (*evidence.Sources)...)
+			r.origins["research.sources"] = applied.origin
+		}
+		setValue(r.origins, "research.max_queries_per_turn", evidence.MaxQueriesPerTurn, &r.config.Research.MaxQueriesPerTurn, applied.origin)
+		setValue(r.origins, "research.timeout", evidence.Timeout, &r.config.Research.Timeout, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)

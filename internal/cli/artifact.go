@@ -253,23 +253,13 @@ func newArtifactFlags(name string, stderr io.Writer) *artifactFlags {
 }
 
 // parse reads the flags and the positional arguments, in whatever order they
-// were typed. Go's flag package stops at the first word that is not a flag, so
-// `artifact approve brief --reason ...` would otherwise arrive as three
-// positional arguments and be refused for naming three artifacts — and an id
-// before the flags that describe what is being done to it is how anybody types
-// it.
+// were typed, which is what parseArguments is for.
 func (f *artifactFlags) parse(args []string, positional int) (int, bool) {
-	remaining := args
-	for {
-		if err := f.set.Parse(remaining); err != nil {
-			return 2, false
-		}
-		if f.set.NArg() == 0 {
-			break
-		}
-		f.args = append(f.args, f.set.Arg(0))
-		remaining = f.set.Args()[1:]
+	parsed, err := parseArguments(f.set, args)
+	if err != nil {
+		return 2, false
 	}
+	f.args = parsed
 	if len(f.args) != positional {
 		if positional == 0 {
 			fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)

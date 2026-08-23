@@ -9,6 +9,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/research"
 )
 
 // configDocument is the on-disk shape of a configuration layer. Every field is
@@ -22,6 +23,8 @@ type configDocument struct {
 	Product   *productDocument         `yaml:"product"`
 	Execution *executionDocument       `yaml:"execution"`
 	Triage    *triageDocument          `yaml:"triage"`
+	Exchange  *exchangeDocument        `yaml:"exchange"`
+	Research  *researchDocument        `yaml:"research"`
 	Approvals *approvalsDocument       `yaml:"approvals"`
 	Checks    *[]string                `yaml:"checks"`
 	Agents    map[string]agentDocument `yaml:"agents"`
@@ -75,6 +78,24 @@ type triageDocument struct {
 	// the effective repair budget turns out to be rather than whatever it was
 	// when some layer underneath was written.
 	RepairGrantAttempts *int `yaml:"repair_grant_attempts"`
+}
+
+type exchangeDocument struct {
+	MaxRounds *int `yaml:"max_rounds"`
+}
+
+// researchDocument is absent from every file written before research existed,
+// which is what leaves the capability off for them: a layer supplying no sources
+// permits none, and that is the state a project stays in until its operator
+// names one.
+type researchDocument struct {
+	// Sources replaces an inherited list wholesale rather than adding to it, the
+	// way the check list and the work-item exemptions do: what the harness may
+	// reach outside this machine is one statement, and a list half from a bundle
+	// and half from a project is a reach nobody decided.
+	Sources           *[]research.Source `yaml:"sources"`
+	MaxQueriesPerTurn *int               `yaml:"max_queries_per_turn"`
+	Timeout           *Duration          `yaml:"timeout"`
 }
 
 type approvalsDocument struct {

@@ -22,12 +22,30 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 )
 
 // MaxLineBytes bounds one line the operator types. It is the same order as the
 // largest message a conversation accepts, so an over-long line is refused
 // rather than silently cut in half.
 const MaxLineBytes = 64 << 10
+
+// continuationMark ends a line the operator is carrying on to the next. It is
+// the newline that asks the terminal for nothing: where shift-return cannot be
+// reported and alt-return is taken by the window manager, and on a stream that
+// is not a terminal at all, this is still a newline in the message.
+const continuationMark = `\`
+
+// carriedOn reports whether a line the operator finished carries on to the next,
+// and what it holds without the mark. A message that is to end in a backslash
+// therefore cannot be typed, which is the price of a rule with nothing to
+// remember: the two keys above put one anywhere in a message.
+func carriedOn(line string) (string, bool) {
+	if !strings.HasSuffix(line, continuationMark) {
+		return line, false
+	}
+	return strings.TrimSuffix(line, continuationMark) + "\n", true
+}
 
 // ErrInterrupted reports that Prompt returned because something else needed to
 // be shown, not because the operator finished a line. Whatever they had typed
@@ -61,6 +79,12 @@ type Console interface {
 	Status(text string)
 	// Theme reports how much this console may dress what is written to it.
 	Theme() Theme
+	// Composing says, in one line, how a message of more than one line is typed
+	// here. What it says is what this console turned out to support rather than
+	// what a terminal usually does: shift-return is named only where the terminal
+	// has agreed to report it, and the fallback that asks the terminal for
+	// nothing is named whatever the answer was.
+	Composing() string
 	// Close restores the terminal and flushes anything held back. It is safe to
 	// call more than once.
 	Close() error
@@ -95,6 +119,24 @@ func Open(options Options) Console {
 		return newPlain(options.In, options.Out)
 	}
 	return terminal
+}
+
+// ThemeFor returns the theme a command that is not a conversation may dress its
+// output with. A conversation asks the console it opened, which knows what its
+// streams turned out to be; a command has only the writer it was handed, so this
+// asks that writer the same two questions — a terminal on the other end, and an
+// environment that permits dressing at all. Anything else, a redirected stream
+// or a buffer in a test among them, is the undressed theme, which is the same
+// answer `Open` gives for the same streams.
+func ThemeFor(out io.Writer, env func(string) string) Theme {
+	if env == nil {
+		env = os.Getenv
+	}
+	file, ok := out.(*os.File)
+	if !ok || !isTerminalStream(out) {
+		return Theme{}
+	}
+	return NewTheme(env, func() int { return terminalWidth(file.Fd()) })
 }
 
 // addressable reports whether these streams are a terminal this may draw a

@@ -83,6 +83,14 @@ type BranchReview struct {
 	Summary        string    `json:"summary,omitempty"`
 	Findings       []Finding `json:"findings,omitempty"`
 	Failure        string    `json:"failure,omitempty"`
+	// Shadow marks a review made to measure the reviewer rather than to judge
+	// the branch: the same reviewer under the same contract, run again over a
+	// branch state another review already decided, so the two verdicts can be
+	// held up against each other. It is recorded in this log rather than kept
+	// somewhere else because it is a provider invocation that happened and cost
+	// money, and it is marked because a verdict that gates nothing must never be
+	// readable as one that gates something — Approved says so below.
+	Shadow bool `json:"shadow,omitempty"`
 }
 
 // Validate rejects a record that could not describe a review that happened.
@@ -150,11 +158,11 @@ func (b BranchReview) Validate() error {
 // Approved reports the one thing a reader of this record acts on: whether an
 // independent reviewer approved the accumulated change. Everything else — a
 // repair verdict, a review that failed, a review of a change too large to show
-// in full — is not an approval, and each of them says so through the same
-// answer, so nothing downstream has to enumerate the ways a review can fall
-// short.
+// in full, a shadow review that was never asked to gate anything — is not an
+// approval, and each of them says so through the same answer, so nothing
+// downstream has to enumerate the ways a review can fall short.
 func (b BranchReview) Approved() bool {
-	return b.Decision == ReviewApprove
+	return !b.Shadow && b.Decision == ReviewApprove
 }
 
 // BranchReviewStore is where branch reviews are collected: their own directory
@@ -360,6 +368,50 @@ func (s *BranchReviewStore) LoadEvents(reviewID string) ([]execution.Event, erro
 		return nil, fmt.Errorf("read branch review event log: %w", err)
 	}
 	return events, nil
+}
+
+// ReviewPrice is what one branch review cost, as its own event log reports it.
+// It is the same evidence a run is priced from — the provider's own figure on
+// the event that ended the invocation — read out of the log this store keeps
+// rather than a run's, because a branch review belongs to no run.
+type ReviewPrice struct {
+	ReviewID    string  `json:"review_id"`
+	Invocations int     `json:"invocations,omitempty"`
+	CostUSD     float64 `json:"cost_usd"`
+	// Unknown says why this review could not be priced, and is empty on one that
+	// was. A review carrying it did not cost nothing: nothing survives to say
+	// what it cost, which is a different fact and is stated as itself.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// Known reports a review the recorded evidence could actually price.
+func (p ReviewPrice) Known() bool { return p.Unknown == "" }
+
+// Price reports what one branch review cost. It never fails for want of a log:
+// an event stream that is gone is what an unknown price is, and reporting that
+// as an error would lose the reviews beside it that can be priced.
+func (s *BranchReviewStore) Price(reviewID string) ReviewPrice {
+	price := ReviewPrice{ReviewID: reviewID}
+	path, err := s.eventPath(reviewID)
+	if err != nil {
+		price.Unknown = err.Error()
+		return price
+	}
+	cost, invocations, err := scanEventCost(path)
+	if err != nil {
+		price.Unknown = err.Error()
+		return price
+	}
+	// Every branch review is one provider invocation by construction, so a log
+	// with none in it is a log that lost them rather than a review that spent
+	// nothing.
+	if invocations == 0 {
+		price.Unknown = "the review's event log holds no invocation to price"
+		return price
+	}
+	price.CostUSD = cost
+	price.Invocations = invocations
+	return price
 }
 
 func (s *BranchReviewStore) eventPath(reviewID string) (string, error) {

@@ -973,16 +973,7 @@ func renderSlackSection(content, channel string) string {
 		}
 	}
 	if start < 0 {
-		block := fmt.Sprintf(`
-# Reporting into Slack, written by "yoyo setup". One thread per work item and
-# one message per milestone, posted by a separate "yoyo slack" process that
-# holds this project's two tokens; nothing about a run waits on it. The recipe
-# is docs/slack/setup.md in the yoyodyne repository.
-slack:
-  enabled: true
-  channel: %s
-`, channel)
-		return strings.TrimRight(content, "\n") + "\n" + block
+		return writeSlackSection(lines, channel)
 	}
 
 	// The block is everything indented under the key, up to the next line at the
@@ -1002,6 +993,78 @@ slack:
 	body = setSlackKey(body, "channel", channel)
 	edited = append(edited, body...)
 	return strings.Join(append(edited, lines[end:]...), "\n")
+}
+
+// writeSlackSection writes the block into a file that has none live. Where
+// "yoyo init" scaffolded its commented example, the block goes exactly there
+// and the example goes away: a file carrying an enabled block and, above it, an
+// instruction to enable one is a file arguing with itself. Anywhere else it is
+// appended, which is all this ever did.
+func writeSlackSection(lines []string, channel string) string {
+	block := []string{
+		`# Reporting into Slack, written by "yoyo setup". One thread per work item and`,
+		`# one message per milestone, posted by a separate "yoyo slack" process that`,
+		`# holds this project's two tokens; nothing about a run waits on it. The recipe`,
+		`# is docs/slack/setup.md in the yoyodyne repository.`,
+		"slack:",
+		"  enabled: true",
+		"  channel: " + channel,
+	}
+	start, end, found := commentedSlackExample(lines)
+	if !found {
+		return strings.TrimRight(strings.Join(lines, "\n"), "\n") + "\n\n" + strings.Join(block, "\n") + "\n"
+	}
+	edited := append([]string{}, lines[:start]...)
+	edited = append(edited, block...)
+	return strings.Join(append(edited, lines[end:]...), "\n")
+}
+
+// commentedSlackExample finds the commented slack block a generated
+// configuration carries, together with the paragraph above it that says to
+// uncomment it, and reports the half-open range they occupy. A file whose
+// commented block is not the scaffold's own shape is left alone: it is
+// somebody's own comment, and this is not the place to decide it was a mistake.
+func commentedSlackExample(lines []string) (int, int, bool) {
+	key := -1
+	for index, line := range lines {
+		if commented, ok := uncomment(line); ok && strings.TrimSpace(commented) == "slack:" {
+			key = index
+			break
+		}
+	}
+	if key < 0 {
+		return 0, 0, false
+	}
+	// The paragraph explaining the block is whatever comment lines run above it,
+	// which the blank line the scaffold puts before the section terminates.
+	start := key
+	for start > 0 {
+		if _, ok := uncomment(lines[start-1]); !ok {
+			break
+		}
+		start--
+	}
+	// The block itself is the commented lines indented under the key, which is
+	// what separates them from the next paragraph of prose.
+	end := key + 1
+	for end < len(lines) {
+		commented, ok := uncomment(lines[end])
+		if !ok || !strings.HasPrefix(commented, "  ") {
+			break
+		}
+		end++
+	}
+	return start, end, true
+}
+
+// uncomment strips one leading "#" from a comment line, keeping whatever
+// followed it, and reports false for a line that is not a comment.
+func uncomment(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " \t")
+	if !strings.HasPrefix(trimmed, "#") {
+		return "", false
+	}
+	return strings.TrimPrefix(trimmed, "#"), true
 }
 
 // setSlackKey replaces a key inside the block, or writes it at the top of the

@@ -33,9 +33,10 @@ package runstate
 //
 // Spending the budget is not carrying the decision out, and the two are
 // deliberately apart. Recording the decision is the role's; starting the run,
-// or asking a forge for anything, is the harness's own hand afterwards — the
-// re-run action is the one that exists, and it is bounded again by its own
-// once-per-docketed-stoppage record. So these operations stay the gate rather
+// continuing one, or asking a forge for anything, is the harness's own hand
+// afterwards — the re-run and repair-continue actions are the two that exist,
+// each bounded again by a record of its own: one re-run per docketed stoppage,
+// and a grant spent no further than the continuations the item's runs record. So these operations stay the gate rather
 // than the decision: an action records itself through one of them and is
 // refused by the cap it finds, instead of arriving with a budget of its own
 // invention.

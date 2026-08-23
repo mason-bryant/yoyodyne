@@ -176,6 +176,140 @@ func TestTheSameArgumentMadeAgainOnARepairAttemptIsOneProposal(t *testing.T) {
 	}
 }
 
+// An agent asked the same question twice rarely answers it to the byte. The
+// argument is the same one when the second attempt moves a clause or swaps a
+// word, and it has to arrive as one proposal for the same reason an exact repeat
+// does — a run that proposed five changes and had two pairs of them restated is
+// what reported this.
+func TestTheSameArgumentRewordedOnARepairAttemptIsOneProposal(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	writeDesignArtifact(t, repository)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		if attempts == 1 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	// The same request twice: a word added to the change, a clause reworded, and
+	// the reasoning made over from scratch.
+	provider.developerFinalTextByAttempt = []string{
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design",`+
+			`"change":"the ordering section should say which of the two orderings holds when the queue is drained, leaving the rest of the section as it stands",`+
+			`"why":"the item cannot satisfy both orderings"}`),
+		"worked on it\n\n" + amendmentBlock(`{"artifact":"v1-design",`+
+			`"change":"the ordering section should say which of the two orderings actually holds when the queue is drained, leaving the rest of that section as it stands",`+
+			`"why":"nothing in the document decides between them, so the work item has to guess"}`),
+	}
+	recorder := &fakeAmendments{}
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	pipeline.Amendments = recorder
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.RepairAttempts != 1 {
+		t.Fatalf("repair attempts = %d, want the developer asked twice", outcome.RepairAttempts)
+	}
+	if len(recorder.appended) != 1 || len(outcome.Amendments) != 1 {
+		t.Fatalf("one argument reworded produced %d proposal(s): %#v", len(recorder.appended), recorder.appended)
+	}
+	// The one that waits on the architect is the one that was made first, whole.
+	if !strings.Contains(recorder.appended[0].Change, "which of the two orderings holds") {
+		t.Fatalf("proposal = %#v", recorder.appended[0])
+	}
+	if outcome.AmendmentProblem != "" {
+		t.Fatalf("a dropped rewording was reported as a lost proposal: %q", outcome.AmendmentProblem)
+	}
+}
+
+// The five changes one run actually proposed, verbatim, since they are the
+// evidence for where this boundary sits. The architect deciding them found two
+// pairs asking the same thing twice; nothing else there is a repeat, and two of
+// the ones that are not concern the same document and overlap heavily.
+func TestWhichProposalsOfTheRunThatReportedThisCountAsOneArgument(t *testing.T) {
+	t.Parallel()
+
+	const (
+		// amendment-10ba891d: the ownership section should record the gate.
+		ownershipSection = "the artifact-ownership section should record that a developer's diff is refused deterministically on the artifact homes before review, with a grant in the work item's own text as the only exception"
+		// amendment-14958f8a and amendment-c29b4954: the same request, differing by
+		// three words in the middle of it.
+		enforcedSection      = `the "What is enforced, and what is not" section should record a third enforced boundary: a developer's diff is refused on the configured artifact homes and the project configuration directory before any check or reviewer sees it, unless the work item's own text grants the path — leaving the "Not enforced for the developer" paragraph as it stands, because it is scoped to pushing and merging and this changes nothing about that half`
+		enforcedSectionAgain = `the "What is enforced, and what is not" section should record a third enforced boundary: a developer's diff is refused on the configured artifact homes and the project configuration directory before any check or reviewer sees it, unless the work item grants the path — leaving the "Not enforced for the developer" paragraph as it stands, because it is scoped to pushing and merging and this changes nothing about that half`
+		// amendment-834f1d83 and amendment-1185271f: the same request, made over
+		// and stated at more length the second time.
+		grantShape      = "the shape of the protected-path grant — a marker line in the work item's text, read from every field, with a directory grant covering its contents — should be settled or replaced by the architect, together with which role writes a grant into an item"
+		grantShapeAgain = "the shape of the protected-path grant should be settled or replaced by the architect: the marker line, the four item fields it is read from (title, description, design guidance, acceptance criteria, and not the notes), and directory grants covering their contents"
+	)
+
+	for name, fixture := range map[string]struct {
+		first, second string
+		artifacts     [2]string
+		same          bool
+	}{
+		// What the exact comparison missed and this one catches.
+		"one clause reworded": {first: enforcedSection, second: enforcedSectionAgain, same: true},
+		// And the guard rail that keeps it from catching more than that: these two
+		// ask for different sections of one document, share a third of their
+		// wording, and are two arguments the architect had to decide separately.
+		"a related change to the same document": {first: ownershipSection, second: enforcedSection},
+		// The boundary, stated where somebody who disagrees with it can find it.
+		// This pair is one argument made twice, and it is not caught: it shares
+		// less of its wording with its own restatement than the pair above shares
+		// with a change nobody would call a repeat, so no threshold separates
+		// them. The cost of letting it through is one more proposal to read; the
+		// cost of catching it by lowering the bar is a distinct argument dropped
+		// silently, which is what this channel exists to prevent.
+		"the same request restated at length": {first: grantShape, second: grantShapeAgain},
+		// A document is half of the question either way.
+		"the same words about another document": {first: grantShape, second: grantShape, artifacts: [2]string{"v1-harness-design", "v1-goals"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			artifacts := fixture.artifacts
+			if artifacts[0] == "" {
+				artifacts = [2]string{"v1-harness-design", "v1-harness-design"}
+			}
+			first := newAmendmentRequest(amendment.Proposal{Artifact: artifacts[0], Change: fixture.first})
+			second := newAmendmentRequest(amendment.Proposal{Artifact: artifacts[1], Change: fixture.second})
+			if got := first.sameArgument(second); got != fixture.same {
+				t.Fatalf("sameArgument() = %t, want %t", got, fixture.same)
+			}
+			// Which one arrived first cannot change the answer, or the same run
+			// would dedupe differently depending on the order the agent wrote them
+			// in.
+			if got := second.sameArgument(first); got != fixture.same {
+				t.Fatalf("sameArgument() reversed = %t, want %t", got, fixture.same)
+			}
+		})
+	}
+}
+
+// A change made of no words at all is compared by its wording, since there is
+// nothing else to tell two of them apart.
+func TestAChangeWithNoWordsIsComparedByItsText(t *testing.T) {
+	t.Parallel()
+
+	punctuation := newAmendmentRequest(amendment.Proposal{Artifact: "v1-design", Change: "..."})
+	if !punctuation.sameArgument(newAmendmentRequest(amendment.Proposal{Artifact: "v1-design", Change: " ... "})) {
+		t.Fatal("the same wordless change twice is two proposals")
+	}
+	if punctuation.sameArgument(newAmendmentRequest(amendment.Proposal{Artifact: "v1-design", Change: "?!"})) {
+		t.Fatal("two different wordless changes are one proposal")
+	}
+	if punctuation.sameArgument(newAmendmentRequest(amendment.Proposal{Artifact: "v1-design", Change: "say which ordering holds"})) {
+		t.Fatal("a wordless change and a worded one are one proposal")
+	}
+}
+
 // A different argument on a later attempt is a different proposal, so the
 // deduplication cannot swallow something new the developer found.
 func TestADifferentChangeOnARepairAttemptIsItsOwnProposal(t *testing.T) {

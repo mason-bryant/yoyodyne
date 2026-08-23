@@ -199,6 +199,78 @@ func TestBacklogShowsTheOperatorTheOrderWorkIsPulledIn(t *testing.T) {
 	}
 }
 
+// How a message of more than one line is typed is not the same on every
+// terminal, so /help says what this one supports rather than a sentence written
+// once for all of them: a key named in help that the terminal will not report is
+// a key the operator presses and nothing happens.
+func TestHelpSaysHowAMultiLineMessageIsTypedOnThisConsole(t *testing.T) {
+	t.Parallel()
+
+	var stream strings.Builder
+	session := openTestSession(t, testOptions(t, &fakeBackend{}))
+	if err := session.Converse(context.Background(), testConsole(strings.NewReader("/help\n/exit\n"), &stream)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	// A stream reports no keystrokes at all, so what it offers is the mark that
+	// carries a line on to the next, and it claims nothing about shift-return.
+	transcript := stream.String()
+	if !strings.Contains(transcript, `end a line with \`) {
+		t.Fatalf("transcript = %q, want it to say how a stream composes more than one line", transcript)
+	}
+	if strings.Contains(transcript, "shift-return") {
+		t.Fatalf("a stream was told about a key it can never report: %q", transcript)
+	}
+
+	// A console that does report it says so, and /help says what it said.
+	var terminal strings.Builder
+	reporting := composingConsole{
+		Console: testConsole(strings.NewReader("/help\n/exit\n"), &terminal),
+		says:    "Multi-line: shift-return inserts a newline — this terminal reports it.",
+	}
+	session = openTestSession(t, testOptions(t, &fakeBackend{}))
+	if err := session.Converse(context.Background(), reporting); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+	if !strings.Contains(terminal.String(), reporting.says) {
+		t.Fatalf("transcript = %q, want it to carry %q", terminal.String(), reporting.says)
+	}
+}
+
+// A message composed over more than one line is one message, and the lines the
+// operator put in it are part of what they said: the product manager is asked
+// the question they typed rather than a paragraph run together.
+func TestAMultiLineMessageReachesTheProductManagerWithItsLinesIntact(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1",
+		FinalText: "Two goals, then.",
+	}}}
+	session := openTestSession(t, testOptions(t, provider))
+	var out strings.Builder
+	input := strings.NewReader("two goals:\\\n- one that ships\\\n- one that lasts\n/exit\n")
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	if len(provider.requests) != 1 {
+		t.Fatalf("the carried-on lines were sent as %d messages, want 1", len(provider.requests))
+	}
+	if !strings.Contains(provider.requests[0].Prompt, "two goals:\n- one that ships\n- one that lasts") {
+		t.Fatalf("the message lost its lines on the way:\n%s", provider.requests[0].Prompt)
+	}
+}
+
+// composingConsole is a conversation held over a stream that says a terminal's
+// keys are reported to it, which is how what /help claims is testable without a
+// terminal that reports them.
+type composingConsole struct {
+	console.Console
+	says string
+}
+
+func (c composingConsole) Composing() string { return c.says }
+
 // A conversation with no harness behind it can still discuss the product. It
 // says the backlog is out of reach rather than rendering an empty one, because
 // "nothing is admitted" and "nothing could be read" are different answers.
@@ -535,6 +607,13 @@ func (c *scriptedConsole) Working(phase string) console.Activity {
 func (c *scriptedConsole) Status(string) {}
 
 func (c *scriptedConsole) Theme() console.Theme { return c.theme }
+
+// Composing is what a stream says: the mark that carries a line on to the next,
+// which is the one way of typing a message of more than one line that needs
+// nothing reported by anything.
+func (c *scriptedConsole) Composing() string {
+	return testConsole(strings.NewReader(""), c.out).Composing()
+}
 
 func (c *scriptedConsole) Close() error { return nil }
 

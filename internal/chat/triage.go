@@ -28,9 +28,11 @@ package chat
 // What the harness does not do is carry the decision out. Nothing here starts a
 // run, hands a developer a grant, or asks a forge for anything: causing work is
 // the harness's own hand on the operator's instruction, and this is a role
-// deciding. The record and the budget are what a later hand acts on — for a
-// re-run that hand is `yoyo triage rerun`, which reads the intake hold, proves
-// the stoppage is over, and records this decision as why the fresh run exists.
+// deciding. The record and the budget are what a later hand acts on, and there
+// are two of those, opposite to each other: `yoyo triage rerun` starts the item
+// over and records this decision as why the fresh run exists, and `yoyo triage
+// repair` re-enters the stopped run's own repair loop on the grant recorded
+// here. Both read the intake hold and prove the stoppage is over first.
 
 import (
 	"context"
@@ -109,6 +111,23 @@ type TriageBudgets interface {
 	RecordMergeRearm(ctx context.Context, workItemID string) (runstate.TriageCounters, error)
 }
 
+// Stoppages is what the harness durably recorded about the runs triage decides
+// about. One thing is read from it: the work item a run was made for.
+//
+// A decision names two things that have to agree — the item it lands on, and
+// the run whose stoppage it settles — and a conversation working a docket of
+// several entries is exactly where they come apart. Two entries transposed
+// write each decision's reasoning onto the other item, and both then read as
+// decided, which is worse than either reading as undecided: the reasoning is
+// about a change nobody looking at that item can see.
+//
+// It is optional like the rest, and a conversation without one records a
+// decision unchecked rather than appearing to have checked it.
+type Stoppages interface {
+	// WorkItemOf reports the work item the named run was made for.
+	WorkItemOf(ctx context.Context, runID string) (string, error)
+}
+
 // EscalationError reports an escalation that carried no report. It is the
 // harness refusing rather than the provider failing, exactly as an authority
 // refusal is: nothing in the block was carried out, the item was not blocked,
@@ -128,7 +147,9 @@ func (e *EscalationError) Error() string {
 // it settles. Whether that run is on the docket needs the docket rather than the
 // action, and is deliberately not asked: the entry the decision is about may
 // have been cut from a bounded listing, and refusing a decision for that would
-// refuse exactly the oldest stoppages nobody has got to yet.
+// refuse exactly the oldest stoppages nobody has got to yet. Whether the run is
+// this item's own stopped work is asked, but where the run record can be read
+// rather than here — see refuseTransposedStoppage.
 func (a TrackerAction) triageProblems() []error {
 	var problems []error
 	switch decision := strings.TrimSpace(a.Decision); {
@@ -189,10 +210,12 @@ func refuseUnreportedEscalation(parsed parsedReply) error {
 	return &EscalationError{WorkItemID: strings.Join(escalated[reported:], ", ")}
 }
 
-// carryOutTriage records one triage decision. The budget is spent before the
-// decision is written down, which is the order the durable counters are built
-// for: a process that dies between the two has spent an attempt nobody took,
-// rather than recorded a decision nothing bounds.
+// carryOutTriage records one triage decision. Whether the run it names is this
+// item's stopped work is asked first, because a decision landing on the wrong
+// item is a decision that should never have been paid for; the budget is then
+// spent before the decision is written down, which is the order the durable
+// counters are built for: a process that dies between the two has spent an
+// attempt nobody took, rather than recorded a decision nothing bounds.
 //
 // A refusal from the budget is the gate doing its job rather than a failure of
 // the conversation: the development manager is told which cap refused it and
@@ -201,12 +224,17 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 	action := outcome.Action
 	id := strings.TrimSpace(action.ID)
 	decision := strings.TrimSpace(action.Decision)
+	run := strings.TrimSpace(action.Run)
+	if err := s.refuseTransposedStoppage(ctx, id, run); err != nil {
+		outcome.fail(err)
+		return
+	}
 	spent, err := s.spendTriageBudget(ctx, id, decision)
 	if err != nil {
 		outcome.fail(err)
 		return
 	}
-	note := s.trackerProvenance(triageVerbs[decision]+", on the stopped work of run "+strings.TrimSpace(action.Run), action.Reason)
+	note := s.trackerProvenance(triageVerbs[decision]+", on the stopped work of run "+run, action.Reason)
 	if decision == decisionEscalate {
 		// An escalation is recorded as a blocker rather than as a note, because
 		// the item itself has to say it is waiting on a person: a note leaves the
@@ -216,16 +244,48 @@ func (s *Session) carryOutTriage(ctx context.Context, outcome *TrackerOutcome) {
 			outcome.fail(err)
 			return
 		}
-		outcome.applied("escalated %s to the operator and blocked it, on the stopped work of run %s",
-			id, strings.TrimSpace(action.Run))
+		outcome.applied("escalated %s to the operator and blocked it, on the stopped work of run %s", id, run)
 		return
 	}
 	if _, err := s.options.Tracker.Update(ctx, id, beads.WorkItemChange{AppendNotes: note}); err != nil {
 		outcome.fail(err)
 		return
 	}
-	outcome.applied("triaged %s as %q, on the stopped work of run %s%s",
-		id, decision, strings.TrimSpace(action.Run), spent)
+	outcome.applied("triaged %s as %q, on the stopped work of run %s%s", id, decision, run, spent)
+}
+
+// refuseTransposedStoppage refuses a decision whose run was made for some other
+// work item. It is weaker than asking whether the run is on the docket, and
+// deliberately so: an entry may have been cut from a bounded listing, and
+// refusing a decision for that would refuse exactly the oldest stoppages nobody
+// has got to yet. What this catches is the failure a docket of several entries
+// actually produces — two of them transposed — where both items end up carrying
+// reasoning about a change that is not theirs.
+//
+// A run the store cannot answer for is refused too. The decision is written onto
+// an item as settled fact about a particular stoppage, and a stoppage nothing
+// can be found out about is not one this conversation has established anything
+// against; refusing costs the decision nothing, because nothing is spent before
+// this is asked.
+func (s *Session) refuseTransposedStoppage(ctx context.Context, workItemID, runID string) error {
+	if s.options.Stoppages == nil {
+		return nil
+	}
+	stoppedFor, err := s.options.Stoppages.WorkItemOf(ctx, runID)
+	if err != nil {
+		return fmt.Errorf("run %s could not be read, so nothing says it is %s's stopped work; nothing was recorded and nothing was spent: %w",
+			runID, workItemID, err)
+	}
+	stopped := strings.TrimSpace(stoppedFor)
+	if stopped == "" {
+		return fmt.Errorf("run %s records no work item, so nothing says it is %s's stopped work; nothing was recorded and nothing was spent",
+			runID, workItemID)
+	}
+	if stopped != workItemID {
+		return fmt.Errorf("run %s was made for %s rather than for %s, so this decision would land on an item whose stopped work it is not about; nothing was recorded and nothing was spent",
+			runID, stopped, workItemID)
+	}
+	return nil
 }
 
 // spendTriageBudget spends what the decision costs and says what it came to, or

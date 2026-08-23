@@ -19,6 +19,24 @@ make build
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
 runs.
 
+## What `test` checks besides the code
+
+Some of what `make test` runs is not about the Go code at all: it reads this
+repository's own documents, so a mechanical defect in them fails a check instead
+of costing a reviewer a paragraph. Each one exists because a reviewer wrote that
+paragraph, more than once, and because the thing being checked is one nobody can
+verify by eye — a relative path resolves only against the directory layout, and a
+`#fragment` names a heading through a slug nothing writes down.
+
+| What fails | Where it lives | What it means |
+| --- | --- | --- |
+| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. |
+| A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
+| A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
+
+Fixtures written to be malformed on purpose are not walked: anything under a
+`testdata` directory is skipped, along with `.git`, `.dolt`, and `dist`.
+
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports

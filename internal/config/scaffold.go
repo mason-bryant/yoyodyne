@@ -243,6 +243,18 @@ triage:
   stuck_merge_age: %s
   review_rounds_cap: %d
 
+# How long one role may go on asking another one something. Roles can put a
+# question to each other through the harness -- the product manager asking the
+# architect what a goal costs, the architect asking the product manager whether a
+# trade-off is one a user would accept -- and every exchange is recorded where
+# you can read it. This is the hard limit on rounds in one thread. Reaching it
+# closes the exchange as unresolved and tells you about it, because two judgement
+# models can defer to each other politely for ever and the only thing that ends
+# that is a number. It may not be zero: the way to leave the channel unused is to
+# leave it unused.
+exchange:
+  max_rounds: %d
+
 # What you approve, and what runs without asking. The brief and the goals are
 # "human" deliberately: they are what you state, and everything else traces back
 # to them. "yoyo artifact approve <id>" records your approval in the document's
@@ -297,6 +309,7 @@ approvals:
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,
+		effective.Exchange.MaxRounds,
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,
@@ -304,6 +317,8 @@ approvals:
 		effective.Approvals.Integration,
 		effective.Approvals.Publishing,
 	)
+
+	renderScaffoldReporting(&builder)
 
 	renderScaffoldChecks(&builder, detection)
 
@@ -361,6 +376,67 @@ const (
 // checksGuide points at the per-language examples and the reasoning behind them,
 // for a project that has no checkout of Yoyodyne to look them up in.
 const checksGuide = "https://github.com/mason-bryant/yoyodyne/blob/main/docs/configuration.md#checks"
+
+// slackGuide points at the whole Slack recipe -- the app, the invitation, and
+// where the two tokens go -- which is the part of it that does not happen in
+// this file. It is a URL for the reason checksGuide is one: a generated project
+// has no checkout of Yoyodyne to read docs/slack/setup.md out of.
+const slackGuide = "https://github.com/mason-bryant/yoyodyne/blob/main/docs/slack/setup.md"
+
+// renderScaffoldReporting writes the two optional top-level sections a project
+// is otherwise given no sign of: where it reports, and which humans it
+// recognizes. Both are written commented out, because both are off by default
+// and a project that says nothing about either reports nothing and recognizes
+// nobody -- which stays the default, since uncommenting is the whole gesture
+// asked for here.
+//
+// They are written at all because the alternative is what an operator following
+// the setup recipe actually met: a step saying to add a section to a file that
+// gives no hint of its shape, or that the capability exists. Every line below
+// is written so that deleting its leading "# " leaves a valid entry, the way
+// the commented checks further down are.
+func renderScaffoldReporting(builder *strings.Builder) {
+	fmt.Fprintf(builder, `
+# Reporting into Slack, which is optional and off. A project that says nothing
+# about it reports nothing -- which is every project until it opts in -- and an
+# installation without reporting runs work exactly as one with it does. Switched
+# on, it is one thread per work item and one message per milestone, posted by a
+# separate "yoyo slack" process that holds this project's two tokens. No run and
+# no agent ever holds one, which is why no token belongs in this file. Uncomment
+# the block below and name this workspace's channel, by id from the channel's
+# About panel or by #name; an id is worth preferring because a rename does not
+# break it. "yoyo setup" writes these two values for you if you would rather.
+# Creating the app, inviting it, and storing its tokens are the rest of it:
+# %s
+#
+# slack:
+#   enabled: true
+#   channel: C0123456789
+
+# The humans this project recognizes, and what each of them may do. A project
+# that names nobody -- which is every project until it names somebody -- is
+# closed rather than open: it recognizes nobody, not everybody. An entry binds
+# one person's identifier namespaces, because an act carries an identifier and
+# never a person -- a commit carries an address, a push carries a forge account,
+# a thread reply carries a member id -- and binding them together is what lets an
+# authority check resolve whichever one arrived to the same human. "own-intent"
+# is authority over what the product is for, and at most one human may hold it;
+# "direct-work" is authority to steer work already in flight, including the
+# thread replies the Slack sink records as directives. Who may steer from Slack
+# is derived from this rather than authored beside it -- the humans granted
+# direct-work who have bound a member id, and nobody else -- so until somebody is
+# named here, every reply in a thread is answered saying it was not acted on.
+#
+# operators:
+#   your-name:
+#     git_email: you@example.com
+#     forge_account: your-account
+#     slack_member_id: U0123456789   # your Slack profile -> "Copy member ID"
+#     grants:
+#       - own-intent
+#       - direct-work
+`, slackGuide)
+}
 
 // renderScaffoldChecks writes the checks section: what detection proposed, where
 // each proposal came from, and what it could not decide. A proposal is only

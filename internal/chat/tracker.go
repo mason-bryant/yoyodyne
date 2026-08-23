@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 // trackerFence opens the one block a reply may carry tracker actions in. It is
@@ -121,6 +122,14 @@ const (
 	// not an "update" with a well-worded note: a decision nobody can find is the
 	// state triage exists to leave behind.
 	actionTriage = "triage"
+	// actionHandle records what became of one collected report. Its subject is
+	// neither an item nor a run but a report in the pile every role files into,
+	// and it is here rather than in a block of its own because it is the same
+	// kind of thing as everything above: a bounded act the harness carries out,
+	// records, and reports back. Recording it is what takes a report out of the
+	// pile the product manager is shown, so a report nobody decides about keeps
+	// coming back.
+	actionHandle = "handle"
 )
 
 // trackerActionArguments names the optional arguments each operation accepts.
@@ -140,6 +149,7 @@ var trackerActionArguments = map[string][]string{
 	actionClose:        {},
 	actionRetire:       {},
 	actionTriage:       {"run", "decision"},
+	actionHandle:       {"report"},
 }
 
 // trackerActionNames lists the operations in the order the contract states them,
@@ -147,6 +157,7 @@ var trackerActionArguments = map[string][]string{
 var trackerActionNames = []string{
 	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
 	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire, actionTriage,
+	actionHandle,
 }
 
 // TrackerAction is one bounded operation on the work tracker. It carries
@@ -194,6 +205,11 @@ type TrackerAction struct {
 	// nothing else: an item can stop more than once, and a decision that does not
 	// say which stoppage it was about is one nobody can match to an entry.
 	Run string `json:"run,omitempty"`
+	// Report names the collected report a handling settles, copied from the
+	// listing it was delivered in. It is required there and taken by nothing
+	// else: a handling that does not say which report it is about takes nothing
+	// out of the pile and tells nobody anything.
+	Report string `json:"report,omitempty"`
 	// Decision is what triage decided, from the fixed vocabulary in triage.go. It
 	// is a named decision rather than prose because the harness acts on it — a
 	// repair, a re-run, and a re-arm each spend a budget, and an escalation
@@ -375,6 +391,13 @@ func (a TrackerAction) validateSubject() error {
 			return errors.New("survey does not take an id; it reports the whole open queue, and one item is what \"read\" is for")
 		}
 		return nil
+	case a.Action == actionHandle:
+		// The one action whose subject is not a work item at all. It names a
+		// report, so an id would be an item nothing was going to be done to.
+		if id != "" {
+			return errors.New("handle does not take an id; it names the report it settles in \"report\", and it changes no work item")
+		}
+		return nil
 	case id == "":
 		return fmt.Errorf("%s requires the id of the item to act on", a.Action)
 	default:
@@ -386,7 +409,7 @@ func (a TrackerAction) validateSubject() error {
 // is every operation but admitting new work and surveying the queue.
 func (a TrackerAction) actsOnExistingItem() bool {
 	switch a.Action {
-	case actionCreate, actionSurvey:
+	case actionCreate, actionSurvey, actionHandle:
 		return false
 	default:
 		return true
@@ -454,6 +477,13 @@ func (a TrackerAction) validateArguments() []error {
 		}
 	case actionTriage:
 		problems = append(problems, a.triageProblems()...)
+	case actionHandle:
+		switch reported := strings.TrimSpace(a.Report); {
+		case reported == "":
+			problems = append(problems, errors.New("handle requires \"report\", the report it says what became of"))
+		case !report.ValidID(reported):
+			problems = append(problems, fmt.Errorf("handle report %q is not a report identifier; a report is named exactly as it was listed to you", reported))
+		}
 	}
 	// The arguments an operation does accept are checked wherever they appear, so
 	// a value that could not be applied is refused before anything is run.
@@ -479,9 +509,20 @@ func (a TrackerAction) validateArguments() []error {
 	// for the reason an unrecognized class is: what it names is a marker selection
 	// reads, and a word nothing reads would take the item out of the queue's reach
 	// without anybody having said which conversation carries it.
+	//
+	// The bare conversation marker is refused for the second half of that same
+	// sentence. It takes the item out of the queue's reach and says nothing about
+	// whose conversation carries it, so the thread has nobody to name from the
+	// handoff until somebody picks the work up — which is the silence the marker
+	// was extended to end, and it ends only if it is refused here.
 	if executor := domain.WorkItemExecutor(strings.TrimSpace(string(a.Executor))); executor != "" && !executor.Valid() {
-		problems = append(problems, fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
-			a.Executor, namedWorkItemExecutors()))
+		if executor == domain.WorkItemExecutorConversation {
+			problems = append(problems, fmt.Errorf("executor %q does not say whose conversation carries the work, so nothing could name who holds it until somebody picked it up; name the role: %s",
+				a.Executor, namedWorkItemExecutors()))
+		} else {
+			problems = append(problems, fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
+				a.Executor, namedWorkItemExecutors()))
+		}
 	}
 	return problems
 }
@@ -534,6 +575,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(a.Decision) != "" {
 		carried = append(carried, "decision")
+	}
+	if strings.TrimSpace(a.Report) != "" {
+		carried = append(carried, "report")
 	}
 	return carried
 }
@@ -950,6 +994,8 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		outcome.applied("retired %s from the backlog without it being done", id)
 	case actionTriage:
 		s.carryOutTriage(ctx, outcome)
+	case actionHandle:
+		s.recordReportHandling(outcome)
 	default:
 		// Validation admits nothing else, so reaching this is a harness bug rather
 		// than a badly formed request; it is reported as a failure all the same.
