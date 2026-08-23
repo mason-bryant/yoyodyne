@@ -260,6 +260,9 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	var specifications strings.Builder
 	var omitted []string
 	var intent recordedIntent
+	// The references that are specifications, counted apart from the references
+	// themselves: a directory index is carried and is not one. See below.
+	stated := 0
 	bundle := Bundle{Bytes: reserved}
 	for _, specificationPath := range specificationPaths {
 		reference, err := readReference(root, specificationPath, maxBytes-bundle.Bytes)
@@ -273,7 +276,17 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 			}
 			return Bundle{}, err
 		}
-		section := fmt.Sprintf("\n## Specification: %s\n\n%s", reference.Path, reference.Content)
+		// A directory index arrives under a heading of its own rather than as a
+		// specification, because it is not one and saying so is cheaper than
+		// leaving the reader to notice. It is still carried: what is filed in a
+		// directory, and whose it is, is worth knowing to whoever is about to
+		// write the first document into it.
+		heading := "Specification"
+		index := directoryIndex(reference.Path)
+		if index {
+			heading = "Directory index"
+		}
+		section := fmt.Sprintf("\n## %s: %s\n\n%s", heading, reference.Path, reference.Content)
 		if !strings.HasSuffix(section, "\n") {
 			section += "\n"
 		}
@@ -285,8 +298,8 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		bundle.Bytes += len(section)
 		bundle.References = append(bundle.References, reference)
 		intent.add(reference)
-		// A directory index is not held to the shape a specification is held to.
-		// The artifact contract says so normatively — an index is ungoverned by
+		// An index is also not held to the shape a specification is held to. The
+		// artifact contract says so normatively — an index is ungoverned by
 		// design, and index documents are not malformed for lacking goals — and
 		// it follows from what an index is: it describes what is filed beside it
 		// and states no intent, which is the same reason artifact identity skips
@@ -297,9 +310,10 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		// rewritten to say what is filed there instead would be reported for
 		// stating none. Either way the report is about a file the contract was
 		// never written for.
-		if directoryIndex(reference.Path) {
+		if index {
 			continue
 		}
+		stated++
 		if reason := specificationStructureProblem(reference.Content); reason != "" {
 			bundle.SpecificationProblems = append(bundle.SpecificationProblems, SpecificationProblem{Path: reference.Path, Reason: reason})
 		}
@@ -309,7 +323,15 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// references are no longer only specifications and the question this answers
 	// — does this repository record any product intent at all — is still about
 	// the specifications alone.
-	bundle.SpecificationsIncluded = len(bundle.References)
+	//
+	// The indexes are counted out of it for that same question's sake. `yoyo
+	// init` writes one into the specifications directory and one into the goals
+	// directory beneath it, so a repository that has recorded nothing at all now
+	// has two Markdown files there; counting those as specifications would answer
+	// "does this product record any intent" with yes on every freshly configured
+	// project, and the conversation that opens by saying intent is not written
+	// down and asking what the product is for is exactly what that would lose.
+	bundle.SpecificationsIncluded = stated
 	if bundle.SpecificationsIncluded == 0 {
 		// Saying that intent is not written down is part of the context whether or
 		// not there was room for anything else, so it is charged before the
@@ -916,7 +938,15 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 				}
 				return "", nil, err
 			}
-			section := fmt.Sprintf("\n## %s: %s\n\n%s", set.Label, reference.Path, reference.Content)
+			// An index is labeled as one here for the reason it is above: it says
+			// what would be filed in the directory rather than being one of the
+			// documents the label names.
+			label := set.Label
+			index := directoryIndex(documentPath)
+			if index {
+				label = "Directory index"
+			}
+			section := fmt.Sprintf("\n## %s: %s\n\n%s", label, reference.Path, reference.Content)
 			if !strings.HasSuffix(section, "\n") {
 				section += "\n"
 			}
@@ -927,6 +957,14 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 			rendered.WriteString(section)
 			bundle.Bytes += len(section)
 			bundle.References = append(bundle.References, reference)
+			if index {
+				// An index is not one of this role's documents, so a home holding
+				// only the index `yoyo init` wrote has still recorded nothing and
+				// the role is told to treat it as unwritten. Counting it would tell
+				// an architect its designs are here on every freshly configured
+				// project, which is the one thing that note exists to prevent.
+				continue
+			}
 			// A directory whose documents were all carried by an earlier set, or
 			// were all too large to fit, has told the reader nothing, so it counts
 			// as found only where something of it actually arrived.

@@ -455,7 +455,10 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 and it is what the conversation is for. An empty or missing specifications
 directory is reported as "product intent is not written down", which is a true
 statement about the repository rather than an error, and the product manager
-says exactly that rather than inferring what your product must be about. Tell it
+says exactly that rather than inferring what your product must be about. The
+`README.md` that `yoyo init` writes there does not change that answer: an index
+says what would be filed in a directory and states no intent, so it is carried
+under a heading of its own and never counted as a specification. Tell it
 what you are building and it will draft the brief and the goals with you.
 
 It cannot save them. The product manager runs with no tools at all — it manages
@@ -650,7 +653,9 @@ reported the same way rather than treated as a product with no intent. A
 `README.md` is the one file the shape is not asked of: a directory index says
 what is filed beside it and states no intent of its own, which is the same reason
 artifact identity skips it, so there is no introduction for goals to serve and no
-goals to state.
+goals to state. It is carried into the conversation under a heading of its own
+and is not counted as a specification, so a directory holding nothing but the
+indexes `yoyo init` wrote is still a repository that has recorded no intent.
 
 The context also says outright what those specifications record of the two
 documents intent is written in — the brief saying what the product is and who it
@@ -2876,8 +2881,12 @@ What *does* change things is [`yoyo setup`](#getting-started), which is this
 command's other half: it walks the steps that reach the state described here,
 asking first, and then runs this diagnosis and takes its exit status from it. So
 a finding here is either something setup can offer to do — the tracker, the
-configuration, this project's Slack secrets — or something it deliberately
-leaves to you, which it hands over with the same command you see above.
+configuration, the index at the door of each artifact home, this project's Slack
+secrets — or something it deliberately
+leaves to you, which it hands over with the same command you see above. An index
+that is there and has stopped saying what is filed there is the one setup asks
+about twice: writing one that is missing loses nothing, and replacing one you
+wrote loses your prose, so that question defaults to no.
 
 The two checks worth calling out are the ones that catch an installation that
 was working and stopped. **A long-running sink is started from a binary that

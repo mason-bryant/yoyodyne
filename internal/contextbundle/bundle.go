@@ -76,7 +76,10 @@ type Bundle struct {
 	// which the references alone no longer answer: a role that reads its own
 	// documents as well has references whether or not the product records any
 	// intent at all, and "this repository has no brief or goals" is exactly the
-	// thing a caller must still be able to say.
+	// thing a caller must still be able to say. A directory index is carried as
+	// a reference and is not counted here for the same reason — it says what
+	// would be filed in a directory rather than stating any intent, and `yoyo
+	// init` writes one into a specifications directory that is otherwise empty.
 	SpecificationsIncluded int
 }
 

@@ -376,8 +376,10 @@ review is not a change anybody can trust.
 The directory is walked to any depth, and every `.md` file inside it is a
 specification, with one exception: a `README.md` is a directory index rather than
 a document stating anything, so neither the shape above nor
-[artifact identity](#artifact-identity-and-metadata) is asked of it. It is still
-read into the context, because what is filed in a directory is worth knowing.
+[artifact identity](#artifact-identity-and-metadata) is asked of it, and it is not
+counted as a specification. It is still read into the context, under a heading of
+its own, because what is filed in a directory is worth knowing to whoever is about
+to write the first document into it.
 Everything else has its prose checked for the introduction-then-goals shape
 above, and its identity — the frontmatter naming its id, kind, status, and what it
 supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
@@ -397,7 +399,10 @@ loading intent in the wrong shape and saying so.
 
 An empty or missing specifications directory is not an error either. The
 conversation says that product intent is not written down, which is a true
-statement about the repository rather than a reason to fail.
+statement about the repository rather than a reason to fail. A directory holding
+nothing but the indexes `yoyo init` wrote is that same directory: an index states
+no intent, so it is not counted as a specification and the conversation still
+says intent is not written down.
 
 The context also states, in so many words, what the directory records of the two
 documents intent is written in: the **brief** saying what the product is and who
