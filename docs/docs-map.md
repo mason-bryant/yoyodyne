@@ -332,6 +332,7 @@ convenience: it is what makes the frozen anchors above possible at all.
 |---|---|---|
 | `# Yoyodyne configuration` (opening, what owning defaults costs) | 24 | **stays** as the index opening, merged with the README's `## Configuring a project` |
 | `## Creating a project configuration` | 30 | `configuration/setup.md` |
+| `### When the repository ignores the configuration` | 30 | `configuration/setup.md` |
 | `### Where the tracker syncs` | 31 | `configuration/setup.md` |
 | `## Layout` | 95 | `configuration/setup.md` |
 | `## Discovery` | 23 | `configuration/setup.md` |
@@ -352,15 +353,28 @@ convenience: it is what makes the frozen anchors above possible at all.
 | `## Architectural invariants` | 62 | `configuration/goals.md` |
 | `## Checks` (+ `### What init proposes`, `### How long a check may take`) | 155 | `configuration/runs.md` |
 | `## Scheduling ready work` (+ `### Watching instead of draining`, `### When a configuration change takes effect`, `### Why each run says why it was there`) | 170 | `configuration/runs.md` |
+| `## How long one role may ask another` | 40 | `configuration/runs.md` |
 | `## Publishing through pull requests` (+ its three children) | 180 | `configuration/publishing.md` |
 | `## Losing a race for the target branch` | 41 | `configuration/publishing.md` |
-| `## Merge and removal semantics` (+ `### What fails closed`) | 84 | `configuration/publishing.md` |
+| `## Merge and removal semantics` (+ `### What fails closed`) | 92 | `configuration/setup.md` |
 | `## Waiting out a provider that refuses` | 116 | `configuration/recovery.md` |
 | `## Relaunching a run the provider killed` | 46 | `configuration/recovery.md` |
 | `## Triage thresholds` (+ `### What one work item has been given`) | 170 | `configuration/recovery.md` |
+| `## Provider accounts` | 38 | `configuration/agents.md` |
 | `## Operators` | 72 | `configuration/agents.md` |
 | `## Personas` | 43 | `configuration/agents.md` |
+| `## Research sources` | 60 | `configuration/agents.md` |
 | `## Reporting to Slack` (+ `### Avatars`) | 85 | `configuration/agents.md` |
+
+Five rows above were settled by yoyodyne-ifd.117 rather than by this map, and
+are recorded here so the map does not describe a split that did not happen.
+`## Merge and removal semantics` and `### What fails closed` describe how a
+project that uses `extends` combines with the bundle beneath it and what
+validation refuses — configuration layering, not the git merge that follows a
+promotion — so they go to `configuration/setup.md` beside `## Precedence` and
+`## Extending a built-in bundle`, which is also what makes that section's "the
+precedence and merge rules above" resolve. The other four are sections landed
+after this map was drafted and had no row at all.
 
 The index at `docs/configuration.md` carries, verbatim as headings so the slugs
 survive:
@@ -397,18 +411,25 @@ lands the last split document lands the list. The set stays explicit — this ma
 is the enumeration it needs, which is the argument for the map existing as a
 checked-in document rather than as a decision recorded in a conversation.
 
-**Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
-makes "every link resolves" its definition of done, and the only thing standing
-behind that today is a reviewer reading a diff — which is exactly the check that
-does not catch a silently-ignored fragment. This has already happened once at a
-much smaller scale: yoyodyne-ifd.54 records two README anchors left dead by a
-rename, found by hand afterwards and repaired by asking a later run to grep for
-the old names. This effort moves 22 README sections and 30 configuration
-sections at once, and 67 intra-document links with them. A link checker over the repository's Markdown — resolving both
-relative paths and fragments, and covering `.github/` — wired into `make check`
-is the durable form of the whole policy above, and it is what would let a
-reviewer verify the tables here instead of re-deriving them. It is named here
-and in the summary as work to admit, not queued.
+yoyodyne-ifd.117 landed half of that list: `docs/configuration.md` and the seven
+documents beneath it. The six the README split produced are deliberately still
+absent, because the README has not been trimmed to its index yet and carries
+between 74% and 97% of each of them. Naming both would spend a byte budget twice
+on one document and drop the guides below it, which is the failure above
+inverted rather than avoided. They belong in the set as the README is trimmed,
+and that is the trim's work rather than a follow-up of its own.
+
+**Nothing mechanically enforced that a fragment resolves, and now something
+does.** When this map was drafted the only thing standing behind
+yoyodyne-ifd.121.2's "every link resolves" was a reviewer reading a diff — which
+is exactly the check that does not catch a silently-ignored fragment, and
+yoyodyne-ifd.54 records two README anchors left dead by a rename and found by
+hand afterwards. `internal/doclink` has since landed and closes that gap: it
+resolves both relative paths and fragments across the repository's Markdown, and
+`TestThisRepositoryOwnDocumentationLinksResolve` runs it over this checkout
+under `make test`, which is one of this project's declared checks. The moved-anchor
+policy above is enforced rather than reviewed from here on, and a run executing
+this map can verify the tables instead of re-deriving them.
 
 ## What the architect is being asked
 

@@ -71,7 +71,7 @@ holding three questions gets one answer and loses the other two. It is a questio
 and not a gate. Nothing is blocked, nothing is written, later means later, and a
 repository whose goals are already written gets no such prompt. The asking is
 persona guidance, so a project that wants a different opening
-[replaces it](configuration.md#personas) like any other part of the
+[replaces it](configuration/agents.md#personas) like any other part of the
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
@@ -85,7 +85,7 @@ disagree, the product manager reports the conflict rather than settling it.
 Not the source, not the design document, and no way to run a command: those say
 how the product is built rather than what it is for or what it ships. The
 narrowing this partially undoes is described, with what it bought and what it
-cost, in the [configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+cost, in the [configuration guide](configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf. The first is the work tracker,
@@ -122,7 +122,7 @@ it on.** The role still has no network. What it has is the same arrangement it
 has with the tracker: it names a question and one of the sources you configured,
 the harness runs that source, and it hands back what came out. A source is a
 command you wrote — see
-[research sources](configuration.md#research-sources) — so what the harness may
+[research sources](configuration/agents.md#research-sources) — so what the harness may
 reach is exactly what you named and nothing else. Only the question leaves your
 machine, redacted and bounded on the way out; a project that configured no source
 has the capability off, and the product manager is told so and says it could not
@@ -152,7 +152,7 @@ claims: one is what it says it read, the other is what was fetched.
 one admits no work, changes no document, and approves nothing. Everything it
 might lead to already has a path with an approval on it and none of those paths
 runs through here: work reaches the queue as a proposal, under whatever approval
-[your project asks for](configuration.md#what-reaches-the-queue); a change to the
+[your project asks for](configuration/goals.md#what-reaches-the-queue); a change to the
 brief or the goals is yours to make; a change to a design or a decision record is
 the architect's, through `yoyo amendment`. That separation is the point. Research
 that could quietly turn an idea into approved work would be a way to approve work
@@ -200,7 +200,7 @@ and what could not be read is said.
 
 The product manager can propose a Beads work item instead of creating one, when
 the decision is yours rather than its. What becomes of a proposal is
-[`approvals.work_items`](configuration.md#what-reaches-the-queue) to decide,
+[`approvals.work_items`](configuration/goals.md#what-reaches-the-queue) to decide,
 and until you say otherwise every one of them is put to you: shown as a numbered
 card with its reasoning, and created only after an answer that approves it by
 name. A proposal you left undecided is named when the conversation ends, and a
@@ -242,7 +242,7 @@ it was, because an item claiming an approval you never gave is the one record
 this arrangement cannot afford.
 
 **Or keep the gate and carve one class out of it.**
-[`approvals.work_item_exemptions`](configuration.md#what-reaches-the-queue)
+[`approvals.work_item_exemptions`](configuration/goals.md#what-reaches-the-queue)
 lists classes of work the per-item gate is not asking about, and there is one:
 `diagnosis`, work that only reads what is already there and produces findings
 rather than a change. It is empty until you write it, the product manager is told
@@ -305,7 +305,7 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself where [`approvals.work_items`](configuration.md#what-reaches-the-queue)
+itself where [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)
 lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
@@ -662,7 +662,7 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
@@ -754,7 +754,7 @@ round of it, and the asking role then either asks again in the same thread or
 closes it with what it took from the exchange. Closing is the ordinary ending.
 
 **Every exchange is opened with a hard limit on rounds**, which is
-[`exchange.max_rounds`](configuration.md#how-long-one-role-may-ask-another) and defaults
+[`exchange.max_rounds`](configuration/runs.md#how-long-one-role-may-ask-another) and defaults
 to ten. The limit is copied onto the exchange as it opens and is durable with it,
 so neither a process dying nor an edit to the configuration lengthens a thread
 that is already running long. Reaching it is not a silent cutoff: the exchange
@@ -816,7 +816,7 @@ a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
 escalating instead. A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
-[review-round cap](configuration.md#what-one-work-item-has-been-given) even
+[review-round cap](configuration/recovery.md#what-one-work-item-has-been-given) even
 the first is refused. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
@@ -892,7 +892,7 @@ Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
 special carries it, deliberately: notes are not evidence for a [protected-path
-grant](configuration.md#protected-paths-in-a-developers-change), so
+grant](configuration/artifacts.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 

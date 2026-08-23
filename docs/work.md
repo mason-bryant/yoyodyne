@@ -27,7 +27,7 @@ uses. An item grants an exception in its own text, on a line beginning
 rather than discovered in a diff. A grant admits the path and decides nothing
 about what goes into it, so the reviewer is told to read the item for the decided
 change behind each grant and to raise a finding when none is named.
-[Configuration](configuration.md#protected-paths-in-a-developers-change)
+[Configuration](configuration/artifacts.md#protected-paths-in-a-developers-change)
 has the details.
 
 Then the configured checks run in that worktree, and an independent reviewer —
@@ -199,7 +199,7 @@ The configuration is re-read before every pull for the same reason: a capacity
 you raise or a priority you reorder while a pass is running is picked up the next
 time it chooses something, rather than at the next restart. Runs already in
 flight keep the configuration they started under.
-[Configuration](configuration.md#scheduling-ready-work) has the rest.
+[Configuration](configuration/runs.md#scheduling-ready-work) has the rest.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
@@ -414,4 +414,4 @@ than imply one another. Publishing with `integration: human` opens the pull
 request and stops: nothing is merged, the run branch survives on the remote, and
 the worktree is preserved for you — which is what a `human` integration policy
 means. See the
-[configuration guide](configuration.md#publishing-through-pull-requests).
+[configuration guide](configuration/publishing.md#publishing-through-pull-requests).

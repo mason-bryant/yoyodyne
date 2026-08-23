@@ -485,7 +485,7 @@ there as well.
 
 A **round** is a reviewer verdict a developer attempt produced, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](configuration.md#losing-a-race-for-the-target-branch)
+promotion that [loses its race](configuration/publishing.md#losing-a-race-for-the-target-branch)
 and gets a fresh verdict on the replayed change is not charged for it. Rounds are
 what runs actually spend, and every run records them.
 
@@ -500,7 +500,7 @@ remain — and a merge re-arm is bounded on its own because it buys no round at
 all. The rounds alone would bound neither of the first two on an item whose runs
 keep stopping before a reviewer ever sees them. The
 numbers are the `triage` keys and the integration retries in [the configuration
-guide](configuration.md#what-one-work-item-has-been-given). An item triage
+guide](configuration/recovery.md#what-one-work-item-has-been-given). An item triage
 has spent more than one pass on says so in the first line, which is the fact
 worth looking for: work that keeps coming back is usually work where something
 other than the change is wrong.

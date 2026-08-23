@@ -311,7 +311,7 @@ worth knowing: the tracker's history counts against your repository's size like
 any other history, and what it pushes — `refs/dolt/data` and a
 `__dolt_remote_info__` branch — is carried without complaint by GitHub but is
 worth checking on a forge that restricts which refs it accepts. See
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration/setup.md#where-the-tracker-syncs).
 
 **Then review the checks it proposed.** Your repository already announces what
 it is built with, so `init` reads that and writes the commands that follow from
@@ -353,7 +353,7 @@ wrapper. Each says which it is and why.
 Taking any of them costs a character: delete its leading `#`. A repository that
 announces nothing keeps `checks: []` and the commented examples for Go,
 TypeScript, Python, and Java that have always been there; the
-[configuration guide](docs/configuration.md#checks) has the same examples with
+[configuration guide](docs/configuration/runs.md#checks) has the same examples with
 the reasoning.
 
 Each entry runs through `/bin/sh -c` in the run's worktree. A check must be
@@ -365,7 +365,7 @@ Each check also gets a wall-clock budget, `execution.check_timeout`, thirty
 minutes by default. Raise it as your suite grows, and raise it again if you run
 several developers at once: concurrent runs share the machine, so each suite's
 wall clock grows without its work doing so. See
-[How long a check may take](docs/configuration.md#how-long-a-check-may-take).
+[How long a check may take](docs/configuration/runs.md#how-long-a-check-may-take).
 
 **Then validate what you wrote:**
 
@@ -389,7 +389,7 @@ warning names the rule and does not fail the command. If the repository is not
 yours to commit tool config to, that is a real case rather than a mistake: keep
 the configuration outside it and pass `--config`, and exclude it in
 `.git/info/exclude` rather than in a tracked `.gitignore`. See
-[When the repository ignores the configuration](docs/configuration.md#when-the-repository-ignores-the-configuration).
+[When the repository ignores the configuration](docs/configuration/setup.md#when-the-repository-ignores-the-configuration).
 
 **Then check the whole installation, not only the file:**
 
@@ -504,7 +504,7 @@ approvals:
   that is the method the harness asks for.
 
 [How work flows once you approve it](#how-work-flows-once-you-approve-it) has
-the full behavior, and the [configuration guide](docs/configuration.md#publishing-through-pull-requests)
+the full behavior, and the [configuration guide](docs/configuration/publishing.md#publishing-through-pull-requests)
 has the table of what each combination produces.
 
 ### Working on yoyo itself
@@ -627,7 +627,7 @@ holding three questions gets one answer and loses the other two. It is a questio
 and not a gate. Nothing is blocked, nothing is written, later means later, and a
 repository whose goals are already written gets no such prompt. The asking is
 persona guidance, so a project that wants a different opening
-[replaces it](docs/configuration.md#personas) like any other part of the
+[replaces it](docs/configuration/agents.md#personas) like any other part of the
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
@@ -641,7 +641,7 @@ disagree, the product manager reports the conflict rather than settling it.
 Not the source, not the design document, and no way to run a command: those say
 how the product is built rather than what it is for or what it ships. The
 narrowing this partially undoes is described, with what it bought and what it
-cost, in the [configuration guide](docs/configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+cost, in the [configuration guide](docs/configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
 It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf. The first is the work tracker,
@@ -678,7 +678,7 @@ it on.** The role still has no network. What it has is the same arrangement it
 has with the tracker: it names a question and one of the sources you configured,
 the harness runs that source, and it hands back what came out. A source is a
 command you wrote — see
-[research sources](docs/configuration.md#research-sources) — so what the harness may
+[research sources](docs/configuration/agents.md#research-sources) — so what the harness may
 reach is exactly what you named and nothing else. Only the question leaves your
 machine, redacted and bounded on the way out; a project that configured no source
 has the capability off, and the product manager is told so and says it could not
@@ -708,7 +708,7 @@ claims: one is what it says it read, the other is what was fetched.
 one admits no work, changes no document, and approves nothing. Everything it
 might lead to already has a path with an approval on it and none of those paths
 runs through here: work reaches the queue as a proposal, under whatever approval
-[your project asks for](docs/configuration.md#what-reaches-the-queue); a change to the
+[your project asks for](docs/configuration/goals.md#what-reaches-the-queue); a change to the
 brief or the goals is yours to make; a change to a design or a decision record is
 the architect's, through `yoyo amendment`. That separation is the point. Research
 that could quietly turn an idea into approved work would be a way to approve work
@@ -756,7 +756,7 @@ and what could not be read is said.
 
 The product manager can propose a Beads work item instead of creating one, when
 the decision is yours rather than its. What becomes of a proposal is
-[`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to decide,
+[`approvals.work_items`](docs/configuration/goals.md#what-reaches-the-queue) to decide,
 and until you say otherwise every one of them is put to you: shown as a numbered
 card with its reasoning, and created only after an answer that approves it by
 name. A proposal you left undecided is named when the conversation ends, and a
@@ -798,7 +798,7 @@ it was, because an item claiming an approval you never gave is the one record
 this arrangement cannot afford.
 
 **Or keep the gate and carve one class out of it.**
-[`approvals.work_item_exemptions`](docs/configuration.md#what-reaches-the-queue)
+[`approvals.work_item_exemptions`](docs/configuration/goals.md#what-reaches-the-queue)
 lists classes of work the per-item gate is not asking about, and there is one:
 `diagnosis`, work that only reads what is already there and produces findings
 rather than a change. It is empty until you write it, the product manager is told
@@ -861,7 +861,7 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself where [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)
+itself where [`approvals.work_items`](docs/configuration/goals.md#what-reaches-the-queue)
 lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
@@ -1333,7 +1333,7 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](docs/configuration/goals.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
@@ -1425,7 +1425,7 @@ round of it, and the asking role then either asks again in the same thread or
 closes it with what it took from the exchange. Closing is the ordinary ending.
 
 **Every exchange is opened with a hard limit on rounds**, which is
-[`exchange.max_rounds`](docs/configuration.md#how-long-one-role-may-ask-another) and defaults
+[`exchange.max_rounds`](docs/configuration/runs.md#how-long-one-role-may-ask-another) and defaults
 to ten. The limit is copied onto the exchange as it opens and is durable with it,
 so neither a process dying nor an edit to the configuration lengthens a thread
 that is already running long. Reaching it is not a silent cutoff: the exchange
@@ -1503,7 +1503,7 @@ a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
 escalating instead. A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
-[review-round cap](docs/configuration.md#what-one-work-item-has-been-given) even
+[review-round cap](docs/configuration/recovery.md#what-one-work-item-has-been-given) even
 the first is refused. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
@@ -1579,7 +1579,7 @@ Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
 special carries it, deliberately: notes are not evidence for a [protected-path
-grant](docs/configuration.md#protected-paths-in-a-developers-change), so
+grant](docs/configuration/artifacts.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
@@ -1973,7 +1973,7 @@ uses. An item grants an exception in its own text, on a line beginning
 rather than discovered in a diff. A grant admits the path and decides nothing
 about what goes into it, so the reviewer is told to read the item for the decided
 change behind each grant and to raise a finding when none is named.
-[Configuration](docs/configuration.md#protected-paths-in-a-developers-change)
+[Configuration](docs/configuration/artifacts.md#protected-paths-in-a-developers-change)
 has the details.
 
 Then the configured checks run in that worktree, and an independent reviewer —
@@ -2106,7 +2106,7 @@ The configuration is re-read before every pull for the same reason: a capacity
 you raise or a priority you reorder while a pass is running is picked up the next
 time it chooses something, rather than at the next restart. Runs already in
 flight keep the configuration they started under.
-[Configuration](docs/configuration.md#scheduling-ready-work) has the rest.
+[Configuration](docs/configuration/runs.md#scheduling-ready-work) has the rest.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
@@ -2321,7 +2321,7 @@ than imply one another. Publishing with `integration: human` opens the pull
 request and stops: nothing is merged, the run branch survives on the remote, and
 the worktree is preserved for you — which is what a `human` integration policy
 means. See the
-[configuration guide](docs/configuration.md#publishing-through-pull-requests).
+[configuration guide](docs/configuration/publishing.md#publishing-through-pull-requests).
 
 ## Configuring a project
 
@@ -2345,7 +2345,7 @@ repository id follow from it. Editing a field is the whole of what changes the
 harness's behavior. `init` also points the tracker at a remote so the backlog is
 shared rather than per-machine — this project's Git remote by default, or the
 URL `--tracker-remote` names; see
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration/setup.md#where-the-tracker-syncs).
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated
@@ -2474,9 +2474,10 @@ Two things are true of both, and the second is the point rather than a cost:
   reports that it found none. In this scenario that is the intent: the
   configuration belongs to you and not to a repository you are a guest in.
 
-See the [configuration guide](docs/configuration.md) for the full layout, the
-`init` flags, precedence, merge and removal semantics, persona rules, extending
-a bundle, and migration from `.yoyodyne.yaml`.
+See [writing a project configuration](docs/configuration/setup.md) for the full
+layout, the `init` flags, precedence, merge and removal semantics, extending a
+bundle, and migration from `.yoyodyne.yaml`; persona rules are in
+[configuring agents](docs/configuration/agents.md#personas).
 
 ## Artifact identity
 
@@ -2516,14 +2517,14 @@ unapproved document still loads, still governs what is downstream of it, and
 stops nothing that reads it, and approving writes nothing but the approval — the
 document itself stays the owning role's to change. What your approval of the
 goals decides is whether work serving them is admitted without asking you, which
-is [`approvals.work_items`](docs/configuration.md#what-reaches-the-queue) to say:
+is [`approvals.work_items`](docs/configuration/goals.md#what-reaches-the-queue) to say:
 it is `human` until you set it otherwise, and every item is put to you. Set it to
 `automatic` and your approval of the goals document is what lets work serving
 those goals into the queue — so a goals document nobody approved, and one amended
 since you approved it, are documents nothing is admitted under. Everywhere else
 an amendment after approval changes what is reported about a document rather than
 what is allowed. The
-[configuration guide](docs/configuration.md#approving-a-document) has the schema
+[configuration guide](docs/configuration/artifacts.md#approving-a-document) has the schema
 and what is refused.
 
 A document in one of those directories with no usable identity is named on
@@ -2557,7 +2558,7 @@ brief is reported as an orphan. Neither refuses the document — a broken
 relationship is a name to correct, not a reason to lose what somebody wrote. The
 brief is the root and a decision record is not downstream of intent, so neither
 is asked to support anything. The
-[configuration guide](docs/configuration.md#traceability-references-and-orphans)
+[configuration guide](docs/configuration/goals.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
 ## Goals, and what work serves them
@@ -3237,7 +3238,7 @@ there as well.
 
 A **round** is a reviewer verdict a developer attempt produced, counted across
 every run of the item. A re-review no developer attempt produced is not one, so a
-promotion that [loses its race](docs/configuration.md#losing-a-race-for-the-target-branch)
+promotion that [loses its race](docs/configuration/publishing.md#losing-a-race-for-the-target-branch)
 and gets a fresh verdict on the replayed change is not charged for it. Rounds are
 what runs actually spend, and every run records them.
 
@@ -3252,7 +3253,7 @@ remain — and a merge re-arm is bounded on its own because it buys no round at
 all. The rounds alone would bound neither of the first two on an item whose runs
 keep stopping before a reviewer ever sees them. The
 numbers are the `triage` keys and the integration retries in [the configuration
-guide](docs/configuration.md#what-one-work-item-has-been-given). An item triage
+guide](docs/configuration/recovery.md#what-one-work-item-has-been-given). An item triage
 has spent more than one pass on says so in the first line, which is the fact
 worth looking for: work that keeps coming back is usually work where something
 other than the change is wrong.
@@ -3440,7 +3441,7 @@ the kinds that pause the work, and `resolve <id> <how>` lifts one. Every reply i
 answered in its thread with what was recorded or why nothing was.
 
 Who may do it is not configured beside the channel: it is derived from the humans
-[`operators`](docs/configuration.md#operators) grants `direct-work` who have
+[`operators`](docs/configuration/agents.md#operators) grants `direct-work` who have
 bound a `slack_member_id`, and nobody else — so a project that has granted nobody
 is steered by nobody, which is what a workspace gets until you add yourself.
 
@@ -3453,9 +3454,10 @@ is steered by nobody, which is what a workspace gets until you add yourself.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.
-- [The configuration guide](docs/configuration.md) — the full configuration
-  reference: layout, discovery, precedence, checks, publishing, personas,
-  inheritance, and inspection.
+- [The configuration guide](docs/configuration.md) — the index to the
+  configuration reference, split by what you are configuring: writing a
+  configuration, artifact homes, admission, checks and scheduling, publishing,
+  triage thresholds, and agents.
 - [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
   reporting in threads, with the app manifest checked in beside it.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what

@@ -161,7 +161,7 @@ for, so neither costs a reinstall. **The names are not configurable** — only t
 picture is: who speaks is a claim about who did the work, and that stays the
 harness's to make. The product each name carries is not a choice either; it is
 read from `product.id`.
-[`docs/configuration.md`](../configuration.md#avatars) has the whole of it.
+[`docs/configuration.md`](../configuration/agents.md#avatars) has the whole of it.
 
 Who may steer the harness from a thread is not part of this block. It comes from
 the top-level `operators` mapping, which is where the project says which humans
@@ -182,7 +182,7 @@ a member id, and nobody else. Until somebody is on it, every reply is answered
 saying it was not acted on, which is what a workspace gets by default. The member
 id lives in the configuration rather than in the environment because it is
 identity rather than a secret.
-[`docs/configuration.md`](../configuration.md#operators) has the rest of the
+[`docs/configuration.md`](../configuration/agents.md#operators) has the rest of the
 mapping, including the other grant and the namespaces you can bind.
 
 > **Moved:** this used to be `operators` *inside* the `slack` block. It is not
