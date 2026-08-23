@@ -1,15 +1,16 @@
 package cli
 
-// The tests here hold the release verb — scripts/cut-release.sh — to two things
-// the Go checks could not otherwise see.
+// The tests here hold the release path — scripts/cut-release.sh, and the notes
+// it is gated on — to three things the Go checks could not otherwise see.
 //
 // The verb is shell, so until this file nothing in `make check` executed it: its
 // own suite ran only as a separate CI step, and a separate step is something
 // somebody reads a red X on a day later than the one they broke it. The first
-// test runs that suite from here, so the verb is exercised by the same `make
-// test` as everything else, on the machine of whoever changed it.
+// two tests run those suites from here, so every line of the release path is
+// exercised by the same `make test` as everything else, on the machine of
+// whoever changed it.
 //
-// The second holds the verb's list of the tracker's derived exports to the list
+// The third holds the verb's list of the tracker's derived exports to the list
 // a run declares, in the one direction the two actually imply. They answer
 // different questions — what a release cut may commit on the operator's behalf,
 // and what a run may tolerate the primary checkout acquiring — and it is the
@@ -28,6 +29,12 @@ import (
 // refusal against them, so it needs no network, no provider, and no
 // cross-compile — which is what makes it cheap enough to run from here.
 const cutReleaseTestPath = "../../scripts/cut-release-test.sh"
+
+// releaseNotesTestPath is the notes writer's own suite, and the release page
+// body composer's with it. It fabricates a scratch repository and a stub
+// tracker, so this repository's real history and real tracker are never read —
+// which is what makes its assertions about a range stable enough to run here.
+const releaseNotesTestPath = "../../scripts/release-notes-test.sh"
 
 // cutReleaseScriptPath is the verb itself.
 const cutReleaseScriptPath = "../../scripts/cut-release.sh"
@@ -62,6 +69,26 @@ func TestTheReleaseVerbRefusesWhatItShould(t *testing.T) {
 	report, err := suite.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s did not pass (%v):\n%s", cutReleaseTestPath, err, report)
+	}
+}
+
+// TestAReleasesNotesSayWhatLanded runs the notes writer's suite. The cut is
+// gated on a notes file existing; what that file says is this suite's claim,
+// and none of it is Go — so without this the placement rule, the section order,
+// and the body the release page is published with would be exercised by a CI
+// step alone, and first executed for real during a publication.
+func TestAReleasesNotesSayWhatLanded(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"bash", "git", "python3"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s needs %s, which is not on PATH", releaseNotesTestPath, tool)
+		}
+	}
+	suite := exec.Command("bash", releaseNotesTestPath)
+	report, err := suite.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s did not pass (%v):\n%s", releaseNotesTestPath, err, report)
 	}
 }
 
