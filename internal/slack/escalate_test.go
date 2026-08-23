@@ -110,6 +110,74 @@ func TestTheAnswerInTheDirectThreadIsTheDecision(t *testing.T) {
 	}
 }
 
+// The one ask whose options end the state themselves. The other two are ended by
+// an act the harness may not perform for the operator, so their options name the
+// command; a directive nobody has settled is ended by resolving it, which is
+// already something a reply may do. So answering settles it, the work it stopped
+// picks up, and the ask does not come back an hour later at somebody who believes
+// they answered it — which is the noise the whole tier's discipline exists to
+// prevent.
+func TestAnsweringADirectiveAskSettlesItAndTheAskStops(t *testing.T) {
+	t.Parallel()
+
+	feed := &stoppedFeed{}
+	sink, directives, posts := newSteeringSinkWithFeed(t, feed, testOperator)
+	paused := pausingDirective(t, directives)
+	reading := &HarnessFeed{Directives: directives}
+	feed.delivery = directiveDelivery(t, reading, time.Now())
+	if err := sink.Once(context.Background()); err != nil {
+		t.Fatalf("Once() error = %v", err)
+	}
+	alarm := posts.timestamps[0]
+
+	// The letter alone is not an answer, for the reason the command line gives:
+	// the work resumes on the answer rather than on the act of answering.
+	sink.steering.handle(context.Background(), answerIn(directChannel(testOperator), testOperator,
+		"a", "1750000011.000100", alarm))
+	held, err := directives.Load(paused)
+	if err != nil || !held.Pauses() {
+		t.Fatalf("directive = %+v (err %v), want it still holding the work", held, err)
+	}
+	if refusal := posts.requests[len(posts.requests)-1]; !strings.Contains(refusal.Text, "rather than on the act of answering") {
+		t.Fatalf("refusal = %q, want it to say what a bare letter is missing", refusal.Text)
+	}
+
+	sink.steering.handle(context.Background(), answerIn(directChannel(testOperator), testOperator,
+		"a — the second one, and say so in the design", "1750000011.000200", alarm))
+
+	settled, err := directives.Load(paused)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() || settled.Pauses() {
+		t.Fatalf("directive = %+v, want the answer to have settled it rather than left it standing", settled)
+	}
+	if letter, chose := directive.Decided(settled.Resolution); !chose || letter != "a" {
+		t.Fatalf("resolution %q records %q (%t), want the option that was chosen", settled.Resolution, letter, chose)
+	}
+	if !strings.Contains(settled.Resolution, "the second one, and say so in the design") {
+		t.Fatalf("resolution = %q, want what the operator actually answered", settled.Resolution)
+	}
+	// Nothing was written beside it: the answer settled the directive rather than
+	// leaving a second one for somebody else to settle.
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 1 {
+		t.Fatalf("recorded = %+v, want the one directive, settled", recorded)
+	}
+	if receipt := posts.requests[len(posts.requests)-1]; !strings.Contains(receipt.Text, paused) ||
+		!strings.Contains(receipt.Text, "the second one, and say so in the design") {
+		t.Fatalf("receipt = %q, want it to say which directive was settled and how", receipt.Text)
+	}
+
+	// And the state is gone, so the follow-up an hour later has nothing to say.
+	if _, found, err := reading.directiveStoppage(); err != nil || found {
+		t.Fatalf("directiveStoppage() found %t (err %v), want the ask to stop once it has been answered", found, err)
+	}
+}
+
 // An answer that names no option is refused, visibly and with the letters in it.
 // The person reading the refusal is in a chat client rather than looking at the
 // message they were answering.
@@ -433,6 +501,51 @@ func brakeDelivery(t *testing.T, at time.Time) Delivery {
 		Notification: notify.FromEscalation(stopped.Escalation, now),
 		InThread:     notify.EscalationOptions(stopped.Escalation, now),
 	}
+}
+
+// directiveDelivery is the real derivation of a directive nobody has settled,
+// read from the same record the sink's own answer path writes back to.
+func directiveDelivery(t *testing.T, reading *HarnessFeed, now time.Time) Delivery {
+	t.Helper()
+	stopped, found, err := reading.directiveStoppage()
+	if err != nil {
+		t.Fatalf("directiveStoppage() error = %v", err)
+	}
+	if !found {
+		t.Fatal("a directive nobody has settled is not a stopped system, which is what this tier is for")
+	}
+	return Delivery{
+		Stream:       escalationStream,
+		Cursor:       Cursor{Standing: stopped.mark, Said: now},
+		Direct:       true,
+		Telling:      telling(stopped, now, DefaultFollowUp),
+		Notification: notify.FromEscalation(stopped.Escalation, now),
+		InThread:     notify.EscalationOptions(stopped.Escalation, now),
+	}
+}
+
+// pausingDirective is one directive nobody has settled, in the record the sink
+// both reads the state from and writes the answer back to.
+func pausingDirective(t *testing.T, directives *runstate.DirectiveStore) string {
+	t.Helper()
+	id, err := directive.NewID()
+	if err != nil {
+		t.Fatalf("NewID() error = %v", err)
+	}
+	if err := directives.Record(directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            id,
+		ProductID:     testProduct,
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    time.Now().Add(-2 * time.Hour),
+		Text:          "which of the two publishing behaviours did you mean",
+		Unresolved:    "which of the two publishing behaviours was meant",
+		Scope:         []string{testItem},
+	}); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	return id
 }
 
 // answerIn is one person replying in the thread under a direct message this sink

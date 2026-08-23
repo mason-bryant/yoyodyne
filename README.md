@@ -3457,9 +3457,12 @@ project granted `direct-work`: the brake tripped, capacity gone past the point o
 waiting it out, and a directive nobody has settled. Each says what stopped, why it
 is yours, whose move follows, and where the record is, with the options and a
 recommendation in the thread under it — and **the reply in that thread is the
-decision**, recorded as a directive against the option it names. A single blocked
-item is deliberately not one of these: it has an owner, and messaging everybody
-about each of those is how a channel stops being read.
+decision**, recorded against the option it names in the same record `yoyo
+directive record` writes. Where the ask is about a directive nobody has settled,
+answering settles that one, so the work it stopped picks up and the ask does not
+come back. A single blocked item is deliberately not one of these: it has an
+owner, and messaging everybody about each of those is how a channel stops being
+read.
 
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest

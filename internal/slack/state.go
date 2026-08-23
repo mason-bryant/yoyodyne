@@ -195,8 +195,11 @@ type Direct struct {
 	// ask nobody can answer.
 	Asked bool `json:"asked,omitempty"`
 	// Options is what this message offered, in the order it offered them, because
-	// the letters a reply names are positions in exactly this list.
-	Options []string `json:"options,omitempty"`
+	// the letters a reply names are positions in exactly this list. Each carries
+	// what choosing it does as well as what it said, so an answer that arrives
+	// hours later does what the message promised rather than what the sink can
+	// work out afresh.
+	Options []notify.Option `json:"options,omitempty"`
 	// Topic is what the escalation was about, as a topic key. It is what a decision
 	// recorded from the reply is scoped to: the item where one item is stopped, and
 	// the whole line where the line is.

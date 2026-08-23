@@ -639,12 +639,12 @@ choosing:
 b — leave it held until I've read what the brake caught
 ```
 
-That reply **is** the decision. It is recorded as a directive in the same record
+That reply **is** the decision. It goes into the same record
 [`yoyo directive record`](../conversation.md#directives-and-the-work-they-pause)
-writes and every run consults, and it is recorded against **which option you
-chose** rather than as the sentence you typed — so what the receipt says, and what
-a role reads afterwards, is the decision rather than something to interpret. The
-words after the letter are kept beside it.
+writes and every run consults, against **which option you chose** rather than as
+the sentence you typed — so what the receipt says, and what a role reads
+afterwards, is the decision rather than something to interpret. The words after
+the letter are kept beside it.
 
 The letter is required, and a reply without one is answered saying so and naming
 the letters. That is not pedantry: an ask answered with prose is a decision nobody
@@ -652,20 +652,30 @@ can name later, which is the thing the options exist to prevent. The last option
 is always *something else, or you want more of the record first* — that is where
 prose belongs, and choosing it records that you have not decided yet.
 
-Three things about it are worth knowing:
+Four things about it are worth knowing:
 
 - **It records the decision; it does not work the machine.** Choosing "release
   intake" writes down that intake should be released, where every role reads it;
   `yoyo release` is still what releases it, and the option says so. Directives
   move intent and commands move the machine, and the machine is not driven from a
   chat workspace.
+- **The exception is the ask about a directive, and it is not really one.** That
+  state is not ended by a command at all — it is ended by *resolving* the
+  directive, which is already something a reply may do from a thread. So choosing
+  to settle or withdraw one settles it, exactly as
+  [`yoyo directive resolve`](../conversation.md#directives-and-the-work-they-pause)
+  would, and the work it stopped picks up from where it stopped. Those two
+  options need your answer after the letter, for the reason the command line
+  needs one — the work resumes on the answer rather than on the act of answering
+  — and a bare letter is refused saying so.
 - **The identity check is the channel's.** An answer from somebody without
   `direct-work`, or from somebody the ask was not put to, is answered saying it
   was not acted on. Nothing else in the workspace can reach the record.
-- **Releasing cancels the follow-ups.** A state that is still stopped is said
-  again every `--heartbeat` while it stands. The moment it clears — the hold
-  released, the provider serving, the directive settled — nothing more is sent,
-  and nothing announces the clearing either: the channel already carries that.
+- **Answering, or clearing it yourself, cancels the follow-ups.** A state that is
+  still stopped is said again every `--heartbeat` while it stands. The moment it
+  clears — the hold released, the provider serving, the directive settled by your
+  answer or from the terminal — nothing more is sent, and nothing announces the
+  clearing either: the channel already carries that.
 
 ## Coming back from a long gap
 

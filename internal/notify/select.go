@@ -348,12 +348,12 @@ type Escalation struct {
 	// the one that keeps the message an index into the durable account rather than
 	// a replacement for it.
 	Record string
-	// Options is what may be decided, in the order they are offered and in terms
-	// somebody who is not reading the code can choose between. The last of them is
-	// always the one that is not a decision — something else, or not enough
-	// information yet — because an ask with no way out other than the two the
-	// harness thought of is an ask that collects wrong answers.
-	Options []string
+	// Options is what may be decided, in the order they are offered, each saying
+	// what choosing it does as well as what it is. The last of them is always the
+	// one that is not a decision — something else, or not enough information yet —
+	// because an ask with no way out other than the two the harness thought of is
+	// an ask that collects wrong answers.
+	Options []Option
 	// Recommendation is which of them the record supports, and why.
 	Recommendation string
 	// Topic is what this is about: the item where one item is stopped, and the

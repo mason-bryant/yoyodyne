@@ -338,10 +338,11 @@ person -- the brake tripped, capacity gone past the point of waiting it out, or 
 directive nobody has settled -- every human this project granted direct-work with
 a bound Slack member id is messaged directly, with what stopped, why it is theirs,
 and where the record is, and the options and a recommendation in the thread under
-it. The reply in that thread is the decision, recorded as a directive against the
-option it names. A single blocked item is deliberately not one of these: it has an
-owner, and messaging everybody about each of those is how a channel stops being
-read.
+it. The reply in that thread is the decision, recorded against the option it names
+in the same directive record every run consults; where the ask is about a
+directive nobody has settled, answering settles that one and the work it stopped
+picks up. A single blocked item is deliberately not one of these: it has an owner,
+and messaging everybody about each of those is how a channel stops being read.
 
 It needs both tokens in its own environment and takes them from nowhere else:
 

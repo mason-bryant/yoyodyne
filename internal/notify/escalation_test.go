@@ -18,7 +18,7 @@ func TestAnEscalationCarriesTheBlockedOutcomeAndTheDecision(t *testing.T) {
 		Why:            "intake is released by a person and by nobody else",
 		Since:          moment.Add(-10 * time.Hour),
 		Record:         "`yoyo status`",
-		Options:        []string{"release intake", "keep it held", "something else"},
+		Options:        []Option{{Text: "release intake"}, {Text: "keep it held"}, {Text: "something else"}},
 		Recommendation: "(b) until you have read what it was held for",
 		Topic:          Product(),
 	}
@@ -56,16 +56,20 @@ func TestAnEscalationCarriesTheBlockedOutcomeAndTheDecision(t *testing.T) {
 
 // The letters are how a decision is named, so the two halves of the lettering
 // have to agree: what a message offered under a letter is what a reply naming
-// that letter chose.
+// that letter chose — its words, and what choosing it does.
 func TestALetterNamesExactlyTheOptionItWasOfferedUnder(t *testing.T) {
-	options := []string{"release intake", "keep it held", "something else"}
+	options := []Option{
+		{Text: "settle it", Settles: "directive-3f2a"},
+		{Text: "keep it held"},
+		{Text: "something else"},
+	}
 	for index, wanted := range options {
 		letter := OptionLetter(index)
 		if letter == "" {
 			t.Fatalf("option %d is offered under no letter", index)
 		}
 		if got, named := OptionAt(options, letter); !named || got != wanted {
-			t.Fatalf("(%s) names %q (found %t), want %q", letter, got, named, wanted)
+			t.Fatalf("(%s) names %+v (found %t), want %+v", letter, got, named, wanted)
 		}
 	}
 	// A letter nothing was offered under names nothing, rather than the nearest

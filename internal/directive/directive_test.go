@@ -10,6 +10,34 @@ import (
 
 var recordedAt = time.Date(2026, 8, 18, 9, 0, 0, 0, time.UTC)
 
+// What was decided has to survive as the decision rather than as a sentence
+// somebody has to interpret, so the two halves of the contract are written and
+// read here rather than by whichever surface put the question.
+func TestADecisionRecordsWhichOptionWasChosen(t *testing.T) {
+	t.Parallel()
+
+	decided := Decision("b", "keep it held until what stopped it is dealt with", "I want to read what the brake caught")
+	letter, chose := Decided(decided)
+	if !chose || letter != "b" {
+		t.Fatalf("Decided(%q) = %q, %t; want the letter that was chosen", decided, letter, chose)
+	}
+	for _, kept := range []string{"keep it held until what stopped it is dealt with", "I want to read what the brake caught"} {
+		if !strings.Contains(decided, kept) {
+			t.Fatalf("%q does not keep %q", decided, kept)
+		}
+	}
+	// An answer that was only a letter is still a decision; there is simply
+	// nothing said beside it.
+	if letter, chose := Decided(Decision("a", "release intake", "")); !chose || letter != "a" {
+		t.Fatalf("a bare answer read as %q, %t; want the letter it chose", letter, chose)
+	}
+	// And an ordinary directive somebody typed chose nothing, which is an answer
+	// rather than a failure to read one.
+	if letter, chose := Decided("prefer the smaller change here"); chose {
+		t.Fatalf("Decided() read %q out of an instruction nobody was offered options for", letter)
+	}
+}
+
 // A directive that pauses work has to say what it is waiting for, and one that
 // does not must not pretend to. Both halves are what keeps a pause liftable: a
 // record with nothing unresolved stops work nobody can release, and an

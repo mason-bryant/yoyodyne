@@ -66,10 +66,10 @@ func fullyRecorded(kind Kind) Event {
 			Accumulated:     37,
 			Stopped:         "intake is held",
 			Record:          "`yoyo status`",
-			Options: []string{
-				"release intake and let the line choose again",
-				"keep it held until what stopped it is dealt with",
-				"something else, or you want more of the record first",
+			Options: []Option{
+				{Text: "release intake and let the line choose again"},
+				{Text: "keep it held until what stopped it is dealt with"},
+				{Text: "something else, or you want more of the record first"},
 			},
 			Recommendation: "(a), on the evidence there is",
 		},

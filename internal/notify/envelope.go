@@ -577,7 +577,7 @@ type Detail struct {
 	// governed escalation shape's own list rather than prose about one, because
 	// the answer is recorded against which of these was chosen: a decision nobody
 	// can name is a decision nobody can act on afterwards.
-	Options []string `json:"options,omitempty"`
+	Options []Option `json:"options,omitempty"`
 	// Recommendation is which option the record supports and why, read by
 	// KindEscalationOptions. The escalation shape requires one — an operator asked
 	// to decide without being told what the harness would do is being asked to do
@@ -601,6 +601,25 @@ type Detail struct {
 	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
 	// owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
+}
+
+// Option is one thing an escalation offers to decide, and what choosing it does.
+//
+// The two halves are one type because an option that says one thing and does
+// another is the failure this exists to prevent: an ask that offered to settle
+// something the answer could not settle would leave the operator believing they
+// had ended a state that goes on interrupting them. So what an option does is
+// carried beside the words that offer it, and the surface that reads the answer
+// does what the option said rather than what it can most easily do.
+type Option struct {
+	// Text is what the option says, in the terms somebody who is not reading the
+	// code can choose between.
+	Text string `json:"text"`
+	// Settles is the identifier of the directive that choosing this option ends.
+	// It is empty for an option that ends nothing on its own — which is most of
+	// them, because most of what stops the harness is ended by a person doing
+	// something the harness may not do for them.
+	Settles string `json:"settles,omitempty"`
 }
 
 // Event is one reportable thing the record says happened. It carries no words of

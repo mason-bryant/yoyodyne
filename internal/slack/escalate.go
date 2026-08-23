@@ -175,10 +175,10 @@ func brakeStoppage(held switches) (stoppage, bool) {
 				Why:     "a hold is lifted by a person and by nothing else. No role may lift it, no run resumes past it, and the harness will not decide on its own that it has been long enough.",
 				Since:   held.operator.HeldAt,
 				Record:  "`yoyo status`, which says what is parked behind the hold",
-				Options: []string{
-					"lift it — the work that was in flight carries on from its own record (`yoyo resume`)",
-					"leave it in place, and say what has to be true before it lifts; that is recorded as direction every role reads",
-					"something else, or you want more of the record in front of you first",
+				Options: []notify.Option{
+					{Text: "lift it — the work that was in flight carries on from its own record (`yoyo resume`)"},
+					{Text: "leave it in place, and say what has to be true before it lifts; that is recorded as direction every role reads"},
+					{Text: "something else, or you want more of the record in front of you first"},
 				},
 				// Nothing records why a hold over everything was placed, so nothing here
 				// can argue for keeping one. Saying that plainly is better than a
@@ -211,10 +211,10 @@ func brakeStoppage(held switches) (stoppage, bool) {
 			Why:     "intake is released by a person. The harness will not start choosing again on its own, and no role may release it — which is exactly what the brake is for.",
 			Since:   held.intake.HeldAt,
 			Record:  "`yoyo status`, which says what is ready behind the hold and what is still in flight",
-			Options: []string{
-				"release intake and let the line choose from the backlog again (`yoyo release`)",
-				"keep it held until what stopped it is dealt with, and say what that is; it is recorded as direction every role reads",
-				"something else, or you want more of the record in front of you first",
+			Options: []notify.Option{
+				{Text: "release intake and let the line choose from the backlog again (`yoyo release`)"},
+				{Text: "keep it held until what stopped it is dealt with, and say what that is; it is recorded as direction every role reads"},
+				{Text: "something else, or you want more of the record in front of you first"},
 			},
 			Recommendation: recommendation,
 			Topic:          notify.Product(),
@@ -273,10 +273,10 @@ func capacityStoppage(states []runstate.State, now time.Time, budget time.Durati
 			Why:    "nobody chose this and no role can end it. Waiting it out was the plan and the wait has now run past what the harness will sit through without saying so, which makes carrying on waiting a decision rather than a default.",
 			Since:  since,
 			Record: "run " + oldest.RunID + ", and `yoyo status` for the rest of them",
-			Options: []string{
-				"keep waiting — the parked runs resume from their own records when capacity comes back",
-				"hold everything until you have looked at what this is costing, so nothing new is started or spent meanwhile (`yoyo pause`)",
-				"something else, or you want the accounts and the costs in front of you first",
+			Options: []notify.Option{
+				{Text: "keep waiting — the parked runs resume from their own records when capacity comes back"},
+				{Text: "hold everything until you have looked at what this is costing, so nothing new is started or spent meanwhile (`yoyo pause`)"},
+				{Text: "something else, or you want the accounts and the costs in front of you first"},
 			},
 			Recommendation: recommendation,
 			Topic:          notify.Product(),
@@ -335,10 +335,22 @@ func (f *HarnessFeed) directiveStoppage() (stoppage, bool, error) {
 				Why:     "this is " + told.Kind.Headline() + ", and it is settled by the operator and by nobody else.",
 				Since:   told.ReceivedAt,
 				Record:  "`yoyo directive list`, which shows it whichever way it was recorded",
-				Options: []string{
-					"settle it — say how, and the work picks up from exactly where it stopped",
-					"withdraw it — say so, and the work carries on against the intent it already had",
-					"something else, or you want to see what it is holding up first",
+				// The two that end it say so and do it: answering one settles this
+				// directive through the record every other resolution goes through,
+				// which is the only thing that lifts the pause and therefore the only
+				// thing that stops this ask coming back. The other two states are
+				// ended by an act the harness may not perform for the operator, so
+				// their options name the command instead.
+				Options: []notify.Option{
+					{
+						Text:    "settle it, with your answer after the letter",
+						Settles: told.ID,
+					},
+					{
+						Text:    "withdraw it, and the work carries on against the intent it already had",
+						Settles: told.ID,
+					},
+					{Text: "something else, or you want to see what it is holding up first"},
 				},
 				Recommendation: "(a): nothing else settles this, and the work it names is stopped for as long as it stands.",
 				Topic:          topic,

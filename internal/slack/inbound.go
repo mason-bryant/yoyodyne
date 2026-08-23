@@ -224,6 +224,25 @@ func (s *steering) decided(topic notify.Topic, answering Direct, message inbound
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
+	answered := directive.Decision(chosen.letter, chosen.option.Text, chosen.said)
+	// An option that said it would settle a directive settles that directive,
+	// rather than recording a second one beside the one that stopped the work.
+	// Anything else would be the ask offering something the answer cannot do: the
+	// pause would stand, the work would not pick up, and the operator would be
+	// interrupted about it again an hour after they believed they had answered.
+	if paused := chosen.option.Settles; paused != "" {
+		// The same thing `resolve` in a channel thread does, and it is held to the
+		// same rule the command line holds it to: the work resumes on the answer
+		// rather than on the act of answering, so a bare letter is not one.
+		if chosen.said == "" {
+			return refused(topic, at, "say how it was settled after the letter — the work this held resumes on the answer rather than on the act of answering")
+		}
+		resolved, err := s.directives.Resolve(paused, answered, at)
+		if err != nil {
+			return refused(topic, at, err.Error())
+		}
+		return acknowledged(topic, notify.KindDirectiveResolved, resolved, at)
+	}
 	_, receivedBy := addressed(message.text)
 	// The ask's own subject: the item where one item was stopped, and every item
 	// where the whole line was. An answer about the line narrowed to some item
@@ -231,7 +250,7 @@ func (s *steering) decided(topic notify.Topic, answering Direct, message inbound
 	recorded, err := s.record(steer{
 		kind:       directive.KindOperational,
 		receivedBy: receivedBy,
-		text:       chosen,
+		text:       answered,
 	}, scopeOf(topic), at)
 	if err != nil {
 		return refused(topic, at, err.Error())
@@ -244,36 +263,44 @@ func (s *steering) decided(topic notify.Topic, answering Direct, message inbound
 	return acknowledged(topic, notify.KindDirectiveRecorded, recorded, at)
 }
 
+// decision is one answer as it was read: the option it named, the letter it
+// named it under, and what was said beside it.
+type decision struct {
+	option notify.Option
+	letter string
+	said   string
+}
+
 // parseDecision reads which option an answer chose, and whatever the operator
 // said beside it.
 //
-// The letter is required, and that is the whole of the grammar. What is recorded
+// The letter is required, and that is the whole of the grammar. What is decided
 // has to say which option was chosen rather than only what somebody typed —
 // otherwise the record of a decision is a paragraph somebody has to interpret
 // later, which is the same problem the ask was written to end. The refusal names
 // the letters, because the person reading it is in a chat client rather than
 // looking at the message they are answering.
-func parseDecision(raw string, options []string) (string, error) {
+func parseDecision(raw string, options []notify.Option) (decision, error) {
 	text, _ := addressed(raw)
 	word, rest := firstWord(text)
 	letter := strings.ToLower(strings.Trim(word, "()[].,:;-—*_"))
 	option, named := notify.OptionAt(options, letter)
 	if !named {
-		return "", fmt.Errorf("say which option you are choosing — %s — because what is recorded is the option rather than the words around it; put the letter first and add whatever you want to say after it", offered(options))
+		return decision{}, fmt.Errorf("say which option you are choosing — %s — because what is recorded is the option rather than the words around it; put the letter first and add whatever you want to say after it", offered(options))
 	}
-	decided := "chose (" + letter + ") " + option
 	// What somebody wrote after the letter is kept, with whatever they separated it
 	// from the letter with taken off: "b — because" and "b, because" are the same
 	// answer, and the record already has its own separator.
-	if extra := strings.TrimSpace(strings.TrimLeft(rest, "-—–:;,. ")); extra != "" {
-		decided += " — " + extra
-	}
-	return decided, nil
+	return decision{
+		option: option,
+		letter: letter,
+		said:   strings.TrimSpace(strings.TrimLeft(rest, "-—–:;,. ")),
+	}, nil
 }
 
 // offered names the letters an ask put on the table, so a refusal to read an
 // answer says what would have been readable.
-func offered(options []string) string {
+func offered(options []notify.Option) string {
 	letters := make([]string, 0, len(options))
 	for index := range options {
 		if letter := notify.OptionLetter(index); letter != "" {

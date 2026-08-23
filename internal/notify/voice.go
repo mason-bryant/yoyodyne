@@ -928,7 +928,7 @@ const (
 // An option the record left empty is said as an absence in its own place rather
 // than dropped, because dropping it would shift every letter after it — and the
 // letters are what the decision is recorded against.
-func optionsOf(options []string) string {
+func optionsOf(options []Option) string {
 	if len(options) == 0 {
 		return " nothing the record offers to choose between"
 	}
@@ -937,7 +937,7 @@ func optionsOf(options []string) string {
 		if index >= MaxOptions {
 			break
 		}
-		fmt.Fprintf(&laid, "\n(%s) %s", OptionLetter(index), stated(option, "an option the record does not carry"))
+		fmt.Fprintf(&laid, "\n(%s) %s", OptionLetter(index), stated(option.Text, "an option the record does not carry"))
 	}
 	return laid.String()
 }
@@ -952,17 +952,19 @@ func OptionLetter(index int) string {
 }
 
 // OptionAt is the option one letter names, reporting whether it names one at
-// all. It is the other half of the lettering, so a decision recorded from a
-// reply is recorded against exactly the option the message offered under that
-// letter.
-func OptionAt(options []string, letter string) (string, bool) {
+// all. It is the other half of the lettering, so a decision made from a reply is
+// made against exactly the option the message offered under that letter — both
+// the words it is recorded under and what choosing it does.
+func OptionAt(options []Option, letter string) (Option, bool) {
 	wanted := strings.ToLower(strings.TrimSpace(letter))
 	for index := range options {
 		if index < MaxOptions && OptionLetter(index) == wanted {
-			return strings.TrimSpace(options[index]), true
+			chosen := options[index]
+			chosen.Text = strings.TrimSpace(chosen.Text)
+			return chosen, true
 		}
 	}
-	return "", false
+	return Option{}, false
 }
 
 // outcomeOf says how an exchange ended. Closing unresolved at the round cap is

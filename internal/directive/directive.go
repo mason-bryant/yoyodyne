@@ -294,6 +294,56 @@ func (d Directive) Resolve(resolution string, at time.Time) (Directive, error) {
 	return resolved, nil
 }
 
+// DecisionPrefix opens the text of a directive that answers a question the
+// harness put to the operator with lettered options, rather than an instruction
+// the operator typed.
+//
+// It is the record's contract rather than one surface's formatting, and it is
+// here for the reason a work item's goal line is one constant: the harness writes
+// it and reads it back, and two spellings that drifted apart would leave a
+// recorded decision reading as ordinary prose. Ordinarily there is nothing in a
+// directive to parse — it is what somebody said, in their words. Where the
+// harness asked with options, though, what has to survive is which option they
+// chose rather than the sentence around it, so the option is stated first, in a
+// fixed shape, by Decision below and read back out by Decided.
+const DecisionPrefix = "chose "
+
+// Decision is the text of a directive that records one answer to a lettered ask:
+// the letter, the option it named as the ask offered it, and whatever was said
+// beside it.
+//
+// It writes the recorded text of a decision and the resolution of a directive
+// that one settles, so the two read the same way whichever the answer turned out
+// to be — and a reader that wants to know what was decided asks this package
+// rather than matching prose.
+func Decision(letter, option, said string) string {
+	decided := DecisionPrefix + "(" + strings.TrimSpace(letter) + ") " + strings.TrimSpace(option)
+	if extra := strings.TrimSpace(said); extra != "" {
+		decided += " — " + extra
+	}
+	return decided
+}
+
+// Decided reads one back: the letter that was chosen, and whether the text
+// records a decision at all.
+//
+// The letter is what identifies the choice, because the ask that offered it is
+// what gives the letter its meaning; the option's own words follow it in the text
+// for whoever is reading rather than matching. Text that Decision did not write
+// is an ordinary directive somebody typed, which chose nothing — that is an
+// answer rather than a failure to read one.
+func Decided(text string) (string, bool) {
+	rest, found := strings.CutPrefix(strings.TrimSpace(text), DecisionPrefix+"(")
+	if !found {
+		return "", false
+	}
+	letter, _, closed := strings.Cut(rest, ")")
+	if !closed || strings.TrimSpace(letter) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(letter), true
+}
+
 // Pausing selects the unresolved directives that pause one work item. It is the
 // question the run pipeline asks, in one place, so a run that starts, a run that
 // resumes, and a run at its gate are all held to the same reading.
