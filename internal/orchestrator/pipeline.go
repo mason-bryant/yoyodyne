@@ -813,7 +813,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
-			protectedpath.Protect(p.Config), p.Config.Execution.RepairAttemptsBeforeReplan)
+			protectedpath.Protect(p.Config), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -1192,7 +1192,7 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 // an approval always belongs to a change that passed them, and nothing an
 // earlier attempt was granted carries forward.
 func (a *activeRun) repairLoop(ctx context.Context) error {
-	limit := a.pipeline.Config.Execution.RepairAttemptsBeforeReplan
+	limit := a.repairBudget()
 	for {
 		// Every round of the gate asks what the operator has directed, because a
 		// round is another developer invocation and a directive recorded while one
@@ -1250,6 +1250,14 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// repairBudget is how many repair attempts this run may make: what the project
+// configured, plus whatever triage has granted it to continue on. A run nothing
+// continued is the configured budget unchanged, which is every run until triage
+// re-enters one.
+func (a *activeRun) repairBudget() int {
+	return a.state.RepairBudget(a.pipeline.Config.Execution.RepairAttemptsBeforeReplan)
 }
 
 // repair records one attempt against the budget and then hands the failure back

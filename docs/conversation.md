@@ -710,8 +710,12 @@ were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 
-Recording a decision is not carrying it out, and one of the six now has an
-action that does. `yoyo triage rerun <run-id> --reason "<what the development
+Recording a decision is not carrying it out, and two of the six now have an
+action that does. They are the two opposite answers to a run that stopped:
+`yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
+run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<what the development
 manager decided>"` starts a fresh run of the item whose stopped run the docket
 entry names — the case where the ground moved under a change that was never
 wrong. The run records the development manager as having chosen the work and the
@@ -772,10 +776,40 @@ grant](configuration.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
-The harness carries out none of the other five. Two of them ask for something
-and it is still yours to do: `yoyo run <id>` after a repair grant, and for a
-re-arm, asking the forge to merge the pull request again yourself —
-nothing in the harness repeats a merge request the forge dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
+`yoyo triage repair <run-id> --reason "<what the development manager decided>"`
+is the other one, and it is the answer to the opposite case: the change is nearly
+right and the run ran out of attempts. It starts nothing over. The stopped run
+goes on — same branch, same worktree, the developer session that already holds
+the context, and the reviewer's findings handed back exactly as they were
+written — under the grant the development manager already recorded. Deciding
+`repair` is what takes that grant and sizes it; this reads that record for what
+it is worth and hands the run exactly that, so it can never give a run more
+attempts than the round cap let the item have. **Your hold on intake applies to
+this too**, for the same reason it applies to a re-run.
+
+**It supersedes the blocker rather than needing you to remember to.** The run
+that stopped blocked its item and recorded the blocker on its own state, which
+`/status`, `yoyo reconcile`, and the docket all read as the fact that it stopped.
+Re-entry clears both as it happens: the item is put back with the decision
+recorded on it, and the run's blocker is cleared onto the continuation that
+supersedes it, keeping the words it was recorded in. So a repair does not need
+the reopening a re-run does.
+
+Five things refuse it, and every one of them is asked before either of those
+writes, so a refused re-entry leaves the grant exactly where it was. The stopped
+run has to be really over. It has to have recorded a failure that was actually
+returned to its developer — findings, a failing check, or refused paths — because
+a run whose provider kept refusing has no repair loop to re-enter. The item must
+not be closed or waiting on other work. A grant of the development manager's has
+to be there and not already carried out. And **the preserved worktree has to be
+as the harness left it**: what a continued developer is handed back is whatever is
+in that worktree, so a HEAD that moved — you mid-surgery, an agent that
+committed — refuses to a person, leaves the item blocked, and says so.
+
+The harness carries out none of the other four. One of them asks for something
+and it is still yours to do: for a re-arm, asking the forge to merge the pull
+request again yourself — nothing in the harness repeats a merge request the forge
+dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
 recorded whether or not you or the harness act on it, which is the same direction
 every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that

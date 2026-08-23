@@ -361,7 +361,14 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 // counted against, so a re-run of something nothing docketed would be a re-run
 // nothing bounds.
 func (r Rerunner) entry(priorRunID string) (triage.Entry, error) {
-	entries, err := r.Docket.List()
+	return docketedStoppage(r.Docket, priorRunID, "run again")
+}
+
+// docketedStoppage finds the docketed stoppage of one run, for whichever action
+// is about to act on it. act names what the caller would do, so a refusal reads
+// as the thing that was refused rather than as a lookup that came back empty.
+func docketedStoppage(docket RerunDocket, priorRunID, act string) (triage.Entry, error) {
+	entries, err := docket.List()
 	if err != nil {
 		return triage.Entry{}, fmt.Errorf("read the triage docket: %w", err)
 	}
@@ -370,7 +377,7 @@ func (r Rerunner) entry(priorRunID string) (triage.Entry, error) {
 			return candidate, nil
 		}
 	}
-	return triage.Entry{}, fmt.Errorf("no stopped run of %s is on the triage docket, so there is no stoppage to run again", priorRunID)
+	return triage.Entry{}, fmt.Errorf("no stopped run of %s is on the triage docket, so there is no stoppage to %s", priorRunID, act)
 }
 
 // stoppageIsOver reports the run's own record proving the stoppage is terminal
@@ -471,7 +478,14 @@ func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
 // asked before anything is claimed, so a collision costs the stoppage's re-run
 // nothing.
 func (r Rerunner) noRunInFlight(workItemID string) error {
-	incomplete, err := r.Runs.Incomplete()
+	return noRunInFlight(r.Runs, workItemID)
+}
+
+// noRunInFlight is the same rule for every triage action that would put a
+// developer on an item: an item something is already running is not work that
+// has stopped, whatever the docket entry said when it was written.
+func noRunInFlight(runs RerunRuns, workItemID string) error {
+	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return fmt.Errorf("read what is already in flight: %w", err)
 	}
@@ -499,12 +513,20 @@ func (r Rerunner) noRunInFlight(workItemID string) error {
 // runs in flight, so what is read here and what would refuse the fresh run are
 // one fact rather than two.
 func (r Rerunner) slotIsFree() (runstate.CapacityError, bool, error) {
-	incomplete, err := r.Runs.Incomplete()
+	return slotIsFree(r.Runs, r.Capacity)
+}
+
+// slotIsFree counts the runs in flight against the configured limit, the same
+// way and from the same records the reservation does, so what a triage action
+// reads before it spends anything and what would refuse the run it starts are
+// one fact rather than two.
+func slotIsFree(runs RerunRuns, capacity int) (runstate.CapacityError, bool, error) {
+	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return runstate.CapacityError{}, false, fmt.Errorf("read what is already in flight: %w", err)
 	}
-	if len(incomplete) >= r.Capacity {
-		return runstate.CapacityError{Limit: r.Capacity, Active: len(incomplete)}, false, nil
+	if len(incomplete) >= capacity {
+		return runstate.CapacityError{Limit: capacity, Active: len(incomplete)}, false, nil
 	}
 	return runstate.CapacityError{}, true, nil
 }
