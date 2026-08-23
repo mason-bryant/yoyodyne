@@ -628,6 +628,59 @@ func TestAssembleProductSpendsTheBudgetOnIntentFirst(t *testing.T) {
 	}
 }
 
+// The configuration reference is a directory now, and docs/configuration/artifacts.md
+// tells the product manager in prose that it is given the whole of it -- the index
+// and every guide beneath it. That sentence is a claim about the list above, so it
+// is pinned against the directory rather than against a copy of the list: a guide
+// added to docs/configuration/ and not named here would make the sentence false
+// silently, and the role would be told it had read something it had not. This is
+// the ifd.20 failure in its documentation form, which is why it is checked rather
+// than remembered.
+func TestShippedDocumentationNamesEveryConfigurationGuide(t *testing.T) {
+	t.Parallel()
+
+	// The repository this test runs in, reached from the package directory. The
+	// guides are counted where they actually live, because a fixture is exactly
+	// what cannot have the guide that was forgotten.
+	const repositoryRoot = "../.."
+	entries, err := os.ReadDir(filepath.Join(repositoryRoot, "docs", "configuration"))
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	guides := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
+			continue
+		}
+		guides["docs/configuration/"+entry.Name()] = true
+	}
+	// A walk that found nothing would agree with any list at all, which is the
+	// one way this gate can pass while checking nothing.
+	if len(guides) == 0 {
+		t.Fatal("no configuration guides were found; the walk is looking in the wrong place")
+	}
+
+	named := map[string]bool{}
+	for _, documentPath := range shippedDocumentation {
+		named[documentPath] = true
+	}
+	for guide := range guides {
+		if !named[guide] {
+			t.Errorf("%s is a configuration guide the product manager is not given", guide)
+		}
+	}
+	for documentPath := range named {
+		if strings.HasPrefix(documentPath, "docs/configuration/") && !guides[documentPath] {
+			t.Errorf("%s is named here and is not a guide in the repository", documentPath)
+		}
+	}
+	// The index is what the guides hang off and what every link written before
+	// the split still resolves against, so it is carried as well as they are.
+	if !named["docs/configuration.md"] {
+		t.Error("the configuration index is not among the documentation the product manager is given")
+	}
+}
+
 // The note is written after the budget has been spent, so what it can cost is
 // charged before it. Every path it can name is one of a fixed set, so the
 // reserve is exact rather than an allowance -- but only while it stays that way.

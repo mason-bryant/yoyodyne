@@ -27,7 +27,7 @@ uses. An item grants an exception in its own text, on a line beginning
 rather than discovered in a diff. A grant admits the path and decides nothing
 about what goes into it, so the reviewer is told to read the item for the decided
 change behind each grant and to raise a finding when none is named.
-[Configuration](configuration.md#protected-paths-in-a-developers-change)
+[Configuration](configuration/artifacts.md#protected-paths-in-a-developers-change)
 has the details.
 
 Then the configured checks run in that worktree, and an independent reviewer —
@@ -38,7 +38,12 @@ treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
 `execution.repair_attempts_before_replan` attempts, before the run gives up and
-records a blocker.
+records a blocker. That budget is not always the last word: a development
+manager who decides the change is worth another go can hand the item a grant of
+further attempts, and [`yoyo triage
+repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
+run's repair loop on the change it already has rather than starting the item
+over.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the
@@ -95,8 +100,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Six things keep an item out of a pass, and the pass accounts for them at two
-different grains. Three are named against the item, because nothing else would
+Seven things keep an item out of a pass, and the pass accounts for them at two
+different grains. Four are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -105,10 +110,12 @@ reported as ready to pull, so a scheduler that did not know the difference would
 buy the same change twice — two developers rewriting one file, the second of them
 guaranteed a conflict at integration. A child covers whether it is queued,
 blocked, or already claimed by a run in flight, and the container becomes
-ordinary work again once its last unfinished child leaves the backlog. And an
+ordinary work again once its last unfinished child leaves the backlog. An
 item that **would race work already in flight** is sequenced behind it rather
 than started beside it, with the run it would have raced and what the two share
-both named. The other
+both named. And an item whose **executor is a persona conversation** rather than
+a developer run is passed over with what carries it named, which the paragraph
+after next is about. The other
 three — the tracker not reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -121,7 +128,7 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those three that is a wait rather than a refusal. Two
+Sequencing is the one of those four that is a wait rather than a refusal. Two
 items race when they are siblings of one epic, when one is the epic the other was
 broken out of, or when the files they will change overlap. An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in
@@ -142,8 +149,40 @@ races nothing, and both runs record what the sequencing did — the one that wai
 says what it waited for, and the one pulled past it says which items it was pulled
 ahead of.
 
-A seventh thing deliberately keeps nothing out: an item whose goal was amended after
-it was admitted is pulled exactly as it would have been, because
+Not everything in the backlog is a developer run. Promoting a document the
+architect owns, settling a decomposition, recording a decision: those happen in a
+conversation with a role, and the harness's own gates already say so — the
+artifact homes are default-deny for a developer's diff, so a run pointed at one
+of them produces a correctly refused empty change. What it also produces is a
+spent run, two review rounds, and two rounds counted against that item's cap, so
+an item mis-selected twice reaches its cap having done nothing and escalates work
+nobody ever started.
+
+So an item says what carries it, and whose conversation that is. The product
+manager sets `executor` on the item as it is admitted — `conversation:` followed
+by the role, as in `conversation:architect` — and `update` takes it too, for work
+already in the queue. The bare word `conversation` is refused: from the handoff
+until whoever holds the item starts on it, the role named here is the only thing
+that says who has it, and a marker that named none left exactly that stretch
+unattributed. An item carrying it keeps its place in the order, is reported in
+the queue with what carries it, and is never selected for a developer run. It is
+not a wait, and the pass says so rather than counting it among the items that are
+about to become pullable: nothing clears, and what moves it is somebody opening
+the conversation the item names. Work that says nothing is a developer run, which
+is nearly all of it.
+
+Naming the item yourself is unaffected. `yoyo run <id>` is you deciding, and the
+marker steers what the harness chooses rather than what you may ask for.
+
+The marker is not retroactive, which is the part worth knowing before you rely
+on it: it covers exactly the items that carry it, so work admitted before you
+started marking carries none and is chosen as ordinary developer work. Nothing
+infers it — no reading of an item tells a conversation from a diff — so bringing
+an existing queue under the guard means marking its conversation-executed items,
+one `update` each, in the product manager's conversation.
+
+An eighth thing deliberately keeps nothing out: an item whose goal was amended
+after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.
 
@@ -160,7 +199,7 @@ The configuration is re-read before every pull for the same reason: a capacity
 you raise or a priority you reorder while a pass is running is picked up the next
 time it chooses something, rather than at the next restart. Runs already in
 flight keep the configuration they started under.
-[Configuration](configuration.md#scheduling-ready-work) has the rest.
+[Configuration](configuration/runs.md#scheduling-ready-work) has the rest.
 
 **`--watch` keeps it open.** Instead of returning when the queue empties, it
 waits `execution.work_poll` — a minute by default — and reads the queue again,
@@ -249,6 +288,76 @@ verdict, a review that never answered, a change too large to be seen in full. Th
 findings are then work, and admitting work to the backlog is the product
 manager's.
 
+### Measuring the reviewer against itself
+
+A branch review is a replayable function of a branch state: the same commits over
+the same base, described the same way, judged under the same contract. That is
+what makes a *shadow* review possible — the same review, made to measure the
+reviewer rather than to judge the branch:
+
+```sh
+./bin/yoyo review --shadow --model sonnet --base main --branch milestone
+./bin/yoyo review --compare                   # what the collected ones amount to
+```
+
+A shadow verdict approves nothing, whatever it decided, and that is enforced in
+the record rather than remembered by whoever reads it: the durable review is
+marked, and `Approved` answers no for a shadow verdict exactly as it does for a
+repair one. That is what makes the measurement free of risk — a cheaper reviewer
+pointed at a branch cannot leave an approval of it behind. `--model` is refused
+without `--shadow` for the same reason: a review whose reviewer was chosen at a
+terminal rather than by the configuration is a measurement and only ever that.
+Because it decides nothing about the branch, a shadow review exits on the
+question it was actually asked — whether it produced a verdict — so a shadow
+`repair` verdict is a successful measurement rather than a failure.
+
+The baselines are the branch reviews already recorded. Every verdict `yoyo
+review` has ever given is in the `branch-reviews` log with the base commit and
+head commit it was given on, and `--compare` pairs on those two — so a branch
+state the configured reviewer has already judged can be shadowed without paying
+for its baseline again. What that costs is one shadow review per state and
+nothing else.
+
+Reaching one of those states is the only manual step. `--branch` takes a local
+branch name, so a state that is still a branch head is shadow-reviewable as it
+stands; an earlier state needs a local branch pointed at the head commit the
+recorded verdict names (`git branch <name> <commit>`), and `--base` takes the
+base commit from the same record. That new branch name is deliberately not part
+of the pairing: the same commits reached under a second name are the same code,
+so the two reviews still pair, and each side's own branch name is reported so the
+one thing the reviewers were told differently is visible. A state nothing has
+reviewed has no baseline at all, and there an ordinary `yoyo review` is what
+makes one first.
+
+`--compare` reads what was recorded and invokes nothing. For each shadow review
+it reports, per severity, how many of the baseline reviewer's findings the shadow
+also anchored to, how many it missed, and how many it raised alone, with what
+each of the two reviews cost beside it. Findings are paired by the file each
+anchors to, which is the only thing two reviewers reliably agree on — they will
+differ on the line and always on the wording — so a finding that names no file
+cannot be paired at all, and the count of those is reported rather than folded
+silently into the miss rate. Every finding is listed under its comparison for the
+same reason: whether a missed finding was a local, mechanical catch or one that
+only exists in the accumulated shape of the branch is a judgement about its
+content, and the numbers cannot make it. A finding only the shadow raised is a
+candidate false positive rather than a proven one — what this measures against is
+the other reviewer, not what is true of the branch.
+
+A shadow review costs money like any other provider invocation, and is priced
+where every other branch review is: it records the same event stream, so
+[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) counts it
+under `branch reviews`, and `--compare` reports each side's own cost from that
+same log. It is not in `yoyo cost`, which prices work items from the runs made
+for them — a branch review belongs to no run, and a shadow review belongs to no
+work item either. So measuring a reviewer is spend an operator can see, but not
+under the item that prompted it, and it is indistinguishable in the status total
+from a review that gated something.
+
+The first use of this is recorded in
+[the ifd.92 experiment note](experiments/yoyodyne-ifd-92-shadow-review.md): what the
+instrument is, which recorded verdicts are the benchmark, and what has not been
+measured yet.
+
 ## Publishing, and the merge that follows it
 
 Runs are local until a project sets `approvals.publishing` to `automatic`. With
@@ -305,4 +414,4 @@ than imply one another. Publishing with `integration: human` opens the pull
 request and stops: nothing is merged, the run branch survives on the remote, and
 the worktree is preserved for you — which is what a `human` integration policy
 means. See the
-[configuration guide](configuration.md#publishing-through-pull-requests).
+[configuration guide](configuration/publishing.md#publishing-through-pull-requests).

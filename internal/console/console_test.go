@@ -84,6 +84,36 @@ func TestAnythingThatIsNotATerminalGetsPlainText(t *testing.T) {
 	}
 }
 
+// TestAStreamComposesAMultiLineMessageWithTheContinuationMark is the fallback
+// where there are no keystrokes at all to report: a redirected conversation can
+// still say something of more than one line, and the prompt is written once for
+// the whole of it rather than once a line.
+func TestAStreamComposesAMultiLineMessageWithTheContinuationMark(t *testing.T) {
+	t.Parallel()
+
+	var out strings.Builder
+	console := newPlain(strings.NewReader("two goals\\\nthen a brief\nand one line\n"), &out)
+	line, err := console.Prompt(context.Background(), "you> ", nil)
+	if err != nil {
+		t.Fatalf("Prompt() error = %v", err)
+	}
+	if line != "two goals\nthen a brief" {
+		t.Fatalf("line = %q", line)
+	}
+	// A line that does not carry on is still one message, unchanged.
+	if line, err := console.Prompt(context.Background(), "you> ", nil); err != nil || line != "and one line" {
+		t.Fatalf("Prompt() = %q, %v", line, err)
+	}
+	if transcript := out.String(); transcript != "you> you> " {
+		t.Fatalf("transcript = %q", transcript)
+	}
+	// What it says about composing names the mark and claims nothing about keys
+	// a stream never sees.
+	if help := console.Composing(); !strings.Contains(help, `\`) || strings.Contains(help, "shift-return") {
+		t.Fatalf("Composing() = %q", help)
+	}
+}
+
 // TestAStreamIsNeverInterrupted is the honest half of the degradation. A
 // stream has no moment where the operator is waiting with the screen to
 // themselves, so a run that finishes is reported at the next line rather than

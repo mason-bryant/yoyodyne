@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -51,24 +52,40 @@ func (p *plain) Prompt(ctx context.Context, prompt string, _ <-chan struct{}) (s
 	if err != nil {
 		return "", err
 	}
-	if p.scanner == nil || !p.scanner.Scan() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
-		if p.scanner != nil {
-			if err := p.scanner.Err(); err != nil {
-				return "", err
+	// A line ending in the continuation mark carries on to the next one, which is
+	// how a message of more than one line is written to a stream that has no
+	// keystrokes to report. The prompt is written once for the whole of it: a
+	// redirected transcript says what was asked, not how many lines the answer
+	// took.
+	var composed strings.Builder
+	for {
+		if p.scanner == nil || !p.scanner.Scan() {
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.scanner != nil {
+				if err := p.scanner.Err(); err != nil {
+					return "", err
+				}
 			}
+			// The newline closes the prompt line nobody answered, so a transcript
+			// does not end mid-line.
+			fmt.Fprintln(p.out)
+			return "", io.EOF
 		}
-		// The newline closes the prompt line nobody answered, so a transcript
-		// does not end mid-line.
-		fmt.Fprintln(p.out)
-		return "", io.EOF
+		carried, continues := carriedOn(p.scanner.Text())
+		composed.WriteString(carried)
+		if !continues {
+			break
+		}
+		if composed.Len() > MaxLineBytes {
+			return "", fmt.Errorf("the operator sent more than %d bytes without ending the message", MaxLineBytes)
+		}
 	}
 	// Nothing is echoed here. Where the input is a terminal it echoed the line
 	// itself, and where it is not there was never an echo to reproduce; writing
 	// one would either double the line or change what a redirected transcript
 	// has always contained.
-	return p.scanner.Text(), nil
+	return composed.String(), nil
 }
 
 // Working says each phase once, as a line like any other. A stream has nothing
@@ -91,6 +108,12 @@ func (p *plain) Status(string) {}
 // Theme dresses nothing. Colour and rules are for a terminal, and a stream that
 // is not one gets the same lines a redirected conversation has always had.
 func (p *plain) Theme() Theme { return Theme{} }
+
+// Composing names only the continuation mark. A stream reports no keystrokes and
+// has none to report: whatever key was pressed, what arrives here is a line.
+func (p *plain) Composing() string {
+	return `Multi-line: end a line with \ to carry it on to the next. A line that does not ends the message.`
+}
 
 // Close has nothing to restore: a stream was never put into a state anybody
 // has to be got out of.

@@ -398,7 +398,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 		},
 	}}
 	var oneShot bytes.Buffer
-	printChatConcerns(&oneShot, domain.RoleProductManager, concerns)
+	printChatConcerns(&oneShot, console.Theme{}, domain.RoleProductManager, concerns)
 	for _, required := range []string{
 		"Nothing was proposed or created",
 		"yoyodyne chat",
@@ -421,7 +421,7 @@ func TestChatReportsConcernsAsQuestionsNobodyHasAnswered(t *testing.T) {
 	}
 
 	var quiet bytes.Buffer
-	printChatConcerns(&quiet, domain.RoleProductManager, nil)
+	printChatConcerns(&quiet, console.Theme{}, domain.RoleProductManager, nil)
 	printOpenConcerns(&quiet, console.Theme{}, nil)
 	if quiet.Len() != 0 {
 		t.Fatalf("a turn with no concerns printed %q", quiet.String())
@@ -697,6 +697,20 @@ func TestConfigShowExplainsInheritance(t *testing.T) {
 	if strings.Contains(output, "You implement one bounded work item") {
 		t.Errorf("config show inlined a persona body:\n%s", output)
 	}
+	// The revision names these values as one thing, so what a run recorded and
+	// what the configuration says can be held up against each other.
+	resolved, err := config.LoadResolved(path)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	if !strings.Contains(output, "# revision: "+resolved.Config.Revision()) {
+		t.Errorf("config show does not name the revision in force:\n%s", output)
+	}
+	// A project that names no account runs under one all the same, and says so
+	// where an operator reads what is in force.
+	if !strings.Contains(output, "account: "+config.DefaultAccountAlias) {
+		t.Errorf("config show does not say which account the agents run under:\n%s", output)
+	}
 }
 
 func TestConfigShowJSONReportsEffectiveValuesAndOrigins(t *testing.T) {
@@ -755,6 +769,51 @@ func TestConfigValidateReportsAMissingConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "no Yoyodyne configuration found") {
 		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+// Every command that takes an id reads its flags after that id, because that is
+// the order the usage texts and the documentation say to type and the order
+// anybody types when they have just read an id out of a listing. Go's flag
+// package stops at the first word that is not a flag, so each of these was
+// refused for naming two things.
+//
+// The assertion is the exit code: a command that parsed what it was given gets
+// as far as loading the configuration and fails at 1 on a path that is not
+// there, and one that did not refuses at 2 with a usage error before it looks at
+// anything. Nothing here has to reach a provider or a tracker to say which
+// happened.
+func TestFlagsAreReadAfterTheIdEveryCommandThatTakesOne(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	for name, args := range map[string][]string{
+		"artifact show":     {"artifact", "show", "brief", "--config", missing},
+		"artifact approve":  {"artifact", "approve", "brief", "--config", missing, "--reason", "approved in conversation"},
+		"amendment show":    {"amendment", "show", "amendment-0123456789abcdef0123456789abcdef", "--config", missing},
+		"amendment approve": {"amendment", "approve", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the ordering was never settled"},
+		"amendment decline": {"amendment", "decline", "amendment-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the design is right"},
+		"invariant show":    {"invariant", "show", "one-writer-per-item", "--config", missing, "--json"},
+		"invariant create":  {"invariant", "create", "one-writer-per-item", "--config", missing, "--title", "one writer", "--statement", "one writer", "--rationale", "one writer", "--established-by", "yoyodyne-ifd.2.7", "--reason", "extracted"},
+		"invariant amend":   {"invariant", "amend", "one-writer-per-item", "--config", missing, "--scope", "internal/runstate", "--reason", "the other half moved"},
+		"invariant retire":  {"invariant", "retire", "one-writer-per-item", "--config", missing, "--reason", "the reservation moved into the store"},
+		"directive record":  {"directive", "record", "do publishing differently", "--config", missing, "--kind", "ambiguous", "--unresolved", "which behaviour was meant"},
+		"directive resolve": {"directive", "resolve", "directive-0123456789abcdef0123456789abcdef", "--config", missing, "--resolution", "the second behaviour was meant"},
+		"exchange show":     {"exchange", "show", "exchange-0123456789abcdef0123456789abcdef", "--config", missing, "--json"},
+		"agent show":        {"agent", "show", "developer", "--config", missing, "--json"},
+		"agent chat":        {"agent", "chat", "developer", "--config", missing, "--message", "what are you working on?"},
+		"run":               {"run", "yoyodyne-ifd.74", "--config", missing, "--json"},
+		"triage rerun":      {"triage", "rerun", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the ground moved"},
+		"triage repair":     {"triage", "repair", "run-0123456789abcdef0123456789abcdef", "--config", missing, "--reason", "the findings still stand"},
+		"status":            {"status", "yoyodyne-ifd.74", "--config", missing, "--failed"},
+		"cost":              {"cost", "yoyodyne-ifd.74", "--config", missing, "--record"},
+		"resume":            {"resume", "yoyodyne-ifd.74", "--config", missing},
+	} {
+		var stdout, stderr bytes.Buffer
+		code := Run(args, &stdout, &stderr, "test")
+		if code != 1 {
+			t.Fatalf("%s: code = %d, want 1 — the flags after the id were not read; stderr = %q", name, code, stderr.String())
+		}
 	}
 }
 

@@ -140,6 +140,16 @@ func namedWorkItemClasses() string {
 	return strings.Join(named, ", ")
 }
 
+// namedWorkItemExecutors lists the executors an action may claim, so a refusal
+// names what was available rather than only what was wrong.
+func namedWorkItemExecutors() string {
+	named := make([]string, 0, len(domain.WorkItemExecutors))
+	for _, executor := range domain.WorkItemExecutors {
+		named = append(named, fmt.Sprintf("%q", executor))
+	}
+	return strings.Join(named, ", ")
+}
+
 // perItemApprovalReason is why the operator is being asked about work that
 // would otherwise have been admitted. It names the setting, because an operator
 // who wants the other behavior has to be able to find the thing to change.

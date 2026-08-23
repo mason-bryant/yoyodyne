@@ -41,14 +41,14 @@ unapproved document still loads, still governs what is downstream of it, and
 stops nothing that reads it, and approving writes nothing but the approval — the
 document itself stays the owning role's to change. What your approval of the
 goals decides is whether work serving them is admitted without asking you, which
-is [`approvals.work_items`](configuration.md#what-reaches-the-queue) to say:
+is [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue) to say:
 it is `human` until you set it otherwise, and every item is put to you. Set it to
 `automatic` and your approval of the goals document is what lets work serving
 those goals into the queue — so a goals document nobody approved, and one amended
 since you approved it, are documents nothing is admitted under. Everywhere else
 an amendment after approval changes what is reported about a document rather than
 what is allowed. The
-[configuration guide](configuration.md#approving-a-document) has the schema
+[configuration guide](configuration/artifacts.md#approving-a-document) has the schema
 and what is refused.
 
 A document in one of those directories with no usable identity is named on
@@ -82,7 +82,7 @@ brief is reported as an orphan. Neither refuses the document — a broken
 relationship is a name to correct, not a reason to lose what somebody wrote. The
 brief is the root and a decision record is not downstream of intent, so neither
 is asked to support anything. The
-[configuration guide](configuration.md#traceability-references-and-orphans)
+[configuration guide](configuration/goals.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
 ## Goals, and what work serves them
@@ -148,6 +148,28 @@ goals at all is reported once, naming the brief, rather than against every goal
 below it. Nothing is refused over a broken link: the goal is still what the
 document states and work naming it still resolves, because what is wrong is the
 chain above it rather than the goal.
+
+The listing itself is laid out to be read: one goal to an entry, a blank line
+between entries, and where the goal is stated indented under it. On a terminal
+the statement is bold and the lines about it italic, and that emphasis is an
+addition and never the meaning — the same discipline everything else the harness
+dresses holds to. What separates two goals is the blank line, what says a line is
+about the goal above it is the indent and its label, and what says a goal is no
+longer in force is said in words, so a listing piped to a file, read with
+`NO_COLOR` set, or shown on a terminal that says it is dumb says exactly what it
+says dressed. `--json` carries none of it. The listing closes with a line naming
+what these goals sit underneath — the goals the product brief states, and the
+file to open for them — because read on its own it stops one link short of where
+the chain begins.
+
+A goal hard-wrapped across physical lines is reported on stderr the same way,
+and is likewise not refused. The statement is rejoined and work naming it still
+resolves — recording only the first line was a silent truncation that corrupted
+every wrapped goal at once, and rejoining is what closed it. What the report says
+is that the rejoining is a reading of the file rather than something the file
+states: an indent, or a wrapped line that reads as the `Supports:` trailer,
+changes the recorded goal without changing a word of it, and a goal written on
+one line cannot be changed that way.
 
 ## What a change upstream leaves stale
 

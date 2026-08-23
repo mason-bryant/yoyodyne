@@ -16,12 +16,14 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/cost"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -36,10 +38,11 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "run requires exactly one Beads work item id")
 		printRunUsage(stderr)
 		return 2
@@ -55,7 +58,7 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	// it was chosen is indistinguishable from one the harness chose unaccountably.
 	pipeline.Selection = runstate.OperatorSelection(
 		"the operator ran this item by name from the command line", time.Now())
-	outcome, err := pipeline.Run(ctx, flags.Arg(0))
+	outcome, err := pipeline.Run(ctx, positional[0])
 	return reportRunResult(stdout, stderr, *jsonOutput, outcome, err)
 }
 
@@ -81,6 +84,11 @@ type components struct {
 	// built beside the reports because it is durable in the same way and for the
 	// same reason: the argument outlives the run that made it.
 	amendments *runstate.AmendmentStore
+	// evaluations is where the product manager's recommendations about the
+	// operator's ideas are kept. It is built beside the amendments for the same
+	// reason: the reasoning outlives the conversation that reached it, and a
+	// decision taken weeks later is the one that most needs it.
+	evaluations *runstate.EvaluationStore
 	// docket is the work that has stopped moving, waiting for the development
 	// manager to decide what becomes of it. It is built beside the reports for
 	// the same reason: an entry outlives the run that produced it, and a run
@@ -163,6 +171,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	evaluations, err := runstate.NewEvaluationStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	docket, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -209,6 +221,7 @@ func buildComponents(configPath string) (components, error) {
 		store:         store,
 		reports:       reports,
 		amendments:    amendments,
+		evaluations:   evaluations,
 		docket:        docket,
 		branchReviews: branchReviews,
 		directives:    directives,
@@ -576,7 +589,7 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 	if !jsonOutput {
 		// What the run's agents reported is collected whichever way the run went,
 		// so it is named whichever way this reports.
-		reportCollectedReports(stdout, outcome)
+		reportCollectedReports(stdout, console.ThemeFor(stdout, os.Getenv), outcome)
 		// And so is what they proposed changing in a document they do not own: it
 		// is waiting on a person either way, and a proposal nobody is told about is
 		// one nobody decides.
@@ -699,16 +712,25 @@ func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintln(stdout, reason)
 	}
 	fmt.Fprintf(stdout, "nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
-	fmt.Fprintf(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "`yoyo release` lets the harness choose work again, as does /release in a conversation, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
 }
 
 // reportCollectedReports names what this run's agents reported without it
 // stopping their work. The reports themselves are read from the pile, either
 // from a command line or from the conversation the operator may already be in;
 // what this owes them is to say there is something new to read, and where.
-func reportCollectedReports(writer io.Writer, outcome orchestrator.Outcome) {
+//
+// It says how many of what rather than only how many, and is marked and dressed
+// by the worst of them. This is the last line of a run that has just printed a
+// screen of branches, worktrees and prices, and an operator who is only going to
+// read one of those lines has to be told from it whether anything in that pile
+// is already costing them.
+func reportCollectedReports(writer io.Writer, theme console.Theme, outcome orchestrator.Outcome) {
 	if len(outcome.Reports) > 0 {
-		fmt.Fprintf(writer, "reported %d thing(s) without stopping the run; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
+		worst := report.Worst(outcome.Reports)
+		fmt.Fprint(writer, theme.Severity(console.Severity(worst), fmt.Sprintf(
+			"%sreported %d thing(s) without stopping the run (%s); `yoyo reports` shows them, as does /reports in `yoyo chat`\n",
+			worst.Prefix(), len(outcome.Reports), report.Tally(outcome.Reports))))
 	}
 	if outcome.ReportProblem != "" {
 		fmt.Fprintln(writer, outcome.ReportProblem)

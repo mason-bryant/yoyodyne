@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/research"
 )
 
 const (
@@ -21,6 +22,10 @@ const (
 	// which takes the size of the effective repair budget rather than a number
 	// of its own.
 	OriginDerivedRepairGrant = "derived:execution.repair_attempts_before_replan"
+	// OriginDerivedAccount marks an agent's account no layer stated, which
+	// follows the single account the effective mapping declares rather than a
+	// value of its own.
+	OriginDerivedAccount = "derived:accounts"
 	// OriginInput marks a configuration decoded from a stream rather than read
 	// from a project file.
 	OriginInput = "configuration input"
@@ -211,6 +216,7 @@ func newResolution() *resolution {
 				StuckMergeAge:   defaultStuckMergeAge,
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
+			Exchange: Exchange{MaxRounds: defaultExchangeMaxRounds},
 			// Publishing and work_items are the approvals with a harness default,
 			// because they are the ones added after configurations existed: a file
 			// mentioning neither loads rather than failing over a key that did not
@@ -233,8 +239,14 @@ func newResolution() *resolution {
 			// nothing, because what is refused is proposed instead and the operator
 			// decides. A project that wants the old behaviour sets `automatic`.
 			Approvals: Approvals{Publishing: domain.ApprovalHuman, WorkItems: domain.ApprovalHuman},
+			// One account, named, is what every project has until pooling exists, so
+			// it is a harness default rather than something a project states: a file
+			// that says nothing about accounts still has runs that say which account
+			// they ran under, and naming a second one is what a project writes.
+			Accounts: map[string]Account{DefaultAccountAlias: {}},
 		},
 		origins: map[string]string{
+			"accounts":                                            OriginDefault,
 			"product.specifications":                              OriginDefault,
 			"product.invariants":                                  OriginDefault,
 			"product.designs":                                     OriginDefault,
@@ -254,6 +266,7 @@ func newResolution() *resolution {
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
+			"exchange.max_rounds":                                 OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -292,6 +305,20 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)
 		setValue(r.origins, "triage.review_rounds_cap", triage.ReviewRoundsCap, &r.config.Triage.ReviewRoundsCap, applied.origin)
 		setValue(r.origins, "triage.repair_grant_attempts", triage.RepairGrantAttempts, &r.config.Triage.RepairGrantAttempts, applied.origin)
+	}
+	if asks := document.Exchange; asks != nil {
+		setValue(r.origins, "exchange.max_rounds", asks.MaxRounds, &r.config.Exchange.MaxRounds, applied.origin)
+	}
+	if evidence := document.Research; evidence != nil {
+		// Copied rather than aliased, like the check list: a layer's own slice must
+		// not become the resolved configuration's, or a later layer would be editing
+		// what an earlier document holds.
+		if evidence.Sources != nil {
+			r.config.Research.Sources = append([]research.Source(nil), (*evidence.Sources)...)
+			r.origins["research.sources"] = applied.origin
+		}
+		setValue(r.origins, "research.max_queries_per_turn", evidence.MaxQueriesPerTurn, &r.config.Research.MaxQueriesPerTurn, applied.origin)
+		setValue(r.origins, "research.timeout", evidence.Timeout, &r.config.Research.Timeout, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
@@ -338,6 +365,18 @@ func (r *resolution) apply(applied layer) error {
 		r.config.Operators = operators
 		r.origins["operators"] = applied.origin
 	}
+	// A supplied accounts mapping replaces the inherited one entirely, for the
+	// reason the operators mapping above does: what accounts exist is one
+	// statement, and a set assembled from two layers is not the one either of
+	// them wrote.
+	if document.Accounts != nil {
+		accounts := make(map[string]Account, len(*document.Accounts))
+		for alias, account := range *document.Accounts {
+			accounts[alias] = account
+		}
+		r.config.Accounts = accounts
+		r.origins["accounts"] = applied.origin
+	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate
 	// either layer described.
@@ -378,6 +417,10 @@ func (r *resolution) applyAgent(name string, document agentDocument, applied lay
 		agent.config.Model = strings.TrimSpace(*document.Model)
 		agent.origins["model"] = applied.origin
 	}
+	if document.Account != nil {
+		agent.config.Account = strings.TrimSpace(*document.Account)
+		agent.origins["account"] = applied.origin
+	}
 	if document.Persona != nil {
 		// A persona override replaces the inherited persona completely, so both
 		// halves of the reference must come from the overriding layer.
@@ -413,6 +456,18 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 		if _, supplied := agent.origins["instances"]; !supplied {
 			effectiveAgent.Instances = 1
 			agent.origins["instances"] = OriginDefault
+		}
+		// An agent that names no account runs on the project's single one, read
+		// after every layer has had its say so it follows the mapping that will
+		// actually be in force rather than one some layer underneath declared. A
+		// configuration declaring more than one account assigns nothing here, which
+		// keeps the refusal that follows about the accounts rather than about every
+		// agent that did not choose between them.
+		if _, supplied := agent.origins["account"]; !supplied {
+			if alias := effective.AccountAlias(); alias != "" {
+				effectiveAgent.Account = alias
+				agent.origins["account"] = OriginDerivedAccount
+			}
 		}
 		if agent.persona != nil {
 			text, source, err := agent.persona.loader.load(agent.persona.path)

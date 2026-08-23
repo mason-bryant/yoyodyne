@@ -69,11 +69,20 @@ type Delivery struct {
 // Silent reports a delivery that advances a cursor and posts nothing.
 func (d Delivery) Silent() bool { return d.Notification.Silent() }
 
-// Batch is one pass over the durable records: what is ready to post, and which
-// streams still exist so cursors for the rest can be dropped.
+// Batch is one pass over the durable records: what is ready to post, which
+// streams still exist so cursors for the rest can be dropped, and what each
+// topic is doing right now.
 type Batch struct {
 	Deliveries []Delivery
 	Streams    map[string]struct{}
+	// Statuses is each topic's current status, keyed exactly as a thread is. It
+	// is a reading rather than a history, and that is why it is beside the
+	// deliveries instead of among them: a delivery is a transition said once, and
+	// a status is what is true at the end of this pass however many transitions
+	// got there — including none, which is the case a message could never carry.
+	// A run that finishes with nothing left to say still has to stop reading as
+	// working.
+	Statuses map[string]notify.Status
 }
 
 // Feed is where the sink's messages come from. It is polled rather than
@@ -174,6 +183,11 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 		}
 		batch.Deliveries = append(batch.Deliveries, deliveries...)
 	}
+	// What each item is doing is read from the same reading its crossings were
+	// selected from, for the reason the in-flight count is: a status derived from
+	// a second reading a moment later could contradict the messages posted beside
+	// it in the same pass.
+	batch.Statuses = itemStatuses(states, since)
 
 	conversed, err := f.conversationDeliveries(ctx, cursors, batch.Streams)
 	if err != nil {
@@ -246,6 +260,51 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, beat...)
 	return batch, nil
+}
+
+// itemStatuses reads what each work item is doing out of the runs recorded for
+// it. An item is marked from its latest run, because a status answers what is
+// happening to the item now: an earlier attempt that failed is not what somebody
+// scanning the channel needs, and the thread below the mark still holds it.
+//
+// A run that was over before the watermark marks nothing. It is history the
+// channel was never told about, and a thread opened today by something else —
+// a report, the backlog moving — must not acquire a status from a run nobody
+// here has said a word about.
+func itemStatuses(states []runstate.State, since time.Time) map[string]notify.Status {
+	latest := map[string]runstate.State{}
+	for _, state := range states {
+		if predates(since, completion(state)) {
+			continue
+		}
+		if held, found := latest[state.WorkItemID]; found && !later(state, held) {
+			continue
+		}
+		latest[state.WorkItemID] = state
+	}
+	statuses := make(map[string]notify.Status, len(latest))
+	for item, state := range latest {
+		topic, err := notify.WorkItem(item)
+		if err != nil {
+			// A run nothing can be addressed to is already said once and read past
+			// where its crossings are selected; marking is not the place to say it
+			// a second time on every pass.
+			continue
+		}
+		statuses[topic.Key()] = notify.StatusOfRun(state)
+	}
+	return statuses
+}
+
+// later reports the more recent of two runs on one item. The start is what
+// orders them — a second attempt begins after the first, whatever either goes on
+// to do — and the last update settles the tie a repaired record could otherwise
+// leave.
+func later(state, held runstate.State) bool {
+	if !state.StartedAt.Equal(held.StartedAt) {
+		return state.StartedAt.After(held.StartedAt)
+	}
+	return state.UpdatedAt.After(held.UpdatedAt)
 }
 
 // sessions reads what the watch sessions did, in the order they did it. A

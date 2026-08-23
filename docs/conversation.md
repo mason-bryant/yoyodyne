@@ -71,7 +71,7 @@ holding three questions gets one answer and loses the other two. It is a questio
 and not a gate. Nothing is blocked, nothing is written, later means later, and a
 repository whose goals are already written gets no such prompt. The asking is
 persona guidance, so a project that wants a different opening
-[replaces it](configuration.md#personas) like any other part of the
+[replaces it](configuration/agents.md#personas) like any other part of the
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
@@ -85,13 +85,16 @@ disagree, the product manager reports the conflict rather than settling it.
 Not the source, not the design document, and no way to run a command: those say
 how the product is built rather than what it is for or what it ships. The
 narrowing this partially undoes is described, with what it bought and what it
-cost, in the [configuration guide](configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+cost, in the [configuration guide](configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
-It has no tools: no filesystem, no commands, no network. What it has instead is
-the work tracker, through a fixed set of named operations the harness carries
+It has no tools: no filesystem, no commands, no network. What it has instead are
+capabilities the harness performs on its behalf. The first is the work tracker,
+through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -99,6 +102,61 @@ failed is reported as failed rather than described as done, and a block the
 harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
+
+## Bringing it an idea rather than a work item
+
+Most of what you say to the product manager is intent: build this, do that
+first, stop doing the other. Some of it is not. "What if we did X", "is Y worth
+it", "should we move to Z" is a question, and the answer to it is usually
+neither yes nor no — it is what the evidence says, what the product is already
+committed to, what is still unknown, and a recommendation you can disagree with.
+
+It works through one of those rather than answering off the top of its head. It
+asks what it genuinely needs to know first, one or two questions at a time. Where
+evidence would change what it would recommend, it gathers some. Then it weighs
+the idea against your brief and your goals, because whether an idea is good in
+the abstract is not what you asked.
+
+**Gathering evidence is a second harness capability, and it is off until you turn
+it on.** The role still has no network. What it has is the same arrangement it
+has with the tracker: it names a question and one of the sources you configured,
+the harness runs that source, and it hands back what came out. A source is a
+command you wrote — see
+[research sources](configuration/agents.md#research-sources) — so what the harness may
+reach is exactly what you named and nothing else. Only the question leaves your
+machine, redacted and bounded on the way out; a project that configured no source
+has the capability off, and the product manager is told so and says it could not
+check rather than answering from memory as though it had.
+
+What comes back is untrusted. A search result is a stranger's prose arriving
+inside a prompt, so it is delivered framed as evidence about the world and never
+as instruction, exactly as your own repository documents already are. Every
+question and what it returned is printed to you as it happens, because research
+spends your money outside this machine.
+
+**What it concludes is written down.** The recommendation is one of four — adopt,
+reject, defer, or run a bounded experiment — and it is recorded with the
+reasoning, how the idea sits against the brief and the goals, the sources it
+cites, what the evidence states, what it inferred rather than read, what it is
+still uncertain about, and what argues the other way. Those last four are
+separate fields on purpose: a paragraph is where the difference between a fact
+and a hunch goes to die. Where it could not get adequate evidence it says so and
+the recommendation reflects that, rather than answering confidently anyway.
+
+`yoyo evaluation list` and `yoyo evaluation show <id>` read them back, and the
+record keeps what the harness actually retrieved — from which source, at what
+moment — beside the sources the product manager cited. The two are different
+claims: one is what it says it read, the other is what was fetched.
+
+**An evaluation is advice and the harness treats it as nothing else.** Recording
+one admits no work, changes no document, and approves nothing. Everything it
+might lead to already has a path with an approval on it and none of those paths
+runs through here: work reaches the queue as a proposal, under whatever approval
+[your project asks for](configuration/goals.md#what-reaches-the-queue); a change to the
+brief or the goals is yours to make; a change to a design or a decision record is
+the architect's, through `yoyo amendment`. That separation is the point. Research
+that could quietly turn an idea into approved work would be a way to approve work
+by asking a model to look something up.
 
 The brief and the goals stay yours. The product manager proposes a change to a
 goal and says plainly that it is yours to make; it cannot make one, and with no
@@ -142,7 +200,7 @@ and what could not be read is said.
 
 The product manager can propose a Beads work item instead of creating one, when
 the decision is yours rather than its. What becomes of a proposal is
-[`approvals.work_items`](configuration.md#what-reaches-the-queue) to decide,
+[`approvals.work_items`](configuration/goals.md#what-reaches-the-queue) to decide,
 and until you say otherwise every one of them is put to you: shown as a numbered
 card with its reasoning, and created only after an answer that approves it by
 name. A proposal you left undecided is named when the conversation ends, and a
@@ -184,7 +242,7 @@ it was, because an item claiming an approval you never gave is the one record
 this arrangement cannot afford.
 
 **Or keep the gate and carve one class out of it.**
-[`approvals.work_item_exemptions`](configuration.md#what-reaches-the-queue)
+[`approvals.work_item_exemptions`](configuration/goals.md#what-reaches-the-queue)
 lists classes of work the per-item gate is not asking about, and there is one:
 `diagnosis`, work that only reads what is already there and produces findings
 rather than a change. It is empty until you write it, the product manager is told
@@ -247,7 +305,7 @@ being three weeks out rather than turning down cards 2 and 3.
 
 Work reaches the queue only with a goal named against it, and the goal has to be
 one you approved. Every proposal, and every item the product manager admits
-itself where [`approvals.work_items`](configuration.md#what-reaches-the-queue)
+itself where [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)
 lets it, says which goal it serves in the words your goals document states it in;
 the harness resolves that against the goals it reads from `docs/product` and
 refuses an admission — or a proposal, before you are asked about it — that names
@@ -274,6 +332,28 @@ was admitted under is never rewritten. An item that names no goal and one whose
 goal your goals do not state are reported apart, because the first is work to
 attribute and the second is a claim to correct. [`yoyo goals`](artifacts.md#goals-and-what-work-serves-them)
 reads both from outside the conversation.
+
+An item also says what carries it, where that is not a developer run, and whose
+conversation that is. Work whose execution is a conversation with a role —
+promoting a document the architect owns, settling a decomposition — is admitted
+with `executor: conversation:architect`, naming the role whose conversation
+carries it, and `update` sets it on work already in the queue. The role is
+required: what the channel says about a handed-over item, until somebody picks it
+up, is whatever the marker named. The harness never selects a marked
+item for a developer run: it keeps its place in your order, the queue says what
+carries it rather than reporting it as ready, and a pass that reaches it says it
+passed it over rather than counting it among the work about to become pullable.
+Naming an item yourself with `yoyo run` is unaffected, because that is you
+deciding. Work that says nothing is a developer run, which is nearly all of it —
+and which is why the marker is not retroactive: everything admitted before you
+start marking says nothing, and is chosen as ordinary developer work. Which
+queued items need one is a product judgement the harness cannot infer, so
+bringing an existing queue under the guard is a pass over it with `update`.
+Before this the harness could not tell, and it cost a whole run and two review
+rounds on an item no developer could execute — with those rounds counted against
+the item's cap, so a second mis-selection would have escalated work nobody had
+started. [How work flows](work.md#letting-the-harness-choose-the-work) is the
+selection side of it.
 
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
@@ -434,7 +514,10 @@ the harness *choosing* new work, and lets everything already running finish. It
 is what you reach for when the queue looks wrong but nothing is on fire. It holds
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
-and `/release` lets the harness choose again. A held intake leads `/status` with
+and `/release` lets the harness choose again — as does `yoyo release` at a
+terminal, which lifts the same record, for when the hold is the one the
+failure-storm brake placed overnight and no conversation is open. A held intake
+leads `/status` with
 its own banner saying when it was placed and why, beneath the PAUSED banner if
 both are in force. It is recorded per product, unlike
 [`yoyo pause`](operations.md#pausing-everything-and-resuming-it), because what a development
@@ -459,9 +542,11 @@ what the item cost, broken down by the runs it took.
 A redirection is about one item. A directive is about the product: it is
 recorded for the product rather than for the agent you happened to say it to, so
 it reaches every run of every item, in this process and in any other. That is
-what `yoyo directive` and `/directive` write, and it is the same record every
-run reads before it starts, before it resumes, and before it puts a change
-through the gate that would integrate it.
+what `yoyo directive`, `/directive`, and a reply in a work item's
+[Slack thread](reporting.md#reporting-into-slack) write, and it is the same
+record every run reads before it starts, before it resumes, and before it puts a
+change through the gate that would integrate it. Which of the three it arrived
+through changes nothing about it downstream.
 
 Most directives are operational. They take effect from the moment they are
 recorded, and nothing waits for them:
@@ -577,7 +662,7 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration/goals.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |
@@ -620,6 +705,68 @@ the development manager, developer, and reviewer get the designs and the
 invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for.
+
+### Roles asking each other things
+
+A question one role cannot answer itself used to cost you one of two things:
+relaying it between two conversations by hand, or a whole work-item cycle. Now
+the role asks directly and the harness carries it. The product manager asking the
+architect *what does this goal cost, and what am I missing?* before it orders the
+backlog, and the architect asking the product manager *if we sacrifice some
+performance, is that an unacceptable trade-off from the user's standpoint?*
+before it settles a design, are the two cases it exists for. They are one
+mechanism with the parties swapped, and everything below holds identically in
+both directions.
+
+Three things are true of every exchange, and each is enforced rather than asked
+for:
+
+- **It is durable and visible.** An exchange is a record of its own under the
+  product's state, written before each round is taken, and `yoyo exchange list`
+  and `yoyo exchange show <id>` read the whole thread. Two roles cannot say
+  anything to each other that you cannot read afterwards, which is the
+  no-side-conversations property traceability implies. The conversation that
+  asked tells you at the time as well, and where the project reports to Slack
+  each round arrives in a thread of its own.
+- **It is judgment-only.** Both halves are toolless: the role being asked has no
+  filesystem, no commands, and nothing to check anything against, so an ask moves
+  opinion and never evidence. An answer reaching for any harness block at all is
+  refused whole and the asker is told its question went unanswered. Work that
+  needs something verified is still commissioned as bounded developer work.
+- **It is decisionless.** No authority moves through an ask. Nothing an answering
+  role says admits work, orders a backlog, edits a document, or resolves
+  anything, and decisions still land as amendments, proposals, and directives.
+
+```sh
+./bin/yoyo exchange list           # every exchange, the open ones first, with what each cost
+./bin/yoyo exchange show <id>      # one exchange in full: every question and every answer
+./bin/yoyo exchange list --json    # the records themselves, for a script
+```
+
+The channel runs between the three roles that hold judgement about the product —
+the product manager, the architect, and the development manager. The developer
+and the reviewer are not on it: their judgement is exercised inside a run,
+against a change and a worktree, and an opinion from either with none of that in
+front of it is worth less than the round it would cost.
+
+The answer comes back inside the reply you were already waiting for, as a further
+round of it, and the asking role then either asks again in the same thread or
+closes it with what it took from the exchange. Closing is the ordinary ending.
+
+**Every exchange is opened with a hard limit on rounds**, which is
+[`exchange.max_rounds`](configuration/runs.md#how-long-one-role-may-ask-another) and defaults
+to ten. The limit is copied onto the exchange as it opens and is durable with it,
+so neither a process dying nor an edit to the configuration lengthens a thread
+that is already running long. Reaching it is not a silent cutoff: the exchange
+closes as unresolved and is escalated to you as a report at warning severity,
+naming what the two roles did not settle. That is the one way this fails — two
+judgement models deferring to each other politely for ever — and a limit that
+ended the conversation quietly would hide exactly the case worth seeing.
+
+**What an exchange cost is reported beside the rounds it took**, wherever one is
+read. Rounds alone say how long a conversation went on and cost alone says what
+it came to; the question you actually have — was that worth it — is answerable
+only from the two together.
 
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
@@ -669,7 +816,7 @@ a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
 escalating instead. A repair and a re-run are each once per item — a second of
 either is an escalation rather than a larger budget — and past the
-[review-round cap](configuration.md#what-one-work-item-has-been-given) even
+[review-round cap](configuration/recovery.md#what-one-work-item-has-been-given) even
 the first is refused. A merge re-arm is bounded per item by the
 integration-retry budget rather than the rounds, because it buys no round at
 all; the design's stricter rule — once per publication — arrives with the
@@ -683,8 +830,12 @@ were never told about. `rescope` and `wait` are the two that are a note and
 nothing else — a re-scope's real work is the child item it creates beside the
 note, and a wait asks for nothing at all.
 
-Recording a decision is not carrying it out, and one of the six now has an
-action that does. `yoyo triage rerun <run-id> --reason "<what the development
+Recording a decision is not carrying it out, and two of the six now have an
+action that does. They are the two opposite answers to a run that stopped:
+`yoyo triage rerun` starts the item over, and `yoyo triage repair` continues the
+run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<what the development
 manager decided>"` starts a fresh run of the item whose stopped run the docket
 entry names — the case where the ground moved under a change that was never
 wrong. The run records the development manager as having chosen the work and the
@@ -741,14 +892,44 @@ Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
 special carries it, deliberately: notes are not evidence for a [protected-path
-grant](configuration.md#protected-paths-in-a-developers-change), so
+grant](configuration/artifacts.md#protected-paths-in-a-developers-change), so
 guidance that travels this way can never widen what the re-run is allowed to
 change.
 
-The harness carries out none of the other five. Two of them ask for something
-and it is still yours to do: `yoyo run <id>` after a repair grant, and for a
-re-arm, asking the forge to merge the pull request again yourself —
-nothing in the harness repeats a merge request the forge dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
+`yoyo triage repair <run-id> --reason "<what the development manager decided>"`
+is the other one, and it is the answer to the opposite case: the change is nearly
+right and the run ran out of attempts. It starts nothing over. The stopped run
+goes on — same branch, same worktree, the developer session that already holds
+the context, and the reviewer's findings handed back exactly as they were
+written — under the grant the development manager already recorded. Deciding
+`repair` is what takes that grant and sizes it; this reads that record for what
+it is worth and hands the run exactly that, so it can never give a run more
+attempts than the round cap let the item have. **Your hold on intake applies to
+this too**, for the same reason it applies to a re-run.
+
+**It supersedes the blocker rather than needing you to remember to.** The run
+that stopped blocked its item and recorded the blocker on its own state, which
+`/status`, `yoyo reconcile`, and the docket all read as the fact that it stopped.
+Re-entry clears both as it happens: the item is put back with the decision
+recorded on it, and the run's blocker is cleared onto the continuation that
+supersedes it, keeping the words it was recorded in. So a repair does not need
+the reopening a re-run does.
+
+Five things refuse it, and every one of them is asked before either of those
+writes, so a refused re-entry leaves the grant exactly where it was. The stopped
+run has to be really over. It has to have recorded a failure that was actually
+returned to its developer — findings, a failing check, or refused paths — because
+a run whose provider kept refusing has no repair loop to re-enter. The item must
+not be closed or waiting on other work. A grant of the development manager's has
+to be there and not already carried out. And **the preserved worktree has to be
+as the harness left it**: what a continued developer is handed back is whatever is
+in that worktree, so a HEAD that moved — you mid-surgery, an agent that
+committed — refuses to a person, leaves the item blocked, and says so.
+
+The harness carries out none of the other four. One of them asks for something
+and it is still yours to do: for a re-arm, asking the forge to merge the pull
+request again yourself — nothing in the harness repeats a merge request the forge
+dropped. That manual re-arm is safe against a concurrent harness promotion for one reason worth knowing: the forge serializes merges into the base branch and re-runs its required checks in full, so the worst a race costs is a drop you would re-arm again — never an unverified merge. The re-arm action, when built, takes the harness's own promotion lease instead and removes even that churn. The budget is spent when the decision is
 recorded whether or not you or the harness act on it, which is the same direction
 every counter here fails in: an attempt nobody took rather than one nobody
 counted. What triage changed is that stopped work is decided by the role that
@@ -769,9 +950,32 @@ sentence: what you have typed stays exactly as it is, and you carry on from
 where you were. The conversation is written into the terminal's ordinary output
 rather than an alternate screen, so scrollback, selection and copying, and
 resizing keep working on it as they would on any other command's output. Editing
-the line is deliberately small — the arrow keys, home and end, backspace and
-delete, and Ctrl-U and Ctrl-W — and Ctrl-C still interrupts the way it always
-did, because the terminal keeps its own signal keys.
+what you are composing is deliberately small — the arrow keys, home and end,
+backspace and delete, and Ctrl-U and Ctrl-W.
+
+Return sends the message, and shift-return puts a newline in it, so what you say
+can be more than one line. Whether shift-return reaches yoyo at all is the
+terminal's decision rather than yoyo's: in a terminal's legacy mode return and
+shift-return are the same byte, and a key that silently does nothing is worse
+than one you were never offered. So the terminal is asked when the conversation
+opens — the kitty keyboard protocol, or xterm's modifyOtherKeys — and where it
+answers, shift-return inserts a newline. Where it does not, **alt-return** does,
+and so does **ending a line with a backslash**, which asks the terminal for
+nothing at all and works on a redirected stream too. `/help` says which of these
+this terminal supports rather than listing all of them at you. The price of the
+backslash is that a message ending in one cannot be typed: the backslash is what
+carries the line on. What you compose is drawn in the same region, over as many
+rows as it has lines, and reaches the product manager with its lines where you
+put them.
+
+Ctrl-C still interrupts the way it always did, and Ctrl-Z still stops the
+conversation. A terminal that has agreed to report shift-return stops raising
+the signal keys itself, so yoyo raises what it reports — to the same process
+group the terminal would have. The keyboard is handed back exactly as it was
+found whenever the terminal changes hands: when the conversation ends, and when
+Ctrl-Z stops it, so the shell you drop into finds none of this on it. Resuming
+takes it back and asks again, because what a terminal agreed to before a stop is
+not what it is doing after one.
 
 While a turn is being answered, the line below the conversation says what it is
 doing: a spinner, the phase it has reached, and how long you have been waiting.
@@ -821,7 +1025,17 @@ than one wall of text; the frame is decoration exactly as the rule is, and where
 decoration is suppressed the same card is its heading with the body indented
 under it. The states work is in are coloured too, and the same way wherever they
 appear — running blue, blocked orange, done green, failed red — so `/status` is
-read down its aligned columns rather than picked out of ragged prose. Colour is
+read down its aligned columns rather than picked out of ragged prose. So is what
+a report or a concern is asking for: something already wrong is red and bold,
+a risk that has not cost anything yet is orange, and a note is left plain,
+because a listing where every line is coloured has no emphasis left for the line
+that matters. That one carries a mark as well as a colour — `!!` at the left
+margin for critical and `!` for warning, in the column before the identifier —
+so the pile can be scanned down its margin, and so the distinction is the one
+thing here that survives a terminal which cannot be dressed at all. A concern is
+marked the same way, by kind: work the product manager says would cut against a
+goal is the critical one, and the two that are questions about incomplete goals
+or about its own judgement are warnings. Colour is
 an addition to the text and never what carries the meaning — the question still
 ends in a question mark, the proposal still says what it is proposing, the group
 still says "blocked (2)" in words — so a transcript with the escapes stripped

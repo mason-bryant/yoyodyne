@@ -75,14 +75,18 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	failedOnly := flags.Bool("failed", false, "only the runs that ended without succeeding")
 	limit := flags.Int("limit", defaultStatusRuns, "report at most this many runs, newest first (0 reports all of them)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(stderr, "status accepts at most one Beads work item id")
 		printStatusUsage(stderr)
 		return 2
 	}
+	// The item is optional, so it is read through argumentAt rather than indexed:
+	// `yoyo status` with nothing named reports the whole recent history.
+	workItemID := argumentAt(positional, 0)
 	if *limit < 0 {
 		fmt.Fprintln(stderr, "limit cannot be negative; 0 reports every recorded run")
 		return 2
@@ -93,7 +97,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		return reportStatusFailure(stdout, stderr, *jsonOutput, err)
 	}
 	history, err := store.History(runstate.RunQuery{
-		WorkItemID: flags.Arg(0),
+		WorkItemID: workItemID,
 		FailedOnly: *failedOnly,
 		Limit:      *limit,
 	})
@@ -110,7 +114,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// reported beside them instead.
 	var counters *runstate.TriageCounters
 	var triageFailure string
-	if workItemID := flags.Arg(0); workItemID != "" {
+	if workItemID != "" {
 		read, err := store.Triage().Counters(workItemID)
 		if err != nil {
 			triageFailure = fmt.Sprintf("the item's triage record could not be read: %v", err)
@@ -143,7 +147,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		return writeJSON(stdout, stderr, output)
 	}
 	printWatch(stdout, watched)
-	printRunHistory(stdout, history, flags.Arg(0), *failedOnly)
+	printRunHistory(stdout, history, workItemID, *failedOnly)
 	if counters != nil {
 		printItemTriage(stdout, *counters, caps)
 	}
@@ -358,6 +362,14 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	} else {
 		fmt.Fprintln(writer, "  selected: no reason recorded")
 	}
+	// What the run was spent on and what set it up are printed for every run, and
+	// for the reason the selection line is: there is one account today, so a line
+	// that appeared only where several existed would be a line nobody was reading
+	// on the day the second one arrived. A record that names neither is a record
+	// written before either was carried, and says so.
+	fmt.Fprintf(writer, "  ran under %s, configuration %s\n",
+		recorded(run.AccountAlias, "an account the record does not name"),
+		recorded(run.ConfigRevision, "a configuration the record does not name"))
 	printed := true
 	for _, reason := range []struct {
 		label string
@@ -390,6 +402,17 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		printed = true
 	}
 	return printed
+}
+
+// recorded says what a record holds for one field, or states the absence in
+// words. A blank in a listing reads as a bug in the listing rather than as a
+// record that was written before the field existed, which is what an absence
+// here actually is.
+func recorded(value, absence string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return absence
 }
 
 // printOutstandingSteps says what a finished run still owes, so a run marked

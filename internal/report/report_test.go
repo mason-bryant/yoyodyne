@@ -188,3 +188,221 @@ func TestCollectedReportsAreRefusedWithoutTheirAttribution(t *testing.T) {
 		}
 	}
 }
+
+// The pile is read worst-first by whoever works through it, and a report nobody
+// has decided about is what they are being asked to look at.
+func TestThePileIsReadWorstFirstAndOnlyWhatNobodyHasDecidedAbout(t *testing.T) {
+	t.Parallel()
+
+	note := piledReport("report-00000000000000000000000000000001", SeverityNote, 1)
+	oldCritical := piledReport("report-00000000000000000000000000000002", SeverityCritical, 2)
+	warning := piledReport("report-00000000000000000000000000000003", SeverityWarning, 3)
+	newCritical := piledReport("report-00000000000000000000000000000004", SeverityCritical, 4)
+	pile := []Report{note, oldCritical, warning, newCritical}
+
+	ordered := BySeverity(pile)
+	got := []string{ordered[0].ID, ordered[1].ID, ordered[2].ID, ordered[3].ID}
+	// Worst first, and the newest first inside one severity: a bounded listing
+	// then cuts the end nobody minds losing.
+	want := []string{newCritical.ID, oldCritical.ID, warning.ID, note.ID}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("BySeverity() = %v, want %v", got, want)
+		}
+	}
+	// The pile's own order is the order it was reported in, and reading it must
+	// not disturb that.
+	if pile[0].ID != note.ID {
+		t.Fatalf("BySeverity() reordered the pile it was given: %v", pile)
+	}
+
+	handlings := []Handling{testHandling(warning.ID, "already fixed")}
+	open := Unhandled(pile, handlings)
+	if len(open) != 3 {
+		t.Fatalf("Unhandled() = %#v", open)
+	}
+	for _, reported := range open {
+		if reported.ID == warning.ID {
+			t.Fatal("a report somebody decided about is still being asked about")
+		}
+	}
+}
+
+// A report handled twice is two records, and what is read is the later one: the
+// log is appended to rather than rewritten, so the first decision is history.
+func TestTheCurrentDispositionIsTheLatestOne(t *testing.T) {
+	t.Parallel()
+
+	first := testHandling("report-00000000000000000000000000000001", "nothing to do")
+	second := testHandling("report-00000000000000000000000000000001", "admitted as yoyodyne-ifd.150")
+	second.RecordedAt = first.RecordedAt.Add(time.Hour)
+	// Whichever order they are read in, the answer is the same fact about when
+	// each was decided rather than about how the log happened to be scanned.
+	for _, handlings := range [][]Handling{{first, second}, {second, first}} {
+		if current := Handled(handlings)["report-00000000000000000000000000000001"]; current.Reason != second.Reason {
+			t.Fatalf("Handled() = %#v, want the later decision", current)
+		}
+	}
+}
+
+// A handling that names nothing, or names something that is not a report, takes
+// no report out of anybody's view while reading as though it had.
+func TestAHandlingSaysWhichReportAndWhatBecameOfIt(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name     string
+		mutate   func(*Handling)
+		expected string
+	}{
+		{"no report", func(h *Handling) { h.ReportID = "" }, "report id is invalid"},
+		{"not a report identifier", func(h *Handling) { h.ReportID = "yoyodyne-ifd.19" }, "report id is invalid"},
+		{"no reason", func(h *Handling) { h.Reason = "  " }, "reason is required"},
+		{"no invocation", func(h *Handling) { h.RunID = "" }, "run id is required"},
+		{"unrecorded moment", func(h *Handling) { h.RecordedAt = time.Time{} }, "recorded_at is required"},
+		{"a reason nobody could read", func(h *Handling) {
+			h.Reason = strings.Repeat("x", MaxHandlingReasonBytes+1)
+		}, "limit is"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			handling := testHandling("report-00000000000000000000000000000001", "admitted as yoyodyne-ifd.150")
+			testCase.mutate(&handling)
+			err := handling.Validate()
+			if err == nil || !strings.Contains(err.Error(), testCase.expected) {
+				t.Fatalf("Validate() error = %v, want it to mention %q", err, testCase.expected)
+			}
+		})
+	}
+	if err := testHandling("report-00000000000000000000000000000001", "admitted as yoyodyne-ifd.150").Validate(); err != nil {
+		t.Fatalf("Validate() on a well-formed handling error = %v", err)
+	}
+}
+
+// A report is named by its identifier now, so a listing that showed everything
+// about one except the word for it would leave the reader unable to act on it.
+func TestARenderedReportNamesItselfAndWhatBecameOfIt(t *testing.T) {
+	t.Parallel()
+
+	reported := piledReport("report-00000000000000000000000000000001", SeverityCritical, 1)
+	rendered := reported.Render()
+	for _, want := range []string{reported.ID, "critical", "from the developer on yoyodyne-ifd.19", reported.RunID} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("Render() = %q, want it to contain %q", rendered, want)
+		}
+	}
+	handled := testHandling(reported.ID, "admitted as yoyodyne-ifd.150").Render()
+	for _, want := range []string{"handled", "product-manager", "admitted as yoyodyne-ifd.150"} {
+		if !strings.Contains(handled, want) {
+			t.Fatalf("Handling.Render() = %q, want it to contain %q", handled, want)
+		}
+	}
+}
+
+// Colour is an addition everywhere in this harness and never the carrier of
+// meaning, so the severity a report was filed at has to be findable with every
+// escape stripped out of the listing: piped to a file, read under NO_COLOR, or
+// shown on a terminal that says it is dumb. The marker is what does that, and a
+// reader scanning the margin has to be able to stop at the critical one without
+// reading the note above it.
+func TestASeverityIsMarkedWhereNothingMayBeDressed(t *testing.T) {
+	t.Parallel()
+
+	critical := piledReport("report-00000000000000000000000000000001", SeverityCritical, 1).Render()
+	warning := piledReport("report-00000000000000000000000000000002", SeverityWarning, 2).Render()
+	note := piledReport("report-00000000000000000000000000000003", SeverityNote, 3).Render()
+	if !strings.HasPrefix(critical, "  !! report-") {
+		t.Fatalf("a critical report is not marked at the margin: %q", critical)
+	}
+	if !strings.HasPrefix(warning, "  !  report-") {
+		t.Fatalf("a warning is not marked at the margin: %q", warning)
+	}
+	// A note asks for nothing, and a mark on every line marks none of them.
+	if !strings.HasPrefix(note, "     report-") {
+		t.Fatalf("a note was marked as though it wanted attention: %q", note)
+	}
+	// The marker is padded rather than inserted, so the identifiers still read
+	// down the page as a column once the criticals are marked out of them.
+	columns := make(map[int]struct{})
+	for _, rendered := range []string{critical, warning, note} {
+		columns[strings.Index(rendered, "report-")] = struct{}{}
+	}
+	if len(columns) != 1 {
+		t.Fatalf("the identifiers no longer line up: %v", columns)
+	}
+	// The severity is still stated in words as well, so nothing rests on the
+	// reader knowing what the mark means.
+	if !strings.Contains(critical, "[critical]") || !strings.Contains(note, "[note]") {
+		t.Fatalf("a rendered report no longer says its severity in words: %q / %q", critical, note)
+	}
+}
+
+// A summary that names a pile without listing it owes the reader the one thing a
+// count cannot say: whether anything in there is already costing somebody.
+func TestASummaryOfAPileNamesTheWorstOfItAndHowManyOfWhat(t *testing.T) {
+	t.Parallel()
+
+	pile := []Report{
+		piledReport("report-00000000000000000000000000000001", SeverityNote, 1),
+		piledReport("report-00000000000000000000000000000002", SeverityWarning, 2),
+		piledReport("report-00000000000000000000000000000003", SeverityNote, 3),
+	}
+	if worst := Worst(pile); worst != SeverityWarning {
+		t.Fatalf("Worst() = %q, want %q", worst, SeverityWarning)
+	}
+	// Worst first, and a severity nothing was filed at is left out rather than
+	// counted at zero.
+	if tally := Tally(pile); tally != "warning 1, note 2" {
+		t.Fatalf("Tally() = %q", tally)
+	}
+	critical := piledReport("report-00000000000000000000000000000004", SeverityCritical, 4)
+	if worst := Worst(append(pile, critical)); worst != SeverityCritical {
+		t.Fatalf("Worst() = %q, want the critical one", worst)
+	}
+	// Nothing reported is not a severity, so a summary of it claims none.
+	if worst := Worst(nil); worst != "" {
+		t.Fatalf("Worst(nil) = %q, want no severity at all", worst)
+	}
+	if tally := Tally(nil); tally != "" {
+		t.Fatalf("Tally(nil) = %q", tally)
+	}
+	// A line of prose is marked with a separator where a listing pads a column,
+	// and a note is marked with nothing in either.
+	if prefix := SeverityCritical.Prefix(); prefix != "!! " {
+		t.Fatalf("Prefix() = %q", prefix)
+	}
+	if prefix := SeverityNote.Prefix(); prefix != "" {
+		t.Fatalf("a note carries a prefix: %q", prefix)
+	}
+}
+
+func piledReport(id string, severity Severity, minute int) Report {
+	return Report{
+		SchemaVersion: SchemaVersion,
+		ID:            id,
+		Role:          "developer",
+		Agent:         "developer",
+		RunID:         "run-0123456789abcdef0123456789abcdef",
+		WorkItemID:    "yoyodyne-ifd.19",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Severity:      severity,
+		Message:       "something worth knowing",
+		RecordedAt:    time.Date(2026, 8, 22, 9, minute, 0, 0, time.UTC),
+	}
+}
+
+func testHandling(reportID, reason string) Handling {
+	return Handling{
+		SchemaVersion: HandlingSchemaVersion,
+		ReportID:      reportID,
+		Role:          "product-manager",
+		Agent:         "product-manager",
+		RunID:         "chat-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Reason:        reason,
+		RecordedAt:    time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC),
+	}
+}

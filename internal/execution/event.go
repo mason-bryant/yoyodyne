@@ -85,6 +85,14 @@ const (
 	// has to say that the operator gave one.
 	EventDirectiveRecorded EventType = "directive.recorded"
 	EventDirectiveResolved EventType = "directive.resolved"
+	// An ask this conversation put to another role is recorded in this
+	// conversation's own log as well as in the exchange itself, for the reason a
+	// report is recorded in both places: the exchange holds the thread, and the
+	// conversation has to say that its own reasoning went and asked somebody. The
+	// round and its closing are separate events because a round that produced no
+	// answer still happened and still spent the exchange's budget.
+	EventExchangeRound  EventType = "exchange.round"
+	EventExchangeClosed EventType = "exchange.closed"
 )
 
 type Event struct {

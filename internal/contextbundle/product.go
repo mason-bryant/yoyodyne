@@ -76,7 +76,26 @@ const maxIntentPathBytes = 80
 // architect's decision records, which say how the product is built and are the
 // half of docs/ that made description reachable as intent in the first place. A
 // path that names nothing in a given repository is simply not there.
-var shippedDocumentation = []string{"README.md", "docs/configuration.md"}
+//
+// The configuration guide is named here as well as split apart beneath it.
+// docs/configuration.md is an index now, so a set that still named it alone
+// would carry a table of contents and call it a description of the product --
+// which is the ifd.20 failure again, arrived at by a documentation restructure
+// instead of on purpose. The audience documents the README split produced are
+// deliberately not here yet: the README still carries the text of each of them,
+// so naming both would spend the budget twice on one document and drop the
+// guides below it. They belong here as the README is trimmed to its index.
+var shippedDocumentation = []string{
+	"README.md",
+	"docs/configuration.md",
+	"docs/configuration/setup.md",
+	"docs/configuration/artifacts.md",
+	"docs/configuration/goals.md",
+	"docs/configuration/runs.md",
+	"docs/configuration/publishing.md",
+	"docs/configuration/recovery.md",
+	"docs/configuration/agents.md",
+}
 
 // maxCommandHelpBytes bounds the help a caller supplies. Help text is compiled
 // into the product rather than growing at runtime, so this is a bound on a
@@ -1071,8 +1090,17 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 		listed = listed[:maxProductWorkItems]
 	}
 	for _, item := range listed {
-		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d, %s] %s\n",
-			item.ID, item.Status, item.Priority, item.IssueType, singleLine(item.Title, maxWorkItemTitleBytes)))
+		// An item no developer run carries says so here, because this listing is
+		// what the queue's owner orders from: work that will never be pulled is a
+		// different thing to put at the top of it from work that will be pulled
+		// next. Ordinary work says nothing, which is nearly all of it.
+		executor := ""
+		if !item.Executor.DeveloperRun() {
+			executor = ", executor " + string(item.Executor)
+		}
+		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d, %s%s] %s\n",
+			item.ID, item.Status, item.Priority, item.IssueType, executor,
+			singleLine(item.Title, maxWorkItemTitleBytes)))
 	}
 	if len(items) > len(listed) {
 		rendered.WriteString(fmt.Sprintf("\n%d further work item(s) are not listed here.\n", len(items)-len(listed)))

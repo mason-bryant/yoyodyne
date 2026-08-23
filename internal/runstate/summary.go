@@ -71,6 +71,13 @@ type RunSummary struct {
 	// nothing accounts for is indistinguishable from work happening behind the
 	// operator's back, and a missing line reads as neither.
 	Selection *Selection `json:"selection,omitempty"`
+	// AccountAlias and ConfigRevision are which provider account the run spent
+	// and which configuration set it up. They are here for the reason the
+	// selection is: a run nobody can attribute to an account or to a
+	// configuration is one whose cost and whose behaviour cannot be explained
+	// afterwards, and there is one of each today only until there is not.
+	AccountAlias   string `json:"account_alias,omitempty"`
+	ConfigRevision string `json:"config_revision,omitempty"`
 	// CostUSD is what the provider reported for every invocation in this run's
 	// log, and UnknownCost says why there is no figure rather than reporting one
 	// of zero: a run whose evidence is gone did not cost nothing.
@@ -169,6 +176,8 @@ func (s *Store) summarize(state State) RunSummary {
 		Integrated:     state.Integration != nil,
 		Outstanding:    state.Outstanding(),
 		MergeQueued:    state.PullRequest != nil && state.PullRequest.MergeQueued,
+		AccountAlias:   state.AccountAlias,
+		ConfigRevision: state.ConfigRevision,
 		Failure:        state.Failure,
 		PublishFailure: state.PublishFailure,
 		CleanupFailure: state.CleanupFailure,

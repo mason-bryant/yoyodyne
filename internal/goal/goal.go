@@ -192,6 +192,38 @@ func (p LinkProblem) String() string {
 	return fmt.Sprintf("%s (%s): %s", p.Statement, p.ArtifactID, p.Reason)
 }
 
+// WrapProblem is one goal whose statement is hard-wrapped across more than one
+// physical line. The statement is still recorded whole — rejoining the wrap is
+// what closed the silent truncation this class is named for — so nothing is
+// dropped over one and it is reported beside a set that holds every goal it
+// read, exactly as a broken link upstream is.
+//
+// It is reported at all because rejoining is a reading of the file rather than
+// something the file says. What an attribution has to match, word for word, is
+// the statement that reading produced, and the reading turns on an indent and on
+// which line is taken for the trailer: a wrapped goal can be changed into a
+// different goal by an edit that changes none of its words. A goal written on
+// one line cannot, which is why the convention is worth holding rather than
+// merely tolerating the wrap.
+type WrapProblem struct {
+	// Statement is the goal as it was rejoined, which is the goal work would have
+	// to name.
+	Statement  string `json:"statement"`
+	ArtifactID string `json:"artifact_id"`
+	Path       string `json:"path"`
+	// Line is the physical line the entry opens on, counted from the top of the
+	// file rather than from the end of the frontmatter, so what is reported names
+	// a place to open.
+	Line int `json:"line"`
+	// Lines is how many physical lines the statement was rejoined from.
+	Lines  int    `json:"lines"`
+	Reason string `json:"reason"`
+}
+
+func (p WrapProblem) String() string {
+	return fmt.Sprintf("%s:%d: %s", p.Path, p.Line, p.Reason)
+}
+
 // Problem names one goals document whose goals could not be read, and says why.
 // It is reported beside the goals that did load: a document nobody can read is
 // a gap in what work can be attributed to, and a gap nobody is told about looks
@@ -213,6 +245,12 @@ type Set struct {
 	// BriefGoals are the goals the product brief states, which is what the goals
 	// above link upward to.
 	BriefGoals []BriefGoal `json:"brief_goals,omitempty"`
+	// BriefPath is the repository-relative file the product brief is written in,
+	// carried whether or not that brief is in force or states any goal. It is
+	// where a reader sent upstream from the goals has to open, and the cases
+	// where nothing links upward are exactly the cases where BriefGoals cannot
+	// answer for it.
+	BriefPath string `json:"brief_path,omitempty"`
 	// Sources are the goals artifacts read, in the order the artifact set holds
 	// them, so what is reported can say where it looked.
 	Sources  []string  `json:"sources,omitempty"`
@@ -222,6 +260,11 @@ type Set struct {
 	// is a document whose goals are not in the set, and one of these is a goal
 	// that is. Nothing is dropped over one.
 	LinkProblems []LinkProblem `json:"link_problems,omitempty"`
+	// WrapProblems are the goals written across more than one physical line. They
+	// are kept apart from the two above for the same reason those are kept apart
+	// from each other: the goal is in the set and its link upstream may be
+	// perfectly good, and what is wrong is how the document is written.
+	WrapProblems []WrapProblem `json:"wrap_problems,omitempty"`
 	// Unavailable is why the goals are not known at all, as opposed to known to
 	// be none. A caller that could not load the artifacts says so here: work
 	// admitted while the goals cannot be read is not work whose goal was
@@ -375,6 +418,10 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		// is still what a reader has to be sent to.
 		if brief == "" || recorded.InForce() {
 			brief = recorded.ID
+			// The path is taken with the id and by the same rule, so what a reader
+			// is sent to open is the brief that was named rather than whichever one
+			// the artifact set happened to hold last.
+			set.BriefPath = recorded.Path
 		}
 		// A superseded or retired brief states intent that was replaced, and its
 		// goals are not link targets. Both ends of the link are held to the same
@@ -437,6 +484,22 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 				InForce:    recorded.InForce(),
 				Approval:   recorded.ApprovalState(),
 			})
+			// Only a document in force is held to the convention, the same rule the
+			// link upstream is judged by and for the same reason: a goal in a
+			// superseded or retired document is not something work can name, and
+			// reporting how it is written would leave a permanent finding against a
+			// file nobody is going to open again.
+			if recorded.InForce() && entry.lines > 1 {
+				set.WrapProblems = append(set.WrapProblems, WrapProblem{
+					Statement:  entry.statement,
+					ArtifactID: recorded.ID,
+					Path:       recorded.Path,
+					Line:       entry.line,
+					Lines:      entry.lines,
+					Reason: fmt.Sprintf("its statement is written across %d physical lines; a goal is written on one, so that the words an attribution has to match are what the file says outright rather than what rejoining the wrap produced — an indent, or a wrapped line that reads as the `%s` trailer, changes the recorded goal without changing a word of it",
+						entry.lines, supportsPrefix),
+				})
+			}
 		}
 	}
 	set.LinkProblems = linkProblems(set.Goals, set.BriefGoals, brief, briefInForce, briefUnreadable)
@@ -768,6 +831,13 @@ func named(statement string) string {
 type entry struct {
 	statement string
 	trailer   string
+	// line is the physical line the entry opens on, counted from the top of the
+	// file, and lines is how many physical lines the statement was rejoined from.
+	// They are collected here rather than derived afterwards because only the
+	// pass that did the rejoining knows what it joined: the statement it returns
+	// carries no trace of the wrap.
+	line  int
+	lines int
 }
 
 // statements reads the goals one document states, or says why it states none.
@@ -790,7 +860,8 @@ type entry struct {
 // returns is what work may be attributed to, so a sentence read out of the
 // wrong section becomes a goal somebody can admit work under.
 func statements(content string) ([]entry, string) {
-	lines := strings.Split(withoutFrontmatter(content), "\n")
+	body, dropped := withoutFrontmatter(content)
+	lines := strings.Split(body, "\n")
 	level := 0
 	inGoals := false
 	inFence := false
@@ -801,7 +872,7 @@ func statements(content string) ([]entry, string) {
 	// ends the statement.
 	open, trailing, adopted := false, false, false
 	var stated []entry
-	for _, raw := range lines {
+	for index, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "```") || strings.HasPrefix(line, "~~~") {
 			inFence, open, trailing = !inFence, false, false
@@ -843,7 +914,7 @@ func statements(content string) ([]entry, string) {
 				continue
 			}
 			if statement := strings.TrimSpace(item[1]); statement != "" {
-				stated = append(stated, entry{statement: statement})
+				stated = append(stated, entry{statement: statement, line: dropped + index + 1, lines: 1})
 				open = true
 			}
 			continue
@@ -883,6 +954,7 @@ func statements(content string) ([]entry, string) {
 			continue
 		}
 		stated[len(stated)-1].statement += " " + line
+		stated[len(stated)-1].lines++
 	}
 	switch {
 	case level == 0:
@@ -903,21 +975,24 @@ func indented(raw string) bool {
 }
 
 // withoutFrontmatter drops the artifact identity metadata a goals document
-// carries at the top of the file. The identity is validated where artifacts are
-// loaded; here it is neither a heading nor a goal, and reading it as content
-// would let a `supports` entry be collected as something work can serve.
-func withoutFrontmatter(content string) string {
+// carries at the top of the file, and says how many lines it dropped. The
+// identity is validated where artifacts are loaded; here it is neither a heading
+// nor a goal, and reading it as content would let a `supports` entry be
+// collected as something work can serve. The count is returned because a
+// position reported back to a reader has to name the line in the file rather
+// than the line in what was left of it.
+func withoutFrontmatter(content string) (string, int) {
 	trimmed := strings.TrimPrefix(content, "\ufeff")
 	lines := strings.Split(trimmed, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "---" {
-		return trimmed
+		return trimmed, 0
 	}
 	for index := 1; index < len(lines); index++ {
 		if strings.TrimSpace(lines[index]) == "---" {
-			return strings.Join(lines[index+1:], "\n")
+			return strings.Join(lines[index+1:], "\n"), index + 1
 		}
 	}
-	return trimmed
+	return trimmed, 0
 }
 
 // readGoalsDocument reads one goals file, bounded the same way the artifact
