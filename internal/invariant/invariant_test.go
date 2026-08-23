@@ -217,6 +217,64 @@ func TestSelectNamesWhatDidNotFitRatherThanTrimmingSilently(t *testing.T) {
 	}
 }
 
+func TestDeliveredTextKeepsWhatAppliesEverywhereOnAByteStablePrefix(t *testing.T) {
+	t.Parallel()
+
+	// Two work items: one that names a package a scoped invariant constrains and
+	// one that names nothing at all. Their deliveries differ, which is what
+	// selection is for, but every byte up to and including the repository-wide
+	// constraint is identical — so that part of the prompt is a prefix a provider
+	// can cache across every run this repository makes rather than input it is
+	// charged for again each time.
+	set := Set{
+		Directory: invariantsDirectory,
+		Active: []Invariant{
+			built("harness-owns-git", nil),
+			built("one-writer-per-item", []string{"internal/runstate"}),
+		},
+	}
+	wide := set.Select("audit how prompts are assembled").Text()
+	both := set.Select("reserve a run in internal/runstate").Text()
+	if wide == both {
+		t.Fatalf("evidence naming a scoped invariant delivered the same text as evidence that did not:\n%s", wide)
+	}
+	shared := commonPrefix(wide, both)
+	if !strings.Contains(shared, renderInvariant(built("harness-owns-git", nil))) {
+		t.Fatalf("the repository-wide invariant is not on the stable prefix; shared bytes were:\n%s", shared)
+	}
+	// The one part of the framing that varies with the work item is what has to
+	// stay below the set it describes, or it moves every constraint behind it off
+	// the shared prefix.
+	if strings.Contains(shared, "were selected as relevant") {
+		t.Fatalf("the selection count reached the stable prefix:\n%s", shared)
+	}
+
+	// Nothing was dropped to get there: each delivery still says how much of the
+	// repository's set it is, and the scoped invariant still reaches only the
+	// work item whose evidence named it.
+	if !strings.Contains(wide, "1 of the 2 active invariant(s)") || strings.Contains(wide, "one-writer-per-item") {
+		t.Fatalf("the narrower delivery rendered as:\n%s", wide)
+	}
+	if !strings.Contains(both, "2 of the 2 active invariant(s)") || !strings.Contains(both, "one-writer-per-item") {
+		t.Fatalf("the wider delivery rendered as:\n%s", both)
+	}
+	for _, text := range []string{wide, both} {
+		if !strings.Contains(text, "not the whole set") {
+			t.Fatalf("a delivery was presented as the whole set:\n%s", text)
+		}
+	}
+}
+
+// commonPrefix is the leading bytes two renderings share, which is what a
+// provider's prefix cache can hold across both of them.
+func commonPrefix(first, second string) string {
+	shared := 0
+	for shared < len(first) && shared < len(second) && first[shared] == second[shared] {
+		shared++
+	}
+	return first[:shared]
+}
+
 func TestDeliveredTextStatesOwnershipAndItsOwnLimits(t *testing.T) {
 	t.Parallel()
 
