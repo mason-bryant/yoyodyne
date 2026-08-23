@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -219,10 +220,14 @@ func TestStatusFollowsAStreamAsItsEventsArrive(t *testing.T) {
 	// The events are appended after the follow is under way, so what is asserted
 	// is that they were picked up rather than replayed.
 	ctx, stop := context.WithCancel(context.Background())
-	var out, errs bytes.Buffer
+	// The follow writes from its own goroutine while this one watches what has
+	// arrived, which is two goroutines on one buffer: they are separated here
+	// rather than in the command, because a command writing to whatever io.Writer
+	// it was handed is exactly what every other one does.
+	out, errs := &syncBuffer{}, &syncBuffer{}
 	done := make(chan int, 1)
 	go func() {
-		done <- reportRunStatus(ctx, []string{"--follow", "--config", configPath}, &out, &errs)
+		done <- reportRunStatus(ctx, []string{"--follow", "--config", configPath}, out, errs)
 	}()
 	appendStreamEvent(t, store, runID, 3, execution.EventAgentMessage, streamStart, map[string]any{"text": "still working"})
 	deadline := time.After(10 * time.Second)
@@ -332,6 +337,27 @@ func TestStatusRefusesStreamOptionsItCannotHonor(t *testing.T) {
 // streamStart is when the fabricated streams here opened, fixed so nothing
 // asserted about them depends on when the test ran.
 var streamStart = time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+
+// syncBuffer is what a still-running command writes to while the test reads
+// what it has written so far. Nothing about following needs it — a command
+// writes to the io.Writer it was handed and never reads it back — but a test
+// that watches output arrive is by construction on a second goroutine.
+type syncBuffer struct {
+	mu      sync.Mutex
+	written bytes.Buffer
+}
+
+func (b *syncBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.written.Write(data)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.written.String()
+}
 
 func recordStreamRun(t *testing.T, stateRoot string, status runstate.Status, startedAt time.Time, cost float64) string {
 	t.Helper()
