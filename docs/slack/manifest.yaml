@@ -52,8 +52,9 @@
 # them. Rewrap these paragraphs freely; just keep that gap two lines wide.
 #
 # One part of the profile is not here at all: a manifest cannot carry an image,
-# so the app's icon is uploaded by hand. It is app-icon-v1.png beside this file,
-# and step 1 of setup.md walks the upload.
+# so the app's icon is uploaded by hand. It is already checked in, as
+# docs/slack/app-icon-v1.png beside this file and beside the role faces in
+# docs/slack/avatars/, and step 1 of setup.md walks the upload.
 display_information:
   name: Yoyodyne
   # What it is, in one line. The About text below is the fuller story, so this

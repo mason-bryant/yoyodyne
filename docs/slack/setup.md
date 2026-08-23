@@ -86,10 +86,12 @@ the original manifest back in under *App Manifest*.
 **The one thing the manifest cannot carry is the icon.** Slack takes an app's
 image through its own upload and not through a manifest, so this is the single
 part of the profile you set by hand: *Basic Information* → *Display Information*
-→ **App icon**, and upload [`app-icon-v1.png`](app-icon-v1.png) from beside this
-document. It is the same engraved gear the harness speaks under in the channel,
-so the app and its messages read as one thing. Skipping it costs nothing but the
-grey placeholder Slack assigns every app that has not been given a face.
+→ **App icon**, and upload [`docs/slack/app-icon-v1.png`](app-icon-v1.png),
+which is checked in beside this document and beside the role faces in
+[`avatars/`](avatars) at the 1024px Slack asks for. It is the same engraved gear
+the harness speaks under in the channel, so the app and its messages read as one
+thing. Skipping it costs nothing but the grey placeholder Slack assigns every
+app that has not been given a face.
 
 The manifest says what each scope is for. The two that read messages —
 `channels:history` and `groups:history` — are there so the thread replies the
