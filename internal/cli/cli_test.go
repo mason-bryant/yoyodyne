@@ -181,6 +181,44 @@ func TestReconcileRefusesArgumentsAndReportsConfigurationFailureAsJSON(t *testin
 	}
 }
 
+// A settle catches its target branch up itself, so the report says so on the
+// run that did it. A catch-up it held is the fact somebody has to read, which
+// is why it goes to stderr — and why it is still not a failure: the branch is
+// behind, nothing is owed, and the next sweep takes it.
+func TestReconcileReportsTheCatchUpASettleMadeAndTheOneItHeld(t *testing.T) {
+	t.Parallel()
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	results := []orchestrator.Reconciliation{
+		{
+			RunID:      "run-advanced",
+			WorkItemID: "yoyodyne-task",
+			Action:     orchestrator.ActionCompleted,
+			Catchup:    &gitworktree.Catchup{TargetBranch: "main", RemoteCommit: "abc1234", Advanced: true},
+		},
+		{
+			RunID:      "run-held",
+			WorkItemID: "yoyodyne-other",
+			Action:     orchestrator.ActionCompleted,
+			Catchup:    &gitworktree.Catchup{TargetBranch: "main", Held: "the primary checkout has unsaved changes"},
+		},
+	}
+	code := reportReconcileResult(&stdout, &stderr, false, results, orchestrator.Convergence{}, 0, nil)
+	if code != 0 {
+		t.Fatalf("reportReconcileResult() code = %d, want 0; stderr = %q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "main caught up to abc1234") {
+		t.Errorf("stdout = %q, want the catch-up the settle made", stdout.String())
+	}
+	if strings.Contains(stdout.String(), "not caught up") {
+		t.Errorf("stdout = %q, want the held catch-up kept off stdout", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "main not caught up: the primary checkout has unsaved changes") {
+		t.Errorf("stderr = %q, want the held catch-up and why", stderr.String())
+	}
+}
+
 // Chat talks to whichever agent fills the product-manager role, with the
 // persona that role resolved to. In this repository both are stated in the
 // project configuration and read from the project's own personas directory.
