@@ -35,13 +35,13 @@ document whose reader needs it, not to the one whose subsystem it names.
 | `docs/operations.md` | An operator recovering from a stall, a crash, or a provider refusal | 454 lines |
 | `docs/developing-yoyo.md` | Someone changing yoyo itself | 30 lines |
 | [`docs/configuration.md`](configuration.md) | Anyone arriving at a configuration link — an index and the frozen anchors | 120 lines |
-| `docs/configuration/setup.md` | Someone writing or inheriting a project configuration | 533 lines, as landed |
+| `docs/configuration/setup.md` | Someone writing or inheriting a project configuration | 359 lines |
 | `docs/configuration/artifacts.md` | Someone configuring artifact homes, approval, and ownership | 486 lines |
 | `docs/configuration/goals.md` | Someone configuring admission, attribution, and staleness | 346 lines |
 | `docs/configuration/runs.md` | Someone configuring checks, scheduling, and what a run costs | 325 lines |
 | `docs/configuration/publishing.md` | Someone configuring pull requests, branches, and merges | 305 lines |
 | `docs/configuration/recovery.md` | Someone configuring triage thresholds and provider-refusal waits | 332 lines |
-| `docs/configuration/agents.md` | Someone configuring provider accounts, operators, personas, research sources, and Slack | 337 lines, as landed |
+| `docs/configuration/agents.md` | Someone configuring operators, personas, and Slack | 200 lines |
 
 Line counts are the current content's, carried across. They are a size budget
 for review, not a target to write to: a run that lands a document materially
@@ -332,7 +332,6 @@ convenience: it is what makes the frozen anchors above possible at all.
 |---|---|---|
 | `# Yoyodyne configuration` (opening, what owning defaults costs) | 24 | **stays** as the index opening, merged with the README's `## Configuring a project` |
 | `## Creating a project configuration` | 30 | `configuration/setup.md` |
-| `### When the repository ignores the configuration` | 29 | `configuration/setup.md` |
 | `### Where the tracker syncs` | 31 | `configuration/setup.md` |
 | `## Layout` | 95 | `configuration/setup.md` |
 | `## Discovery` | 23 | `configuration/setup.md` |
@@ -355,15 +354,13 @@ convenience: it is what makes the frozen anchors above possible at all.
 | `## Scheduling ready work` (+ `### Watching instead of draining`, `### When a configuration change takes effect`, `### Why each run says why it was there`) | 170 | `configuration/runs.md` |
 | `## Publishing through pull requests` (+ its three children) | 180 | `configuration/publishing.md` |
 | `## Losing a race for the target branch` | 41 | `configuration/publishing.md` |
-| `## Merge and removal semantics` (+ `### What fails closed`) | 92 | `configuration/setup.md` |
+| `## Merge and removal semantics` (+ `### What fails closed`) | 84 | `configuration/publishing.md` |
 | `## Waiting out a provider that refuses` | 116 | `configuration/recovery.md` |
 | `## Relaunching a run the provider killed` | 46 | `configuration/recovery.md` |
 | `## Triage thresholds` (+ `### What one work item has been given`) | 170 | `configuration/recovery.md` |
-| `## Provider accounts` | 38 | `configuration/agents.md` |
-| `## Operators` | 74 | `configuration/agents.md` |
+| `## Operators` | 72 | `configuration/agents.md` |
 | `## Personas` | 43 | `configuration/agents.md` |
-| `## Research sources` | 60 | `configuration/agents.md` |
-| `## Reporting to Slack` (+ `### Avatars`) | 115 | `configuration/agents.md` |
+| `## Reporting to Slack` (+ `### Avatars`) | 85 | `configuration/agents.md` |
 
 The index at `docs/configuration.md` carries, verbatim as headings so the slugs
 survive:

@@ -205,7 +205,7 @@ the role is allowed to do. The set of role names is fixed for the same reason �
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](#what-fails-closed). The conversation
+[refused when the configuration loads](../configuration.md#what-fails-closed). The conversation
 guide's [Talking to the other agents](../conversation.md#talking-to-the-other-agents)
 states the table itself.
 
@@ -328,98 +328,6 @@ from the bundle would let a file written against a different schema load as
 whatever the bundle happened to say — which is what the version exists to
 prevent.
 
-## Merge and removal semantics
-
-These describe how a project that uses `extends` combines with the bundle
-beneath it. A configuration `init` wrote has no layer beneath it, so it is read
-as written: an agent is present because it is in the file, and absent because it
-is not.
-
-- A field a layer does not mention is **inherited** from the layer beneath it.
-- A field a layer does mention **replaces** the inherited value. This includes an
-  explicit zero, such as `repair_attempts_before_replan: 0`.
-- `checks` is replaced as a whole list rather than concatenated. Checks gate
-  integration, and a silently merged list is not the gate either layer described.
-- `agents` is merged by agent name. An override names only the fields it changes:
-
-  ```yaml
-  agents:
-    developer:
-      model: claude-opus-5-20260514
-  ```
-
-  The developer keeps its inherited role, backend, instance count, and persona.
-- A `persona` override **replaces the inherited persona completely** and must
-  supply both `version` and `path`. Half of one persona and half of another is
-  guidance nobody wrote.
-- An agent name the bundle does not define creates a new agent, which must then
-  supply everything an agent requires: role, backend, and model selector.
-- `disabled: true` removes an inherited agent:
-
-  ```yaml
-  agents:
-    architect:
-      disabled: true
-  ```
-
-  Removal is explicit, so an agent is never lost by being accidentally omitted.
-  Validation still enforces the roles the invoked workflow executes: at least one
-  developer agent always, and a reviewer agent whenever `approvals.integration`
-  is `automatic`. Disabling either is a validation failure, not a way to skip
-  review.
-
-### What fails closed
-
-These are all errors, reported before any work is claimed:
-
-- a missing `version`, or a `version` this executable does not implement;
-- an unknown key anywhere in the file, including a misspelled agent field;
-- an unknown bundle in `extends`;
-- a `disabled: true` entry that also configures fields, or that names an agent no
-  layer defined;
-- a persona override missing `version` or `path`;
-- a usage-limit pause bound that is not a duration, or that is negative — `0`
-  is accepted, because "never wait" is a choice somebody can mean;
-- a `triage.stuck_merge_age` that is not a duration, or that is zero or
-  negative — unlike the usage-limit pauses, "no time at all" is not a choice
-  anybody can mean here;
-- a negative `triage.review_rounds_cap`, or a `triage.repair_grant_attempts`
-  below 1 — a cap of `0` is a choice and is accepted, a grant of `0` is not;
-- an `execution.remote` that is empty or is not a plain remote name, since it
-  reaches a `git push` command line;
-- a `product.specifications` that is empty, absolute, or climbs out of the
-  repository, since it decides what the product manager reads; and the same of
-  `product.invariants`, `product.designs`, and `product.decisions`, since they
-  decide which documents the harness treats as canonical artifacts and which
-  paths a developer's change may not touch. This is the check on the text; the
-  same four are checked again against the filesystem when something writes into
-  them, which is where a symlink out of the repository is caught, and which is a
-  refusal at the point of the write rather than at load;
-- a persona path that is absolute, traverses upward, is not Markdown, is missing,
-  is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
-- a `role` that is not one of the harness's five, which is how a typo in an
-  agents block is caught: the message names what was written and lists what could
-  have been meant. Adding a role is a change to the harness, not to this file;
-- a role and backend combination the backend does not support, such as an
-  architect on the Codex backend;
-- any effective configuration that fails validation, even when every individual
-  layer looked reasonable — for example `max_concurrent_developers` above the
-  configured developer instances, or automatic integration with no checks;
-- `slack.enabled` with no `slack.channel`, a channel that is not a channel id
-  or name, or an entry under `slack.avatars` keyed by something that is not a
-  role or `harness` or valued as something that is neither an emoji shortcode
-  nor an https image URL — all checked whether or not reporting is switched on,
-  so a typo is found now rather than on the day somebody turns it on;
-- an `operators` entry that binds no namespace at all, binds one that is not an
-  address, a forge account, or a Slack member id, names a grant the harness does
-  not have, or binds an identifier a second human already bound — and two humans
-  holding `own-intent`, since intent has one owner;
-- an `accounts` alias that is not an identifier, a description longer than 200
-  bytes, an agent whose `account` names an alias the mapping does not declare,
-  or a second account — pooling work across accounts is not implemented, and a
-  project that declared two would have every run recording one of them while
-  both were being spent.
-
 ## Extending a built-in bundle
 
 Inheritance is a supported capability, and a project that wants it writes
@@ -442,7 +350,8 @@ agents:
 ```
 
 That file inherits the five agents and their personas from the bundle, overlays
-the one field it names, and is subject to the precedence and merge rules above.
+the one field it names, and is subject to the precedence rules above and the
+[merge and removal semantics](../configuration.md#merge-and-removal-semantics).
 
 **What it buys, and what it costs.** Upgrading the executable upgrades the
 defaults and the personas the project did not override — which is exactly what
