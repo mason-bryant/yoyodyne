@@ -163,6 +163,70 @@ func (a *activeRun) republishRebase(ctx context.Context, rebase gitworktree.Reba
 	return nil
 }
 
+// settleRemoteTarget settles where the remote target branch stands before the
+// promotion rather than only after it.
+//
+// The check publishIntegration makes against the remote runs once the local
+// target branch has already moved, and nothing moves it back. A run that finds
+// the remote somewhere else there has integrated already: the item closes as
+// integrated, an outstanding publication is recorded, and what is left is a
+// local target the remote does not carry and no fast-forward reconciles — a
+// divergence nothing owns. Asking the same question first is what makes the same
+// movement recoverable, because nothing has been promoted yet and there is still
+// a change to replay.
+//
+// A remote that moved onto work this repository can take on is taken on. The
+// local target is fast-forwarded onto it, which leaves the change written
+// against a commit the target no longer stands at, and the promotion below
+// refuses that as drift exactly as it refuses a target another run moved: the
+// run replays onto where the target went, runs its checks again, and earns a
+// fresh independent verdict. That is what a human push to the target during a
+// run costs, and it is a cost rather than a wedge.
+//
+// A remote that moved somewhere the local branch cannot be brought onto is the
+// divergence only a person can settle, and it stops the run here — with both
+// branch positions named and the worktree and branch preserved — rather than
+// after an item has been closed against it.
+func (a *activeRun) settleRemoteTarget(ctx context.Context) error {
+	if !a.publishing {
+		return nil
+	}
+	// The question asked before the promotion is the one publishIntegration asks
+	// after it, about the target branch as it stands: the remote must be at or
+	// behind it, or carry exactly its content above it. The commit this run was
+	// written against is both sides of it, because a local target that has since
+	// moved away from that commit is drift the promotion itself refuses.
+	standing := gitworktree.Integration{
+		TargetBranch:         a.worktree.TargetBranch,
+		TargetCommit:         a.worktree.BaseCommit,
+		PreviousTargetCommit: a.worktree.BaseCommit,
+	}
+	err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, standing)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
+		return fmt.Errorf("check the remote target branch before promoting: %w", err)
+	}
+	catchup, catchupErr := a.pipeline.Worktrees.CatchUpTarget(ctx, a.worktree.TargetBranch)
+	if catchupErr != nil {
+		return fmt.Errorf("bring %s onto what %s has before promoting: %w",
+			a.worktree.TargetBranch, a.pipeline.Config.Execution.Remote, catchupErr)
+	}
+	// A remote with no such branch is not a divergence but a repository whose
+	// target has never been published, and the publication that follows the
+	// promotion is what puts it there. It reaches here because an absent remote
+	// branch is drift to the check above, and it must not stop a first publication.
+	if catchup.RemoteCommit == "" {
+		return nil
+	}
+	if catchup.Held != "" {
+		return a.blockOnDivergedTarget(catchup)
+	}
+	a.outcome.Catchup = &catchup
+	return nil
+}
+
 // mergeMethod is how the harness asks the forge to merge, and it is a constant
 // rather than a setting because the choice decides what the remote history is.
 // A merge commit is the only method that puts the promoted commit itself on the

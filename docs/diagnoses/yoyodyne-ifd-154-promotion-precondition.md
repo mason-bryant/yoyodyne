@@ -11,6 +11,27 @@ Code read at 2026-08-23, against the tree this document is committed with:
 `internal/orchestrator/pipeline.go`, `internal/orchestrator/reconcile.go`, and
 `internal/publish/github.go`. Every line number below is from that tree.
 
+## Superseded in part by yoyodyne-ifd.177
+
+This document is a dated reading and is kept as one. The defect its fourth
+assertion found — a promotion made onto a target the remote had left, an item
+closed as integrated against it, and a local target no fast-forward could
+reconcile — was admitted as `yoyodyne-ifd.177` and fixed. **The sections below
+titled "What a refusal actually does: it does not replay" and the fourth row of
+the verdict table describe the tree as it was on 2026-08-23 and no longer
+describe the promotion path.**
+
+What changed: `activeRun.integrate` now settles where the remote target stands
+*before* the local promotion (`activeRun.settleRemoteTarget`,
+`internal/orchestrator/publish.go`). A remote the local target can be
+fast-forwarded onto is taken on, which makes the promotion refuse its own
+recorded base as `ErrTargetDrift` and sends the run through the replay the
+claim under test described — checks re-run, fresh independent review. A remote
+the local target cannot be brought onto blocks the run with both branch
+positions named, before the item is closed. The everything-else of this document
+— where the precondition is enforced, what containment and content each prove,
+and the queued-merge gap — is unchanged and still holds.
+
 ## The claim under test
 
 [The team-mode coordination draft](../team-mode-coordination.md), in the
@@ -111,14 +132,16 @@ than accepted.
   the content check's alone. This is the cross-machine case the draft's argument
   is about, and it was the shape that was unpinned: the existing drift coverage
   used a plain pushed commit rather than a merge commit.
-- `internal/orchestrator/publish_test.go:326`,
-  `TestPipelineRefusesToMergeIntoARemoteTargetThatMoved` — the promotion path
+- `TestPipelineRefusesToMergeIntoARemoteTargetThatMoved` — the promotion path
   consults the check before it asks the forge: with a drifted target the forge is
-  never asked to merge at all.
-- `internal/orchestrator/publish_test.go:360`,
-  `TestPipelineDoesNotReplayAPromotionTheRemoteTargetRefused` — added by this work
-  item. Pins what the refusal actually does, which is the subject of the next
-  section but one.
+  never asked to merge at all. *Replaced by ifd.177 with
+  `TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget`, which pins the same
+  property one step earlier: the forge is never asked, and nothing is promoted.*
+- `TestPipelineDoesNotReplayAPromotionTheRemoteTargetRefused` — added by this work
+  item. Pinned what the refusal actually did, which is the subject of the next
+  section but one. *Retired by ifd.177, which made the refusal replay; the case it
+  covered is now
+  `TestPipelineReplaysOntoARemoteTargetSomebodyPushedTo`.*
 
 ## What is not enforced: the merge the forge queues
 
@@ -206,6 +229,9 @@ was waiting on rather than a position on it.
 - Pin or re-check the merge base for a queued merge, or state in the design that
   the queued path detects after the merge rather than failing closed before it.
   Nothing covers this today.
-- No recovery path exists for the outcome above: a local target diverged from the
-  remote with a closed work item behind it is reported by reconciliation and
-  resolved by nobody.
+- ~~No recovery path exists for the outcome above: a local target diverged from
+  the remote with a closed work item behind it is reported by reconciliation and
+  resolved by nobody.~~ Admitted as `yoyodyne-ifd.177` and fixed: a run can no
+  longer produce that outcome, because the divergence is settled or refused
+  before the promotion. A repository already wedged by a run that predates the
+  fix is still wedged, and still needs a person.
