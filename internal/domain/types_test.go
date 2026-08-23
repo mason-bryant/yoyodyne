@@ -83,3 +83,37 @@ func TestBackendSupportsRole(t *testing.T) {
 		})
 	}
 }
+
+// The two questions an executor answers are deliberately not the same one. What
+// the harness recognizes decides whether a marker may be written; what is a
+// developer run decides whether an item may be selected — and an unrecognized
+// marker answers no to both, so a typo costs an item nobody pulls rather than
+// the run the marker exists to save.
+func TestAnUnrecognizedExecutorIsStillNotADeveloperRun(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		executor     WorkItemExecutor
+		valid        bool
+		developerRun bool
+	}{
+		{name: "none named", executor: "", valid: false, developerRun: true},
+		{name: "whitespace only", executor: "  ", valid: false, developerRun: true},
+		{name: "conversation", executor: WorkItemExecutorConversation, valid: true, developerRun: false},
+		{name: "a role that is not an executor", executor: "architect", valid: false, developerRun: false},
+		{name: "a typo", executor: "converstaion", valid: false, developerRun: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.executor.Valid(); got != tt.valid {
+				t.Fatalf("Valid() = %v, want %v", got, tt.valid)
+			}
+			if got := tt.executor.DeveloperRun(); got != tt.developerRun {
+				t.Fatalf("DeveloperRun() = %v, want %v", got, tt.developerRun)
+			}
+		})
+	}
+}

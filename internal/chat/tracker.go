@@ -130,9 +130,9 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority", "class"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor"},
 	actionAttribute:    {"goal"},
-	actionUpdate:       {"title", "description", "note"},
+	actionUpdate:       {"title", "description", "note", "executor"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
 	actionLink:         {"depends_on"},
@@ -180,6 +180,12 @@ type TrackerAction struct {
 	// of work differently at admission. It is taken by a creation and by nothing
 	// else, and it is optional there: work that claims no class is ordinary work.
 	Class domain.WorkItemClass `json:"class,omitempty"`
+	// Executor is what carries the work, where that is not a developer run. A
+	// creation takes it because an item is chosen from the moment it is admitted,
+	// and an update takes it because the queue predates the marker: the items this
+	// was written for were admitted before anything could say what executes them.
+	// It is optional in both places, and work that names none is a developer run.
+	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
 	// Note is text appended to the item's notes, which is how the product
 	// manager writes on an item without replacing what is already there.
 	Note string `json:"note,omitempty"`
@@ -416,8 +422,9 @@ func (a TrackerAction) validateArguments() []error {
 	case actionAttribute:
 		problems = append(problems, a.goalProblems()...)
 	case actionUpdate:
-		if strings.TrimSpace(a.Title) == "" && strings.TrimSpace(a.Description) == "" && strings.TrimSpace(a.Note) == "" {
-			problems = append(problems, errors.New("update must change the title, the description, or the notes"))
+		if strings.TrimSpace(a.Title) == "" && strings.TrimSpace(a.Description) == "" &&
+			strings.TrimSpace(a.Note) == "" && strings.TrimSpace(string(a.Executor)) == "" {
+			problems = append(problems, errors.New("update must change the title, the description, the notes, or the executor"))
 		}
 		problems = append(problems,
 			boundTrackerText("title", a.Title, maxTrackerTitleBytes, false),
@@ -461,6 +468,14 @@ func (a TrackerAction) validateArguments() []error {
 			problems = append(problems, fmt.Errorf("depends_on: %w", err))
 		}
 	}
+	// An executor the harness does not recognize is refused wherever it appears,
+	// for the reason an unrecognized class is: what it names is a marker selection
+	// reads, and a word nothing reads would take the item out of the queue's reach
+	// without anybody having said which conversation carries it.
+	if executor := domain.WorkItemExecutor(strings.TrimSpace(string(a.Executor))); executor != "" && !executor.Valid() {
+		problems = append(problems, fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
+			a.Executor, namedWorkItemExecutors()))
+	}
 	return problems
 }
 
@@ -500,6 +515,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(string(a.Class)) != "" {
 		carried = append(carried, "class")
+	}
+	if strings.TrimSpace(string(a.Executor)) != "" {
+		carried = append(carried, "executor")
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
@@ -813,8 +831,13 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// The goal is written onto the item rather than only checked as it goes
 			// past, because an item in the queue that does not say what it is for is
 			// exactly the work nobody can later decide to stop doing.
-			Notes:    s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class),
-			Parent:   action.parent(),
+			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class),
+			Parent: action.parent(),
+			// The executor is set as the item is admitted rather than after it,
+			// because the harness may choose an item the moment it is in the queue: a
+			// marker added by a second action is a window in which the item can be
+			// pulled for a run that cannot execute it.
+			Executor: domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor))),
 			Priority: action.Priority,
 		})
 		if err != nil {
@@ -845,7 +868,11 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		}
 		outcome.applied("attributed %s to the goal: %s", id, singleLine(attributed, maxTrackerFailureBytes))
 	case actionUpdate:
-		change := beads.WorkItemChange{Title: strings.TrimSpace(action.Title), Description: strings.TrimSpace(action.Description)}
+		change := beads.WorkItemChange{
+			Title:       strings.TrimSpace(action.Title),
+			Description: strings.TrimSpace(action.Description),
+			Executor:    domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor))),
+		}
 		if note := strings.TrimSpace(action.Note); note != "" {
 			change.AppendNotes = s.trackerProvenance("Noted", action.Reason) + "\n\n" + note
 		}
@@ -1125,13 +1152,26 @@ func renderOpenQueueEvidence(items []beads.WorkItem, goals goal.Set) string {
 		listed = listed[:maxTrackerSurveyItems]
 	}
 	for _, item := range listed {
-		fmt.Fprintf(&rendered, "- %s [%s, p%d, %s] %s\n",
-			item.ID, item.Status, item.Priority, item.IssueType, singleLine(item.Title, maxTrackerTitleBytes))
+		fmt.Fprintf(&rendered, "- %s [%s, p%d, %s%s] %s\n",
+			item.ID, item.Status, item.Priority, item.IssueType, executorLabel(item.Executor),
+			singleLine(item.Title, maxTrackerTitleBytes))
 	}
 	if len(items) > len(listed) {
 		fmt.Fprintf(&rendered, "\n%d further open item(s) are not listed here.\n", len(items)-len(listed))
 	}
 	return boundText(rendered.String(), maxTrackerSurveyBytes)
+}
+
+// executorLabel is what a queue listing says about an item no developer run
+// carries, and is nothing at all for the ordinary work that one does. It is in
+// the listing rather than only in a read because ordering is decided from the
+// listing: an item that will never be pulled is a different thing to put at the
+// top of the queue from one that will be pulled next.
+func executorLabel(executor domain.WorkItemExecutor) string {
+	if executor.DeveloperRun() {
+		return ""
+	}
+	return ", executor " + string(executor)
 }
 
 // renderQueueAttribution says what the queue's traceability to the goals
@@ -1226,6 +1266,12 @@ func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 	// it is the difference between an item that traces to intent somebody
 	// approved and one that says it does.
 	fmt.Fprintf(&rendered, "attribution: %s\n", describeAttribution(goals.AttributionOf(item.Notes, item.GoalWitness)))
+	// What carries the work, said only where it is not a developer run. An item
+	// that says nothing here is ordinary work, and printing "developer run" on
+	// every item would bury the one line that changes what happens to it.
+	if !item.Executor.DeveloperRun() {
+		fmt.Fprintf(&rendered, "executor: %s, so the harness never selects it for a developer run\n", item.Executor)
+	}
 	if item.Assignee != "" {
 		fmt.Fprintf(&rendered, "assignee: %s\n", singleLine(item.Assignee, maxSurveyTitleBytes))
 	}
