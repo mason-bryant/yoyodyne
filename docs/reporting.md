@@ -265,6 +265,26 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+Every message ends by saying whose move follows it. A thread is a narrative and a
+narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
+work routed to a role waits on somebody opening a conversation — and the silence
+after the last message reads the same whether somebody is working, somebody is
+waiting to be asked, or nobody at all holds the ball. So each message closes on
+one clause: `Next: the reviewer's — a verdict on the change.` It is the same
+clause whoever is speaking, because whose move follows a promotion is a fact about
+the state of the work rather than an opinion a persona has about it, and it is on
+every message rather than only the ones that look final — which message turns out
+to be a thread's last is not knowable when it is written.
+
+The work that most needed it is the work no run ever touches. An item
+[marked for a conversation](work.md#letting-the-harness-choose-the-work) is never
+selected, so no run reports anything about it, and its thread used to show the run
+that could not carry it and then nothing for the rest of the item's life. Three
+messages carry that journey now: the item being handed to a role's conversation,
+that role's first act on it, and the close that finishes it. The close is reported
+here and nowhere else, because everywhere else the run that landed the work
+already says it, and this is the work with no run to say anything.
+
 [`docs/slack/setup.md`](slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest
 beside it rather than a list of checkboxes to work through by hand.

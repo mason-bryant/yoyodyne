@@ -40,10 +40,21 @@ import (
 // structure around work rather than the work arriving or moving; and closing an
 // item is already said by the run that finished it. A channel that reported
 // every tracker call would be the event log this exists not to be.
+//
+// The exception is work no run carries, and it is the reason two of these are
+// named at all. An item marked for a conversation is never selected, so there is
+// no run to say any of it: the note the architect writes on it is the only sign
+// the work started, and the close is the only sign it finished. For that item the
+// rule above inverts — the actions that are silent everywhere else are the whole
+// of its narrative, and without them its thread ends on a failed run and says
+// nothing for the rest of the item's life.
 const (
+	trackerRead         = "read"
+	trackerSurvey       = "survey"
 	trackerCreate       = "create"
 	trackerAttribute    = "attribute"
 	trackerReprioritize = "reprioritize"
+	trackerClose        = "close"
 )
 
 // FromConversation says what the event at one position of a conversation's log
@@ -63,7 +74,12 @@ func FromConversation(conversation runstate.Conversation, events []execution.Eve
 	event := events[index]
 	switch event.Type {
 	case execution.EventTrackerActionApplied:
-		return fromTrackerAction(conversation, event)
+		// The earlier records are read for the same reason a creation reads them:
+		// one milestone is about where in a sequence the action falls rather than
+		// about the action itself. A role's first act on work handed to it is that
+		// role picking it up, and its second is that role working — and only the log
+		// says which this was.
+		return fromTrackerAction(conversation, events[:index], event)
 	case execution.EventProposalCreated:
 		// The approval that precedes this is deliberately not reported beside it.
 		// They are one decision, and the creation is the half that names the item
@@ -91,6 +107,7 @@ type trackerAction struct {
 		Goal     string  `json:"goal"`
 		Parent   *string `json:"parent"`
 		Priority *int    `json:"priority"`
+		Executor string  `json:"executor"`
 		Reason   string  `json:"reason"`
 	} `json:"action"`
 	WorkItemID string `json:"work_item_id"`
@@ -99,12 +116,40 @@ type trackerAction struct {
 	// a reordering, an attribution — and a record written before it was carried
 	// leaves the topic addressed exactly as it was before there was one.
 	WorkItemTitle string `json:"work_item_title"`
+	// WorkItemExecutor is what the tracker said carried the item as the action
+	// ran, before the action changed anything. A record written before it was
+	// carried says nothing, which reads as ordinary work — the same thing an
+	// absent marker has always meant.
+	WorkItemExecutor string `json:"work_item_executor"`
+}
+
+// handsOff is the executor this action gives the item, and is empty for the
+// actions that say nothing about what carries the work, which is nearly all of
+// them.
+func (a trackerAction) handsOff() string { return strings.TrimSpace(a.Action.Executor) }
+
+// carriedBy is what the tracker already said carried the item when the action
+// ran, and is empty for ordinary work a developer run carries.
+func (a trackerAction) carriedBy() string { return strings.TrimSpace(a.WorkItemExecutor) }
+
+// changesTheItem reports an action that did something to the work rather than
+// asked about it. It is what makes a role's first such action the moment it
+// picked the work up: reading an item and surveying the queue are what a role
+// does before deciding anything, and treating either as starting the work would
+// announce a pickup for a conversation that went on to do nothing.
+func (a trackerAction) changesTheItem() bool {
+	switch a.Action.Action {
+	case "", trackerRead, trackerSurvey:
+		return false
+	default:
+		return true
+	}
 }
 
 // fromTrackerAction says what one applied action did to the queue. Only actions
 // the record says were applied reach here, so nothing said is an intention: an
 // action that failed is recorded as a failure and is never readable as a change.
-func fromTrackerAction(conversation runstate.Conversation, event execution.Event) (Notification, error) {
+func fromTrackerAction(conversation runstate.Conversation, earlier []execution.Event, event execution.Event) (Notification, error) {
 	var recorded trackerAction
 	if err := json.Unmarshal(event.Payload, &recorded); err != nil {
 		return Notification{}, fmt.Errorf("read a tracker action recorded in %s: %w", conversation.ConversationID, err)
@@ -118,8 +163,32 @@ func fromTrackerAction(conversation runstate.Conversation, event execution.Event
 		Priority: -1,
 	}
 	var kind Kind
-	switch recorded.Action.Action {
-	case trackerCreate:
+	switch {
+	// Marking work already in the backlog with an executor is the handoff itself:
+	// the item stops being a run's to carry, and from here nothing happens to it
+	// until a role opens a conversation about it. A creation that names one is not
+	// this — it is an admission that happens to be conversation work, and the
+	// admission is where a thread learns what the item is for, so it stays an
+	// admission with what carries it named beside it.
+	case recorded.Action.Action != trackerCreate && recorded.handsOff() != "":
+		kind = KindWorkHandedOff
+		detail.Executor = recorded.handsOff()
+	// Closing work a conversation carries is the only account there is of that
+	// work finishing. It comes before the pickup below because a role that did the
+	// work and then closed the item in one turn has done both, and what a reader
+	// needs from a single message is the ending.
+	case recorded.carriedBy() != "" && recorded.Action.Action == trackerClose:
+		kind = KindWorkCarriedOut
+		detail.Executor = recorded.carriedBy()
+	// The first thing a conversation does to work that was handed to a
+	// conversation is that role starting it. It is read from this conversation's
+	// own log, so a second role taking the same item up later is a second pickup
+	// rather than silence — which is the honest reading, since it is a second role
+	// starting on it.
+	case recorded.carriedBy() != "" && recorded.changesTheItem() && !actedOn(earlier, recorded.WorkItemID):
+		kind = KindWorkPickedUp
+		detail.Executor = recorded.carriedBy()
+	case recorded.Action.Action == trackerCreate:
 		// Admitting work and decomposing it are two acts, and which one this was
 		// follows from who did it: the product manager owns what is admitted to the
 		// backlog, and every other role that may create at all creates underneath
@@ -133,28 +202,35 @@ func fromTrackerAction(conversation runstate.Conversation, event execution.Event
 		if recorded.Action.Parent != nil {
 			detail.Parent = strings.TrimSpace(*recorded.Action.Parent)
 		}
-	case trackerAttribute:
+		detail.Executor = recorded.handsOff()
+	case recorded.Action.Action == trackerAttribute:
 		kind = KindItemAttributed
-	case trackerReprioritize:
+		detail.Executor = recorded.carriedBy()
+	case recorded.Action.Action == trackerReprioritize:
 		kind = KindItemReprioritized
 		if recorded.Action.Priority != nil {
 			detail.Priority = *recorded.Action.Priority
 		}
+		detail.Executor = recorded.carriedBy()
 	default:
 		return Notification{}, nil
 	}
+	// An action that names no title of its own is named by the item the record
+	// says it acted on. It is the same fallback for the thread's header and for
+	// what the message says, because they are the same question: an item's first
+	// appearance in the channel is as often a reordering as an admission, and a
+	// role picking up work names no title at all — a thread headed by a bare
+	// identifier, or a sentence saying the item has no name, would be the record
+	// being read less carefully than it was written.
+	detail.Title = namedItem(detail.Title, recorded.WorkItemTitle)
 	topic, err := topicForItem(recorded.WorkItemID)
 	if err != nil {
 		return Notification{}, fmt.Errorf("address the %s recorded in %s: %w", kind, conversation.ConversationID, err)
 	}
 	return Notification{
 		// An admission is usually the first thing said about an item, so this is
-		// where most threads get the name their header carries. An action that
-		// names no title of its own is named by the item the record says it acted
-		// on: an item's first appearance in the channel is as often a reordering as
-		// an admission, and a thread opened by one of those would otherwise be
-		// headed by a bare identifier.
-		Topic: topic.WithTitle(namedItem(detail.Title, recorded.WorkItemTitle)),
+		// where most threads get the name their header carries.
+		Topic: topic.WithTitle(detail.Title),
 		// The role's own act, in its own voice: what is admitted, decomposed,
 		// attributed, or reordered is a judgment the role made, and the harness
 		// only carried it out on the role's behalf.
@@ -182,6 +258,36 @@ func namedItem(named, recorded string) string {
 		return named
 	}
 	return strings.TrimSpace(recorded)
+}
+
+// actedOn reports this conversation having already changed one item earlier in
+// its own log. It is what makes a pickup the first act rather than every act: a
+// role carrying work in conversation writes on the item repeatedly, and a thread
+// that said it had been picked up each time would say the one thing that matters
+// so often it stopped meaning anything.
+//
+// A record it cannot read is not an earlier act. Skipping it would be the safe
+// direction for a message nobody wants twice, and this is the opposite case: the
+// pickup is the message the thread is missing, and losing it to one unreadable
+// record is worse than saying it once more than necessary.
+func actedOn(earlier []execution.Event, workItemID string) bool {
+	wanted := strings.TrimSpace(workItemID)
+	if wanted == "" {
+		return false
+	}
+	for _, event := range earlier {
+		if event.Type != execution.EventTrackerActionApplied {
+			continue
+		}
+		var recorded trackerAction
+		if err := json.Unmarshal(event.Payload, &recorded); err != nil {
+			continue
+		}
+		if strings.TrimSpace(recorded.WorkItemID) == wanted && recorded.changesTheItem() {
+			return true
+		}
+	}
+	return false
 }
 
 // approvedWork is the part of a created item's record this reads.
