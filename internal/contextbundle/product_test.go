@@ -628,6 +628,128 @@ func TestAssembleProductSpendsTheBudgetOnIntentFirst(t *testing.T) {
 	}
 }
 
+// Every document in the set is carried, not just the two entry points. This is
+// the assertion behind a sentence the README and docs/conversation.md both
+// make -- that the product manager is given the README, the configuration
+// guide, and the six operator documents beside them -- and it is here because
+// yoyodyne-ifd.121 moved most of what the product manager used to read out of
+// README.md. A split that renamed a document and left this list alone would
+// carry a landing page and silently drop what it points at, which is ifd.20's
+// narrowing again by accident.
+func TestAssembleProductCarriesEveryShippedDocument(t *testing.T) {
+	t.Parallel()
+
+	// Named here rather than read from shippedDocumentation, because a test that
+	// iterates the list it is pinning agrees with any list at all. These are the
+	// eight the README and docs/conversation.md tell the operator are read, in
+	// the order the budget is spent in.
+	want := []string{
+		"README.md",
+		"docs/configuration.md",
+		"docs/conversation.md",
+		"docs/work.md",
+		"docs/reporting.md",
+		"docs/artifacts.md",
+		"docs/operations.md",
+		"docs/developing-yoyo.md",
+	}
+	if strings.Join(shippedDocumentation, ",") != strings.Join(want, ",") {
+		t.Fatalf("shippedDocumentation = %v, want %v -- and the README and docs/conversation.md say what it should be", shippedDocumentation, want)
+	}
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	for _, documentPath := range want {
+		writeProductFile(t, root, documentPath, "# "+documentPath+"\n\nWhat "+documentPath+" describes.\n")
+	}
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, documentPath := range want {
+		for _, required := range []string{
+			"### Shipped documentation: " + documentPath,
+			"What " + documentPath + " describes.",
+		} {
+			if !strings.Contains(bundle.Text, required) {
+				t.Fatalf("the shipped surface is missing %q:\n%s", required, bundle.Text)
+			}
+		}
+	}
+	if strings.Contains(bundle.Text, "This documentation did not fit and is not included above") {
+		t.Fatalf("the default budget cannot carry the set it names:\n%s", bundle.Text)
+	}
+}
+
+// The set names paths rather than walking, so a document renamed or moved out
+// from under it goes quiet rather than failing: readReference treats a path
+// that names nothing as simply not there. In this repository every one of them
+// is a file somebody wrote, so the list and the tree are checked against each
+// other here -- which is what makes the prose about what the product manager
+// reads true of yoyodyne itself rather than only of a temporary directory.
+//
+// The budget is measured here rather than in the test above, and against these
+// documents rather than fabricated ones. Whether eight one-line files fit says
+// nothing about whether yoyodyne's own do: what widening the set was for is that
+// the shipped-surface picture survives the README shrinking, and the only way
+// that claim can be checked is against the documents the operator actually gets.
+// The measured total is logged so a run that is approaching the bound says so
+// while there is still headroom, rather than only failing once there is none.
+func TestShippedDocumentationNamesFilesThisRepositoryHas(t *testing.T) {
+	t.Parallel()
+
+	root := repositoryRoot(t)
+	total := 0
+	for _, documentPath := range shippedDocumentation {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(documentPath)))
+		if err != nil {
+			t.Fatalf("shippedDocumentation names %s, which this repository does not have: %v", documentPath, err)
+		}
+		total += int(info.Size())
+	}
+	t.Logf("the %d shipped documents are %d bytes against a %d-byte product budget (%d spare)",
+		len(shippedDocumentation), total, defaultMaxProductBytes, defaultMaxProductBytes-total)
+
+	// Assembled against this repository, not a temporary directory: the
+	// specifications, the tracker evidence, and the documentation are competing
+	// for one budget, and intent is spent first, so the documentation is what a
+	// shortfall drops.
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, documentPath := range shippedDocumentation {
+		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Fatalf("this repository's own product context does not carry %s", documentPath)
+		}
+	}
+	if strings.Contains(bundle.Text, "This documentation did not fit and is not included above") {
+		t.Fatalf("this repository's own documents no longer fit the product budget; the bundle says:\n%s", bundle.Text)
+	}
+}
+
+// repositoryRoot walks up from the package directory to the module root, which
+// is the directory holding go.mod.
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+
+	directory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(directory, "go.mod")); err == nil {
+			return directory
+		}
+		parent := filepath.Dir(directory)
+		if parent == directory {
+			t.Fatalf("no go.mod above %s", directory)
+		}
+		directory = parent
+	}
+}
+
 // The note is written after the budget has been spent, so what it can cost is
 // charged before it. Every path it can name is one of a fixed set, so the
 // reserve is exact rather than an allowance -- but only while it stays that way.

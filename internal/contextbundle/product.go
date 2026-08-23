@@ -76,7 +76,22 @@ const maxIntentPathBytes = 80
 // architect's decision records, which say how the product is built and are the
 // half of docs/ that made description reachable as intent in the first place. A
 // path that names nothing in a given repository is simply not there.
-var shippedDocumentation = []string{"README.md", "docs/configuration.md"}
+//
+// It names every operator-facing document rather than only the two entry
+// points, because yoyodyne-ifd.121 split the README into a landing page and the
+// documents beside it: naming the README alone after that split would carry a
+// table of contents and leave out everything it points at, which is the ifd.20
+// narrowing again by accident.
+var shippedDocumentation = []string{
+	"README.md",
+	"docs/configuration.md",
+	"docs/conversation.md",
+	"docs/work.md",
+	"docs/reporting.md",
+	"docs/artifacts.md",
+	"docs/operations.md",
+	"docs/developing-yoyo.md",
+}
 
 // maxCommandHelpBytes bounds the help a caller supplies. Help text is compiled
 // into the product rather than growing at runtime, so this is a bound on a
