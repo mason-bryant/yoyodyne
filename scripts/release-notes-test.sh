@@ -4,7 +4,7 @@
 # repository and a stub tracker, so what the notes say about a range is executed
 # rather than asserted.
 #
-#   scripts/release-notes-test.sh
+#   bash scripts/release-notes-test.sh
 #
 # The script's whole job is a join: which work items landed between two tags,
 # and what the tracker says about each. Running it against this repository would
@@ -57,13 +57,15 @@ missing() {
 # item writes one tracker record, in the shape `bd show <id> --json` answers
 # with: a JSON array holding the one item. The goal is written where the harness
 # writes it, onto the notes, because that is where the script reads it from.
+# Status defaults to closed, which is what a release's notes are made of; a case
+# that wants unfinished work passes its own.
 item() {
   mkdir -p "$fixtures"
-  python3 - "$fixtures/$1.json" "$1" "$2" "$3" "$4" "${5:-}" <<'PY'
+  python3 - "$fixtures/$1.json" "$1" "$2" "$3" "$4" "${5:-}" "${6:-closed}" <<'PY'
 import json
 import sys
 
-path, identifier, title, kind, priority, served = sys.argv[1:7]
+path, identifier, title, kind, priority, served, status = sys.argv[1:8]
 notes = "Admitted to the backlog by the product manager."
 if served:
     notes += "\n\nGoal served: %s" % served
@@ -73,7 +75,7 @@ with open(path, "w", encoding="utf-8") as fixture:
         "title": title,
         "issue_type": kind,
         "priority": int(priority),
-        "status": "closed",
+        "status": status,
         "notes": notes,
         "metadata": {},
     }], fixture)
@@ -101,6 +103,9 @@ item scratch-ifd.3 "A completed run is discarded after its terminal result" bug 
   "Never lose finished work."
 item scratch-ifd.4 "Shift-return inserts a newline in the conversation input" bug 2
 item scratch-ifd.5 "The thing that shipped in the last release" feature 1
+# The item a commit names without the item being done: a parent epic is named by
+# every child's commit, and a multi-part item by each part as it lands.
+item scratch-ifd.6 "The epic every child's commit names" task 1 "" in_progress
 
 mkdir -p "$project/scripts"
 cp "$repository/scripts/release-notes.sh" "$project/scripts/release-notes.sh"
@@ -125,6 +130,7 @@ land scratch-ifd.1 "Watch mode: the harness runs until told to stop"
 land scratch-ifd.2 "Format the goals listing, including the well-known ordering"
 land scratch-ifd.3 "A completed run is discarded after its terminal result"
 land scratch-ifd.4 "Shift-return inserts a newline in the conversation input"
+land scratch-ifd.6 "The epic every child's commit names"
 
 draft() { ( cd "$project" && ./scripts/release-notes.sh "$@" 2>&1 ) || true; }
 
@@ -158,6 +164,12 @@ contains "$body" "covering v0.1.0 to v0.2.0" "and says what it covers"
 contains "$body" '(`scratch-ifd.1`)' "each item carries its id"
 contains "$body" "Serves: Let configurable agents run unattended." "and the goal it served"
 missing "$body" "scratch-ifd.5" "an item that landed before the previous tag is not in it"
+
+step "only what the tracker calls closed is published as shipped"
+contains "$output" "1 work item(s) the commits named are not closed" \
+  "an item a commit named and the tracker has not closed is counted"
+missing "$body" "The epic every child's commit names" "and is not in the notes"
+missing "$body" "scratch-ifd.6" "not even as an id"
 
 step "each item starts in the section its type puts it in"
 for probe in "Watch mode|Key functionality" \
@@ -213,6 +225,13 @@ git -C "$project" tag -a v0.2.0 -m v0.2.0
 output="$(draft v0.3.0)"
 contains "$output" "nothing to write" "says there is nothing to write from"
 contains "$output" "v0.2.0..HEAD" "and names the range it found empty"
+
+step "a range holding only unfinished work is refused too"
+# Different from the range above and worth telling apart: work did land here,
+# and none of it is something a release page may claim shipped.
+land scratch-ifd.6 "The epic every child's commit names"
+output="$(draft v0.3.0)"
+contains "$output" "none of them is closed" "says the work is not closed rather than that nothing landed"
 
 printf '\n=== result\n'
 if [ "$failures" = "0" ]; then

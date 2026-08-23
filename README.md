@@ -540,7 +540,8 @@ reruns a path that is already exercised rather than executing it for the first
 time when a failure would mean a botched or missing release.
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once this tag's notes are on
+`main`:
 
 ```sh
 make release VERSION=v0.3.0
@@ -561,11 +562,13 @@ release workflow acts on, so it stays something you do deliberately.
 of those refusals against fabricated repositories.
 
 A tag whose notes are missing is the one refusal that leaves something behind:
-the cut drafts `docs/releases/<tag>.md` from the work items that landed since
-the last tag and stops, so you read it, place each item under **key
-functionality**, **enhancements**, or **bug fixes**, commit it, and cut again.
-The tag then names a commit carrying its own notes, and the release workflow
-publishes that file as the release page's body.
+the cut drafts `docs/releases/<tag>.md` from the work items closed since the
+last tag and stops, so you read it, place each item under **key functionality**,
+**enhancements**, or **bug fixes**, and land it on `main` — the cut refuses a
+`HEAD` that `origin/main` does not have, so notes committed only in your
+checkout stop the next cut rather than that one. Cut again once `origin/main`
+carries them: the tag then names a commit carrying its own notes, and the
+release workflow publishes that file as the release page's body.
 
 ## The conversation
 

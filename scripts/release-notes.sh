@@ -4,16 +4,23 @@
 # work items closed between the previous release tag and this one, with their
 # titles, their types, and the goals they served.
 #
-#   scripts/release-notes.sh v0.3.1            write docs/releases/v0.3.1.md
-#   scripts/release-notes.sh v0.3.1 --print    print it instead of writing
-#   scripts/release-notes.sh v0.3.1 --force    overwrite notes that already exist
+#   make release-notes VERSION=v0.3.1               write docs/releases/v0.3.1.md
+#   bash scripts/release-notes.sh v0.3.1 --print    print it instead of writing
+#   bash scripts/release-notes.sh v0.3.1 --force    overwrite notes that exist
 #
 # The raw material is the tracker rather than the commit log. A commit message
 # says what one change did; the work item behind it says what somebody wanted
 # and which goal it served, which is the difference between a changelog and
 # notes a newcomer can read. So the commits are used only to answer which items
-# landed in the range -- their subjects carry the ids -- and everything the
-# notes actually say comes from `bd show`.
+# were touched in the range -- their subjects carry the ids -- and everything
+# the notes actually say comes from `bd show`.
+#
+# Only what the tracker calls closed reaches the notes. An id in a commit
+# message says work touched that item and not that the item is done: a parent
+# epic is named by every child's commit, and a multi-part item is named by each
+# part as it lands. Publishing either as shipped is the specific lie this
+# filter exists to prevent, and what it puts aside is counted in the output
+# rather than dropped quietly.
 #
 # The sections are the operator's shape and are not negotiable here: key
 # functionality first, enhancements under it, bug fixes last. Where an item goes
@@ -46,7 +53,7 @@ id_pattern='[A-Za-z][A-Za-z0-9_]*-[A-Za-z0-9]+(\.[0-9]+)*'
 refuse() { printf '\nrelease-notes: %s\n' "$*" >&2; exit 1; }
 
 material=""
-cleanup() { [ -z "$material" ] || rm -f "$material"; }
+cleanup() { [ -z "$material" ] || rm -f "$material" "$material.md"; }
 trap cleanup EXIT
 
 tag=""
@@ -142,11 +149,14 @@ $candidates
 EOF
 
 if [ "$landed" = "0" ]; then
-  refuse "no closed work item was found in $range, so there is nothing to write $tag's notes from. Write $notes_file by hand if this release really is only commits"
+  refuse "no work item the tracker knows was found in $range, so there is nothing to write $tag's notes from. Write $notes_file by hand if this release really is only commits"
 fi
 
-draft="$(RELEASE_TAG="$tag" RELEASE_DATE="$released" RELEASE_COVERS="$covering" \
-  python3 - "$material" <<'PY'
+# The renderer both filters and renders, and reports what it kept and what it
+# put aside, because only it has read the status. Two numbers on one line: the
+# closed items it wrote, and the items it dropped for not being closed.
+tally="$(RELEASE_TAG="$tag" RELEASE_DATE="$released" RELEASE_COVERS="$covering" \
+  python3 - "$material" "$material.md" <<'PY'
 import json
 import os
 import sys
@@ -193,6 +203,7 @@ def goal(item):
 
 placed = [[] for _ in SECTIONS]
 seen = set()
+unfinished = 0
 with open(sys.argv[1], encoding="utf-8") as material:
     for line in material:
         line = line.strip()
@@ -209,6 +220,14 @@ with open(sys.argv[1], encoding="utf-8") as material:
             if not identifier or identifier in seen:
                 continue
             seen.add(identifier)
+            # An id in a commit message says work touched this item, not that
+            # the item is done: a parent epic is named by every child's commit,
+            # and a multi-part item is named by each part as it lands. Only what
+            # the tracker calls closed goes into a release's notes, because that
+            # is what the notes claim about it.
+            if (item.get("status") or "").strip().lower() != "closed":
+                unfinished += 1
+                continue
             placed[placement(item)].append(item)
 
 def ordering(item):
@@ -234,22 +253,34 @@ for heading, items in zip(SECTIONS, placed):
         if served:
             out.append("  Serves: %s" % served)
 out.append("")
-sys.stdout.write("\n".join(out))
+with open(sys.argv[2], "w", encoding="utf-8") as rendered:
+    rendered.write("\n".join(out))
+sys.stdout.write("%d %d\n" % (sum(len(items) for items in placed), unfinished))
 PY
 )"
 
-# The trailing newline is put back here rather than carried through: command
-# substitution strips it, and a Markdown file that does not end in one is a
-# diff every later edit starts by repairing.
+closed="${tally%% *}"
+unfinished="${tally##* }"
+
+if [ "$closed" = "0" ]; then
+  refuse "$landed work item(s) landed in $range and none of them is closed, so there is nothing $tag's notes can claim shipped. Close them, or write $notes_file by hand"
+fi
+
 if [ "$print_only" = "1" ]; then
-  printf '%s\n' "$draft"
+  cat "$material.md"
   exit 0
 fi
 
 mkdir -p "$notes_home"
-printf '%s\n' "$draft" > "$notes_file"
+cp "$material.md" "$notes_file"
 
-printf 'wrote %s from %d closed work item(s) across %s\n' "$notes_file" "$landed" "$range"
+printf 'wrote %s from %d closed work item(s) across %s\n' "$notes_file" "$closed" "$range"
+if [ "$unfinished" != "0" ]; then
+  # An item a commit named and the tracker has not closed is the one exclusion
+  # somebody has to be able to argue with: it is either work that genuinely has
+  # not landed, or an item somebody forgot to close before the cut.
+  printf '%d work item(s) the commits named are not closed and are not in the notes; close one and draft again if it shipped\n' "$unfinished"
+fi
 if [ "$strangers" != "0" ]; then
   # Named rather than passed over: a tracker that could not answer for an item
   # that really did land looks exactly like a commit message using a hyphen.

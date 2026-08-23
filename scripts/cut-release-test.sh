@@ -270,6 +270,38 @@ else
   fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
 fi
 
+step "the notes commit has to reach origin before the cut goes through"
+# The documented loop's push, executed. Every other case here has an origin it
+# cannot reach and asserts the SKIPPED path, so this is the only place the
+# remote gate runs for real -- and committing the notes without pushing them is
+# exactly the state the loop puts an operator in halfway through.
+project="$(fabricate notes-not-pushed green green absent)"
+origin="$scratch/notes-origin.git"
+git init -q --bare "$origin"
+git -C "$project" remote add origin "$origin"
+git -C "$project" push -q origin main
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "drafted docs/releases/v0.3.0.md" "the first cut drafts the notes"
+git -C "$project" add -A
+git -C "$project" commit -qm "v0.3.0 release notes"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "HEAD is not where origin/main is" "committing the notes is not enough on its own"
+missing "$output" "is present and committed" "it refuses before the notes gate, so nothing further is spent"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+git -C "$project" push -q origin main
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "origin/main agrees" "pushing them satisfies the remote gate"
+contains "$output" "docs/releases/v0.3.0.md is present" "and the notes gate passes behind it"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag was written, and origin has the commit carrying its notes"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+
 step "a cut whose notes cannot be drafted refuses rather than cutting without them"
 project="$(fabricate undraftable-notes green green draft-red)"
 output="$(cut "$project" "v0.3.0")"

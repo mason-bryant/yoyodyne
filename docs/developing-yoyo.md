@@ -49,7 +49,8 @@ time when a failure would mean a botched or missing release.
 ## Cutting a release
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once
+[this tag's notes are on `main`](#every-cut-writes-its-notes):
 
 ```sh
 make release VERSION=v0.3.0
@@ -81,9 +82,23 @@ is the one refusal that leaves something behind: it drafts them and stops.
 make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
 $EDITOR docs/releases/v0.3.1.md    # place each item; the judgement is yours
 git commit -am "v0.3.1 release notes"
+git push origin main               # or a pull request, where main is protected
 make release VERSION=v0.3.1        # green, and the tag carries its own notes
 git push origin v0.3.1
 ```
+
+**That fourth line is not optional, and it is not the tag push.** The cut
+refuses a `HEAD` that is not where `origin/main` is, so a notes commit that
+exists only in your checkout stops the *second* `make release` rather than the
+first — and it stops it before the notes gate, so the message you get names the
+remote rather than the notes. This repository protects `main` against direct
+pushes, so its own notes commit reaches `main` the way every other change does,
+through a branch and a merged pull request; the direct push above is the short
+form for a repository that permits one. Either way the cut runs once
+`origin/main` carries the notes. Only a checkout whose origin is unreachable
+skips this, and the cut says that went unchecked rather than passing over it.
+[`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh) executes this
+loop against a scratch repository with a real remote, unpushed notes and all.
 
 The draft comes from the tracker rather than the commit log:
 [`scripts/release-notes.sh`](../scripts/release-notes.sh) reads the work items
@@ -91,7 +106,15 @@ closed between the previous tag and this one and carries their titles, their
 types, and the goals they served. A commit message says what one change did; the
 item behind it says what somebody wanted, which is the difference between notes
 and a changelog. `make release-notes VERSION=<tag>` drafts one on its own, and
-`scripts/release-notes.sh <tag> --print` shows one without writing it.
+`bash scripts/release-notes.sh <tag> --print` shows one without writing it.
+
+Only what the tracker calls **closed** reaches the notes. An id in a commit
+message says work touched that item, not that the item is done — a parent epic
+is named by every child's commit, and a multi-part item by each part as it lands
+— so publishing either as shipped is the one lie this is careful about. Items
+dropped for not being closed are counted in the output, alongside the tokens
+that looked like ids and are not in the tracker at all, so neither exclusion is
+silent.
 
 Where the draft puts each item is placed from its type, and **that placement is
 a starting point rather than an answer**: which work is key functionality, which

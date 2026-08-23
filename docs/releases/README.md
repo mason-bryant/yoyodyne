@@ -9,6 +9,11 @@ repository tell one story rather than two: the
 [release workflow](../../.github/workflows/release.yml) publishes this file as
 the release's body, with the install preamble under it.
 
+[`v0.3.0.md`](v0.3.0.md) is the exception and says so here rather than in
+itself: it was written after `v0.3.0` was tagged and pushed, so the repository
+carries it but that release's published page does not. Every tag from `v0.3.1`
+on has its notes before it exists.
+
 ## The shape
 
 Three sections, in this order, because it is the order a reader needs them in:
@@ -31,9 +36,15 @@ work item behind a change says what somebody wanted, which is the difference
 between notes and a changelog:
 
 ```sh
-scripts/release-notes.sh v0.3.1            # draft docs/releases/v0.3.1.md
-scripts/release-notes.sh v0.3.1 --print    # see the draft without writing it
+make release-notes VERSION=v0.3.1               # draft docs/releases/v0.3.1.md
+bash scripts/release-notes.sh v0.3.1 --print    # see it without writing it
 ```
+
+Only what the tracker calls **closed** reaches the notes. An id in a commit
+message says work touched that item, not that the item is done — a parent epic
+is named by every child's commit, and a multi-part item by each part as it lands
+— so neither is published as shipped. What is put aside for not being closed is
+counted in the output rather than dropped quietly.
 
 Where the draft puts each item is placed from its type alone, and that placement
 is a starting point rather than an answer. **Which work is key, which is an
@@ -44,4 +55,6 @@ file, then commit it.
 [Cutting a release](../developing-yoyo.md#cutting-a-release) gates on this file
 being present: `make release VERSION=<tag>` with no notes for `<tag>` drafts
 them and refuses, so the judgement happens before the tag rather than after the
-release page is published.
+release page is published. The notes commit has to reach `origin/main` before
+the cut will go through, because the cut refuses a `HEAD` the remote does not
+have.
