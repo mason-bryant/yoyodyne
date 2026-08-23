@@ -376,7 +376,10 @@ yoyo config validate
 `config validate` answers whether the file is *loadable*, and an empty `checks`
 list still is; it is `yoyo run` that refuses a run with no checks. Everything
 under `.yoyodyne/` is machine-independent and belongs in version control, so
-commit it along with the rest of your adoption.
+commit it along with the rest of your adoption — unless the repository is not
+yours to add a tool directory to, which
+[Keeping the configuration out of the repository](#keeping-the-configuration-out-of-the-repository)
+covers.
 
 **Then check the whole installation, not only the file:**
 
@@ -2299,6 +2302,67 @@ configuration resolves to and where each value came from:
 ```sh
 ./bin/yoyo config show --effective --origins
 ```
+
+### Keeping the configuration out of the repository
+
+Committing `.yoyodyne/` is the default because it is what makes a project
+describe itself: a colleague clones it and has the same agents, the same
+personas, and the same checks. A contributor to a repository they do not own is
+in the other situation — the configuration is theirs rather than the project's,
+and a pull request that adds a tool directory nobody asked for is a pull request
+about the tool. Two mechanisms already cover that, and neither needs anything
+new.
+
+**Keep it on disk and out of Git.** Configuration discovery reads the launch
+checkout's filesystem and never consults the index, so a `.yoyodyne/` Git has
+never heard of loads exactly like a committed one. List it in
+`.git/info/exclude`, the per-clone ignore file that is itself never committed:
+
+```sh
+printf '.yoyodyne/\n' >> .git/info/exclude
+yoyo init
+yoyo doctor
+```
+
+Excluding it is load-bearing rather than tidiness. A run refuses to start while
+the primary checkout holds anything uncommitted that the project did not
+declare, untracked files included, and an untracked `.yoyodyne/` is exactly
+that — so without the exclude line the first `yoyo run` names the six files
+`init` just wrote and stops. The tracker is worth the same treatment if you are
+keeping the whole adoption local: `bd init` writes `.beads/` and a set of agent
+instruction files, and each of those is another untracked path a run would
+refuse over.
+
+**Or keep it outside the repository entirely.** Every command that reads a
+configuration takes `--config`, which names the configuration *file* rather than
+a directory, so nothing about the arrangement has to sit inside the checkout:
+
+```sh
+yoyo init                                       # in the repository, so `checks` detection reads its toolchain
+mv .yoyodyne ~/yoyo/theirproject/.yoyodyne      # personas resolve beside the file, so move the directory
+yoyo doctor --config ~/yoyo/theirproject/.yoyodyne/config.yaml
+```
+
+Run `init` inside the repository first: detection reads the project's Makefile
+targets, manifests, and lockfiles to propose `checks`, and pointed at an empty
+directory it has nothing to read. After the move, set `product.repository` to
+the checkout — relative paths in the file resolve against the parent of
+`.yoyodyne`, which is no longer the project — and pass `--config` on every
+command thereafter. The artifact directories are unaffected: `specifications`,
+`designs`, `decisions`, and `invariants` resolve against `product.repository`
+and go on naming directories inside the repository being worked on.
+
+Two things are true of both, and the second is the point rather than a cost:
+
+- **Nothing inside a development worktree can see the configuration.** A
+  worktree is a checkout of a branch, and a file Git does not track is not on
+  one. Today nothing there needs it — checks run as commands and agents are
+  given their instructions by the harness — but a check or a hook that shelled
+  out to `yoyo` from inside a worktree would find no configuration and say so.
+- **The project stops describing itself.** Another clone, another machine, and
+  anybody else working on it get no configuration at all, and `yoyo` there
+  reports that it found none. In this scenario that is the intent: the
+  configuration belongs to you and not to a repository you are a guest in.
 
 See the [configuration guide](docs/configuration.md) for the full layout, the
 `init` flags, precedence, merge and removal semantics, persona rules, extending
