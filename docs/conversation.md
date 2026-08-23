@@ -275,6 +275,21 @@ goal your goals do not state are reported apart, because the first is work to
 attribute and the second is a claim to correct. [`yoyo goals`](artifacts.md#goals-and-what-work-serves-them)
 reads both from outside the conversation.
 
+An item also says what carries it, where that is not a developer run. Work whose
+execution is a conversation with a role — promoting a document the architect
+owns, settling a decomposition — is admitted with `executor: conversation`, and
+`update` sets it on work already in the queue. The harness never selects a marked
+item for a developer run: it keeps its place in your order, the queue says what
+carries it rather than reporting it as ready, and a pass that reaches it says it
+passed it over rather than counting it among the work about to become pullable.
+Naming an item yourself with `yoyo run` is unaffected, because that is you
+deciding. Work that says nothing is a developer run, which is nearly all of it.
+Before this the harness could not tell, and it cost a whole run and two review
+rounds on an item no developer could execute — with those rounds counted against
+the item's cap, so a second mis-selection would have escalated work nobody had
+started. [How work flows](work.md#letting-the-harness-choose-the-work) is the
+selection side of it.
+
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
 answer them differently. Work it can find no goal for is usually a sign the

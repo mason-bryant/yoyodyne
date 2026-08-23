@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
@@ -697,6 +698,108 @@ func TestTheGoalWitnessIsReadHoweverTheTrackerStoredIt(t *testing.T) {
 				t.Fatalf("Show() witness = %#v, want %#v", item.GoalWitness, test.want)
 			}
 		})
+	}
+}
+
+// What carries a work item is written where replacing its notes cannot reach
+// it, and for a sharper reason than the goal witness beside it: this one is read
+// by selection, so a marker the next recorded outcome could overwrite would stop
+// working exactly when a run wrote on the item. The two spellings are the same
+// two the witness uses, which were run against a real bd.
+func TestTheExecutorIsWrittenWhereSelectionCanReadItAndTheNotesCannot(t *testing.T) {
+	t.Parallel()
+
+	created := `{"id":"yoyodyne-ifd.138","title":"Promote the brief","description":"The architect promotes it.",
+	             "status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation"}}`
+	runner := &fakeRunner{responses: []string{created}}
+	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).Create(context.Background(), NewWorkItem{
+		Title:       "Promote the brief",
+		Description: "The architect promotes it.",
+		Type:        "task",
+		Executor:    domain.WorkItemExecutorConversation,
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if !slices.Contains(runner.args[0], `--metadata={"yoyodyne_executor":"conversation"}`) {
+		t.Fatalf("the creation carried no executor: %#v", runner.args[0])
+	}
+	if item.Executor != domain.WorkItemExecutorConversation {
+		t.Fatalf("Create() executor = %q, want the marker read back", item.Executor)
+	}
+
+	// An item admitted before the marker existed acquires one by an update, which
+	// is how the queue that provoked this gets marked at all.
+	marked := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation"}}]`,
+	}}
+	if _, err := (Client{Runner: marked}).Update(context.Background(), "yoyodyne-ifd.138", WorkItemChange{
+		Executor: domain.WorkItemExecutorConversation,
+	}); err != nil {
+		t.Fatalf("Update() error = %v", err)
+	}
+	if !slices.Contains(marked.args[0], "--set-metadata=yoyodyne_executor=conversation") {
+		t.Fatalf("the update carried no executor: %#v", marked.args[0])
+	}
+
+	// A marker bd did not actually store is a failure rather than a reported
+	// success: what rests on it is that nothing selects the item afterwards, and a
+	// caller told it was marked would believe the item covered by exactly the
+	// guard it is not covered by.
+	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task"}]`}}
+	if _, err := (Client{Runner: unstored}).Update(context.Background(), "yoyodyne-ifd.138", WorkItemChange{
+		Executor: domain.WorkItemExecutorConversation,
+	}); err == nil {
+		t.Fatal("Update() with an executor bd did not store = nil error, want a failure")
+	}
+
+	// A creation that says nothing about an executor writes no metadata at all,
+	// so ordinary work is unaffected by any of this.
+	ordinary := &fakeRunner{responses: []string{`{"id":"yoyodyne-1","title":"Implement feature","status":"open","priority":1,"issue_type":"task"}`}}
+	plain, err := (Client{Runner: ordinary}).Create(context.Background(), NewWorkItem{
+		Title: "Implement feature", Description: "d", Type: "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	for _, argument := range ordinary.args[0] {
+		if strings.HasPrefix(argument, "--metadata=") {
+			t.Fatalf("an ordinary creation carried %q", argument)
+		}
+	}
+	if !plain.Executor.DeveloperRun() {
+		t.Fatalf("Create() executor = %q, want ordinary work to be a developer run", plain.Executor)
+	}
+}
+
+// An executor the harness does not recognize is refused where it is written and
+// carried where it is read, and the asymmetry is deliberate. Refusing the write
+// is what keeps the case rare; reading it as work no run may take is what makes
+// a typo cost nothing worse than an item nobody pulls, rather than the run this
+// whole marker exists to save.
+func TestAnUnrecognizedExecutorIsRefusedOnAWriteAndSurvivesARead(t *testing.T) {
+	t.Parallel()
+
+	client := Client{Runner: &fakeRunner{}}
+	if _, err := client.Create(context.Background(), NewWorkItem{
+		Title: "t", Description: "d", Type: "task", Executor: "architect",
+	}); err == nil || !strings.Contains(err.Error(), "executor") {
+		t.Fatalf("Create() with an unknown executor error = %v, want it refused by name", err)
+	}
+	if _, err := client.Update(context.Background(), "yoyodyne-1", WorkItemChange{Executor: "architect"}); err == nil ||
+		!strings.Contains(err.Error(), "executor") {
+		t.Fatalf("Update() with an unknown executor error = %v, want it refused by name", err)
+	}
+
+	stored := &fakeRunner{responses: []string{
+		`[{"id":"yoyodyne-1","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"architect"}}]`,
+	}}
+	item, err := (Client{Runner: stored}).Show(context.Background(), "yoyodyne-1")
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if item.Executor.DeveloperRun() {
+		t.Fatalf("Show() executor = %q, want a marker nobody recognizes still to mean not-a-developer-run", item.Executor)
 	}
 }
 

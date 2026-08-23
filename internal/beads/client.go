@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
@@ -52,6 +53,15 @@ type WorkItem struct {
 	// carries this, which is what tells a destroyed attribution from one nobody
 	// ever made and what says which goal to put back.
 	GoalWitness goal.Witness
+	// Executor is what carries this item's execution, where it is not a developer
+	// run. It is empty for ordinary work, which is what an item that names none
+	// is; see domain.WorkItemExecutor for why the ordinary case is the silent one.
+	//
+	// It is read from the tracker's own metadata rather than from the notes,
+	// because selection reads it: a marker in prose is a marker the next writer
+	// replaces, and the whole point of this one is that nothing chooses the item
+	// after it is set.
+	Executor domain.WorkItemExecutor
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -82,6 +92,13 @@ const (
 // attribution can be told from one nobody made and put back from the words
 // rather than judged again.
 const goalWitnessKey = "yoyodyne_goal_recorded"
+
+// executorKey is where the tracker records what carries an item's execution.
+// Like the goal witness it is metadata rather than notes, and for a sharper
+// reason: this one is read by selection, so a marker the next writer of the
+// notes could replace would be a marker that stops working exactly when
+// somebody records an outcome on the item.
+const executorKey = "yoyodyne_executor"
 
 // witnessValue is what the witness holds for one goal: the statement itself
 // where it fits, and a bare "1" where it does not. The bound is the one a goals
@@ -158,6 +175,12 @@ type NewWorkItem struct {
 	// description is edited.
 	Notes  string
 	Parent string
+	// Executor is what will carry the work, where that is not a developer run.
+	// It is optional and empty for ordinary work, and it is set here rather than
+	// afterwards because an item is chosen from the moment it is admitted: a
+	// marker added in a later call is a window in which the harness can pull the
+	// item for a run nothing can execute.
+	Executor domain.WorkItemExecutor
 	// Priority is where the item is admitted in the backlog's order. It is a
 	// pointer because zero is the highest Beads priority rather than an absent
 	// one, and because admitting work without saying where it goes is a real
@@ -174,6 +197,12 @@ type WorkItemChange struct {
 	// AppendNotes adds to the item's notes rather than replacing them, so an
 	// edit never erases the provenance an earlier one recorded.
 	AppendNotes string
+	// Executor is what carries the item's execution, applied only when it is set.
+	// It is here as well as on a creation because the marker had to arrive after
+	// the queue did: work whose executor is a conversation was admitted for as
+	// long as there was no way to say so, and an item that cannot acquire the
+	// marker afterwards is an item that keeps being chosen for a run.
+	Executor domain.WorkItemExecutor
 	// Priority is a pointer because zero is the highest Beads priority rather
 	// than an absent one.
 	Priority *int
@@ -255,6 +284,10 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 		"--description=" + item.Description,
 		"--type=" + item.Type,
 	}
+	// Every key the created item will carry is gathered before any of it is
+	// rendered, because bd takes a creation's metadata as one object: a second
+	// --metadata would replace the first rather than add to it.
+	entries := map[string]string{}
 	if notes := strings.TrimSpace(item.Notes); notes != "" {
 		args = append(args, "--notes="+notes)
 		if statement, records := goal.NamedIn(notes); records {
@@ -262,12 +295,18 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 			// asked of the caller. A caller that had to remember it would eventually
 			// not, and an attribution written without one is exactly an attribution
 			// whose loss goes unnoticed.
-			metadata, err := creationMetadata(map[string]string{goalWitnessKey: witnessValue(statement)})
-			if err != nil {
-				return WorkItem{}, err
-			}
-			args = append(args, "--metadata="+metadata)
+			entries[goalWitnessKey] = witnessValue(statement)
 		}
+	}
+	if executor := strings.TrimSpace(string(item.Executor)); executor != "" {
+		entries[executorKey] = executor
+	}
+	if len(entries) > 0 {
+		metadata, err := creationMetadata(entries)
+		if err != nil {
+			return WorkItem{}, err
+		}
+		args = append(args, "--metadata="+metadata)
 	}
 	if parent := strings.TrimSpace(item.Parent); parent != "" {
 		args = append(args, "--parent="+parent)
@@ -325,6 +364,9 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 			args = append(args, "--set-metadata="+goalWitnessKey+"="+witnessValue(statement))
 		}
 	}
+	if executor := strings.TrimSpace(string(change.Executor)); executor != "" {
+		args = append(args, "--set-metadata="+executorKey+"="+executor)
+	}
 	if change.Priority != nil {
 		args = append(args, "--priority="+strconv.Itoa(*change.Priority))
 	}
@@ -349,6 +391,13 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	}
 	if change.Priority != nil && item.Priority != *change.Priority {
 		return WorkItem{}, fmt.Errorf("work item %s priority is %d after being updated, want %d", item.ID, item.Priority, *change.Priority)
+	}
+	// The executor is read back for the reason a price is: what rests on it is
+	// that nothing chooses this item for a run afterwards, and a marker reported
+	// as set and not actually stored would leave the caller believing the item
+	// was covered by exactly the guard it is not covered by.
+	if executor := strings.TrimSpace(string(change.Executor)); executor != "" && string(item.Executor) != executor {
+		return WorkItem{}, fmt.Errorf("work item %s executor is %q after being updated, want %q", item.ID, item.Executor, executor)
 	}
 	return item, nil
 }
@@ -661,7 +710,30 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 	}
 	item.Cost = costFromMetadata(raw.Metadata)
 	item.GoalWitness = goalWitnessIn(raw.Metadata)
+	item.Executor = executorIn(raw.Metadata)
 	return item, nil
+}
+
+// executorIn reads what the tracker records about who carries an item's
+// execution. A value the harness does not recognize is carried through as it was
+// written rather than dropped: the caller asks whether the item is a developer
+// run, and something nobody can read was still put there by somebody who meant
+// it was not one. Dropping it would answer "developer run" and spend the run
+// this marker exists to save.
+//
+// Anything but a string is nothing at all, because nothing but a string is ever
+// written here — the harness writes one at creation and one on an update, and
+// neither can produce a number or an object.
+func executorIn(metadata map[string]json.RawMessage) domain.WorkItemExecutor {
+	raw, present := metadata[executorKey]
+	if !present {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return domain.WorkItemExecutor(strings.TrimSpace(value))
 }
 
 // goalWitnessIn reads what the tracker records about a goal written onto an
@@ -790,6 +862,7 @@ func (n NewWorkItem) validate() error {
 	if n.Priority != nil && (*n.Priority < 0 || *n.Priority > MaxPriority) {
 		problems = append(problems, fmt.Errorf("priority %d is outside 0..%d", *n.Priority, MaxPriority))
 	}
+	problems = append(problems, executorProblem(n.Executor)...)
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))
 	}
@@ -801,9 +874,11 @@ func (c WorkItemChange) validate() error {
 	if strings.TrimSpace(c.Title) == "" &&
 		strings.TrimSpace(c.Description) == "" &&
 		strings.TrimSpace(c.AppendNotes) == "" &&
+		strings.TrimSpace(string(c.Executor)) == "" &&
 		c.Priority == nil && c.Parent == nil {
 		problems = append(problems, errors.New("an update must change something"))
 	}
+	problems = append(problems, executorProblem(c.Executor)...)
 	if strings.ContainsAny(c.Title, "\r\n") {
 		problems = append(problems, errors.New("title cannot span lines"))
 	}
@@ -823,6 +898,24 @@ func (c WorkItemChange) validate() error {
 		return fmt.Errorf("invalid work item update: %w", errors.Join(problems...))
 	}
 	return nil
+}
+
+// executorProblem refuses an executor the harness does not recognize, wherever
+// it is written. It is the other half of reading an unrecognized marker as work
+// no run may take: the read is deliberately permissive so a typo cannot cost a
+// run, and this is what keeps that case from being how the marker is normally
+// written. An absent executor is the ordinary case and never a problem.
+func executorProblem(executor domain.WorkItemExecutor) []error {
+	trimmed := domain.WorkItemExecutor(strings.TrimSpace(string(executor)))
+	if trimmed == "" || trimmed.Valid() {
+		return nil
+	}
+	named := make([]string, 0, len(domain.WorkItemExecutors))
+	for _, known := range domain.WorkItemExecutors {
+		named = append(named, fmt.Sprintf("%q", known))
+	}
+	return []error{fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
+		executor, strings.Join(named, ", "))}
 }
 
 // ValidateIssueID reports whether a string can name a Beads issue. It is
