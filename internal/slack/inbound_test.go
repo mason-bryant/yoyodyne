@@ -3,7 +3,9 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -369,11 +371,147 @@ func TestARedeliveredReplyIsActedOnOnce(t *testing.T) {
 	}
 }
 
+// Both of a sink's goroutines post: the delivery loop says what the records say
+// happened, and the connection answers a reply. This drives them together,
+// because the hazard is not in either one — it is in the state they share, and a
+// -race run over tests that only ever use one of them at a time proves nothing
+// about it. What it holds to is what an operator would notice: every reply is
+// recorded and answered, every milestone is posted, and the thread the replies
+// arrive in is still the thread the map says it is.
+func TestRepliesAreAnsweredWhileTheDeliveryLoopIsPosting(t *testing.T) {
+	t.Parallel()
+
+	const rounds = 8
+	sink, directives, posts := newSteeringSinkWithFeed(t, &growingFeed{}, testOperator)
+
+	failures := make(chan error, rounds)
+	var running sync.WaitGroup
+	running.Add(2)
+	go func() {
+		defer running.Done()
+		// Each pass opens a thread for a topic nothing has been said about yet,
+		// which is the one thing that writes the thread map.
+		for round := 0; round < rounds; round++ {
+			if err := sink.pass(context.Background()); err != nil {
+				failures <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		defer running.Done()
+		for round := 0; round < rounds; round++ {
+			sink.steering.handle(context.Background(), reply(testOperator,
+				fmt.Sprintf("round %d: prefer the smaller change", round),
+				fmt.Sprintf("17500000%02d.000200", round)))
+		}
+	}()
+	running.Wait()
+	close(failures)
+	for err := range failures {
+		t.Fatalf("pass() error = %v", err)
+	}
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != rounds {
+		t.Fatalf("recorded %d directives, want every reply written down", len(recorded))
+	}
+
+	posts.mutex.Lock()
+	defer posts.mutex.Unlock()
+	answers := 0
+	for _, post := range posts.requests {
+		if post.ThreadTS == testThreadTS {
+			answers++
+		}
+	}
+	if answers != rounds {
+		t.Fatalf("answers in the item's thread = %d, want one for every reply", answers)
+	}
+
+	// The map the delivery pass was writing all along still says what it said: an
+	// acknowledgment that had written its own copy back would have dropped the
+	// threads the pass opened beside it.
+	threads, err := sink.store.LoadThreads()
+	if err != nil {
+		t.Fatalf("LoadThreads() error = %v", err)
+	}
+	topic, err := notify.WorkItem(testItem)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	if thread, found := threads.Lookup("C1", topic.Key()); !found || thread.ThreadTS != testThreadTS {
+		t.Fatalf("thread for %s = %#v (found %t), want the one the replies arrived in", testItem, thread, found)
+	}
+	if len(threads.Threads) != rounds+1 {
+		t.Fatalf("threads = %d, want the item's and one per pass", len(threads.Threads))
+	}
+}
+
+// An acknowledgment is not given the capability to open a thread, so a topic
+// whose thread has gone from the map it was handed is refused rather than opened
+// a second time. That is what keeps the connection's goroutine off the map the
+// delivery pass owns.
+func TestAnAcknowledgmentNeverOpensAThread(t *testing.T) {
+	t.Parallel()
+
+	sink, _, posts := newSteeringSink(t, testOperator)
+	topic, err := notify.WorkItem(testItem)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	sink.steering.answer(context.Background(), ThreadMap{Threads: map[string]Thread{}},
+		refused(topic, time.Now(), "a reason"))
+
+	if len(posts.requests) != 0 {
+		t.Fatalf("posts = %#v, want nothing said and no thread opened", posts.requests)
+	}
+	threads, err := sink.store.LoadThreads()
+	if err != nil {
+		t.Fatalf("LoadThreads() error = %v", err)
+	}
+	if thread, found := threads.Lookup("C1", topic.Key()); !found || thread.ThreadTS != testThreadTS {
+		t.Fatalf("thread for %s = %#v (found %t), want the map left exactly as it was", testItem, thread, found)
+	}
+}
+
+// growingFeed hands out one new topic's milestone every pass, so every pass opens
+// a thread and writes the thread map. An ordinary feed goes quiet after its first
+// pass, which is exactly the contention this has to keep up.
+type growingFeed struct {
+	mutex sync.Mutex
+	polls int
+}
+
+func (f *growingFeed) Poll(context.Context, Cursors) (Batch, error) {
+	f.mutex.Lock()
+	defer f.mutex.Unlock()
+	f.polls++
+	delivery := milestone(1, notify.KindRunStarted)
+	delivery.Stream = fmt.Sprintf("run:run-%d", f.polls)
+	delivery.Notification.Topic = notify.Topic{
+		Kind: notify.TopicWorkItem,
+		ID:   fmt.Sprintf("yoyodyne-ifd.68.4.%d", f.polls),
+	}
+	return Batch{
+		Streams:    map[string]struct{}{delivery.Stream: {}},
+		Deliveries: []Delivery{delivery},
+	}, nil
+}
+
 // newSteeringSink is a sink with the inbound half wired to a real directive
 // store, and one work item's thread already open — which is the state every reply
 // below arrives into, because a reply is correlated through the thread the sink
 // opened for a topic.
 func newSteeringSink(t *testing.T, operators ...string) (*Sink, *runstate.DirectiveStore, *recordedPosts) {
+	t.Helper()
+	return newSteeringSinkWithFeed(t, &fixedFeed{}, operators...)
+}
+
+func newSteeringSinkWithFeed(t *testing.T, feed Feed, operators ...string) (*Sink, *runstate.DirectiveStore, *recordedPosts) {
 	t.Helper()
 	root := t.TempDir()
 	store, err := NewStore(root, testProduct)
@@ -391,7 +529,7 @@ func newSteeringSink(t *testing.T, operators ...string) (*Sink, *runstate.Direct
 		Channel:    "C1",
 		Store:      store,
 		API:        newTestAPI(t, posts.handle),
-		Feed:       &fixedFeed{},
+		Feed:       feed,
 		Directives: directives,
 		Operators:  operators,
 		Log:        func(string, ...any) {},

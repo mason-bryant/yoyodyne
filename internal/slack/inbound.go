@@ -216,9 +216,13 @@ func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (direc
 	return recorded, nil
 }
 
-// answer posts one acknowledgment into the thread the reply arrived in. It
-// reaches a thread that already exists by construction — the reply was
-// correlated through it — so nothing here opens one.
+// answer posts one acknowledgment into the thread the reply arrived in.
+//
+// The thread already exists by construction — the reply was correlated through
+// it — so the poster is not given the capability to open one. That is what keeps
+// this goroutine off the thread map the delivery pass owns: the map here is a
+// copy this goroutine loaded, and writing it back over a map that has moved since
+// would lose whatever thread the pass opened in between.
 func (s *steering) answer(ctx context.Context, threads ThreadMap, notification notify.Notification) {
 	into := &poster{sink: s.sink, threads: &threads}
 	if err := notification.Notify(ctx, notify.New(into, s.sink.appearance)); err != nil {

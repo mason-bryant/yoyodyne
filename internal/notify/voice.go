@@ -547,12 +547,6 @@ var nextMoves = map[Kind]string{
 	KindCatchUpDigest:  "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 
-// nextMove is whose move follows one event, and says whether anything does. A
-// kind nothing answers for is a kind added to the vocabulary without anybody
-// deciding what a reader is supposed to do about it, which is a mistake in this
-// table rather than in any record — so it is refused the way a missing voice line
-// is, rather than posted as a message that leaves the reader exactly where this
-// exists to stop leaving them.
 // directiveInForceMove is whose move follows a directive that stopped nothing.
 // An operational directive takes effect the moment it is recorded, so there is
 // nobody to wait for — and a thread that told a reader to wait for a resolution
@@ -560,6 +554,12 @@ var nextMoves = map[Kind]string{
 // the rare one.
 const directiveInForceMove = "the harness's — the directive is in force from now, and no work is waiting on it."
 
+// nextMove is whose move follows one event, and says whether anything does. A
+// kind nothing answers for is a kind added to the vocabulary without anybody
+// deciding what a reader is supposed to do about it, which is a mistake in this
+// table rather than in any record — so it is refused the way a missing voice line
+// is, rather than posted as a message that leaves the reader exactly where this
+// exists to stop leaving them.
 func nextMove(event Event) (string, bool) {
 	// Work already marked for a conversation is not queued for a run and never
 	// will be, so the queue's answer would be telling a reader to expect something

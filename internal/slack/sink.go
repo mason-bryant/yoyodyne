@@ -129,6 +129,25 @@ type Titles interface {
 }
 
 // Sink is the long-running reporting process for one product.
+//
+// Two goroutines run inside it and both of them post: the delivery loop, which
+// reads the durable records and says what has happened, and the connection,
+// which answers a reply in a thread. The division between them is a rule rather
+// than a lock, and it is worth stating because a lock would only be as good as
+// the next thing somebody adds to either side:
+//
+// Everything above `pace` is written once, by New, and only read afterwards.
+// Everything below it belongs to exactly one goroutine — `marking` to the
+// delivery pass, which is the only thing that reconciles a status mark, and
+// `steering`'s own memory to the connection, which guards it itself.
+//
+// What both touch is three things, and each one carries its own answer. The
+// pacer is shared on purpose, since a pace two callers each advanced from their
+// own reading of it is not a pace, and it holds a mutex for exactly that. The
+// API is an HTTP client, which is safe to use from several goroutines. And the
+// store is read from both and written from one: the delivery pass owns the thread
+// map, and the acknowledgment path is structurally unable to write it, because
+// the poster it is given cannot open a thread (see `poster.opens`).
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -159,6 +178,9 @@ type Sink struct {
 	// refuses one refuses it every fifteen seconds, and the first refusal is news
 	// while the tenth is noise — the same rule the delivery loop follows for the
 	// same reason.
+	//
+	// It is the delivery pass's alone, and nothing on the acknowledgment path
+	// reads or writes it: an acknowledgment is a message rather than a mark.
 	marking string
 	log     func(format string, args ...any)
 	// steering is the inbound half, nil on a sink that was given nowhere to record
@@ -419,7 +441,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// Rendering is the notifier's, posting is the sink's, and this is the seam
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
-	into := &poster{sink: s, threads: &threads}
+	into := &poster{sink: s, threads: &threads, opens: true}
 	notifier := notify.New(into, s.appearance)
 
 	// How deep the backlog is has to be decided over the whole batch before any of
@@ -611,6 +633,16 @@ func (s *Sink) advance(cursors *Cursors, delivery Delivery) error {
 type poster struct {
 	sink    *Sink
 	threads *ThreadMap
+	// opens says this poster may open a thread for a topic nothing has been said
+	// about yet, and write the map that remembers it. Only the delivery pass may:
+	// it is the one thing that owns the thread map, and it runs while the
+	// connection is answering replies on its own goroutine. An acknowledgment was
+	// correlated through a thread that already exists, so a lookup that failed
+	// there would mean the map had moved underneath it — and opening a second
+	// thread from that stale copy, and writing it back over the map the pass owns,
+	// is the one way this path could damage anything. It cannot, because it is not
+	// given the capability rather than because it never takes it.
+	opens bool
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -638,6 +670,9 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	if topic.Kind != notify.TopicProduct {
 		thread, found := p.threads.Lookup(sink.channel, message.Topic)
 		if !found {
+			if !p.opens {
+				return fmt.Errorf("say %s about %s: its thread is not in the map this was given, and this poster does not open one", message.Kind, message.Topic)
+			}
 			opened, err := sink.openThread(ctx, topic)
 			if err != nil {
 				return err

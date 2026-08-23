@@ -1040,6 +1040,11 @@ type mark struct {
 // recordedPosts is the workspace: what it was asked to post, what it was asked
 // to mark, and what it refused.
 type recordedPosts struct {
+	// mutex is here because the real thing is a web service and this stands in for
+	// one: a sink posts from its delivery loop and from the connection answering a
+	// reply, and a workspace that could not take two calls at once would be the
+	// double failing rather than the sink.
+	mutex      sync.Mutex
 	requests   []postRequest
 	timestamps []string
 	// marks is every reaction call in the order it was made, which is what says a
@@ -1064,6 +1069,8 @@ type recordedPosts struct {
 }
 
 func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 	// A running sink asks the workspace who it is before it posts anything, and
 	// that call carries no body at all.
 	if request.Body == nil {
