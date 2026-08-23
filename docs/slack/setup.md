@@ -475,11 +475,12 @@ Three things are worth knowing about it:
   moving, or by a report — carries no mark at all.
 - **It is reconciled rather than posted.** The status is worked out afresh from
   the durable records on every pass, so a run that finished with nothing left to
-  say still stops reading as working. A change takes all four marks off before
-  putting the true one on — three of those hit nothing and cost a call each —
-  which is what makes a sink killed mid-change settle instead of leaving a mark
-  behind: whatever the opener is wearing when the next change comes, it is one of
-  four and it comes off.
+  say still stops reading as working. A change takes the other three marks off
+  before putting the true one on — the opener wears at most one of them, so the
+  rest of those calls hit nothing — which is what makes a sink killed mid-change
+  settle instead of leaving a mark behind: whatever the opener is wearing when
+  the next change comes, it is one of the four and it is not the one being set,
+  so it comes off.
 - **It is never a gate, and not even a message.** A workspace that refuses the
   reaction costs the channel its status board and not one message: the sink says
   so once in its own log and keeps posting.
