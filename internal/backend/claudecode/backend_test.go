@@ -113,6 +113,37 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	}
 }
 
+// What a developer run is given beyond its tools, asserted from the settings
+// themselves rather than against the constant that produced them.
+//
+// The argument comparison above proves developerSettings is what reached the CLI
+// and says nothing whatever about what is inside it: written against the same
+// constant, it goes on passing on the day either clause is edited out. Both
+// clauses are load-bearing and neither is visible in an argument list -- the
+// sandbox is what confines Bash, and the PreToolUse hook is what stops
+// `bd update --notes` in a developer run destroying a recorded attribution.
+//
+// Each is matched whole rather than by its words in any order, so what passes is
+// the hook nested on the Bash matcher and not three strings that happen to be
+// present. That makes this sensitive to how the constant is punctuated, which is
+// the intended trade: it is a literal in the same file, and reformatting it is
+// something somebody does deliberately and can re-read here.
+func TestADeveloperRunIsSandboxedAndCarriesTheAttributionGuard(t *testing.T) {
+	t.Parallel()
+
+	if !json.Valid([]byte(developerSettings)) {
+		t.Fatalf("developer settings are not valid JSON, so Claude Code would refuse them: %s", developerSettings)
+	}
+	sandbox := `"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}`
+	if !strings.Contains(developerSettings, sandbox) {
+		t.Fatalf("a developer run's Bash is not confined: %s", developerSettings)
+	}
+	guard := `"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]`
+	if !strings.Contains(developerSettings, guard) {
+		t.Fatalf("a developer run carries no PreToolUse guard on Bash, so a `bd update <id> --notes` in one would destroy an attribution unremarked: %s", developerSettings)
+	}
+}
+
 func TestRunPassesTheRequestedModelAndReportsWhatServedIt(t *testing.T) {
 	t.Parallel()
 
