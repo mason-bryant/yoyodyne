@@ -205,6 +205,62 @@ func TestNobodyIsMessagedWhenNobodyHoldsDirectWork(t *testing.T) {
 	}
 }
 
+// The state every workspace installed from the previous manifest is in: the app
+// may post but may not open a direct message. What it must not do is lose the
+// alarm, and what it must not do either is stop the channel — so the messages of
+// that pass stand and keep their place, the refusal is one only a person can
+// clear so the sink says it once and waits it out, and the interrupted saying
+// goes as soon as somebody reinstalls the app.
+func TestAWorkspaceThatWillNotOpenADirectMessageKeepsTheAlarm(t *testing.T) {
+	t.Parallel()
+
+	held := time.Now().Add(-3 * time.Hour)
+	feed := &stoppedFeed{
+		delivery:  brakeDelivery(t, held),
+		alongside: []Delivery{milestone(1, notify.KindRunStarted)},
+	}
+	sink, _, posts := newSteeringSinkWithFeed(t, feed, testOperator)
+	posts.refuseDirects = "missing_scope"
+
+	err := sink.Once(context.Background())
+	if err == nil {
+		t.Fatal("Once() = nil, want the refusal returned so the alarm is said again rather than dropped")
+	}
+	// A refusal only a person can clear is said once and waited out rather than
+	// repeated every fifteen seconds, which is the delivery loop's own rule and the
+	// line the setup document teaches an operator to read.
+	if !PermanentError(err) {
+		t.Fatalf("Once() = %v, want a refusal the sink waits out rather than retries hard", err)
+	}
+	// The channel said what it had to say before any of that, and said it there.
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the thread this pass opened and the milestone in it", posts.requests)
+	}
+	for _, post := range posts.requests {
+		if post.Channel != "C1" {
+			t.Fatalf("post = %#v, want nothing reaching a direct message the workspace refused to open", post)
+		}
+	}
+
+	// A second pass while it still stands repeats none of that: the cursor was
+	// written as each message went, before the direct half failed.
+	if err := sink.Once(context.Background()); !PermanentError(err) {
+		t.Fatalf("Once() = %v, want the same refusal while it stands", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the channel to keep its place across a pass the direct half failed", posts.requests)
+	}
+
+	// The operator reinstalls the app, and what was waiting to reach them goes.
+	posts.refuseDirects = ""
+	if err := sink.Once(context.Background()); err != nil {
+		t.Fatalf("Once() error = %v", err)
+	}
+	if len(posts.opened) != 1 || len(posts.requests) != 4 {
+		t.Fatalf("opened %v and posted %#v, want the interrupted saying delivered once it can be", posts.opened, posts.requests)
+	}
+}
+
 // The noise discipline, which is what keeps the tier worth having. A single
 // blocked item has an owner — the development manager's docket — and stays a
 // channel warning with its mark on the thread.
@@ -331,15 +387,27 @@ func TestOnlyOneStoppedStateIsSaidAtATime(t *testing.T) {
 type stoppedFeed struct {
 	mutex    sync.Mutex
 	delivery Delivery
+	// alongside is what the channel had to say in the same pass, ahead of the
+	// direct one exactly as a real pass orders them. Each carries a position, so a
+	// second pass does not repeat what the first already posted — which is how a
+	// test can watch the channel keep its place while the direct half fails.
+	alongside []Delivery
 }
 
-func (f *stoppedFeed) Poll(context.Context, Cursors) (Batch, error) {
+func (f *stoppedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
 	f.mutex.Lock()
 	defer f.mutex.Unlock()
-	return Batch{
-		Streams:    map[string]struct{}{escalationStream: {}},
-		Deliveries: []Delivery{f.delivery},
-	}, nil
+	batch := Batch{Streams: map[string]struct{}{escalationStream: {}}}
+	for _, delivery := range f.alongside {
+		batch.Streams[delivery.Stream] = struct{}{}
+		if delivery.Cursor.Position <= cursors.Streams[delivery.Stream].Position {
+			continue
+		}
+		batch.Deliveries = append(batch.Deliveries, delivery)
+	}
+	// The direct one goes last, which is where a real pass puts it.
+	batch.Deliveries = append(batch.Deliveries, f.delivery)
+	return batch, nil
 }
 
 // brakeDelivery is the real derivation of a held intake, so what these tests post

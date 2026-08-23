@@ -225,11 +225,14 @@ func (s *steering) decided(topic notify.Topic, answering Direct, message inbound
 		return refused(topic, at, err.Error())
 	}
 	_, receivedBy := addressed(message.text)
-	recorded, err := s.record(topic, steer{
+	// The ask's own subject: the item where one item was stopped, and every item
+	// where the whole line was. An answer about the line narrowed to some item
+	// would be recorded against work the ask was never about.
+	recorded, err := s.record(steer{
 		kind:       directive.KindOperational,
 		receivedBy: receivedBy,
 		text:       chosen,
-	}, at)
+	}, scopeOf(topic), at)
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
@@ -315,7 +318,10 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 		}
 		return acknowledged(topic, notify.KindDirectiveResolved, resolved, at)
 	}
-	recorded, err := s.record(topic, parsed, at)
+	// The thread's item and nothing wider. The refusal above is what makes that
+	// sayable here: every topic that reaches this line is a work item's, so there
+	// is always exactly one item to name.
+	recorded, err := s.record(parsed, []string{topic.ID}, at)
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
@@ -323,16 +329,17 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 }
 
 // record writes one directive where every process that acts on this product's
-// work reads it. The scope is the thread's own subject and nothing wider: a reply
-// in one item's thread is about that item, and an unscoped directive — which is
-// what an empty scope means — would reach the whole product from a message about
-// one piece of it.
+// work reads it.
 //
-// The one place an empty scope is the honest reading is an answer to something
-// that stopped the whole line. That ask was not about an item, it was about every
-// item, and a decision about it narrowed to one of them would be recorded against
-// work it was never about.
-func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (directive.Directive, error) {
+// What work it reaches is the caller's to say rather than this function's, and
+// that is deliberate: an empty scope means every item in the product, which is
+// the right answer for exactly one of the two things that reach here and a
+// far larger thing than the other ever means. A reply in a work item's thread is
+// about that item and names it; an answer to an ask about the whole line is about
+// the whole line and names nothing. Deciding that here, from the shape of the
+// topic, would be one rule serving two callers that need opposite ones — so each
+// says what it means and this writes it down.
+func (s *steering) record(parsed steer, scope []string, at time.Time) (directive.Directive, error) {
 	id, err := directive.NewID()
 	if err != nil {
 		return directive.Directive{}, err
@@ -347,7 +354,7 @@ func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (direc
 		Text:          parsed.text,
 		Artifact:      parsed.artifact,
 		Unresolved:    parsed.unresolved,
-		Scope:         scopeOf(topic),
+		Scope:         scope,
 	}
 	// Every bound a directive is held to is the directive package's, checked on
 	// the way into the store. A reply too long to be one is refused in the thread
@@ -653,8 +660,11 @@ func workItemOf(topic notify.Topic) string {
 	return ""
 }
 
-// scopeOf is the work a directive recorded from a thread reaches: the item the
-// thread is about, and every item where the thread was about the whole line.
+// scopeOf is the work an answer to a direct ask reaches: the item the ask was
+// about, and every item where the ask was about the whole line. It is only ever
+// asked of a topic a direct message was addressed to — a reply in the channel
+// names its own item, because a thread that is not a work item's is refused
+// before anything is recorded from it.
 func scopeOf(topic notify.Topic) []string {
 	if item := workItemOf(topic); item != "" {
 		return []string{item}
