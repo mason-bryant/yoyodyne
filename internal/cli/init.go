@@ -54,6 +54,10 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	// second time: the configuration is the first file written, and it is always
 	// at <root>/.yoyodyne/config.yaml.
 	tracker := configureTrackerRemote(ctx, filepath.Dir(filepath.Dir(written[0])), *trackerRemote, execution.OSProcessRunner{})
+	// A configuration the repository ignores is one this machine has and no
+	// other will, and the moment it was written is the moment somebody can still
+	// decide about it cheaply.
+	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, written[0])
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
@@ -69,6 +73,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			"checks":   detection.Commands(),
 			"detected": detection,
 			"tracker":  tracker,
+			"ignored":  ignored,
 		})
 	}
 	for _, path := range written {
@@ -84,6 +89,12 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, describeTrackerRemote(tracker))
 	} else {
 		fmt.Fprintln(stdout, describeTrackerRemote(tracker))
+	}
+	// Reported like the tracker's failures and for the same reason: the files are
+	// written and valid, so an ignored configuration is something to know about
+	// an init that worked rather than a reason to call it one that did not.
+	if ignored.Ignored {
+		fmt.Fprintln(stderr, describeIgnoredConfiguration(ignored))
 	}
 	return 0
 }

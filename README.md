@@ -381,6 +381,16 @@ yours to add a tool directory to, which
 [Keeping the configuration out of the repository](#keeping-the-configuration-out-of-the-repository)
 covers.
 
+**If you ignored it, both `init` and `config validate` say so.** A `.yoyodyne`
+matched by an ignore rule is a project configured on this machine and nowhere
+else: this checkout keeps working from disk while clones, collaborators, and dev
+worktrees — which check out tracked files only — get an unconfigured project. The
+warning names the rule and does not fail the command. If the repository is not
+yours to commit tool config to, that is a real case rather than a mistake: keep
+the configuration outside it and pass `--config`, and exclude it in
+`.git/info/exclude` rather than in a tracked `.gitignore`. See
+[When the repository ignores the configuration](docs/configuration.md#when-the-repository-ignores-the-configuration).
+
 **Then check the whole installation, not only the file:**
 
 ```sh

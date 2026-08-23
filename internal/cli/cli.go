@@ -11,6 +11,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func Run(args []string, stdout, stderr io.Writer, version string) int {
@@ -36,7 +37,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		// bound to the process's own input the way a conversation is.
 		return runSetup(ctx, args[1:], os.Stdin, stdout, stderr, version)
 	case "config":
-		return runConfig(args[1:], stdout, stderr)
+		return runConfig(ctx, args[1:], stdout, stderr)
 	case "chat":
 		// A conversation is the one command that reads from the operator, so
 		// this is where the process's own input is bound to it.
@@ -111,14 +112,14 @@ func runVersion(args []string, stdout, stderr io.Writer, version string) int {
 	return 0
 }
 
-func runConfig(args []string, stdout, stderr io.Writer) int {
+func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printConfigUsage(stdout)
 		return 0
 	}
 	switch args[0] {
 	case "validate":
-		return runConfigValidate(args[1:], stdout, stderr)
+		return runConfigValidate(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runConfigShow(args[1:], stdout, stderr)
 	default:
@@ -128,7 +129,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runConfigValidate(args []string, stdout, stderr io.Writer) int {
+func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
@@ -158,6 +159,12 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// A configuration can be entirely valid and reach no other machine, so the
+	// one command an operator runs to be told whether it is right says so. It is
+	// not a validity failure and does not become one: the exit code is what it
+	// would have been, and the warning is on the stream a warning belongs on.
+	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, resolved.Path)
+
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
 			"status":     "valid",
@@ -166,9 +173,13 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 			"product_id": resolved.Config.Product.ID,
 			"agents":     len(resolved.Config.Agents),
 			"revision":   resolved.Config.Revision(),
+			"ignored":    ignored,
 		})
 	}
 	fmt.Fprintf(stdout, "configuration valid: %s (revision %s)\n", resolved.Path, resolved.Config.Revision())
+	if ignored.Ignored {
+		fmt.Fprintln(stderr, describeIgnoredConfiguration(ignored))
+	}
 	return 0
 }
 
