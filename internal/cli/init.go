@@ -14,6 +14,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 // runInit writes a project its own complete configuration. The built-in bundle
@@ -253,16 +254,21 @@ func countOf(count int, noun string) string {
 // command can report what was found alongside what was written.
 func initializeProject(directory, productID string, force bool) ([]string, config.Detection, error) {
 	var detection config.Detection
-	root, err := filepath.Abs(directory)
+	// The project is the repository this writes into, and everything it writes is
+	// confined to it: a scaffold that landed outside is a configuration the
+	// operator was told about and cannot find, in a place nothing reviews.
+	project, err := repowrite.NewRoot(directory)
+	if err != nil {
+		return nil, detection, fmt.Errorf("open project directory %q: %w", directory, err)
+	}
+	root := project.Path()
+	// What the operator called the project, which is what the files it wrote are
+	// reported as. Confinement is decided against the resolved root, but a person
+	// who typed one path and is told about another has to work out for themselves
+	// that the two are the same directory.
+	named, err := filepath.Abs(directory)
 	if err != nil {
 		return nil, detection, fmt.Errorf("resolve project directory %q: %w", directory, err)
-	}
-	info, err := os.Stat(root)
-	if err != nil {
-		return nil, detection, fmt.Errorf("inspect project directory %q: %w", directory, err)
-	}
-	if !info.IsDir() {
-		return nil, detection, fmt.Errorf("project directory %q is not a directory", directory)
 	}
 
 	identifier := strings.TrimSpace(productID)
@@ -289,28 +295,37 @@ func initializeProject(directory, productID string, force bool) ([]string, confi
 		return nil, detection, err
 	}
 
-	configurationDirectory := filepath.Join(root, config.DirectoryName)
 	files := scaffold.Files()
+	// Every target is resolved before anything is written, so a scaffold that
+	// would leave the project — through a `.yoyodyne` somebody symlinked
+	// elsewhere, or a directory above it — is refused with the project untouched
+	// rather than half of it written somewhere nobody looks.
+	targets := make([]string, 0, len(files))
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		path := filepath.Join(configurationDirectory, filepath.FromSlash(file.Path))
+		target := config.DirectoryName + "/" + file.Path
+		path := filepath.Join(named, filepath.FromSlash(target))
+		// Where the bytes would actually land, which is what an existing file has to
+		// be looked for at: a target the project does not contain is refused here,
+		// with nothing written.
+		resolved, err := project.Resolve(target)
+		if err != nil {
+			return nil, detection, fmt.Errorf("write %s into %q: %w", target, directory, err)
+		}
 		if !force {
-			if _, err := os.Stat(path); err == nil {
+			if _, err := os.Lstat(resolved); err == nil {
 				return nil, detection, fmt.Errorf("%s already exists; pass --force to overwrite it", path)
 			} else if !os.IsNotExist(err) {
 				return nil, detection, fmt.Errorf("inspect %q: %w", path, err)
 			}
 		}
+		targets = append(targets, target)
 		paths = append(paths, path)
 	}
 
-	for index, file := range files {
-		path := paths[index]
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, detection, fmt.Errorf("create %q: %w", filepath.Dir(path), err)
-		}
-		if err := os.WriteFile(path, file.Content, 0o644); err != nil {
-			return nil, detection, fmt.Errorf("write %q: %w", path, err)
+	for index := range files {
+		if _, err := project.WriteFile(targets[index], files[index].Content); err != nil {
+			return nil, detection, fmt.Errorf("write %s into %q: %w", targets[index], directory, err)
 		}
 	}
 

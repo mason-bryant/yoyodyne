@@ -29,6 +29,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 // MaxFileBytes bounds one artifact file. It is generous, because an artifact is
@@ -225,7 +226,7 @@ func (s Store) Create(role domain.AgentRole, draft Draft, now time.Time) (Artifa
 		return Artifact{}, err
 	}
 	created.Path = relative
-	if err := s.write(path, created, "\n"+body+"\n"); err != nil {
+	if err := s.write(relative, created, "\n"+body+"\n"); err != nil {
 		return Artifact{}, err
 	}
 	return created, nil
@@ -262,7 +263,7 @@ func (s Store) unclaimed(id, path, relative string) error {
 // is judged: what a role is authorized over is decided by the document it is
 // changing rather than by what the caller says it is.
 func (s Store) Amend(role domain.AgentRole, id string, amendment Amendment, now time.Time) (Artifact, error) {
-	existing, path, body, err := s.loadOne(id)
+	existing, body, err := s.loadOne(id)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -302,7 +303,7 @@ func (s Store) Amend(role domain.AgentRole, id string, amendment Amendment, now 
 	if err := amended.Validate(); err != nil {
 		return Artifact{}, err
 	}
-	if err := s.write(path, amended, body); err != nil {
+	if err := s.write(amended.Path, amended, body); err != nil {
 		return Artifact{}, err
 	}
 	return amended, nil
@@ -330,7 +331,7 @@ func (s Store) Retire(role domain.AgentRole, id, reason string, now time.Time) (
 // end is the half Supersede and Retire share: the same authority, the same
 // recorded ending, and a different status and action.
 func (s Store) end(role domain.AgentRole, id string, action Action, status Status, reason string, now time.Time) (Artifact, error) {
-	existing, path, body, err := s.loadOne(id)
+	existing, body, err := s.loadOne(id)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -350,7 +351,7 @@ func (s Store) end(role domain.AgentRole, id string, action Action, status Statu
 	if err := existing.Validate(); err != nil {
 		return Artifact{}, err
 	}
-	if err := s.write(path, existing, body); err != nil {
+	if err := s.write(existing.Path, existing, body); err != nil {
 		return Artifact{}, err
 	}
 	return existing, nil
@@ -362,35 +363,34 @@ func (s Store) end(role domain.AgentRole, id string, action Action, status Statu
 // because an id is answered by whatever file claims it: an id two files claim is
 // answered by neither, and a mutation that went straight to a path would edit
 // one of them anyway.
-func (s Store) loadOne(id string) (recorded Artifact, path, body string, err error) {
+func (s Store) loadOne(id string) (recorded Artifact, body string, err error) {
 	set, err := s.Load()
 	if err != nil {
-		return Artifact{}, "", "", err
+		return Artifact{}, "", err
 	}
 	found, ok := set.Find(id)
 	if !ok {
 		for _, problem := range set.Problems {
 			if idForPath(problem.Path) == id {
-				return Artifact{}, "", "", fmt.Errorf("no artifact %q is recorded in %s; %s is not readable as one: %s",
+				return Artifact{}, "", fmt.Errorf("no artifact %q is recorded in %s; %s is not readable as one: %s",
 					id, strings.Join(set.Homes, ", "), problem.Path, problem.Reason)
 			}
 		}
-		return Artifact{}, "", "", fmt.Errorf("no artifact %q is recorded in %s", id, strings.Join(set.Homes, ", "))
+		return Artifact{}, "", fmt.Errorf("no artifact %q is recorded in %s", id, strings.Join(set.Homes, ", "))
 	}
 	root, err := resolveRoot(s.RepositoryRoot)
 	if err != nil {
-		return Artifact{}, "", "", err
+		return Artifact{}, "", err
 	}
-	path = filepath.Join(root, filepath.FromSlash(found.Path))
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(found.Path)))
 	if err != nil {
-		return Artifact{}, "", "", fmt.Errorf("read artifact %q: %w", found.Path, err)
+		return Artifact{}, "", fmt.Errorf("read artifact %q: %w", found.Path, err)
 	}
 	_, body, err = splitDocument(string(content))
 	if err != nil {
-		return Artifact{}, "", "", fmt.Errorf("read artifact %q: %w", found.Path, err)
+		return Artifact{}, "", fmt.Errorf("read artifact %q: %w", found.Path, err)
 	}
-	return found, path, body, nil
+	return found, body, nil
 }
 
 // path returns where an artifact lands, absolute and repository-relative. The id
@@ -442,14 +442,15 @@ func within(directory string, directories []string) bool {
 	return false
 }
 
-// write replaces one artifact file. These are repository documents reviewed with
-// the code rather than runtime state, so they are written with ordinary file
-// permissions, and through a temporary file and a rename so an interrupted write
-// cannot leave half a document where a whole one was.
-func (s Store) write(path string, recorded Artifact, body string) error {
-	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create artifact directory: %w", err)
+// write replaces one artifact file, named by where it lives in the repository
+// rather than by an absolute path. Going through repowrite is what keeps the
+// write inside the repository: the home it lands in comes from configuration,
+// and a lexical check on that configuration says nothing about what the
+// filesystem has put along the path by the time anything writes there.
+func (s Store) write(relative string, recorded Artifact, body string) error {
+	root, err := repowrite.NewRoot(s.RepositoryRoot)
+	if err != nil {
+		return err
 	}
 	rendered, err := render(recorded, body)
 	if err != nil {
@@ -458,25 +459,8 @@ func (s Store) write(path string, recorded Artifact, body string) error {
 	if len(rendered) > MaxFileBytes {
 		return fmt.Errorf("artifact %q renders to %d bytes, limit is %d", recorded.ID, len(rendered), MaxFileBytes)
 	}
-	temporary, err := os.CreateTemp(directory, ".artifact-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary artifact: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o644); err != nil {
-		temporary.Close()
-		return fmt.Errorf("set artifact permissions: %w", err)
-	}
-	if _, err := temporary.WriteString(rendered); err != nil {
-		temporary.Close()
+	if _, err := root.WriteFile(relative, []byte(rendered)); err != nil {
 		return fmt.Errorf("write artifact %q: %w", recorded.ID, err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary artifact: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace artifact %q: %w", recorded.ID, err)
 	}
 	return nil
 }
@@ -677,17 +661,16 @@ func splitDocument(content string) (metadata, body string, err error) {
 	return "", "", errors.New("its frontmatter is not closed by a `---` line")
 }
 
-// resolveRoot resolves the repository the artifacts belong to.
+// resolveRoot resolves the repository the artifacts belong to. It is the same
+// root the writes are confined to rather than a second reading of it, so a path
+// this package reads from and the path it would write to cannot disagree about
+// where the repository is.
 func resolveRoot(repositoryRoot string) (string, error) {
-	root, err := filepath.Abs(repositoryRoot)
+	root, err := repowrite.NewRoot(repositoryRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolve repository root: %w", err)
+		return "", err
 	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", fmt.Errorf("resolve repository root symlinks: %w", err)
-	}
-	return root, nil
+	return root.Path(), nil
 }
 
 // resolveDirectories keeps every configured directory inside the repository.

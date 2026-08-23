@@ -253,7 +253,7 @@ func (p Policy) Requires(kind Kind) bool {
 // supports, and its status are untouched, so an approval can never become a way
 // to edit a document by another name.
 func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
-	existing, path, body, err := s.loadOne(id)
+	existing, body, err := s.loadOne(id)
 	if err != nil {
 		return Artifact{}, err
 	}
@@ -279,7 +279,7 @@ func (s Store) Approve(id, reason string, now time.Time) (Artifact, error) {
 	if err := approved.Validate(); err != nil {
 		return Artifact{}, err
 	}
-	if err := s.write(path, approved, body); err != nil {
+	if err := s.write(approved.Path, approved, body); err != nil {
 		return Artifact{}, err
 	}
 	return approved, nil

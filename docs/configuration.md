@@ -207,6 +207,23 @@ therefore keeps meaning the project root. The artifact directories —
 *inside the repository being worked on*, so all four resolve against
 `product.repository` and are refused if they leave it.
 
+That refusal is checked twice. When the file loads it is a check on the text: a
+path that is absolute or climbs out with `..` is refused before any work is
+claimed. When something writes a document into one of those directories it is
+checked again, against the filesystem, immediately before the bytes are written —
+because a directory that reads as `docs/decisions` in this file is whatever the
+filesystem has put there by the time anything writes to it, and one symlink along
+the way puts the document outside the repository without a single `..` appearing
+anywhere. So a directory that is a symlink out of the repository, or that sits
+below one, is refused at the point of the write and nothing is written. A symlink
+that stays inside the repository has not left it and the write follows it — with
+one exception: an artifact home that is itself a symlink is refused earlier and
+for a different reason, because the harness lists what a home holds without
+following links and reports one that is a link as not being a directory. The same
+holds of the `.yoyodyne` directory `yoyo init` writes: a project
+whose `.yoyodyne` leads out of the project is refused with the project untouched
+rather than scaffolded somewhere nothing commits.
+
 ## Precedence
 
 A configuration `init` wrote has one layer: itself. Every configured value comes
@@ -2220,7 +2237,10 @@ These are all errors, reported before any work is claimed:
   repository, since it decides what the product manager reads; and the same of
   `product.invariants`, `product.designs`, and `product.decisions`, since they
   decide which documents the harness treats as canonical artifacts and which
-  paths a developer's change may not touch;
+  paths a developer's change may not touch. This is the check on the text; the
+  same four are checked again against the filesystem when something writes into
+  them, which is where a symlink out of the repository is caught, and which is a
+  refusal at the point of the write rather than at load;
 - a persona path that is absolute, traverses upward, is not Markdown, is missing,
   is empty, or resolves through a symlink to somewhere outside `.yoyodyne`;
 - a `role` that is not one of the harness's five, which is how a typo in an
