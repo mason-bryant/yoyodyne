@@ -732,6 +732,96 @@ func TestRunRequiresWorktreeScopedDeveloperWriteTools(t *testing.T) {
 	}
 }
 
+// notesGuardSettings is the part of the developer settings this test reads: the
+// hooks, keyed by the event they run on. Named types rather than one nested
+// anonymous struct so what is being asserted stays legible.
+type notesGuardSettings struct {
+	Hooks map[string][]notesGuardMatcher `json:"hooks"`
+}
+
+type notesGuardMatcher struct {
+	Matcher string             `json:"matcher"`
+	Hooks   []notesGuardAction `json:"hooks"`
+}
+
+type notesGuardAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}
+
+// TestDeveloperRunsPutBashThroughTheNotesGuard holds the developer settings to
+// running the notes-writer guard, and to running the one that is in this
+// repository.
+//
+// A developer run is the population an interactive session's stanza does not
+// cover, and `beads.Client.Update` does not cover it either: that only makes
+// the writes the harness issues safe, and an agent can type
+// `bd update <id> --notes=` into Bash inside a developer run exactly as one did
+// from an interactive session twelve times. This hook is what makes the two
+// populations get the same refusal, so a settings string that stopped naming
+// the script would silently reopen the harness half.
+//
+// The script is asserted to exist because the failure is quiet: Claude Code
+// reports a hook whose command is missing as a non-blocking error and lets the
+// call through, so a rename fails open rather than red.
+func TestDeveloperRunsPutBashThroughTheNotesGuard(t *testing.T) {
+	t.Parallel()
+
+	if _, err := os.Stat("../../../" + NotesGuardScript); err != nil {
+		t.Fatalf("Stat(%s) error = %v; the developer settings name a script this repository does not have",
+			NotesGuardScript, err)
+	}
+
+	var settings notesGuardSettings
+	if err := json.Unmarshal([]byte(developerSandboxSettings), &settings); err != nil {
+		t.Fatalf("developerSandboxSettings is not JSON (%v); Claude Code is handed it as --settings", err)
+	}
+	matchers := settings.Hooks["PreToolUse"]
+	if len(matchers) == 0 {
+		t.Fatalf("developerSandboxSettings wires no PreToolUse hook, which is the only event that can refuse a write")
+	}
+	named := false
+	for _, matcher := range matchers {
+		if matcher.Matcher != "Bash" {
+			t.Errorf("developerSandboxSettings wires the guard for tool %q; a `bd update` is a Bash call and nothing else",
+				matcher.Matcher)
+		}
+		for _, hook := range matcher.Hooks {
+			if hook.Type != "command" {
+				t.Errorf("developerSandboxSettings wires the guard as hook type %q, want \"command\"", hook.Type)
+			}
+			if strings.Contains(hook.Command, NotesGuardScript) {
+				named = true
+			}
+		}
+	}
+	if !named {
+		t.Errorf("developerSandboxSettings wires a PreToolUse hook that does not name %s, so a developer run's Bash is unguarded",
+			NotesGuardScript)
+	}
+}
+
+// TestDeveloperRunsStayConfinedToTheirWorktree holds the half of the same
+// settings string that was there before the guard joined it. Both live in one
+// string, so a change made for either reason can drop the other.
+func TestDeveloperRunsStayConfinedToTheirWorktree(t *testing.T) {
+	t.Parallel()
+
+	var settings struct {
+		Sandbox struct {
+			Enabled                  bool `json:"enabled"`
+			FailIfUnavailable        bool `json:"failIfUnavailable"`
+			AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal([]byte(developerSandboxSettings), &settings); err != nil {
+		t.Fatalf("developerSandboxSettings is not JSON (%v)", err)
+	}
+	if !settings.Sandbox.Enabled || !settings.Sandbox.FailIfUnavailable || settings.Sandbox.AllowUnsandboxedCommands {
+		t.Errorf("developerSandboxSettings no longer confines a developer run's Bash: %+v", settings.Sandbox)
+	}
+}
+
 func TestCapabilities(t *testing.T) {
 	t.Parallel()
 

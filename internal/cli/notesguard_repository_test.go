@@ -22,8 +22,11 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
 // notesGuardTestPath is the guard's own suite. It fabricates hook payloads and
@@ -34,6 +37,15 @@ const notesGuardTestPath = "../../scripts/bd-notes-guard-test.sh"
 // notesGuardScriptRelativePath is the guard itself, named from the repository
 // root the way the documented hook command names it.
 const notesGuardScriptRelativePath = "scripts/bd-notes-guard.sh"
+
+// notesGuardDecisionPath is the half of the guard that decides, and so the half
+// that carries the copy of the attribution prefix.
+const notesGuardDecisionPath = "../../scripts/bd-notes-guard.py"
+
+// notesGuardPrefixPattern reads the prefix the guard looks for out of its
+// source. It is anchored to the assignment rather than searched for loosely, so
+// the same string appearing in a comment or a message cannot satisfy it.
+var notesGuardPrefixPattern = regexp.MustCompile(`(?m)^ATTRIBUTION_PREFIX = "([^"]*)"`)
 
 // notesGuardInstructionPaths are the two instruction files that carry the hook
 // block. They are independent files rather than one symlinked to the other, so
@@ -83,6 +95,35 @@ func TestTheNotesGuardRefusesWhatItShould(t *testing.T) {
 	report, err := suite.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s did not pass (%v):\n%s", notesGuardTestPath, err, report)
+	}
+}
+
+// TestTheNotesGuardLooksForTheLineTheHarnessWrites pins the guard's copy of the
+// attribution prefix to the one the harness writes and reads back.
+//
+// The guard is Python and the record is Go, so the string is duplicated and
+// nothing about the duplication is visible in a diff to either side. What makes
+// that worth a check rather than a comment is which way it breaks: if
+// goal.AttributionPrefix changes, named_in() stops matching anything, every
+// replacing write looks like a write against an unattributed item, and the
+// guard allows the destruction silently. It would not fail, or warn, or refuse
+// too much -- it would go on passing its own suite while protecting nothing,
+// which is exactly the failure this whole item exists to prevent.
+func TestTheNotesGuardLooksForTheLineTheHarnessWrites(t *testing.T) {
+	t.Parallel()
+
+	source, err := os.ReadFile(notesGuardDecisionPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", notesGuardDecisionPath, err)
+	}
+	assignment := notesGuardPrefixPattern.FindStringSubmatch(string(source))
+	if assignment == nil {
+		t.Fatalf("%s no longer assigns ATTRIBUTION_PREFIX, so the guard's copy of %q cannot be held to it",
+			notesGuardDecisionPath, goal.AttributionPrefix)
+	}
+	if assignment[1] != goal.AttributionPrefix {
+		t.Errorf("%s looks for %q; the harness writes and reads back %q (goal.AttributionPrefix). A guard looking for the wrong line finds no attribution to protect and allows every replacing write.",
+			notesGuardDecisionPath, assignment[1], goal.AttributionPrefix)
 	}
 }
 

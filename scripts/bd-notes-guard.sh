@@ -3,24 +3,41 @@
 # bd-notes-guard.sh - refuse a `bd update <id> --notes=` that would destroy the
 # goal attribution living in that item's notes.
 #
-# This is a Claude Code PreToolUse hook, wired for interactive sessions in
-# .claude/settings.json. It reads the hook payload on stdin and, for a Bash tool
-# call, decides one thing: whether the command about to run replaces the notes
-# of an item whose notes are the only copy of its `Goal served:` line.
+# This is a Claude Code PreToolUse hook. It reads the hook payload on stdin and,
+# for a Bash tool call, decides one thing: whether the command about to run
+# replaces the notes of an item whose notes are the only copy of its
+# `Goal served:` line.
 #
 #   allowed  exit 0, silently -- the ordinary answer
 #   refused  exit 2, with the reason on stderr, which is what blocks the call
 #
 # Why this exists. An attribution is one line in a work item's notes
 # (`internal/goal/goal.go`, read back by `goal.NamedIn`), so the notes are the
-# record and a writer that replaces them takes the attribution with it. The
-# harness never does that -- `beads.Client.Update` passes only `--append-notes`
-# -- but nothing stopped an agent or a person typing the replacing form into a
-# terminal, and twelve attributions were destroyed that way before anybody
-# noticed. Every recorded loss came from an interactive session, which is the
-# population this file covers. See
+# record and a writer that replaces them takes the attribution with it. Twelve
+# attributions were destroyed that way before anybody noticed, every one of them
+# from an interactive session. See
 # docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md, which matches each
 # loss to the command that caused it.
+#
+# Who runs this, and who does not. There are two populations and one script, so
+# the refusal is the same in both rather than merely alike:
+#
+#   harness developer runs  wired, in `developerSandboxSettings`
+#                           (internal/backend/claudecode/backend.go), which
+#                           names this script and is held to naming it by
+#                           TestDeveloperRunsPutBashThroughTheNotesGuard.
+#   interactive sessions    NOT wired until somebody merges the PreToolUse block
+#                           in CLAUDE.md and AGENTS.md into .claude/settings.json
+#                           by hand. Claude Code refuses an agent's write to a
+#                           settings file, so no run can wire its own. Until that
+#                           paste happens an interactive `bd update --notes=` is
+#                           unguarded -- which is the population that caused all
+#                           twelve losses.
+#
+# `beads.Client.Update` passing only `--append-notes` is a separate guarantee
+# and covers neither of the above: it makes the writes the *harness itself*
+# issues safe, and says nothing about an agent typing `bd update` into Bash,
+# which is what this script is for.
 #
 # This half is the wrapper: it decides whether the payload is worth examining at
 # all, and bd-notes-guard.py decides what to do about it. The split is so the

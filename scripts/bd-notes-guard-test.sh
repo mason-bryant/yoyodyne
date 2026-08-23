@@ -144,6 +144,23 @@ else
   refuses "bd update --json $attributed --notes=\"flags first\"" \
     "the item is found among the flags rather than by position"
 
+  step "a flag's value is not mistaken for an item"
+  # The way this guard would get itself removed: reading `closed` as a second id
+  # sends `bd show closed --json`, which fails, and a refusal built on that would
+  # be refusing ordinary work over the guard's own misparse.
+  refuses "bd update $attributed --status closed --notes=\"valued flag before\"" \
+    "a valued flag in separate-token form does not become a second id"
+  contains "$verdict" "$goal" "and the refusal is still about the item, not about the flag value"
+  refuses "bd update $attributed --notes=\"valued flag after\" --assignee somebody" \
+    "a valued flag after the write is skipped too"
+  # A valued flag the list does not know still leaves its value looking like an
+  # id. That is absorbed rather than fatal, because a sibling resolved.
+  refuses "bd update $attributed --not-a-known-flag closed --notes=\"unknown valued flag\"" \
+    "an unreadable id is ignored where another id in the same write resolved"
+  contains "$verdict" "$goal" "and that write is still judged on the item that did resolve"
+  allows "bd update $unattributed --status closed --notes=\"no goal to lose\"" \
+    "the same shape against an unattributed item is still allowed"
+
   step "the safe spelling is not caught"
   allows "bd update $attributed --append-notes=\"checks passed\"" \
     "--append-notes on an attributed item is allowed"

@@ -75,6 +75,13 @@ matched to the command that caused it in
 name a goal, unless the replacement carries that same `Goal served:` line
 across. It allows everything else, silently.
 
+**Harness developer runs already run it** — `developerSandboxSettings` in
+`internal/backend/claudecode/backend.go` wires this same script, and a test
+holds it to naming a script that exists. **Interactive sessions do not, yet.**
+One script serves both, so the refusal is identical rather than merely similar;
+what differs is only whether the hook is wired, and for interactive sessions
+that is the paste below.
+
 <!-- BEGIN NOTES GUARD HOOK -->
 ```json
 {

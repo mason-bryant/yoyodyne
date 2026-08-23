@@ -26,6 +26,36 @@ ATTRIBUTION_PREFIX = "Goal served:"
 # into whatever follows.
 SEPARATORS = {"&&", "||", ";", "|", "&"}
 
+# The `bd update` flags that take a value, for the separate-token spelling where
+# the value is its own word. Without this list `bd update <id> --status closed`
+# reads `closed` as a second item id, and the tracker read for it fails -- which
+# would turn ordinary work into a refusal, and a guard that refuses ordinary
+# work is removed as surely as one that refuses nothing. The `--flag=value`
+# spelling needs no list, because the value is inside the token.
+#
+# The list being incomplete is survivable rather than silent: main() only
+# refuses on an unreadable id where *no* id in the same write resolved, so a
+# valued flag missing from here is absorbed as long as the real item was found.
+VALUED_FLAGS = {
+    "--acceptance",
+    "--acceptance-criteria",
+    "--append-notes",
+    "--assignee",
+    "--description",
+    "--design",
+    "--estimate",
+    "--label",
+    "--labels",
+    "--metadata",
+    "--notes",
+    "--parent",
+    "--priority",
+    "--reason",
+    "--status",
+    "--title",
+    "--type",
+}
+
 DIAGNOSIS = "docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md"
 
 # How long one tracker read may take before the guard treats it as unanswerable.
@@ -53,10 +83,16 @@ def named_in(notes):
 
 
 def replacing_writes(command):
-    """Every (item, replacement) this command names in a `bd update --notes`.
+    """Every (items, replacement) this command names in a `bd update --notes`.
 
-    `--append-notes` is deliberately not matched. It is the safe spelling, the
-    one the harness itself uses, and the one a refused caller is sent to.
+    The items of one write are kept together rather than flattened, because
+    whether an id that will not resolve is a typo or a misread flag value is a
+    question only its siblings can answer.
+
+    `--append-notes` is deliberately not treated as a replacement. It is the
+    safe spelling, the one the harness itself uses, and the one a refused caller
+    is sent to -- but it is in VALUED_FLAGS, so its value is still skipped
+    rather than mistaken for an id.
     """
     try:
         tokens = shlex.split(command)
@@ -83,11 +119,14 @@ def replacing_writes(command):
                     cursor += 1
             elif token.startswith("--notes="):
                 replaces, replacement = True, token[len("--notes="):]
+            elif token in VALUED_FLAGS:
+                # Its value is the next word, and a value is not an id.
+                cursor += 1
             elif not token.startswith("-"):
                 items.append(token)
             cursor += 1
-        if replaces:
-            writes.extend((item, replacement) for item in items)
+        if replaces and items:
+            writes.append((items, replacement))
         index = cursor
     return writes
 
@@ -176,22 +215,32 @@ def main():
     if not isinstance(tool_input, dict):
         return 0
     command = tool_input.get("command") or ""
-    for item, replacement in replacing_writes(command):
-        try:
-            notes = recorded_notes(item)
-        except LookupError as failure:
-            unreadable(item, failure)
-        recorded = named_in(notes)
-        if not recorded:
-            # Nothing to destroy. An item that never named a goal is not made
-            # worse by a replacing write, and refusing it would be the guard
-            # protecting a record that does not exist.
-            continue
-        if named_in(replacement) == recorded:
-            # The attribution is carried across verbatim, so the record survives
-            # the replacement and there is nothing here to protect.
-            continue
-        would_destroy(item, recorded)
+    for items, replacement in replacing_writes(command):
+        resolved, unresolved = [], []
+        for item in items:
+            try:
+                resolved.append((item, recorded_notes(item)))
+            except LookupError as failure:
+                unresolved.append((item, failure))
+        if unresolved and not resolved:
+            # Nothing in this write could be read, so the guard cannot tell an
+            # attributed item from an unattributed one and refuses. Where some
+            # sibling *did* resolve, the one that did not is far likelier to be
+            # a flag value this parse misread than an item, and refusing on it
+            # would be refusing ordinary work over the guard's own blind spot.
+            unreadable(*unresolved[0])
+        for item, notes in resolved:
+            recorded = named_in(notes)
+            if not recorded:
+                # Nothing to destroy. An item that never named a goal is not
+                # made worse by a replacing write, and refusing it would be the
+                # guard protecting a record that does not exist.
+                continue
+            if named_in(replacement) == recorded:
+                # The attribution is carried across verbatim, so the record
+                # survives the replacement and there is nothing to protect.
+                continue
+            would_destroy(item, recorded)
     return 0
 
 

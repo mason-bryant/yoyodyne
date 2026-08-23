@@ -30,7 +30,35 @@ const defaultTimeout = 4 * time.Hour
 // than the total budget for exactly that reason.
 const defaultIdleTimeout = 5 * time.Minute
 
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
+// NotesGuardScript is the notes-writer guard, named from the repository root.
+// It is exported because three surfaces have to name the same script and none
+// of them can be allowed to name a different one: the developer settings below,
+// and the block CLAUDE.md and AGENTS.md tell an operator to paste into
+// .claude/settings.json for interactive sessions. One implementation guarded by
+// two wirings is the only way "the same refusal in both populations" is a fact
+// rather than a resemblance -- and the interactive population is the one that
+// destroyed all twelve recorded attributions.
+const NotesGuardScript = "scripts/bd-notes-guard.sh"
+
+// developerSandboxSettings confines a developer run's Bash to the worktree and
+// puts every Bash call through the notes-writer guard first.
+//
+// The guard is here as well as in .claude/settings.json because the two cover
+// different writers. `beads.Client.Update` passing only `--append-notes` makes
+// the writes the *harness* issues safe, and says nothing about an agent inside
+// a developer run typing `bd update <id> --notes=` into Bash, which is the same
+// command that destroyed twelve attributions from interactive sessions. Only
+// this hook covers that.
+//
+// $CLAUDE_PROJECT_DIR resolves to the worktree the run was given, so the script
+// found is the one from the change under test rather than one from elsewhere on
+// the machine. A hook naming a script that is not there is reported by Claude
+// Code as a non-blocking error and the call proceeds, so a rename fails open --
+// which is why TestDeveloperRunsPutBashThroughTheNotesGuard asserts the script
+// exists rather than trusting this string.
+const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},` +
+	`"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash \"$CLAUDE_PROJECT_DIR/` +
+	NotesGuardScript + `\""}]}]}}`
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
