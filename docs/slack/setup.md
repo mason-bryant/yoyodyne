@@ -138,6 +138,12 @@ slack:
   channel: C0123456789
 ```
 
+**It is already in the file, commented out.** `yoyo init` scaffolds this block,
+and an `operators` example beside it, under a paragraph pointing back at this
+document — so the work here is deleting the leading `# ` from each line and
+putting your own channel id in. A configuration written before that existed has
+no such block; adding one is the same three lines.
+
 A project that enables reporting without naming a channel is refused when the
 configuration loads, before any work is claimed. A project that says nothing
 about Slack reports nothing, which is every project until it opts in.

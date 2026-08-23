@@ -543,7 +543,7 @@ func TestRenderSlackSectionWritesOrEditsTheBlockInPlace(t *testing.T) {
 	for name, tc := range map[string]struct {
 		content string
 		want    []string
-		absent  string
+		absent  []string
 	}{
 		"no block at all": {
 			content: "version: 1\nchecks: []\n",
@@ -552,7 +552,15 @@ func TestRenderSlackSectionWritesOrEditsTheBlockInPlace(t *testing.T) {
 		"a block that turned it off": {
 			content: "version: 1\nslack:\n  enabled: false\n  channel: C0\nchecks: []\n",
 			want:    []string{"  enabled: true", "  channel: C1", "checks: []"},
-			absent:  "enabled: false",
+			absent:  []string{"enabled: false"},
+		},
+		"the commented example a generated file carries": {
+			content: "approvals:\n  publishing: human\n\n# Reporting into Slack, off. Uncomment the block below.\n#\n# slack:\n#   enabled: true\n#   channel: C0123456789\n\nchecks: []\n",
+			want:    []string{"  publishing: human", "slack:\n  enabled: true\n  channel: C1", "checks: []"},
+			// The instruction to uncomment goes with the example it was about:
+			// a file that both enables reporting and says to enable reporting is
+			// one arguing with itself.
+			absent: []string{"# slack:", "Uncomment the block below"},
 		},
 		"a block with the channel commented out": {
 			content: "version: 1\nslack:\n  enabled: true\n  # channel: C0\nchecks: []\n",
@@ -572,13 +580,62 @@ func TestRenderSlackSectionWritesOrEditsTheBlockInPlace(t *testing.T) {
 					t.Errorf("rendered configuration has no %q:\n%s", want, rendered)
 				}
 			}
-			if tc.absent != "" && strings.Contains(rendered, tc.absent) {
-				t.Errorf("rendered configuration still has %q:\n%s", tc.absent, rendered)
+			for _, absent := range tc.absent {
+				if strings.Contains(rendered, absent) {
+					t.Errorf("rendered configuration still has %q:\n%s", absent, rendered)
+				}
 			}
 			if strings.Count(rendered, "\nslack:")+strings.Count(rendered, "slack:\n")-strings.Count(rendered, "\nslack:\n") > 1 {
 				t.Errorf("the configuration has more than one slack block:\n%s", rendered)
 			}
 		})
+	}
+}
+
+// What setup edits is what init wrote, so the real generated file is what this
+// is run against rather than a copy of its shape: a scaffold that moves its
+// commented example otherwise leaves setup appending a second block beneath it,
+// silently, in a file nobody re-reads after setup says it wrote one.
+func TestRenderSlackSectionReplacesTheExampleTheScaffoldWrote(t *testing.T) {
+	t.Parallel()
+
+	scaffold, err := config.NewScaffold(config.BuiltinV1, config.ScaffoldOptions{ProductID: "example", Repository: "."})
+	if err != nil {
+		t.Fatalf("NewScaffold() error = %v", err)
+	}
+	rendered := renderSlackSection(string(scaffold.Config.Content), "C1")
+	if !strings.Contains(rendered, "\nslack:\n  enabled: true\n  channel: C1\n") {
+		t.Errorf("the block was not written:\n%s", rendered)
+	}
+	for _, absent := range []string{"# slack:", "#   channel: C0123456789", "Uncomment"} {
+		if strings.Contains(rendered, absent) {
+			t.Errorf("the commented example survives as %q:\n%s", absent, rendered)
+		}
+	}
+	// The operators example is a different section and not setup's to touch.
+	if !strings.Contains(rendered, "# operators:") {
+		t.Errorf("the operators example was taken with it:\n%s", rendered)
+	}
+
+	// And what it wrote has to load, which is the only thing that proves the
+	// edit landed at the left margin rather than inside something else.
+	scaffold.Config.Content = []byte(rendered)
+	directory := filepath.Join(t.TempDir(), config.DirectoryName)
+	for _, file := range scaffold.Files() {
+		path := filepath.Join(directory, filepath.FromSlash(file.Path))
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.WriteFile(path, file.Content, 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+	}
+	loaded, err := config.LoadResolved(filepath.Join(directory, config.FileName))
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	if !loaded.Config.Slack.Enabled || loaded.Config.Slack.Channel != "C1" {
+		t.Errorf("slack = %+v, want reporting into C1", loaded.Config.Slack)
 	}
 }
 

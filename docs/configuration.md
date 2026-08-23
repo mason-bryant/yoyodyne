@@ -2530,7 +2530,9 @@ operators:
 
 The whole mapping is optional, and a project that names nobody recognizes
 nobody — which is every project until it names somebody, and is closed rather
-than open.
+than open. `yoyo init` writes an example of it commented out, beside the
+[`slack`](#reporting-to-slack) block, so a generated file shows what an entry
+looks like without recognizing anybody.
 
 It is **top level rather than under any one surface**, because a human is known
 by more than one. An act carries an identifier and never a person: a commit
@@ -2595,6 +2597,13 @@ slack:
 The whole block is optional, and a project that omits it reports nothing — which
 is every project until it opts in. `channel` takes a channel id or a name;
 an id is worth preferring because renaming the channel does not break it.
+
+**`yoyo init` writes it commented out**, together with the
+[`operators`](#operators) example beside it, so the generated file shows the
+shape and says the capability exists rather than leaving both to be found in
+[`docs/slack/setup.md`](slack/setup.md). Deleting the leading `# ` from each
+line is the whole of turning it on; `yoyo setup` does the same edit for you, and
+replaces the commented example rather than writing a second block under it.
 
 ### Avatars
 

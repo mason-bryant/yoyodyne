@@ -383,10 +383,90 @@ func TestScaffoldWritesReadableDurations(t *testing.T) {
 	}
 }
 
+// The setup recipe tells an operator to add a slack section to this file, so
+// the file has to show one. It stays commented, because the capability is off
+// until somebody opts in, and it carries the pointer to the rest of the recipe
+// -- the app and its tokens -- which is the part that does not happen here.
+func TestScaffoldShowsTheOptionalSlackSectionCommented(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."})
+	rendered, err := os.ReadFile(resolved.Path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	for _, want := range []string{
+		"# slack:\n",
+		"#   enabled: true\n",
+		"#   channel: C0123456789\n",
+		"# operators:\n",
+		"#       - direct-work\n",
+		slackGuide,
+	} {
+		if !strings.Contains(string(rendered), want) {
+			t.Errorf("generated configuration does not show %q:\n%s", want, rendered)
+		}
+	}
+	// Shown is not switched on. A generated project reports nothing and
+	// recognizes nobody until its operator deletes the comment markers.
+	if resolved.Config.Slack.Enabled || resolved.Config.Slack.Channel != "" {
+		t.Errorf("slack = %+v, want a project that reports nothing", resolved.Config.Slack)
+	}
+	if len(resolved.Config.Operators) != 0 {
+		t.Errorf("operators = %v, want a project that recognizes nobody", resolved.Config.Operators)
+	}
+}
+
+// The example is only worth showing if the gesture it asks for works, so the
+// whole of it is uncommented here and loaded: an example that does not load is
+// worse than none, because the operator who tried it has no reason to think the
+// fault is the file's.
+func TestScaffoldedSlackExampleLoadsWhenUncommented(t *testing.T) {
+	t.Parallel()
+
+	resolved := loadScaffoldEdited(t, ScaffoldOptions{ProductID: "example", Repository: "."}, func(content string) string {
+		return uncommentScaffoldBlock(t, uncommentScaffoldBlock(t, content, "slack:"), "operators:")
+	})
+	if !resolved.Config.Slack.Enabled || resolved.Config.Slack.Channel != "C0123456789" {
+		t.Errorf("slack = %+v, want the example switched on", resolved.Config.Slack)
+	}
+	// The Slack allow-list is derived from the grants rather than authored, so
+	// the example is only complete if uncommenting it puts somebody on it.
+	if allowed := resolved.Config.SlackOperators(); len(allowed) != 1 || allowed[0] != "U0123456789" {
+		t.Errorf("slack operators = %v, want the example's member id", allowed)
+	}
+}
+
+// uncommentScaffoldBlock deletes the leading "# " from a commented top-level
+// key and everything under it, which is the whole gesture the generated file
+// asks for -- delete the comment marker and nothing else.
+func uncommentScaffoldBlock(t *testing.T, content, key string) string {
+	t.Helper()
+	lines := strings.Split(content, "\n")
+	for index, line := range lines {
+		if line != "# "+key {
+			continue
+		}
+		for ; index < len(lines) && strings.HasPrefix(lines[index], "# "); index++ {
+			lines[index] = strings.TrimPrefix(lines[index], "# ")
+		}
+		return strings.Join(lines, "\n")
+	}
+	t.Fatalf("the generated configuration has no commented %q to uncomment:\n%s", key, content)
+	return ""
+}
+
 // loadScaffold writes a generated project into a temporary directory and loads
 // it back, which is the only way to prove that what init writes is what the
 // harness can read.
 func loadScaffold(t *testing.T, options ScaffoldOptions) Resolved {
+	t.Helper()
+	return loadScaffoldEdited(t, options, nil)
+}
+
+// loadScaffoldEdited does the same for a generated project somebody has edited
+// first, which is what every commented section in the file asks them to do.
+func loadScaffoldEdited(t *testing.T, options ScaffoldOptions, edit func(string) string) Resolved {
 	t.Helper()
 	scaffold, err := NewScaffold(BuiltinV1, options)
 	if err != nil {
@@ -394,6 +474,9 @@ func loadScaffold(t *testing.T, options ScaffoldOptions) Resolved {
 	}
 	if len(scaffold.Personas) == 0 {
 		t.Fatal("scaffold copied no personas")
+	}
+	if edit != nil {
+		scaffold.Config.Content = []byte(edit(string(scaffold.Config.Content)))
 	}
 	directory := filepath.Join(t.TempDir(), DirectoryName)
 	for _, file := range scaffold.Files() {
