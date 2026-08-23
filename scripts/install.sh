@@ -10,7 +10,8 @@
 # release's own checksums (or `go install` where no release binary exists for
 # this platform), put it in one directory, name the shell-profile line when
 # that directory is not already on PATH, and check the two hard prerequisites
-# -- bd and claude -- installing or naming each one.
+# -- bd and claude -- naming whichever one is missing, or installing claude
+# where --install-prereqs asked for it.
 #
 # It is a script rather than part of the binary for the one reason that
 # survives scrutiny: it is the part that fetches the binary, so it runs on a
@@ -19,10 +20,13 @@
 # Go binary to write it in.
 #
 # What it will not do is edit a shell profile, use sudo, or touch anything in a
-# project. It writes exactly one file of its own choosing, the binary, plus
-# whatever a prerequisite's own installer writes; every other change to this
-# machine is printed as a line for a person to run. A script fetched over the
-# network that asks for a root password is a habit nobody should be taught.
+# project. Left to itself it writes exactly one file, the binary; every other
+# change to this machine is printed as a line for a person to run, including
+# the installs for a missing prerequisite. --install-prereqs is how somebody
+# asks for one of those to be run rather than printed, and it is the only way
+# this writes anything else. A script fetched over the network that installs
+# what it likes, or asks for a root password, is a habit nobody should be
+# taught.
 #
 # Requires bash, curl, tar, and one of shasum or sha256sum. A platform with no
 # release binary needs Go 1.24 or newer instead of curl and tar.
@@ -53,11 +57,14 @@ usage() {
   cat <<USAGE
 install.sh - install yoyo and check what it needs
 
-  --version <tag>   install this release rather than the newest one
-  --dir <path>      install into this directory rather than the default
-  --from-source     build with \`go install\` rather than downloading a release
-  --skip-prereqs    check bd and claude and name what is missing, install neither
-  --help            print this
+  --version <tag>     install this release rather than the newest one
+  --dir <path>        install into this directory rather than the default
+  --from-source       build with \`go install\` rather than downloading a release
+  --install-prereqs   install a missing claude rather than only naming it
+  --help              print this
+
+bd and claude are always checked, and whichever is missing is always named.
+Nothing but the yoyo binary is installed unless --install-prereqs asks for it.
 
 Environment: YOYO_VERSION, YOYO_INSTALL_DIR are the same as --version and --dir.
 USAGE
@@ -66,14 +73,14 @@ USAGE
 tag="${YOYO_VERSION:-}"
 install_dir="${YOYO_INSTALL_DIR:-}"
 from_source=0
-install_prereqs=1
+install_prereqs=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --version) [ $# -ge 2 ] || refuse "--version needs a tag"; tag="$2"; shift 2 ;;
     --dir)     [ $# -ge 2 ] || refuse "--dir needs a path";    install_dir="$2"; shift 2 ;;
-    --from-source)  from_source=1; shift ;;
-    --skip-prereqs) install_prereqs=0; shift ;;
+    --from-source)     from_source=1; shift ;;
+    --install-prereqs) install_prereqs=1; shift ;;
     --help|-h)      usage; exit 0 ;;
     *) usage >&2; refuse "unknown argument: $1" ;;
   esac
@@ -268,7 +275,10 @@ report_prerequisite bd "the tracker every role reads and writes" "$beads_url" ||
 
 if ! report_prerequisite claude "what executes every agent role" "$claude_url"; then
   if [ "$install_prereqs" = "1" ]; then
-    say "installing it:"
+    # Only ever reached because it was asked for. Installing it uninvited would
+    # mean a script fetched over the network running a second one unattended,
+    # which is not a thing to do to somebody's machine on their behalf.
+    say "installing it, because --install-prereqs was passed:"
     if need npm; then
       run npm install -g @anthropic-ai/claude-code || true
     else
@@ -282,6 +292,8 @@ if ! report_prerequisite claude "what executes every agent role" "$claude_url"; 
     else
       say "claude is still not on this shell's PATH. Open a new shell, or install it from $claude_url"
     fi
+  else
+    say "Or pass --install-prereqs and this script will install it for you."
   fi
 fi
 
@@ -291,5 +303,11 @@ if [ -n "$missing" ]; then
   say "Still needed before a run:$missing"
 fi
 say "claude must also be authenticated; \`yoyo doctor\` in your project says whether it is."
+# The three steps the README's own getting-started spine names, in its order and
+# its spelling. A machine that followed this script and then a machine that
+# followed the README have to end up in the same place, or one of the two is
+# a path nobody has walked.
 say "Then, in your own project:"
-printf '\n      cd path/to/your/project\n      yoyo setup\n\n'
+printf '\n      cd path/to/your/project\n      bd init && yoyo init\n      yoyo chat\n\n'
+say "\`yoyo setup\` walks the middle step and everything around it as questions,"
+say "ending in \`yoyo doctor\`, if you would rather be asked than type."

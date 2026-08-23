@@ -189,6 +189,11 @@ contains "$(cat "$request_log")" "api.github.com" "the newest release is asked f
 contains "$output" "checksum matches" "the download is checked against the release's checksums"
 contains "$output" "reports v9.9.9" "the installed binary is run and says which version it is"
 if [ -x "$install_dir/yoyo" ]; then pass "the binary is in the install directory"; else fail "no executable at $install_dir/yoyo"; fi
+# What it says to do next has to be the steps the README documents, or a
+# machine that followed this script and a reader who followed the README are
+# being sent to different places.
+contains "$output" "bd init && yoyo init" "the next step is the one the README's getting started names"
+contains "$output" "yoyo chat" "and the step after it"
 
 step "a tag named on the command line"
 fabricate named-tag
@@ -288,7 +293,11 @@ step "prerequisites that are not installed"
 fabricate prereqs-missing
 uname_s=Darwin uname_m=arm64
 publish v9.9.9 darwin_arm64
-install_run "" /bin/zsh --dir "$install_dir" --skip-prereqs
+# No --install-prereqs: this is the default run, and the README's claim about
+# it -- that nothing but the binary is written unless you ask -- is what these
+# last two checks hold to.
+stub_tool npm 'echo "npm was run, and should not have been" >&2; exit 1'
+install_run "" /bin/zsh --dir "$install_dir"
 [ "$status" = "0" ] && pass "a missing prerequisite is named rather than treated as a failed install" || fail "the install exited $status -- got: $output"
 contains "$output" "bd is not installed" "bd is checked"
 contains "$output" "github.com/gastownhall/beads" "bd is named with where to get it"
@@ -296,6 +305,9 @@ contains "$output" "claude is not installed" "claude is checked"
 contains "$output" "code.claude.com" "claude is named with where to get it"
 contains "$output" "Still needed before a run: bd claude" "the summary lists what is still missing"
 contains "$output" "authenticated" "claude's other requirement is named too"
+contains "$output" "--install-prereqs" "the flag that would have installed it is named"
+missing "$output" "npm install" "nothing is installed without being asked"
+missing "$output" "claude.ai/install.sh" "no second script is fetched and run without being asked"
 
 step "prerequisites that are installed"
 fabricate prereqs-present
@@ -308,17 +320,37 @@ contains "$output" "bd: $stub_dir/bd" "an installed bd is reported with where it
 contains "$output" "claude: $stub_dir/claude" "an installed claude is reported with where it is"
 missing "$output" "Still needed before a run" "nothing is listed as missing when both are there"
 
-step "a missing claude is installed"
-fabricate claude-installed
+step "a missing claude is installed when it is asked for, with npm"
+fabricate claude-installed-npm
 uname_s=Darwin uname_m=arm64
 publish v9.9.9 darwin_arm64
 stub_tool bd 'echo "bd version 1.1.2"'
 # The npm the installer would reach for, doing what a successful install does:
 # leaving a claude on PATH.
 stub_tool npm 'printf "#!/bin/sh\necho 1.0.0\n" > "$(dirname "$0")/claude"; chmod +x "$(dirname "$0")/claude"'
-install_run "" /bin/zsh --dir "$install_dir"
+install_run "" /bin/zsh --dir "$install_dir" --install-prereqs
 contains "$output" "npm install -g @anthropic-ai/claude-code" "the install it runs is printed before it runs"
+contains "$output" "because --install-prereqs was passed" "it says whose decision the install was"
 contains "$output" "claude: $stub_dir/claude" "the recheck finds what the installer left"
+missing "$output" "Still needed before a run" "a prerequisite that was installed is not still listed as missing"
+
+step "a missing claude is installed when it is asked for, without npm"
+fabricate claude-installed-curl
+uname_s=Darwin uname_m=arm64
+publish v9.9.9 darwin_arm64
+stub_tool bd 'echo "bd version 1.1.2"'
+# The fallback route, which is the one branch that fetches a second script and
+# runs it. The stub curl answers claude.ai/install.sh from the served directory
+# like any other URL, so what runs here is a fixture rather than the network.
+cat > "$served/install.sh" <<'SH'
+#!/bin/sh
+dir="$(dirname "$(command -v curl)")"
+printf '#!/bin/sh\necho 1.0.0\n' > "$dir/claude"
+chmod +x "$dir/claude"
+SH
+install_run "" /bin/zsh --dir "$install_dir" --install-prereqs
+contains "$(cat "$request_log")" "https://claude.ai/install.sh" "with no npm, the installer claude documents is what is fetched"
+contains "$output" "claude: $stub_dir/claude" "the recheck finds what that installer left"
 missing "$output" "Still needed before a run" "a prerequisite that was installed is not still listed as missing"
 
 step "the platforms a release covers"
@@ -339,6 +371,7 @@ fabricate help
 install_run "" /bin/zsh --help
 [ "$status" = "0" ] && pass "--help exits 0" || fail "--help exited $status"
 contains "$output" "--from-source" "the flags are documented where they are typed"
+contains "$output" "--install-prereqs" "including the one that lets it change anything else"
 
 printf '\n'
 if [ "$failures" -eq 0 ]; then

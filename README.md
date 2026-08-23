@@ -140,16 +140,19 @@ release binary for it and checks it against the release's own `checksums.txt`
 platform — installs it into `/usr/local/bin` if you can write there and
 `~/.local/bin` otherwise, runs it so the version you got is printed rather than
 assumed, and prints the `PATH` line for your shell if that directory is not
-already on it. Then it checks `bd` and `claude`, installing `claude` where it
-can and naming either one it could not, so what is still missing is on the
-screen rather than waiting to surface as a failed run.
+already on it. Then it checks `bd` and `claude` and names whichever one is
+missing, so what you still have to install is on the screen rather than waiting
+to surface as a failed run.
 
 It edits no shell profile, uses no `sudo`, and touches nothing in a project:
-every change to your machine other than the binary itself is printed as a line
+left to itself it writes one file, the binary, and every other change to your
+machine — including installing a missing prerequisite — is printed as a line
 for you to run. `--dir <path>` installs somewhere else, `--version <tag>` pins a
-release rather than taking the newest, `--from-source` builds with Go instead of
-downloading, and `--skip-prereqs` checks `bd` and `claude` without installing
-either. Pass them through the pipe with `bash -s --`:
+release rather than taking the newest, and `--from-source` builds with Go
+instead of downloading. `--install-prereqs` is the one flag that lets it change
+anything else: it installs a missing `claude` with `npm install -g
+@anthropic-ai/claude-code`, or with the installer at `claude.ai/install.sh`
+where there is no `npm`. Pass any of them through the pipe with `bash -s --`:
 
 ```sh
 curl -fsSL .../install.sh | bash -s -- --dir ~/bin --version v0.3.0
@@ -272,8 +275,9 @@ that step, to a walk somebody is watching.
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
 authenticated, which executes every agent role. Those last two are what the
-install script checks: it installs `claude` where it can, and names either one
-it could not, so the list is not one you have to work through before you start.
+install script checks and names, so a missing one is something you find out in
+the first minute rather than at the first run; `--install-prereqs` has it
+install `claude` for you.
 Go 1.24 or newer is needed only if you install with `go install` or build from
 source — including when the script falls back to it, on a platform no release
 binary covers; a release download needs neither Go nor a checkout. Two more are needed **only if you want pull
