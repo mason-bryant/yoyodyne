@@ -2593,7 +2593,8 @@ of them in the words that document states it in.
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
 ./bin/yoyo goals attribution   # what each admitted work item says it is for
-./bin/yoyo goals witness       # witness the goals already recorded on admitted work
+./bin/yoyo goals witness       # witness the goals already recorded on work items
+./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 Nothing there writes an attribution, for the same reason nothing writes an
@@ -2608,8 +2609,9 @@ wrong, and it is what `yoyo goals attribution` exits non-zero for.
 There is a third way to record no goal, and it is reported apart from both.
 `yoyo` only ever appends to an item's notes, but anything else with the tracker's
 command line can replace them, and a replacement that does not carry the goal
-forward destroys it — which has happened, to six items at once, and read
-afterwards exactly like work admitted before the check existed. So every write
+forward destroys it — which has happened twice, to six items at once and then to
+twelve more, and read afterwards exactly like work admitted before the check
+existed. So every write
 that puts a goal into an item's notes also records that goal in the tracker's
 metadata, where replacing the notes cannot reach it. An item carrying that
 witness and no goal has lost one rather than never had one: it is reported as
@@ -2621,10 +2623,31 @@ while the item stayed empty.
 
 The witness covers a goal from the moment it is written and no earlier, so an
 attribution made before it existed is protected by nothing. `yoyo goals witness`
-sweeps that up: it records, on every admitted item whose notes already state a
-goal and which carries no witness, the goal those notes state. It decides
-nothing — the statement is the item's own — and it is worth running once over an
-existing backlog.
+sweeps that up: it records, on every work item whose notes already state a goal
+and which carries no witness, the goal those notes state. It decides nothing —
+the statement is the item's own — and it is worth running once over an existing
+backlog. It walks every status the tracker holds rather than the queue, because
+the command that destroys an attribution reaches a claimed or closed item just
+as easily, and most of the losses on record were on items that had closed.
+
+The witness makes a loss impossible to hide; `yoyo goals guard` stops the write
+that causes one. It reads a tool call an agent session is about to make and
+refuses a shell command running `bd update <id> --notes`, which is where every
+recorded loss came from. A replacement carrying the `Goal served:` line through
+is allowed, because that one destroys nothing — and it is the way past a refusal
+when the notes genuinely have to be rewritten. The harness gives the guard to
+every developer run it makes; an interactive session in your own repository gets
+it by wiring the same command as a `PreToolUse` hook on `Bash` in
+`.claude/settings.json`:
+
+```json
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
+```
+
+The two halves are not interchangeable. The guard covers the sessions it is
+wired into and says nothing about a command typed anywhere else; the witness
+covers every attributed item whatever wrote over it, and turns a silent loss
+into one the audit fails on.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking

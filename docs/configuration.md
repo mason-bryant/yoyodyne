@@ -1091,16 +1091,27 @@ may state is witnessed without its words rather than stored cut in half.
 **The witness covers a goal only from the moment it is written.** An attribution
 made before this existed carries none, so replacing its notes reads as work
 nobody ever attributed and does not fail the audit. `yoyo goals witness` closes
-that gap over a backlog: it records, on every admitted item whose notes state a
-goal and which carries no witness, the goal those notes already state. It writes
-no attribution and decides nothing — the statement is the item's own, copied to
-where a careless writer cannot reach it — and it is worth running once after
-upgrading, and again after any bulk import of work attributed elsewhere.
+that gap: it records, on every work item whose notes state a goal and which
+carries no witness, the goal those notes already state. It writes no attribution
+and decides nothing — the statement is the item's own, copied to where a careless
+writer cannot reach it — and it is worth running once after upgrading, and again
+after any bulk import of work attributed elsewhere. It sweeps every status the
+tracker holds rather than the queue, because the command that destroys an
+attribution reaches a claimed or closed item just as easily, and most of the
+losses on record were on items that had already closed.
+
+`yoyo goals guard` is the same loss stopped rather than reported. Wired as a
+`PreToolUse` hook on `Bash`, it reads the command an agent session is about to
+run and refuses `bd update <id> --notes`, which replaces an item's notes and
+takes the goal recorded in them with it; a replacement carrying the
+`Goal served:` line through is allowed, because that one destroys nothing. The
+harness gives it to every developer run it makes.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
 yoyo goals attribution   # what each admitted work item says it is for
-yoyo goals witness       # witness the goals already recorded on admitted work
+yoyo goals witness       # witness the goals already recorded on work items
+yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 `attribution` exits non-zero for an item whose attribution is `unresolved` or

@@ -379,24 +379,41 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 			{"id": "yoyodyne-ifd.45", "title": "Admitted long ago", "status": "open",
 				"priority": 3, "issue_type": "task", "notes": "Admitted by hand."},
 		},
+		// The two slices the backlog leaves out, and the two the recorded losses
+		// actually landed in: the item somebody is working on right now, and the
+		// closed items that were written over after they closed. A sweep scoped to
+		// the queue protects neither.
+		"in_progress": {
+			{"id": "yoyodyne-ifd.99", "title": "Configurable roles", "status": "in_progress",
+				"priority": 1, "issue_type": "task", "notes": goal.Note(autonomy)},
+		},
+		"closed": {
+			{"id": "yoyodyne-ifd.4", "title": "Run one work item", "status": "closed",
+				"priority": 1, "issue_type": "task", "notes": goal.Note(autonomy)},
+		},
 	}}
 
 	tracker := beads.Client{Runner: bd, Binary: "bd-test", Dir: "/repo"}
-	admitted, err := admittedWorkItems(context.Background(), tracker)
+	swept, err := workItemsWithStatus(context.Background(), tracker, witnessStatuses)
 	if err != nil {
-		t.Fatalf("admittedWorkItems() error = %v", err)
+		t.Fatalf("workItemsWithStatus() error = %v", err)
 	}
-	witnessed, failures := recordGoalWitnesses(context.Background(), tracker, admitted)
+	witnessed, failures := recordGoalWitnesses(context.Background(), tracker, swept)
 	if failures != 0 {
 		t.Fatalf("witnessed = %#v", witnessed)
 	}
-	if len(bd.written) != 1 || bd.written["yoyodyne-ifd.102.2"] != autonomy {
-		t.Fatalf("the sweep wrote %#v, want the one unwitnessed attributed item", bd.written)
+	if len(bd.written) != 3 {
+		t.Fatalf("the sweep wrote %#v, want every unwitnessed attributed item whatever its status", bd.written)
+	}
+	for _, protected := range []string{"yoyodyne-ifd.102.2", "yoyodyne-ifd.99", "yoyodyne-ifd.4"} {
+		if bd.written[protected] != autonomy {
+			t.Fatalf("%s was not witnessed: the sweep wrote %#v", protected, bd.written)
+		}
 	}
 
 	var rendered bytes.Buffer
-	printWitnessed(&rendered, len(admitted), witnessed)
-	for _, want := range []string{"1 newly witnessed", "yoyodyne-ifd.102.2 witnessed: " + autonomy} {
+	printWitnessed(&rendered, len(swept), witnessed)
+	for _, want := range []string{"3 newly witnessed", "yoyodyne-ifd.102.2 witnessed: " + autonomy} {
 		if !strings.Contains(rendered.String(), want) {
 			t.Fatalf("witness stdout = %q, want it to contain %q", rendered.String(), want)
 		}
@@ -407,9 +424,9 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 	// having swept it. Before the sweep the same replacement read as work nobody
 	// had attributed.
 	goals := goal.Set{Sources: []string{"v1-goals"}, Goals: []goal.Goal{{Statement: autonomy, ArtifactID: "v1-goals", InForce: true}}}
-	swept := beads.WorkItem{ID: "yoyodyne-ifd.102.2", Notes: "Constraints from the architect.",
+	overwritten := beads.WorkItem{ID: "yoyodyne-ifd.102.2", Notes: "Constraints from the architect.",
 		GoalWitness: goal.Witness{Recorded: true, Statement: bd.written["yoyodyne-ifd.102.2"]}}
-	if lost := goals.AttributionOf(swept.Notes, swept.GoalWitness); lost.State != goal.StateLost || lost.Recorded != autonomy {
+	if lost := goals.AttributionOf(overwritten.Notes, overwritten.GoalWitness); lost.State != goal.StateLost || lost.Recorded != autonomy {
 		t.Fatalf("a swept item is not protected: %#v", lost)
 	}
 
@@ -422,9 +439,9 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 		refusal: "bd: the tracker is read-only",
 	}
 	refused := beads.Client{Runner: refusing, Binary: "bd-test", Dir: "/repo"}
-	unwitnessed, err := admittedWorkItems(context.Background(), refused)
+	unwitnessed, err := workItemsWithStatus(context.Background(), refused, witnessStatuses)
 	if err != nil {
-		t.Fatalf("admittedWorkItems() error = %v", err)
+		t.Fatalf("workItemsWithStatus() error = %v", err)
 	}
 	attempted, refusals := recordGoalWitnesses(context.Background(), refused, unwitnessed)
 	if refusals != 1 || len(attempted) != 1 || attempted[0].Failure == "" {
@@ -434,6 +451,72 @@ func TestWitnessingRecordsTheGoalAnItemAlreadyStatesAndDecidesNothing(t *testing
 	printWitnessed(&refusedReport, len(unwitnessed), attempted)
 	if !strings.Contains(refusedReport.String(), "yoyodyne-ifd.102.2 could not be witnessed") {
 		t.Fatalf("witness stdout = %q", refusedReport.String())
+	}
+}
+
+// The other half of the sweep above, standing in front of the writer instead of
+// behind it: the tool call an agent session is about to make, decided before the
+// notes are replaced rather than reported after they were.
+func TestTheGuardRefusesTheWriterAndSaysNothingAboutAnythingElse(t *testing.T) {
+	t.Parallel()
+
+	autonomy := "Run development nearly autonomously."
+	for _, test := range []struct {
+		name    string
+		payload string
+		denied  bool
+	}{
+		{
+			name:    "the writer that destroys an attribution",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --notes=\"replaced\""}}`,
+			denied:  true,
+		},
+		{
+			name:    "the same write carrying the attribution through",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --notes=\"` + goal.Note(autonomy) + `\""}}`,
+		},
+		{
+			name:    "the spelling that adds rather than replaces",
+			payload: `{"tool_name":"Bash","tool_input":{"command":"bd update yoyodyne-ifd.45 --append-notes=\"what I did\""}}`,
+		},
+		{
+			// Nothing but a shell command can carry the writer, and a guard with an
+			// opinion about reading a file is a guard in the way of every run.
+			name:    "a tool that is not a shell",
+			payload: `{"tool_name":"Read","tool_input":{"command":"bd update yoyodyne-ifd.45 --notes=replaced"}}`,
+		},
+		{
+			// A payload this cannot read allows the command and says so. Refusing it
+			// would turn one unrecognised hook shape into a session that can run no
+			// commands at all -- the guard being the outage instead of preventing one.
+			name:    "a tool call it cannot read",
+			payload: `not json at all`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var stdout, stderr bytes.Buffer
+			if code := guardNotesReplacement(nil, strings.NewReader(test.payload), &stdout, &stderr); code != 0 {
+				t.Fatalf("guard exit code = %d, stderr = %q", code, stderr.String())
+			}
+			if !test.denied {
+				if stdout.String() != "" {
+					t.Fatalf("guard said something about a command it has no opinion on: %q", stdout.String())
+				}
+				return
+			}
+			var decision hookDecision
+			if err := json.Unmarshal(stdout.Bytes(), &decision); err != nil {
+				t.Fatalf("guard stdout = %q: %v", stdout.String(), err)
+			}
+			if decision.Output.EventName != "PreToolUse" || decision.Output.Decision != "deny" {
+				t.Fatalf("guard decision = %#v", decision.Output)
+			}
+			if !strings.Contains(decision.Output.Reason, "yoyodyne-ifd.45") ||
+				!strings.Contains(decision.Output.Reason, "--append-notes") {
+				t.Fatalf("guard reason = %q, want it to name the item and what to run instead", decision.Output.Reason)
+			}
+		})
 	}
 }
 

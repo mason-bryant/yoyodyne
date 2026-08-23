@@ -107,7 +107,7 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if runner.prompts[0] != "implement the task" {
 		t.Fatalf("prompt = %q", runner.prompts[0])
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}

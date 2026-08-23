@@ -2,6 +2,37 @@
 
 This file provides instructions and context for AI coding agents working on this project.
 
+## Never replace a work item's notes
+
+**`bd update <id> --notes=...` replaces the notes field wholesale. Use
+`--append-notes` instead.**
+
+```bash
+bd update <id> --append-notes="what you want to record"   # adds to the notes
+bd update <id> --notes="what you want to record"          # DESTROYS everything already there
+```
+
+A work item records the goal it serves as a `Goal served:` line in its notes, so
+a wholesale replacement takes the attribution with it and the item afterwards
+reads as work nobody ever attributed. This is not hypothetical: it has happened
+twice, to six items and then to twelve more, every one of them from
+`bd update --notes=` typed into an agent session. `docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md`
+matches each destroyed record to the command that destroyed it.
+
+`yoyo goals guard` refuses the command before it runs, and allows a replacement
+that carries the `Goal served:` line through — so if the notes genuinely have to
+be rewritten, include that line in the replacement. The harness wires the guard
+into every developer run it makes. An interactive session gets it by adding a
+`PreToolUse` hook on `Bash` to `.claude/settings.json`:
+
+```json
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
+```
+
+The guard only covers sessions it is wired into, which is why the rule is
+written here as well. `yoyo goals attribution` reports and fails on an
+attribution that was destroyed.
+
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker
 
