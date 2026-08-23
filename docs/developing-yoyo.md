@@ -22,17 +22,21 @@ runs.
 ## What `test` checks besides the code
 
 Some of what `make test` runs is not about the Go code at all: it reads this
-repository's own documents, so a mechanical defect in them fails a check instead
-of costing a reviewer a paragraph. Each one exists because a reviewer wrote that
-paragraph, more than once, and because the thing being checked is one nobody can
-verify by eye — a relative path resolves only against the directory layout, and a
-`#fragment` names a heading through a slug nothing writes down.
+repository's own documents, and it executes the part of the build that is shell,
+so a mechanical defect in either fails a check instead of costing a reviewer a
+paragraph or waiting for the day it matters. Each one exists because a reviewer
+wrote that paragraph, more than once, and because the thing being checked is one
+nobody can verify by eye — a relative path resolves only against the directory
+layout, a `#fragment` names a heading through a slug nothing writes down, and no
+Go check has ever run a line of bash.
 
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
 | A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. |
 | A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
 | A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
+| A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
+| The release verb's list of the tracker's derived exports disagreeing with the one a run declares | `internal/cli` (`release_repository_test.go`) | Add the path to both. It is one list spelled once in shell and once in Go, and a path in only one of them is ignored by the other with nothing said. |
 
 Fixtures written to be malformed on purpose are not walked: anything under a
 `testdata` directory is skipped, along with `.git`, `.dolt`, and `dist`.
@@ -65,7 +69,20 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
+The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl` — do not count as a dirty tree. They are derived from a
+store that is authoritative elsewhere, nothing a release ships is built from
+them, and the walkthrough this gate runs rewrites them itself, so refusing on
+them would stall most days of a daily cadence. The cut commits them instead,
+as their own housekeeping commit placed after the last gate is green and before
+the tag, which keeps the tag naming a tree with nothing uncommitted in it
+rather than a clean tree with a footnote. On a day it had to make that commit
+it prints `git push --atomic origin main <tag>` as the publishing command,
+because origin does not have that commit and the branch has to carry it.
+
 It stops at the tag. Publishing is the `git push`, which is the irreversible
 half and what the release workflow acts on, so it stays something you do
 deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
-executes every one of those refusals against fabricated repositories.
+executes every one of those refusals against fabricated repositories, and
+`make test` runs it, so changing the verb is checked by the same command as
+changing anything else.
