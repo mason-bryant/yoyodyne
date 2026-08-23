@@ -22,6 +22,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -155,6 +156,18 @@ type Options struct {
 	// that spends nothing and is refused the three that do — a budget that cannot
 	// be read is never spent through as though it were empty.
 	Triage TriageBudgets
+	// Exchanges is the inter-role ask channel: how a question this role cannot
+	// answer itself reaches the role that can, without the operator relaying it
+	// and without a whole work item. It is optional like the rest, and a
+	// conversation without one refuses an ask plainly rather than appearing to
+	// have asked somebody and been ignored.
+	Exchanges Exchanges
+	// AskRoundsPerMessage bounds how much asking one thing the operator said may
+	// set off. It is not the same bound as an exchange's own cap: the cap stops
+	// one thread going round for ever, and this stops a reply opening thread after
+	// thread. Zero takes the harness default, which is the same number an exchange
+	// is allowed by default — one message asks at most as much as one exchange may.
+	AskRoundsPerMessage int
 	// Amendments is the durable log of changes other roles have proposed to
 	// documents they do not own. It is read here so the ones this role owns reach
 	// it: an owner that never hears the argument cannot answer it. It is optional
@@ -292,6 +305,11 @@ type Session struct {
 	// from, and it is the first thing to check against a real bill.
 	turnCostUSD    float64
 	sessionCostUSD float64
+	// lastInvocationCostUSD is what the provider charged for the invocation just
+	// taken, kept apart from both totals because an exchange is charged per
+	// invocation rather than per message: the round that carried an answer back
+	// belongs to the exchange, and the rest of the message does not.
+	lastInvocationCostUSD float64
 	// titled says a run this conversation reported renamed the operator's
 	// terminal window, so the conversation knows to put the name back when it
 	// ends rather than leaving it announcing work that finished.
@@ -420,7 +438,13 @@ type Reply struct {
 	// could not be kept, because a lost report would otherwise be silence.
 	Reports       []report.Report `json:"reports,omitempty"`
 	ReportProblem string          `json:"report_problem,omitempty"`
-	Evidence      Evidence        `json:"evidence"`
+	// Exchanges are the rounds of asking another role this reply conducted, in
+	// the order they happened. Like the actions they already happened, so they
+	// are reported to the operator rather than put to them — and reported at all
+	// because a conversation that quietly went and asked another agent something
+	// is the kind of side conversation this channel exists not to be.
+	Exchanges []ExchangeRound `json:"exchanges,omitempty"`
+	Evidence  Evidence        `json:"evidence"`
 }
 
 // Open loads or starts a role's conversation. A recorded conversation with a
@@ -535,8 +559,23 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// it, so that is what a per-turn cost has to describe.
 	s.turnCostUSD = 0
 	prompt := s.turnPrompt(trimmed)
-	for round := 1; ; round++ {
+	// chargeTo is the exchange the next invocation belongs to, set when a round of
+	// asking is delivered into it. asksTaken bounds how much asking one message
+	// may set off, which is a different question from how long one thread may run.
+	var chargeTo string
+	asksTaken := 0
+	// trackerRounds counts only the rounds that actually went to the tracker. The
+	// loop is shared with asking now, and a budget that counted both would mean a
+	// message that asked twice had fewer rounds of actions than one that asked
+	// none — which is the tracker budget changing size for a reason nothing about
+	// the tracker explains.
+	trackerRounds := 0
+	for {
 		answer, err := s.takeTurn(ctx, prompt)
+		// The invocation is charged to the exchange whose answer it was carrying,
+		// before anything is decided about what it said: it was paid for either way.
+		s.chargeExchange(chargeTo, s.lastInvocationCostUSD)
+		chargeTo = ""
 		reply.Evidence = s.Evidence()
 		if err != nil {
 			reply.Text = appendProse(reply.Text, answer)
@@ -591,29 +630,74 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		admittedItems, undecided := s.admit(ctx, pending)
 		reply.Admitted = append(reply.Admitted, admittedItems...)
 		reply.Proposals = append(reply.Proposals, undecided...)
-		if len(parsed.Actions) == 0 {
-			break
-		}
-		// The harness now goes to the tracker on the product manager's behalf,
-		// which emits no provider events, so the display is told directly rather
-		// than left saying the provider is still writing.
-		s.activity.doing(phaseTracker)
-		outcomes, err := s.performTrackerActions(ctx, parsed.Actions)
-		reply.Actions = append(reply.Actions, outcomes...)
-		if err != nil {
-			return reply, err
-		}
-		if round >= maxTrackerRounds {
-			// The rounds are spent. The results are still owed to the product
-			// manager, so they are written down to wait for its next turn rather
-			// than being answered with another one now.
-			reply.ResultsCarriedOver = true
-			if err := s.carryResults(outcomes); err != nil {
+		// What the turn set going is carried out here, and what it produced is what
+		// the next round of this message answers from. A reply may both act on the
+		// tracker and ask another role, so both are carried out and both are handed
+		// back; a message with neither is finished.
+		var continuation string
+		// undelivered is what the tracker returned that this round put into the
+		// continuation rather than into the durable record. It is owed to the role
+		// either way, so a round that ends up sending nothing writes it down
+		// instead of dropping it.
+		var undelivered []TrackerOutcome
+		if len(parsed.Actions) > 0 {
+			// The harness now goes to the tracker on the product manager's behalf,
+			// which emits no provider events, so the display is told directly rather
+			// than left saying the provider is still writing.
+			s.activity.doing(phaseTracker)
+			outcomes, err := s.performTrackerActions(ctx, parsed.Actions)
+			reply.Actions = append(reply.Actions, outcomes...)
+			if err != nil {
 				return reply, err
 			}
+			trackerRounds++
+			if trackerRounds >= maxTrackerRounds {
+				// The rounds are spent. The results are still owed to the product
+				// manager, so they are written down to wait for its next turn rather
+				// than being answered with another one now.
+				reply.ResultsCarriedOver = true
+				if err := s.carryResults(outcomes); err != nil {
+					return reply, err
+				}
+			} else {
+				continuation = renderTrackerResults(outcomes) + continueAfterResults
+				undelivered = outcomes
+			}
+		}
+		if parsed.Ask != nil {
+			if asksTaken >= s.options.askRounds() {
+				// One message has asked as much as it may. The exchange itself is
+				// untouched — nothing was opened and nothing was spent — so this
+				// bounds the reply rather than the thread.
+				reply.Exchanges = append(reply.Exchanges, ExchangeRound{
+					Asked:    parsed.Ask.Role,
+					Question: oneLineAsk(*parsed.Ask),
+					Problem:  fmt.Sprintf("one message asks at most %d round(s), and this one has", s.options.askRounds()),
+				})
+				// This round is the last one, so whatever the tracker returned was
+				// about to be handed back and now never will be. It is written down
+				// for the next turn, because results the role never sees are the exact
+				// loss the carry-over exists to prevent — and a bound on asking must
+				// not quietly cost it what its actions did.
+				if len(undelivered) > 0 {
+					reply.ResultsCarriedOver = true
+					if err := s.carryResults(undelivered); err != nil {
+						return reply, err
+					}
+				}
+				break
+			}
+			asksTaken++
+			s.activity.doing(phaseExchange)
+			asked := s.conductAsk(ctx, *parsed.Ask)
+			reply.Exchanges = append(reply.Exchanges, asked.round)
+			continuation += asked.delivery
+			chargeTo = asked.chargeTo
+		}
+		if continuation == "" {
 			break
 		}
-		prompt = renderTrackerResults(outcomes) + continueAfterResults
+		prompt = continuation
 	}
 
 	// A turn with no recorded session cannot be resumed. The answer is real and
@@ -706,6 +790,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// operator who is watching what a conversation costs them. It is counted
 	// before the invocation is judged, because an invocation that failed was
 	// charged for exactly as one that succeeded was.
+	s.lastInvocationCostUSD = result.CostUSD
 	s.turnCostUSD += result.CostUSD
 	s.sessionCostUSD += result.CostUSD
 	// A provider that declined this turn for want of capacity is recorded before
@@ -767,10 +852,13 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 // decides nothing — a report the harness could not read costs the turn nothing,
 // so it travels as its own problem rather than as the turn's error.
 type parsedReply struct {
-	Prose         string
-	Actions       []TrackerAction
-	Proposals     []Proposal
-	Concerns      []Concern
+	Prose     string
+	Actions   []TrackerAction
+	Proposals []Proposal
+	Concerns  []Concern
+	// Ask is the one question this reply puts to another role, where it puts
+	// one. Most replies put none, which is not an empty ask.
+	Ask           *exchange.Ask
 	Reports       []report.Entry
 	ReportProblem error
 }
@@ -801,10 +889,16 @@ func splitReply(role domain.AgentRole, answer string) (parsedReply, error) {
 		parsed.Prose = rest
 		return parsed, &ConcernError{Err: err}
 	}
+	prose, ask, err := exchange.Extract(prose)
+	if err != nil {
+		parsed.Prose = rest
+		return parsed, &AskError{Err: err}
+	}
 	parsed.Prose = prose
 	parsed.Actions = actions
 	parsed.Proposals = proposals
 	parsed.Concerns = concerns
+	parsed.Ask = ask
 	return parsed, nil
 }
 
@@ -1369,6 +1463,10 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 		// it reported is shown for the same reason, and stays in the pile for
 		// /reports afterwards.
 		s.reportTrackerActions(out, reply)
+		// What one role asked another is reported beside it, for the same reason
+		// and one more: an exchange nobody is told about is exactly the side
+		// conversation this channel exists not to be.
+		s.reportExchanges(out, reply)
 		// What the harness put in the queue without asking is said before anything
 		// it is about to ask about, so the operator reads what already happened
 		// first and is not answering a prompt while unaware of it.
@@ -2040,6 +2138,17 @@ func (o Options) clock() execution.Clock {
 	return o.Clock
 }
 
+// askRounds bounds how much asking one message may set off. A caller that states
+// nothing gets the same number an exchange is allowed by default, so a
+// conversation with no configuration behind it still bounds this rather than
+// leaving it open.
+func (o Options) askRounds() int {
+	if o.AskRoundsPerMessage > 0 {
+		return o.AskRoundsPerMessage
+	}
+	return exchange.DefaultMaxRounds
+}
+
 func (o Options) timeout() time.Duration {
 	if o.Timeout == 0 {
 		return defaultTurnTimeout
@@ -2148,6 +2257,8 @@ Some of your turns carry the ones nobody has decided about, worst first, each na
 What becomes of one is a product decision and it is yours. Judge it as you judge anything else: work to admit, a proposal to make, a concern to raise, an upstream change to argue for, or nothing at all — a report that asks for nothing is handled by saying so. Record what you decided with the "handle" action, whose "reason" is what a later reader finds when they ask what happened about this. That record is the only thing that takes a report out of the pile: a report you discussed and did not handle is offered again to your next conversation, and one you handled is never offered again. So handle what you have actually decided and leave the rest, rather than clearing the list.
 
 A report is not a work item and handling one does not create anything. If the answer is work, admit or propose it in the same reply and say in the reason which item it became.
+
+` + exchange.AskingContract + `
 
 ` + report.Contract + `
 

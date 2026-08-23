@@ -57,6 +57,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
 		return runDirective(args[1:], stdout, stderr)
+	case "exchange":
+		return runExchange(ctx, args[1:], stdout, stderr)
 	case "reports":
 		return readReports(args[1:], stdout, stderr)
 	case "run":
@@ -302,6 +304,7 @@ Commands:
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
+  exchange          read what the roles have asked each other, and what it cost
   reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself

@@ -215,6 +215,7 @@ func newResolution() *resolution {
 				StuckMergeAge:   defaultStuckMergeAge,
 				ReviewRoundsCap: defaultReviewRoundsCap,
 			},
+			Exchange: Exchange{MaxRounds: defaultExchangeMaxRounds},
 			// Publishing and work_items are the approvals with a harness default,
 			// because they are the ones added after configurations existed: a file
 			// mentioning neither loads rather than failing over a key that did not
@@ -264,6 +265,7 @@ func newResolution() *resolution {
 			"execution.blocked_runs_before_intake_hold":           OriginDefault,
 			"triage.stuck_merge_age":                              OriginDefault,
 			"triage.review_rounds_cap":                            OriginDefault,
+			"exchange.max_rounds":                                 OriginDefault,
 		},
 		agents: map[string]*agentResolution{},
 	}
@@ -302,6 +304,9 @@ func (r *resolution) apply(applied layer) error {
 		setValue(r.origins, "triage.stuck_merge_age", triage.StuckMergeAge, &r.config.Triage.StuckMergeAge, applied.origin)
 		setValue(r.origins, "triage.review_rounds_cap", triage.ReviewRoundsCap, &r.config.Triage.ReviewRoundsCap, applied.origin)
 		setValue(r.origins, "triage.repair_grant_attempts", triage.RepairGrantAttempts, &r.config.Triage.RepairGrantAttempts, applied.origin)
+	}
+	if asks := document.Exchange; asks != nil {
+		setValue(r.origins, "exchange.max_rounds", asks.MaxRounds, &r.config.Exchange.MaxRounds, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)

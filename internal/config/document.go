@@ -22,6 +22,7 @@ type configDocument struct {
 	Product   *productDocument         `yaml:"product"`
 	Execution *executionDocument       `yaml:"execution"`
 	Triage    *triageDocument          `yaml:"triage"`
+	Exchange  *exchangeDocument        `yaml:"exchange"`
 	Approvals *approvalsDocument       `yaml:"approvals"`
 	Checks    *[]string                `yaml:"checks"`
 	Agents    map[string]agentDocument `yaml:"agents"`
@@ -75,6 +76,10 @@ type triageDocument struct {
 	// the effective repair budget turns out to be rather than whatever it was
 	// when some layer underneath was written.
 	RepairGrantAttempts *int `yaml:"repair_grant_attempts"`
+}
+
+type exchangeDocument struct {
+	MaxRounds *int `yaml:"max_rounds"`
 }
 
 type approvalsDocument struct {

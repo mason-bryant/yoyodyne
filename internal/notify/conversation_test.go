@@ -7,6 +7,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -724,5 +725,109 @@ func TestARecordThatCannotBeReadIsReportedRatherThanSaidWrongly(t *testing.T) {
 	event.Payload = json.RawMessage(`{"action":"not an action object"}`)
 	if _, err := FromConversation(conversation, []execution.Event{event}, 0); err == nil {
 		t.Fatal("an unreadable tracker payload was selected without complaint")
+	}
+}
+
+// An ask exchange is the second thing a conversation does that an operator
+// cannot otherwise see, and it reaches them in a thread of its own so one
+// conversation between two roles can be followed without reading past
+// everything else the asking conversation did.
+func TestAnAskExchangeIsSaidInAThreadOfItsOwn(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	exchangeID := "exchange-7f3a000000000000000000000000000a"
+	events := []execution.Event{
+		recorded(t, 1, execution.EventExchangeRound, map[string]any{
+			"exchange": exchangeID,
+			"asked":    "architect",
+			"round":    1,
+			"rounds":   10,
+			"state":    "open",
+			"cost_usd": 0.25,
+			"question": "what does this goal cost, and what am I missing?",
+			"text":     "More than the ordering assumes.",
+		}),
+		recorded(t, 2, execution.EventExchangeClosed, map[string]any{
+			"exchange": exchangeID,
+			"asked":    "architect",
+			"round":    1,
+			"rounds":   10,
+			"state":    "resolved",
+			"outcome":  "resolved",
+			"cost_usd": 0.25,
+			"question": "what does this goal cost, and what am I missing?",
+			"text":     "",
+		}),
+	}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindExchangeTurn {
+		t.Fatalf("a round is %s", notification.Event.Kind)
+	}
+	if notification.Topic.Kind != TopicExchange || notification.Topic.ID != exchangeID {
+		t.Fatalf("topic = %+v, want the exchange", notification.Topic)
+	}
+	// The words are the architect's, so the architect speaks them: agent-authored
+	// text is posted as its author wrote it, and an architect's judgement in the
+	// product manager's voice would attribute an opinion to a persona that did not
+	// hold it.
+	if notification.Speaker.Role != domain.RoleArchitect {
+		t.Fatalf("speaker = %+v, want the answering role", notification.Speaker)
+	}
+	for _, wanted := range []string{"round 1 of 10", "More than the ordering assumes."} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("body %q does not carry %q", message.Body, wanted)
+		}
+	}
+
+	closed, closing := said(t, conversation, events, 1)
+	if closed.Event.Kind != KindExchangeClosed || closed.Event.Severity != report.SeverityNote {
+		t.Fatalf("a resolved close is %s at %s", closed.Event.Kind, closed.Event.Severity)
+	}
+	// A closing is the harness saying an exchange is over, which is nobody's
+	// opinion.
+	if !closed.Speaker.IsHarness() {
+		t.Fatalf("a closing speaker = %+v, want the harness", closed.Speaker)
+	}
+	if !strings.Contains(closing.Body, "resolved") {
+		t.Fatalf("body %q does not say how it ended", closing.Body)
+	}
+}
+
+// The ending nobody wants is the one worth interrupting for: an exchange that
+// reached its cap says what it left unsettled, at a severity that carries.
+func TestAnExchangeClosedAtItsCapIsSaidAsUnresolved(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{recorded(t, 1, execution.EventExchangeClosed, map[string]any{
+		"exchange": "exchange-7f3a000000000000000000000000000b",
+		"asked":    "product-manager",
+		"round":    10,
+		"rounds":   10,
+		"state":    "unresolved-after-rounds",
+		"outcome":  "unresolved-after-rounds",
+		"cost_usd": 2.5,
+		"question": "if we sacrifice some performance, is that an unacceptable trade-off?",
+		"text":     "",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("an unresolved close is %s, want warning", notification.Event.Severity)
+	}
+	for _, wanted := range []string{"unresolved at its round cap", "unacceptable trade-off"} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("body %q does not carry %q", message.Body, wanted)
+		}
+	}
+}
+
+// A round the record cannot be read from says so rather than being posted with
+// the exchange it belongs to left blank.
+func TestAnUnreadableExchangeRecordIsRefusedRatherThanSaid(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventExchangeRound, map[string]any{
+		"asked": "architect",
+		"round": 1,
+	})}
+	if _, err := FromConversation(conversation, events, 0); err == nil {
+		t.Fatal("a round naming no exchange was said anyway")
 	}
 }

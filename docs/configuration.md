@@ -1917,6 +1917,46 @@ compare-and-swap every other write makes — a remote branch carrying anything
 else is refused rather than overwritten — and the refusal stops the run, because
 nothing has been promoted yet and there is nothing outstanding to report.
 
+## How long one role may ask another
+
+Roles can put a question to each other through the harness — the product manager
+asking the architect what a goal costs before it orders the backlog, the
+architect asking the product manager whether a trade-off is one a user would
+accept before it settles a design. Every exchange is recorded where you can read
+it with `yoyo exchange`, both halves are toolless so an ask moves opinion and
+never evidence, and no authority moves through one. What is configurable is how
+long a single exchange may go on:
+
+```yaml
+exchange:
+  max_rounds: 10             # the hard limit on rounds in one exchange thread
+```
+
+**It is a hard limit and it is durable with the exchange.** The number is copied
+onto an exchange as it opens rather than read afresh each round, so a process
+dying part way through, a second process picking the thread up, and an edit to
+this setting all leave a thread already in flight bounded by what it started
+with. A cap a crash could reset is not a cap.
+
+**Reaching it is not a silent cutoff.** The exchange closes as
+`unresolved-after-rounds`, and it is escalated to you as a report at warning
+severity naming the two roles, the question, the rounds, and what the exchange
+cost — so it reaches [the pile you read](reporting.md#what-agents-report-and-where-it-reaches-you)
+rather than ending in a record nobody opens. The failure this bounds is two
+judgement models deferring to each other politely for ever, which is rare,
+expensive, and invisible without the number.
+
+**Zero is refused**, unlike the triage caps above. An exchange allowed no round
+at all is a channel that is off, and turning the channel off is a matter of
+nobody using it rather than of configuring a limit nothing can be spent against.
+One is the floor.
+
+One further bound is the harness's rather than yours: a single thing you say to a
+conversation sets off at most as many rounds of asking as one exchange is
+allowed, however many exchanges it spreads them over. That bounds a reply
+opening thread after thread, which is a different question from how long one
+thread may run.
+
 ## Triage thresholds
 
 Triage is what looks at work that has stopped moving. Its numbers are

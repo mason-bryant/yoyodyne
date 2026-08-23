@@ -157,6 +157,16 @@ directory, beside the run and conversation records rather than among them. It
 outlives them: a run is settled and its worktree and branch are removed, and
 what it reported is still there for you to read.
 
+One entry in the pile is filed by the harness rather than by an agent: an
+[inter-role ask exchange](conversation.md#roles-asking-each-other-things) that reached the
+round limit it was opened with closes as unresolved and escalates itself here, at
+`warning` severity, naming the two roles, the question, the rounds it spent, and
+what it cost. It is a report rather than a blocker for the same reason everything
+else here is — nothing was stopped, and two roles simply did not settle something
+one of them needed — and it is filed at all because an exchange that ended in a
+silent limit is exactly the failure nobody would otherwise see.
+
+
 ### Who reads them, and what became of each one
 
 A report that only you can read is a report that reaches triage when you happen
