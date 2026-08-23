@@ -316,14 +316,43 @@ func TestConvergeClosesThePublicationARelaunchSuperseded(t *testing.T) {
 		t.Errorf("remote branch %s is still at %q, want it deleted with the request", orphan.Branch, commit)
 	}
 
+	// The worktree that run kept goes with the publication, and the branch it was
+	// holding is then removable — by the branch sweep of this same pass, which is
+	// the whole reason the worktrees are released before the branches are swept.
+	// Left held, that branch survives every sweep there will ever be.
+	if !swept.Worktree.Removed || swept.Worktree.Kept != "" {
+		t.Fatalf("worktree = %#v, want the checkout the superseded run kept released", swept.Worktree)
+	}
+	if _, err := os.Stat(orphan.WorktreePath); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (stat error = %v)", orphan.WorktreePath, err)
+	}
+	var branchSweep BranchSweep
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID == orphan.RunID {
+			branchSweep = candidate
+		}
+	}
+	if !branchSweep.Removed || branchSweep.Failure != "" {
+		t.Fatalf("branch sweep = %#v, want the released branch removed in the same pass", branchSweep)
+	}
+	if branch := strings.TrimSpace(gitOutput(t, fixture.repository, "for-each-ref", "--format=%(refname)", "refs/heads/"+orphan.Branch)); branch != "" {
+		t.Errorf("local branch %s survived the sweep", orphan.Branch)
+	}
+
 	// The run's own record says which vehicle retired it, which is what stops the
-	// next sweep asking the forge about a request it has already closed.
+	// next sweep asking the forge about a request it has already closed — and, for
+	// the worktree, what the run state requires of a removal with no promotion of
+	// its own behind it.
 	retired, err := fixture.store.Load(orphan.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if !strings.Contains(retired.PullRequest.Superseded, landed.RunID) {
 		t.Errorf("recorded supersession = %q, want the vehicle that landed the work named", retired.PullRequest.Superseded)
+	}
+	if !retired.WorktreeRemoved || retired.ArtifactsRetiredBy != landed.RunID {
+		t.Errorf("retired record = worktree_removed %t, artifacts_retired_by %q, want the release recorded against the run that landed the work",
+			retired.WorktreeRemoved, retired.ArtifactsRetiredBy)
 	}
 	repeated := fixture.converge(t)
 	if len(repeated.Publications) != 0 {
@@ -401,6 +430,19 @@ func (f queuedFixture) orphanStarted(t *testing.T, landed Outcome, number int, s
 	// the deletion is a compare-and-swap against.
 	runPipelineGit(t, f.repository, "push", "origin", landed.BaseCommit+":refs/heads/"+branch)
 	head := publishedCommit(t, f.remote, branch)
+	// Locally the run left the pair the operator found: the branch, and a worktree
+	// still checked out on it. The checkout is what makes the branch unremovable
+	// until something releases it, which is the whole of why it survived.
+	// The manager owns a resolved path, and on a machine where the worktree root
+	// sits under a symlinked temporary directory an unresolved one is a different
+	// path to it — which the ownership check refuses rather than acts on.
+	root, err := filepath.EvalSymlinks(f.worktreeRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	worktreePath := filepath.Join(root, "yoyodyne-task-11112222")
+	runPipelineGit(t, f.repository, "branch", branch, landed.BaseCommit)
+	runPipelineGit(t, f.repository, "worktree", "add", worktreePath, branch)
 	completed := started.Add(time.Minute)
 	state := runstate.State{
 		SchemaVersion: runstate.StateSchemaVersion,
@@ -415,7 +457,7 @@ func (f queuedFixture) orphanStarted(t *testing.T, landed Outcome, number int, s
 		StartedAt:     started,
 		UpdatedAt:     completed,
 		CompletedAt:   &completed,
-		WorktreePath:  filepath.Join(f.worktreeRoot, "orphan"),
+		WorktreePath:  worktreePath,
 		Branch:        branch,
 		BaseCommit:    landed.BaseCommit,
 		TargetBranch:  "main",
@@ -434,4 +476,56 @@ func (f queuedFixture) orphanStarted(t *testing.T, landed Outcome, number int, s
 	}
 	f.forge.holds(branch, number)
 	return state
+}
+
+// The state the two SIGTERM leftovers are actually in: a superseded run whose
+// branch carries commits no promotion ever took. Releasing the worktree is still
+// right — what it was being kept for is over — but the branch itself is kept,
+// because once the remote branch has gone it is the only copy of that work left,
+// and deleting it is a person's decision rather than a sweep's.
+//
+// What the release buys is that the branch sweep now says so. Held by a
+// checkout, it could not even look.
+func TestConvergeReleasesTheWorktreeAndKeepsABranchNothingPromoted(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	landed := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+	if results := fixture.reconcile(t); len(results) != 1 || results[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation = %#v, want the landing run settled", results)
+	}
+	orphan := fixture.orphan(t, landed, 44)
+	// The dead run's own work, committed on its branch and promoted by nothing.
+	if err := os.WriteFile(filepath.Join(orphan.WorktreePath, "unpromoted.txt"), []byte("never reviewed\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, orphan.WorktreePath, "add", "-A")
+	runPipelineGit(t, orphan.WorktreePath, "commit", "-m", "work no promotion took")
+
+	convergence := fixture.converge(t)
+	if len(convergence.Publications) != 1 || !convergence.Publications[0].Closed {
+		t.Fatalf("publications = %#v, want the request closed", convergence.Publications)
+	}
+	if !convergence.Publications[0].Worktree.Removed {
+		t.Fatalf("worktree = %#v, want it released even though its branch has to stay", convergence.Publications[0].Worktree)
+	}
+	var branchSweep BranchSweep
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID == orphan.RunID {
+			branchSweep = candidate
+		}
+	}
+	if branchSweep.Removed || branchSweep.Kept == "" {
+		t.Fatalf("branch sweep = %#v, want the branch kept with the reason", branchSweep)
+	}
+	// The reason has to be the work, not the checkout: a checkout is what it would
+	// have said before the release, and it would have been sending somebody after
+	// a directory that is gone.
+	if strings.Contains(branchSweep.Kept, "worktree") || strings.Contains(branchSweep.Kept, "checked out") {
+		t.Errorf("branch kept for %q, want the unpromoted work rather than a checkout that has been released", branchSweep.Kept)
+	}
+	if commit := publishedCommit(t, fixture.repository, orphan.Branch); commit == "" {
+		t.Errorf("local branch %s was deleted, want the only copy of unpromoted work kept", orphan.Branch)
+	}
 }

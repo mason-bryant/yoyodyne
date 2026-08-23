@@ -195,6 +195,16 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case publication.Closed:
 			fmt.Fprintf(stdout, "pull request #%d closed: %s superseded it\n", publication.Number, publication.SupersededBy.Vehicle())
 		}
+		// The worktree is reported apart from the request, because it is on this
+		// machine rather than on the forge and because one can be dealt with while
+		// the other is not. A worktree kept says why: it is the reason the branch
+		// under it survives the branch sweep too.
+		switch {
+		case publication.Worktree.Removed:
+			fmt.Fprintf(stdout, "released the worktree run %s kept: %s\n", publication.RunID, publication.Worktree.Path)
+		case publication.Worktree.Kept != "":
+			fmt.Fprintf(stderr, "worktree of run %s kept: %s\n", publication.RunID, publication.Worktree.Kept)
+		}
 	}
 }
 
@@ -206,10 +216,12 @@ state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
 
-It also closes the pull requests of runs whose work landed by another vehicle —
-a relaunch after a killed run, the loser of a duplicate selection — with a
-comment naming the pull request or commit the work actually landed by, and
-deletes the branch each one published. A request that merged is never touched.
+It also retires the runs whose work landed by another vehicle — a relaunch after
+a killed run, the loser of a duplicate selection. Each one's pull request is
+closed with a comment naming the pull request or commit the work actually landed
+by, the branch it published is deleted, and the worktree it kept is released so
+nothing holds its branch. A request that merged is never touched, and a worktree
+holding uncommitted work is kept with the reason.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

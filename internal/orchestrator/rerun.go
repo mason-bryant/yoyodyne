@@ -638,8 +638,17 @@ func (result *RerunResult) note(problem string) {
 // are written onto is the state read under the lease, so a sweep settling the
 // same run beside this cannot lose any of it.
 func (r Rerunner) retire(ctx context.Context, prior runstate.State, by Supersession, preserved runstate.PreservedArtifacts, result *RerunResult) (runstate.PreservedArtifacts, string) {
+	// Nothing is wired to remove anything, and this is reachable for a run that
+	// preserved nothing locally and still holds an open publication, so what is
+	// reported has to name what actually survived rather than only the local
+	// artifacts. A publication left open here is said out loud for the reason one
+	// left open below is: the convergence sweep will close it, and until it does
+	// the forge shows work as pending that is not.
 	if r.Preserved == nil {
-		preserved.Problem = "nothing is wired to retire what the stopped run preserved, so it is still there"
+		if preserved.Disposition == runstate.PreservedKept {
+			preserved.Problem = "nothing is wired to retire what the stopped run preserved, so it is still there"
+		}
+		r.notePublicationLeftOpen(prior, by, "nothing is wired to delete the branch it published", result)
 		return preserved, ""
 	}
 	stopped, lease, err := r.Runs.AdoptRun(ctx, prior.RunID)
@@ -647,7 +656,10 @@ func (r Rerunner) retire(ctx context.Context, prior runstate.State, by Supersess
 		// Somebody else owns the stopped run, or its record could not be read.
 		// Either way nothing is removed: an artifact retired without its record
 		// being writable is exactly the stale record this took the lease to avoid.
-		preserved.Problem = fmt.Sprintf("what run %s preserved was left where it is, because its record could not be taken to write the removal onto: %v", prior.RunID, err)
+		if preserved.Disposition == runstate.PreservedKept {
+			preserved.Problem = fmt.Sprintf("what run %s preserved was left where it is, because its record could not be taken to write the removal onto: %v", prior.RunID, err)
+		}
+		r.notePublicationLeftOpen(prior, by, fmt.Sprintf("its record could not be taken to write the closure onto: %v", err), result)
 		return preserved, ""
 	}
 	defer lease.Release()
@@ -704,9 +716,7 @@ func (r Rerunner) retirePublication(ctx context.Context, stopped *runstate.State
 		return false
 	}
 	if r.Publications == nil {
-		result.note(fmt.Sprintf(
-			"nothing is wired to close pull request %d, which run %s left open and run %s superseded, so it stays open until a convergence sweep closes it",
-			stopped.PullRequest.Number, stopped.RunID, by.RunID))
+		r.notePublicationLeftOpen(*stopped, by, "nothing is wired to close it", result)
 		return false
 	}
 	retirement := retirePublication(ctx, r.Publications, r.Preserved, *stopped, by)
@@ -719,6 +729,23 @@ func (r Rerunner) retirePublication(ctx context.Context, stopped *runstate.State
 	published.Superseded = by.Vehicle()
 	stopped.PullRequest = &published
 	return true
+}
+
+// notePublicationLeftOpen says that the stopped run's pull request is still
+// open and why, for each of the three ways retiring it can be skipped before
+// anything is attempted. It is one sentence in one place because the three are
+// the same fact to whoever reads the result: the forge is still showing this
+// run's work as pending, and the convergence sweep is what will fix it.
+//
+// A run that published nothing, or whose publication is already retired, says
+// nothing at all — there is no request to leave open.
+func (r Rerunner) notePublicationLeftOpen(stopped runstate.State, by Supersession, because string, result *RerunResult) {
+	if !retirablePublication(stopped) {
+		return
+	}
+	result.note(fmt.Sprintf(
+		"pull request %d, which run %s left open and run %s superseded, is still open because %s; it stays open until a convergence sweep closes it",
+		stopped.PullRequest.Number, stopped.RunID, by.RunID, because))
 }
 
 // recordRemoval marks the stopped run's own record with what this retirement

@@ -36,15 +36,20 @@ type Convergence struct {
 	Publications []PublicationSweep `json:"publications"`
 }
 
-// PublicationSweep is one superseded run's publication and what became of it.
-// Both the run that published it and the vehicle its work landed by are named,
-// because that pair is the whole of the justification for closing a pull request
-// somebody may still be looking at.
+// PublicationSweep is one superseded run's publication and what became of it,
+// together with the checkout that run kept. Both the run that published it and
+// the vehicle its work landed by are named, because that pair is the whole of
+// the justification for closing a pull request somebody may still be looking at.
 type PublicationSweep struct {
 	RunID        string       `json:"run_id"`
 	WorkItemID   string       `json:"work_item_id"`
 	SupersededBy Supersession `json:"superseded_by"`
 	PublicationRetirement
+	// Worktree is what became of the checkout the superseded run kept. It is
+	// reported beside the publication rather than folded into it because a reader
+	// acts on the two in different places — one is on the forge and one is on this
+	// machine — and because a worktree kept names its own reason.
+	Worktree gitworktree.WorktreeRemoval `json:"worktree"`
 }
 
 // BranchSweep is one settled run's leftover branch and what became of it. The
@@ -63,15 +68,19 @@ type BranchSweep struct {
 
 // Converge brings the primary checkout and the local branches onto what the
 // forge has: every target branch the harness knows about is fast-forwarded onto
-// its remote counterpart, then every settled run's leftover branch whose work
-// those targets already carry is deleted, and then every publication whose work
-// landed by another vehicle is closed with that vehicle named.
+// its remote counterpart, then every superseded run's publication is closed with
+// the vehicle its work landed by named and the checkout that run kept is
+// released, and then every settled run's leftover branch whose work those
+// targets already carry is deleted.
 //
-// The order matters and is not an accident. A target that has just caught up
-// contains more than it did a moment ago, so the branches are swept afterwards
-// and against the branch as it now stands. The publications come last because
-// they are about the forge rather than the checkout, and because nothing local
-// depends on them.
+// The order matters and is not an accident, and it is the same reason twice: a
+// step is made after everything that could change its answer. A target that has
+// just caught up contains more than it did a moment ago, so the branches are
+// swept against the branch as it now stands. A superseded run's branch is held
+// by the worktree that run kept, and a held branch is one the branch sweep
+// refuses — so the worktree is released first, and the branch sweep then either
+// removes the branch or says what actually keeps it rather than naming a
+// checkout that has since gone.
 //
 // One branch that cannot be converged never stops the sweep, for the reason one
 // unreconcilable run does not: what could not be done is reported beside
@@ -92,19 +101,56 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 	for _, target := range recordedTargets(recorded) {
 		convergence.Targets = append(convergence.Targets, r.catchUp(ctx, target))
 	}
-	for _, state := range recorded {
-		sweep, swept := r.sweepBranch(ctx, state)
-		if swept {
-			convergence.Branches = append(convergence.Branches, sweep)
-		}
-	}
+	// Releasing the worktrees here is what lets the branch sweep below act on the
+	// branches they were holding, so a superseded run is retired by one pass of
+	// one command rather than by however many times somebody happens to run it.
+	// The branch sweep reads the repository rather than these records, so nothing
+	// has to be carried between the two: what it finds is the state this pass has
+	// just left behind.
 	for _, superseded := range supersededPublications(recorded) {
 		sweep, swept := r.sweepPublication(ctx, superseded)
 		if swept {
 			convergence.Publications = append(convergence.Publications, sweep)
 		}
 	}
+	for _, state := range recorded {
+		sweep, swept := r.sweepBranch(ctx, state)
+		if swept {
+			convergence.Branches = append(convergence.Branches, sweep)
+		}
+	}
 	return convergence, nil
+}
+
+// releasePreserved removes the checkout a superseded run kept and writes the
+// removal onto the state the caller is about to save, so the release and the
+// record of it reach disk together and under the one lease.
+//
+// It never fails the sweep. The manager refuses anything it cannot prove is the
+// harness's own and anything that holds uncommitted work, reporting the reason
+// rather than an error, and a worktree that has to be looked at by hand is a
+// fact to record rather than a reason to report a closed pull request as
+// unclosed. A run whose worktree the harness already removed says nothing.
+func (r Reconciler) releasePreserved(ctx context.Context, state *runstate.State, by Supersession) gitworktree.WorktreeRemoval {
+	if state.WorktreePath == "" || state.WorktreeRemoved {
+		return gitworktree.WorktreeRemoval{Path: state.WorktreePath, Removed: state.WorktreeRemoved}
+	}
+	removal, err := r.Worktrees.RemovePreservedWorktree(ctx, worktreeOf(*state))
+	if err != nil {
+		removal.Path = state.WorktreePath
+		removal.Kept = fmt.Errorf("release the worktree run %s kept: %w", state.RunID, err).Error()
+		return removal
+	}
+	if !removal.Removed {
+		return removal
+	}
+	state.WorktreeRemoved = true
+	// A superseded run promoted nothing, so the removal is only earned by the run
+	// that landed the work in its place, and the record has to name it — this is
+	// the same evidence triage's own retirement records, and the run state refuses
+	// a removal that carries neither.
+	state.ArtifactsRetiredBy = by.RunID
+	return removal
 }
 
 // supersededPublication is one run's open publication paired with the run whose
@@ -204,6 +250,14 @@ func (r Reconciler) sweepPublication(ctx context.Context, superseded supersededP
 	published = *state.PullRequest
 	published.Superseded = superseded.by.Vehicle()
 	state.PullRequest = &published
+	// The checkout the superseded run kept goes with its publication. It held
+	// work no promotion took and the item's work is on the target branch by
+	// another vehicle, so what it was being kept for — somebody reading it, or
+	// cherry-picking from it — is over. The branch it was holding is deliberately
+	// not deleted here: that is the branch sweep's question and it needs the
+	// target to answer it, and a branch carrying work nothing promoted is the one
+	// copy of that work left once the remote branch above has gone.
+	sweep.Worktree = r.releasePreserved(ctx, &state, superseded.by)
 	state.UpdatedAt = r.clock().Now()
 	if err := r.Store.Save(state); err != nil {
 		// The forge is settled and the record is not, so the next sweep asks the

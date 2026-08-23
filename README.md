@@ -3026,21 +3026,35 @@ branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
 
-The forge's half of the same hygiene is the pull requests nothing will ever
-merge. A run branch carries the run that published it, so an item attempted
-again — after a killed process, or as the loser of a duplicate selection —
-publishes a new branch and opens a new request, and nothing revisited the first
-one: it sat open with a green build and no queued merge, indistinguishable from
-pending work until somebody asked why. The sweep pairs each such request with
-the run whose work actually landed, closes it with a comment naming that
-vehicle — the superseding pull request, or the commit that reached the target
-branch — and deletes the branch it published. It refuses on evidence here too: a
-run that integrated something of its own is left alone, because its publication
-is outstanding rather than superseded; a request the forge reports merged is
-never touched; and a request opened after the landing is pending work rather
-than an orphan. A request somebody has already closed collects no second
-comment. A re-run closes the stopped run's publication itself at the moment its
-fresh run integrates, so the open list stays honest between sweeps.
+Between those two it retires the runs whose work landed by another vehicle. A
+run branch carries the run that published it, so an item attempted again — after
+a killed process, or as the loser of a duplicate selection — publishes a new
+branch and opens a new request, and nothing revisited the first one: it sat open
+with a green build and no queued merge, indistinguishable from pending work
+until somebody asked why. The sweep pairs each such run with the run whose work
+actually landed, closes its pull request with a comment naming that vehicle —
+the superseding pull request, or the commit that reached the target branch —
+deletes the branch it published, and releases the worktree it kept. It refuses
+on evidence here too: a run that integrated something of its own is left alone,
+because its publication is outstanding rather than superseded; a request the
+forge reports merged is never touched; a request opened after the landing is
+pending work rather than an orphan; and a worktree holding uncommitted work is
+kept with the reason. A request somebody has already closed collects no second
+comment.
+
+Releasing the worktree before the branches are swept is what makes the local
+half finish. A branch a checkout holds is one the branch sweep refuses to look
+at, and the checkout in question is the dead run's own — so left in place it
+would survive every sweep there will ever be. Released, the branch is either
+removed in the same pass or kept for the reason that actually applies. **A branch
+carrying work nothing promoted is still kept**, and after the published copy has
+gone it is the only copy of that work left; deleting one is your decision, not
+the sweep's, and `git branch -D` is all that is left to do once the worktree is
+out of the way.
+
+A re-run retires the same three things itself at the moment its fresh run
+integrates, so the forge's open list and your worktree directory stay honest
+between sweeps.
 
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
 branch already level with the remote has nothing to catch up to, and cleanup

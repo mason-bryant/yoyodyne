@@ -29,6 +29,13 @@ type ReconcileWorktrees interface {
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+	// RemovePreservedWorktree releases the checkout a superseded run kept. It is
+	// the one removal here that is not about a ref, and it removes only what it
+	// can prove is the harness's own and holds nothing: a directory Git does not
+	// manage, a registration on some other branch, or uncommitted work is kept
+	// with the reason instead. Releasing it is also what unblocks the branch
+	// sweep, which refuses a branch a checkout still holds.
+	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.WorktreeRemoval, error)
 	// The two writes convergence needs, and the only ones here that move a ref.
 	// Both are fast-forward-or-nothing and both refuse on the evidence rather
 	// than on a record: a target branch is only ever advanced onto a remote
