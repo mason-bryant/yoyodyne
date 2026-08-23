@@ -510,7 +510,12 @@ make build
 ```
 
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs.
+runs. Some of what `test` runs reads this repository's own documents rather than
+its code: a documentation link that resolves to nothing, a goal written across
+more than one physical line, and a governed document whose place in the chain is
+wrong each fail a check rather than costing a reviewer a paragraph.
+[Working on yoyo itself](docs/developing-yoyo.md#what-test-checks-besides-the-code)
+says what each one holds and why.
 
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
@@ -2399,6 +2404,15 @@ goals at all is reported once, naming the brief, rather than against every goal
 below it. Nothing is refused over a broken link: the goal is still what the
 document states and work naming it still resolves, because what is wrong is the
 chain above it rather than the goal.
+
+A goal hard-wrapped across physical lines is reported on stderr the same way,
+and is likewise not refused. The statement is rejoined and work naming it still
+resolves — recording only the first line was a silent truncation that corrupted
+every wrapped goal at once, and rejoining is what closed it. What the report says
+is that the rejoining is a reading of the file rather than something the file
+states: an indent, or a wrapped line that reads as the `Supports:` trailer,
+changes the recorded goal without changing a word of it, and a goal written on
+one line cannot be changed that way.
 
 ## What a change upstream leaves stale
 
