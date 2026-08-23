@@ -2357,6 +2357,12 @@ left, and the truncation is recorded. An untruncated grant would promise a round
 nothing would let it take, and one that overshot the cap would make the cap
 decorative.
 
+The room it is cut to counts what a grant already recorded has promised, not
+only the rounds the item has produced. A grant is spendable from the moment it
+is written, so two taken before either is carried out would otherwise be cut
+against the same room and promise between them more than the cap has, with
+neither one overshooting it.
+
 **The round cap is not their only bound, and could not be.** Each of those two
 is also once per item, which is not configured because it is the workflow rather
 than a judgement about pace: triage takes its own decisions about one item once,

@@ -142,6 +142,87 @@ func TestARepairGrantIsTruncatedToTheRoundsTheCapHasRoomFor(t *testing.T) {
 	}
 }
 
+// The truncation counts what is already promised, not only what has been
+// produced. Two grants taken before either is carried out see no counted round
+// between them, so each cut against the rounds counted would be given the whole
+// of the same room, and the rounds granted would pass the cap with neither grant
+// overshooting it.
+func TestASecondGrantIsTruncatedAgainstWhatTheFirstAlreadyPromised(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	// Three grants permitted so the round cap is what answers here rather than the
+	// grant budget, which is the bound this is not about.
+	caps := TriageCaps{ReviewRounds: 4, RepairGrants: 3, Reruns: 1, MergeRearms: 1}
+	first, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 3, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if first.Rounds != 3 || first.Truncated {
+		t.Fatalf("the first grant = %+v, want all three rounds, untruncated", first)
+	}
+	// Not one round has been produced in between, so a grant truncated against the
+	// rounds counted would be given three again.
+	second, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 3, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if second.Rounds != 1 || !second.Truncated {
+		t.Fatalf("the second grant = %+v, want the one round the first left, recorded as truncated", second)
+	}
+	if second.Counters.GrantedRounds != 4 {
+		t.Fatalf("counters after both grants = %+v, want the granted rounds inside the cap of 4", second.Counters)
+	}
+	// And with the cap's room entirely promised, a third is refused outright
+	// rather than granted nothing.
+	_, err = store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 1, time.Now(), caps)
+	if !errors.Is(err, ErrTriageCapReached) {
+		t.Fatalf("GrantRepair() with the cap's room promised = %v, want a refusal", err)
+	}
+	var refusal TriageCapError
+	if !errors.As(err, &refusal) || refusal.Budget != TriageReviewRoundBudget || refusal.Spent != 4 {
+		t.Fatalf("refusal = %+v, want the round budget refusing it with the item's four committed rounds", refusal)
+	}
+	// A re-run is refused by the same room, because it too would produce a verdict
+	// past what the cap has left.
+	if _, err := store.RecordRerun(context.Background(), "yoyodyne-ifd.7", time.Now(), caps); !errors.Is(err, ErrTriageCapReached) {
+		t.Fatalf("RecordRerun() with the cap's room promised = %v, want a refusal", err)
+	}
+}
+
+// The other direction of the same accounting: a grant that has been carried out
+// is charged once rather than twice. Its rounds become counted rounds as the
+// attempts it bought are judged, so an item that spent exactly what it was given
+// has as much room left as one that was never granted anything.
+func TestAGrantThatHasBeenCarriedOutIsNotChargedTwice(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	caps := TriageCaps{ReviewRounds: 8, RepairGrants: 2, Reruns: 1, MergeRearms: 1}
+	if _, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps); err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	for _, attempt := range []string{"run-a#1", "run-a#2"} {
+		if _, err := store.RecordReviewRound(context.Background(), "yoyodyne-ifd.7", attempt, time.Now()); err != nil {
+			t.Fatalf("RecordReviewRound(%q) error = %v", attempt, err)
+		}
+	}
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), caps)
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 2 || granted.Truncated {
+		t.Fatalf("the second grant = %+v, want both rounds against the six the item has left", granted)
+	}
+	counters, err := store.Counters("yoyodyne-ifd.7")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.RoundsUncommitted(caps.ReviewRounds) != 4 {
+		t.Fatalf("counters = %+v, want four of the eight rounds neither spent nor promised", counters)
+	}
+}
+
 // A grant that has room asks for what it asks for and is not cut, so the
 // truncation above is a bound rather than a habit.
 func TestARepairGrantWithRoomIsGivenInFull(t *testing.T) {
@@ -538,6 +619,11 @@ func TestTriageCountersRefuseAnImpossibleRecord(t *testing.T) {
 			want:     "granted rounds require the grant",
 		},
 		{
+			name:     "committed rounds with no grant",
+			counters: TriageCounters{CommittedRounds: 2},
+			want:     "committed rounds require the grant",
+		},
+		{
 			name:     "a counted round with no round count",
 			counters: TriageCounters{LastRound: "run-a#0"},
 			want:     "a counted round requires the round count",
@@ -555,6 +641,39 @@ func TestTriageCountersRefuseAnImpossibleRecord(t *testing.T) {
 				t.Fatalf("Validate() error = %v, want it to name %q", err, test.want)
 			}
 		})
+	}
+}
+
+// A record written before committed rounds were counted is still read and still
+// spent against: the field is an addition to the schema rather than a new one,
+// and a record without it reads as an item with nothing outstanding, which is
+// how the grant that wrote it was treated at the time.
+func TestCountersWrittenBeforeCommittedRoundsAreStillSpendable(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	if err := os.MkdirAll(store.Root(), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	written := `{"schema_version":1,"product_id":"yoyodyne","work_item_id":"yoyodyne-ifd.7",` +
+		`"repair_grants":1,"granted_rounds":2,"review_rounds":2,"last_round":"run-a#1",` +
+		`"updated_at":"2026-08-16T08:00:00Z"}`
+	if err := os.WriteFile(store.path("yoyodyne-ifd.7"), []byte(written), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	counters, err := store.Counters("yoyodyne-ifd.7")
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.RoundsUncommitted(4) != 2 || counters.RoundsRemaining(4) != 2 {
+		t.Fatalf("counters = %+v, want the two rounds the cap has left, promised to nothing", counters)
+	}
+	granted, err := store.GrantRepair(context.Background(), "yoyodyne-ifd.7", 2, time.Now(), TriageCaps{ReviewRounds: 4, RepairGrants: 2, Reruns: 1, MergeRearms: 1})
+	if err != nil {
+		t.Fatalf("GrantRepair() error = %v", err)
+	}
+	if granted.Rounds != 2 || granted.Truncated {
+		t.Fatalf("GrantRepair() = %+v, want the two rounds the record left", granted)
 	}
 }
 
