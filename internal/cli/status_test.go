@@ -477,6 +477,66 @@ func TestStatusSaysWhyEachRunWasChosenAndNamesTheRunsNothingAccountsFor(t *testi
 	}
 }
 
+// The listing says which account a run spent and which configuration set it up.
+// There is one account today, so the line is written for the single-account case
+// and still says something on the day there is a second one; a run recorded
+// before either was carried says so rather than showing a blank.
+func TestStatusSaysWhichAccountAndConfigurationEachRunRanUnder(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here, and the
+	// records it reads are written under it.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 22, 8, 0, 0, 0, time.UTC)
+
+	attributed := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-attributed", started.Add(time.Hour))
+	attributed.AccountAlias = "default"
+	attributed.ConfigRevision = "cfg-0123456789ab"
+	saveRun(t, store, attributed)
+	unattributed := recordedRun(t, store, runstate.StatusSucceeded, "yoyodyne-unattributed", started)
+	saveRun(t, store, unattributed)
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath)
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"ran under default, configuration cfg-0123456789ab",
+		"ran under an account the record does not name, configuration a configuration the record does not name",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("status --json code = %d, stderr = %q", code, stderr)
+	}
+	var output struct {
+		Runs []struct {
+			WorkItemID     string `json:"work_item_id"`
+			AccountAlias   string `json:"account_alias"`
+			ConfigRevision string `json:"config_revision"`
+		} `json:"runs"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &output); err != nil {
+		t.Fatalf("Unmarshal(%q) error = %v", stdout, err)
+	}
+	for _, run := range output.Runs {
+		if run.WorkItemID != "yoyodyne-attributed" {
+			continue
+		}
+		if run.AccountAlias != "default" || run.ConfigRevision != "cfg-0123456789ab" {
+			t.Fatalf("run = %#v, want the account and configuration the record holds", run)
+		}
+	}
+}
+
 // recordedRun creates one run record, so a test can then set what it is about
 // and save it.
 func recordedRun(t *testing.T, store *runstate.Store, status runstate.Status, workItemID string, startedAt time.Time) runstate.State {

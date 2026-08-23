@@ -150,6 +150,34 @@ func TestARunRecordsWhatTheItemIsCalled(t *testing.T) {
 	}
 }
 
+// A run says which provider account it spent and which configuration set it up.
+// Both are read back from the record long after the configuration has been
+// edited and, one day, after there is more than one account to have spent: a run
+// that named neither could not be attributed to either afterwards.
+func TestARunRecordsTheAccountAndConfigurationItRanUnder(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.AccountAlias != pipeline.Config.AccountAlias() {
+		t.Fatalf("recorded account = %q, want the configured %q", state.AccountAlias, pipeline.Config.AccountAlias())
+	}
+	if state.ConfigRevision != pipeline.Config.Revision() {
+		t.Fatalf("recorded configuration = %q, want the revision in force %q", state.ConfigRevision, pipeline.Config.Revision())
+	}
+}
+
 func TestPipelinePreservesFailedWorkAndRecordsFailure(t *testing.T) {
 	t.Parallel()
 

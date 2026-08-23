@@ -161,9 +161,10 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 			"sources":    resolved.Sources,
 			"product_id": resolved.Config.Product.ID,
 			"agents":     len(resolved.Config.Agents),
+			"revision":   resolved.Config.Revision(),
 		})
 	}
-	fmt.Fprintf(stdout, "configuration valid: %s\n", resolved.Path)
+	fmt.Fprintf(stdout, "configuration valid: %s (revision %s)\n", resolved.Path, resolved.Config.Revision())
 	return 0
 }
 
@@ -206,6 +207,10 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 		payload := map[string]any{
 			"config":  resolved.Path,
 			"sources": resolved.Sources,
+			// The revision names these values as one thing, so a run record and the
+			// configuration it was made under can be held up against each other
+			// without diffing two files.
+			"revision": resolved.Config.Revision(),
 		}
 		if showEffective {
 			payload["effective"] = resolved.Config
@@ -220,6 +225,7 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	for _, source := range resolved.Sources {
 		fmt.Fprintf(stdout, "# layer: %s\n", source)
 	}
+	fmt.Fprintf(stdout, "# revision: %s\n", resolved.Config.Revision())
 	if showEffective {
 		encoded, err := yaml.Marshal(resolved.Config)
 		if err != nil {

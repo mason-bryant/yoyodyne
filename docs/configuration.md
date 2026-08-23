@@ -2,7 +2,7 @@
 
 **A Yoyodyne project owns its configuration outright.** `yoyo init` writes a
 complete `.yoyodyne/config.yaml` — every agent, backend, model selector,
-instance count, and persona reference stated in the file — and copies the
+provider account, instance count, and persona reference stated in the file — and copies the
 personas themselves into `.yoyodyne/personas/`. Nothing is inherited at load
 time, so what the file says is what runs, and an edit to it is an edit to the
 harness's behavior with nothing in between.
@@ -150,11 +150,15 @@ approvals:
 
 checks: []          # yours to write; a run with none is refused
 
+accounts:
+  default: {}       # the provider account the agents below run under
+
 agents:
   product-manager:
     role: product-manager
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -163,8 +167,9 @@ agents:
 ```
 
 Five agents — product manager, architect, development manager, developer, and
-reviewer — each with a role, a backend, a model selector, an instance count, and
-a persona file that is in the repository beside the configuration. Change one by
+reviewer — each with a role, a backend, a model selector, the [provider
+account](#provider-accounts) it runs under, an instance count, and a persona file
+that is in the repository beside the configuration. Change one by
 editing it. Remove one by deleting its block. Nothing has to be expressed as a
 deviation from something invisible.
 
@@ -2259,7 +2264,50 @@ These are all errors, reported before any work is claimed:
 - an `operators` entry that binds no namespace at all, binds one that is not an
   address, a forge account, or a Slack member id, names a grant the harness does
   not have, or binds an identifier a second human already bound — and two humans
-  holding `own-intent`, since intent has one owner.
+  holding `own-intent`, since intent has one owner;
+- an `accounts` alias that is not an identifier, a description longer than 200
+  bytes, an agent whose `account` names an alias the mapping does not declare,
+  or a second account — pooling work across accounts is not implemented, and a
+  project that declared two would have every run recording one of them while
+  both were being spent.
+
+## Provider accounts
+
+`accounts` is the provider accounts this project runs its agents under, keyed by
+the alias each one is known by here. Yoyodyne runs one:
+
+```yaml
+accounts:
+  default:
+    description: the Claude subscription this machine is signed in to
+
+agents:
+  developer:
+    role: developer
+    backend: claude-code
+    model: opus
+    account: default
+```
+
+The whole mapping is optional. A project that names none runs under the alias
+`default`, every agent is assigned to it, and nothing about a single-account
+project has to be written down for its runs to say what they ran under.
+
+**An entry is a name and nothing else.** There is deliberately no key here that
+selects a login: the harness invokes the provider with the credentials the
+machine is already signed in with, so a `credentials` key would be configuration
+nothing reads. What the alias buys is that every run record and every surface
+that reports one already names the account it ran under — `yoyo status` says it,
+and so does the message that opens a run's Slack thread.
+
+**A second alias is refused, for now.** Running work across a pool of accounts is
+post-v1, and it arrives here: a second entry, and a rule for which roles run on
+which. Everything downstream of that — the per-agent `account`, the run record,
+the listings — is already the shape it needs, so nothing recorded between now and
+then has to be guessed at afterwards.
+
+**Which roles run where is yours and it is fixed.** An agent runs under the
+account its entry names, and nothing chooses at run time.
 
 ## Operators
 
@@ -2556,9 +2604,18 @@ yoyo config show --effective --origins    # both
 yoyo config show --effective --json       # machine-readable
 ```
 
-`config show` prints the layers it applied, the effective configuration as YAML,
-and, with `--origins`, one line per value. Persona bodies are reported as a
-source and a byte count rather than inlined, so the output stays readable.
+`config show` prints the layers it applied, the revision of the configuration in
+force, the effective configuration as YAML, and, with `--origins`, one line per
+value. Persona bodies are reported as a source and a byte count rather than
+inlined, so the output stays readable.
+
+The revision — `cfg-` and a digest, printed by `config validate` as well — is
+what a run record names when it says which configuration set it up. It is derived
+from the effective values rather than declared, so nobody has to remember to bump
+it: two configurations whose effective values agree share a revision however
+differently their files are written, a bundle upgrade that moves a default moves
+the revision with it, and a changed persona moves it too, because a persona is
+what every prompt is written against.
 
 Origins use these values:
 
@@ -2568,6 +2625,7 @@ Origins use these values:
 | `builtin:v1` | Inherited from the built-in bundle, by a project that uses `extends`. |
 | a file path | Supplied by that project configuration file. |
 | `derived:product.id` | Computed from another configured value. |
+| `derived:accounts` | An agent's `account` no layer stated, which follows the single account the mapping declares. |
 
 An unexpected effective value is therefore a two-command diagnosis: `--effective`
 says what the value is, and `--origins` says which layer is responsible for it.

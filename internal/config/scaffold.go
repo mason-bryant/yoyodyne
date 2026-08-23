@@ -307,12 +307,15 @@ approvals:
 
 	renderScaffoldChecks(&builder, detection)
 
+	renderScaffoldAccounts(&builder, effective)
+
 	builder.WriteString(`
 # Every agent is stated in full: nothing about them is inherited. A model
 # selector that names a family, such as "opus", floats to that family's current
 # default; an exact identifier such as claude-opus-5 pins a version. Persona
 # paths are relative to this .yoyodyne directory and must be Markdown inside it.
-# Delete an agent to remove it, edit one to change it.
+# Each agent names the account it runs under, from the mapping above. Delete an
+# agent to remove it, edit one to change it.
 agents:
 `)
 	for _, name := range sortedNames(effective.Agents) {
@@ -525,11 +528,43 @@ func wrapScaffoldComment(builder *strings.Builder, first, continued, text string
 	builder.WriteString(line + "\n")
 }
 
+// renderScaffoldAccounts writes the provider accounts the agents below run
+// under. There is one, and it is written out rather than left to the harness
+// default for the reason everything else here is: the file states what runs.
+func renderScaffoldAccounts(builder *strings.Builder, effective Config) {
+	builder.WriteString(`
+# The provider accounts this project runs agents under, keyed by the alias each
+# one is known by here. Yoyodyne runs one: the agents below are each assigned to
+# it, every run records the alias it ran under, and every surface that reports a
+# run says it back. The alias is the whole of what an entry is for -- the harness
+# invokes the provider with the credentials this machine is already signed in
+# with, so there is nothing here that selects between logins. Rename the alias to
+# whatever you call this account; a second entry is what pooling work across
+# accounts will be, and it is refused until that exists.
+accounts:
+`)
+	for _, alias := range effective.AccountAliases() {
+		description := strings.TrimSpace(effective.Accounts[alias].Description)
+		if description == "" {
+			// An entry with nothing under it is written as an empty mapping rather
+			// than as a bare key: the file is meant to be read and edited, and a key
+			// with nothing after the colon reads as something somebody deleted.
+			// Describing the account here would be words the harness made up about
+			// whose account it is.
+			fmt.Fprintf(builder, "  %s: {}\n", alias)
+			continue
+		}
+		fmt.Fprintf(builder, "  %s:\n", alias)
+		fmt.Fprintf(builder, "    description: %s\n", description)
+	}
+}
+
 func renderScaffoldAgent(builder *strings.Builder, name string, agent AgentConfig) {
 	fmt.Fprintf(builder, "  %s:\n", name)
 	fmt.Fprintf(builder, "    role: %s\n", agent.Role)
 	fmt.Fprintf(builder, "    backend: %s\n", agent.Backend)
 	fmt.Fprintf(builder, "    model: %s\n", agent.Model)
+	fmt.Fprintf(builder, "    account: %s\n", agent.Account)
 	fmt.Fprintf(builder, "    instances: %d\n", agent.Instances)
 	if !agent.Persona.Defined() {
 		return

@@ -31,7 +31,13 @@ type configDocument struct {
 	// is not the mapping either layer wrote. It decodes straight into the
 	// effective type because there is no per-field override to distinguish.
 	Operators *map[string]Operator `yaml:"operators"`
-	Slack     *slackDocument       `yaml:"slack"`
+	// Accounts replaces an inherited mapping entirely rather than merging into
+	// it, for the reason the operators mapping does: what accounts exist is one
+	// statement, and a mapping half from a bundle and half from a project is not
+	// the set of accounts either layer named. It decodes straight into the
+	// effective type because there is no per-field override to distinguish.
+	Accounts *map[string]Account `yaml:"accounts"`
+	Slack    *slackDocument      `yaml:"slack"`
 }
 
 type productDocument struct {
@@ -100,10 +106,16 @@ type slackDocument struct {
 }
 
 type agentDocument struct {
-	Role      *domain.AgentRole `yaml:"role"`
-	Backend   *domain.Backend   `yaml:"backend"`
-	Model     *string           `yaml:"model"`
-	Instances *int              `yaml:"instances"`
+	Role    *domain.AgentRole `yaml:"role"`
+	Backend *domain.Backend   `yaml:"backend"`
+	Model   *string           `yaml:"model"`
+	// Account is absent from most files. A layer that does not supply it leaves
+	// the agent assigned to the project's single account, which is a derivation
+	// rather than an inherited value: it follows whatever account the effective
+	// mapping turns out to declare rather than whatever some layer underneath was
+	// written against.
+	Account   *string `yaml:"account"`
+	Instances *int    `yaml:"instances"`
 	// Persona replaces an inherited persona completely rather than merging into
 	// it, because half of one persona and half of another is guidance nobody
 	// wrote.
@@ -117,7 +129,7 @@ type agentDocument struct {
 // disabled, which is how a contradictory "remove it and also configure it"
 // entry is detected.
 func (d agentDocument) overridesFields() bool {
-	return d.Role != nil || d.Backend != nil || d.Model != nil || d.Instances != nil || d.Persona != nil
+	return d.Role != nil || d.Backend != nil || d.Model != nil || d.Account != nil || d.Instances != nil || d.Persona != nil
 }
 
 type personaDocument struct {
