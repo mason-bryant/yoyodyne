@@ -390,6 +390,22 @@ stays so the link in every generated `.yoyodyne/config.yaml` keeps resolving.
 Moved to [`configuration/artifacts.md`](configuration/artifacts.md#product-specifications).
 ```
 
+**yoyodyne-ifd.117 landed a stub for all 47 of the page's section anchors, not
+these two.** The tier rule above says a Tier 2 anchor gets no stub, because one
+we can fix ourselves is debt with no creditor. That reasoning holds only while
+the citation list can actually be established, and on this page it could not be:
+the tracked-item half of the sweep reads `.beads/issues.jsonl`, which is a
+passive export, and in the executing run it was four days stale and did not
+contain the executing item itself, with the live database unreadable from inside
+a run. So the choice was between a survey that could not see recent items and a
+stub per anchor, and the item's own criterion — anchors "stable or redirected
+since designs and items link into it" — is the one that had to hold. The stubs
+cost about 190 lines on a page that went from 162KB to 10KB, which is inside the
+120-line budget's intent even where it exceeds its number, and they make the
+criterion true by construction rather than by a search nobody can repeat. If the
+tracker becomes readable from a run, the Tier 2 stubs are removable in one pass
+and this note is the record of why they were ever there.
+
 ## What the split breaks that neither item mentions
 
 **The product manager stops being given the content that moves.**

@@ -52,14 +52,204 @@ something that knows where the answer went.
   accounts, the operators this project recognizes, personas, research sources,
   and reporting to Slack.
 
-## Checks
+## Where each section went
 
-Moved to [`configuration/runs.md`](configuration/runs.md#checks). This heading
-stays so the link in every generated `.yoyodyne/config.yaml` keeps resolving.
+Every heading the guide used to carry is kept below, at this path, pointing at
+where its content now lives. They are here so that a link written before the
+split still lands on the section it named rather than silently on the top of
+this page — which is what GitHub does with a fragment it cannot resolve, and is
+invisible to the reader it fails.
 
-## Product specifications
+Two of them can never be removed whatever else changes. `#checks` is in every
+`.yoyodyne/config.yaml` that `yoyo init` has ever generated, in a file its owner
+edits. `#product-specifications` is linked from the design document, from the
+product goals, and from tracked work items — none of which a change to this
+guide may rewrite.
 
-Moved to
-[`configuration/artifacts.md`](configuration/artifacts.md#product-specifications).
-This heading stays so the links written into designs, goals, and tracked work
-items keep resolving.
+### Creating a project configuration
+
+Moved to [`configuration/setup.md`](configuration/setup.md#creating-a-project-configuration).
+
+### When the repository ignores the configuration
+
+Moved to [`configuration/setup.md`](configuration/setup.md#when-the-repository-ignores-the-configuration).
+
+### Where the tracker syncs
+
+Moved to [`configuration/setup.md`](configuration/setup.md#where-the-tracker-syncs).
+
+### Layout
+
+Moved to [`configuration/setup.md`](configuration/setup.md#layout).
+
+### Discovery
+
+Moved to [`configuration/setup.md`](configuration/setup.md#discovery).
+
+### Precedence
+
+Moved to [`configuration/setup.md`](configuration/setup.md#precedence).
+
+### Product specifications
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#product-specifications).
+
+### What the product manager sees besides them, and what it does not
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
+
+### Artifact identity and metadata
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#artifact-identity-and-metadata).
+
+### Approving a document
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#approving-a-document).
+
+### What reaches the queue
+
+Moved to [`configuration/goals.md`](configuration/goals.md#what-reaches-the-queue).
+
+### Who may change an artifact
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#who-may-change-an-artifact).
+
+### Protected paths in a developer's change
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#protected-paths-in-a-developers-change).
+
+### Proposing a change to a document you do not own
+
+Moved to [`configuration/artifacts.md`](configuration/artifacts.md#proposing-a-change-to-a-document-you-do-not-own).
+
+### Traceability: references and orphans
+
+Moved to [`configuration/goals.md`](configuration/goals.md#traceability-references-and-orphans).
+
+### Goals, and the work attributed to them
+
+Moved to [`configuration/goals.md`](configuration/goals.md#goals-and-the-work-attributed-to-them).
+
+### What a change upstream leaves stale
+
+Moved to [`configuration/goals.md`](configuration/goals.md#what-a-change-upstream-leaves-stale).
+
+### Architectural invariants
+
+Moved to [`configuration/goals.md`](configuration/goals.md#architectural-invariants).
+
+### Checks
+
+Moved to [`configuration/runs.md`](configuration/runs.md#checks).
+
+### What `init` proposes for `checks`
+
+Moved to [`configuration/runs.md`](configuration/runs.md#what-init-proposes-for-checks).
+
+### How long a check may take
+
+Moved to [`configuration/runs.md`](configuration/runs.md#how-long-a-check-may-take).
+
+### Scheduling ready work
+
+Moved to [`configuration/runs.md`](configuration/runs.md#scheduling-ready-work).
+
+### Watching instead of draining
+
+Moved to [`configuration/runs.md`](configuration/runs.md#watching-instead-of-draining).
+
+### When a configuration change takes effect
+
+Moved to [`configuration/runs.md`](configuration/runs.md#when-a-configuration-change-takes-effect).
+
+### Why each run says why it was there
+
+Moved to [`configuration/runs.md`](configuration/runs.md#why-each-run-says-why-it-was-there).
+
+### Publishing through pull requests
+
+Moved to [`configuration/publishing.md`](configuration/publishing.md#publishing-through-pull-requests).
+
+### Publishing without automatic integration
+
+Moved to [`configuration/publishing.md`](configuration/publishing.md#publishing-without-automatic-integration).
+
+### Which branch is authoritative
+
+Moved to [`configuration/publishing.md`](configuration/publishing.md#which-branch-is-authoritative).
+
+### What publishing needs
+
+Moved to [`configuration/publishing.md`](configuration/publishing.md#what-publishing-needs).
+
+### Waiting out a provider that refuses
+
+Moved to [`configuration/recovery.md`](configuration/recovery.md#waiting-out-a-provider-that-refuses).
+
+### Relaunching a run the provider killed
+
+Moved to [`configuration/recovery.md`](configuration/recovery.md#relaunching-a-run-the-provider-killed).
+
+### Losing a race for the target branch
+
+Moved to [`configuration/publishing.md`](configuration/publishing.md#losing-a-race-for-the-target-branch).
+
+### How long one role may ask another
+
+Moved to [`configuration/runs.md`](configuration/runs.md#how-long-one-role-may-ask-another).
+
+### Research sources
+
+Moved to [`configuration/agents.md`](configuration/agents.md#research-sources).
+
+### Triage thresholds
+
+Moved to [`configuration/recovery.md`](configuration/recovery.md#triage-thresholds).
+
+### What one work item has been given
+
+Moved to [`configuration/recovery.md`](configuration/recovery.md#what-one-work-item-has-been-given).
+
+### Merge and removal semantics
+
+Moved to [`configuration/setup.md`](configuration/setup.md#merge-and-removal-semantics).
+
+### What fails closed
+
+Moved to [`configuration/setup.md`](configuration/setup.md#what-fails-closed).
+
+### Provider accounts
+
+Moved to [`configuration/agents.md`](configuration/agents.md#provider-accounts).
+
+### Operators
+
+Moved to [`configuration/agents.md`](configuration/agents.md#operators).
+
+### Reporting to Slack
+
+Moved to [`configuration/agents.md`](configuration/agents.md#reporting-to-slack).
+
+### Avatars
+
+Moved to [`configuration/agents.md`](configuration/agents.md#avatars).
+
+### Personas
+
+Moved to [`configuration/agents.md`](configuration/agents.md#personas).
+
+### Extending a built-in bundle
+
+Moved to [`configuration/setup.md`](configuration/setup.md#extending-a-built-in-bundle).
+
+### Converting an inheriting configuration to an explicit one
+
+Moved to [`configuration/setup.md`](configuration/setup.md#converting-an-inheriting-configuration-to-an-explicit-one).
+
+### Migrating from `.yoyodyne.yaml`
+
+Moved to [`configuration/setup.md`](configuration/setup.md#migrating-from-yoyodyneyaml).
+
+### Inspection
+
+Moved to [`configuration/setup.md`](configuration/setup.md#inspection).
