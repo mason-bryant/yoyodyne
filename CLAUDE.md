@@ -22,8 +22,9 @@ matches each destroyed record to the command that destroyed it.
 `yoyo goals guard` refuses the command before it runs, and allows a replacement
 that carries the `Goal served:` line through — so if the notes genuinely have to
 be rewritten, include that line in the replacement. The harness wires the guard
-into every developer run it makes. An interactive session gets it by adding a
-`PreToolUse` hook on `Bash` to `.claude/settings.json`:
+into every developer run it makes on the Claude Code backend, which is where the
+hook is passed. An interactive session gets it by adding a `PreToolUse` hook on
+`Bash` to `.claude/settings.json`:
 
 ```json
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
@@ -31,7 +32,9 @@ into every developer run it makes. An interactive session gets it by adding a
 
 The guard only covers sessions it is wired into, which is why the rule is
 written here as well. `yoyo goals attribution` reports and fails on an
-attribution that was destroyed.
+attribution destroyed on an open or blocked item; on a claimed or closed item
+the witness keeps the words to put back but nothing fails, so the rule above is
+the only thing standing between those items and a silent loss.
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:6cd5cc61 -->
 ## Beads Issue Tracker

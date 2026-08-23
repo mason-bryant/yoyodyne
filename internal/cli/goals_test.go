@@ -520,6 +520,30 @@ func TestTheGuardRefusesTheWriterAndSaysNothingAboutAnythingElse(t *testing.T) {
 	}
 }
 
+// The sweep is deliberately wider than the audit, and every document that
+// describes either one now says which is which. Pinning the relationship is what
+// keeps the prose from drifting back into the overclaim it was corrected for: the
+// sweep must reach everything the audit reads, or an item could be reported as
+// having lost a goal with no witness holding the words to put back, and it must
+// reach more than that, which is the part that buys recovery on work the audit
+// never looks at.
+func TestTheSweepReachesEveryStatusTheAuditReadsAndMore(t *testing.T) {
+	t.Parallel()
+
+	swept := map[string]bool{}
+	for _, status := range witnessStatuses {
+		swept[status] = true
+	}
+	for _, audited := range backlogStatuses {
+		if !swept[audited] {
+			t.Fatalf("the audit reads %q and the sweep does not reach it, so a loss there could be reported with no witness to put back", audited)
+		}
+	}
+	if len(witnessStatuses) <= len(backlogStatuses) {
+		t.Fatalf("the sweep reaches %v, which is no wider than the audit's %v", witnessStatuses, backlogStatuses)
+	}
+}
+
 // sweepRunner is a bd that answers listings and keeps what a witness wrote, so
 // a sweep can be checked for what it did and did not touch.
 type sweepRunner struct {

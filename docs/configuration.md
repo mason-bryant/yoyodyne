@@ -1100,12 +1100,22 @@ tracker holds rather than the queue, because the command that destroys an
 attribution reaches a claimed or closed item just as easily, and most of the
 losses on record were on items that had already closed.
 
+**The sweep is wider than the audit, and what a witness buys differs across that
+line.** `attribution` reads the backlog — `open` and `blocked` — so on those a
+witnessed loss is a `lost` state it reports and exits non-zero for. On claimed
+and closed items the sweep also reaches, nothing reports the loss: what the
+witness buys there is recovery, because the statement is kept where replacing
+the notes cannot reach it and a destroyed attribution can be put back from the
+record rather than judged again.
+
 `yoyo goals guard` is the same loss stopped rather than reported. Wired as a
 `PreToolUse` hook on `Bash`, it reads the command an agent session is about to
 run and refuses `bd update <id> --notes`, which replaces an item's notes and
 takes the goal recorded in them with it; a replacement carrying the
 `Goal served:` line through is allowed, because that one destroys nothing. The
-harness gives it to every developer run it makes.
+harness gives it to every developer run it makes on the Claude Code backend,
+which is the backend that passes the hook; any other agent session is covered
+only by wiring the same command into that session's own hooks.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated

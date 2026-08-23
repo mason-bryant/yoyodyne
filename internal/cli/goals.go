@@ -347,11 +347,11 @@ type hookDecisionOutput struct {
 // turn a hook payload it did not recognise into a session that can run no
 // commands at all. That is the guard being the outage instead of preventing one.
 //
-// What makes fail-open honest is that this is not the only protection. An
-// attribution the tracker witnesses cannot be destroyed quietly whatever writes
-// over the notes -- `goals attribution` reports the loss and exits non-zero.
-// This is the writer stopped before the fact; the witness is the loss that
-// cannot be hidden after it.
+// What makes fail-open honest is that this is not the only protection. A
+// witnessed attribution destroyed on work the audit reads is a loss
+// `goals attribution` reports and exits non-zero for, and on the work it does
+// not read the witness still holds the words to put back. This is the writer
+// stopped before the fact; the witness is what survives it.
 func guardNotesReplacement(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("goals guard", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -438,16 +438,26 @@ func attributionExitCode(attributions []itemAttribution) int {
 }
 
 // witnessStatuses are the tracker slices the sweep covers: every status an item
-// can be in, rather than the backlog's two.
+// can be in, rather than the backlog's `open` and `blocked`.
 //
-// The scope is wider than the backlog's deliberately, and the difference is the
-// whole value of sweeping at all. What destroys an attribution is a command
-// somebody types, and it reaches a claimed or closed item exactly as easily as a
-// queued one -- of the twelve recorded losses, one was on an item somebody was
-// working on and nine were on closed items, several of them written over after
-// the item closed. A sweep scoped to the backlog would protect the two slices
-// the loss has been least likely to happen in and leave the record of finished
-// work, which is the traceability the chain is kept for, covered by nothing.
+// The scope is wider than the backlog's deliberately, because what destroys an
+// attribution is a command somebody types and it reaches a claimed or a closed
+// item exactly as easily as a queued one. Of the twelve recorded losses, one was
+// on an item somebody was working on and nine were on closed items, several of
+// those written over after the item closed -- so a sweep scoped to the backlog
+// would have covered two of the twelve.
+//
+// What the witness buys is not the same on both sides of that line, and saying
+// so is the difference between this scope and an overclaim. On work the audit
+// reads, a witnessed loss becomes a `lost` state that `goals attribution`
+// reports and exits non-zero for. On claimed and closed work, which
+// admittedWorkItems does not list, it buys recovery rather than detection: the
+// statement is kept where replacing the notes cannot reach it, so a destroyed
+// attribution can be put back from the record instead of being judged again.
+// That is precisely what the nine closed losses needed and what nothing else
+// would have held, which is why the sweep goes wider than the audit rather than
+// the audit being widened to match. Widening the audit is a change to what the
+// backlog means, and it is not this sweep's to make.
 var witnessStatuses = []string{"open", "in_progress", "blocked", "closed"}
 
 // admittedWorkItems is the work that has been admitted and is not finished,
@@ -668,7 +678,9 @@ than one it cannot see. An attribution made before this existed carries no
 witness until it is swept, which is why it is worth running once over a backlog.
 It sweeps every work item the tracker holds and not only the queue: the command
 that destroys an attribution reaches a claimed or a closed item just as easily,
-and most of the losses on record were on closed ones.
+and most of the losses on record were on closed ones. "attribution" reads the
+queue, so a loss it reports is a loss on the queue; on a claimed or closed item
+the witness holds the words to put back and nothing fails.
 
 "guard" is the same loss stopped before it happens. It reads a `+"`PreToolUse`"+` tool
 call on stdin, as an agent session's hook gives it, and refuses a shell command

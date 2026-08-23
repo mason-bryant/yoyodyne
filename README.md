@@ -2630,24 +2630,28 @@ backlog. It walks every status the tracker holds rather than the queue, because
 the command that destroys an attribution reaches a claimed or closed item just
 as easily, and most of the losses on record were on items that had closed.
 
-The witness makes a loss impossible to hide; `yoyo goals guard` stops the write
-that causes one. It reads a tool call an agent session is about to make and
+The witness is what survives a loss; `yoyo goals guard` stops the write that
+causes one. It reads a tool call an agent session is about to make and
 refuses a shell command running `bd update <id> --notes`, which is where every
 recorded loss came from. A replacement carrying the `Goal served:` line through
 is allowed, because that one destroys nothing — and it is the way past a refusal
 when the notes genuinely have to be rewritten. The harness gives the guard to
-every developer run it makes; an interactive session in your own repository gets
-it by wiring the same command as a `PreToolUse` hook on `Bash` in
-`.claude/settings.json`:
+every developer run it makes on the Claude Code backend, which is where the hook
+is passed; an interactive session in your own repository gets it by wiring the
+same command as a `PreToolUse` hook on `Bash` in `.claude/settings.json`:
 
 ```json
 {"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
 ```
 
-The two halves are not interchangeable. The guard covers the sessions it is
-wired into and says nothing about a command typed anywhere else; the witness
-covers every attributed item whatever wrote over it, and turns a silent loss
-into one the audit fails on.
+The two halves are not interchangeable, and neither of them covers everything.
+The guard covers the sessions it is wired into and says nothing about a command
+typed anywhere else. The witness reaches every item the sweep walked, but what
+it buys depends on where that item is: on work the audit reads — `open` and
+`blocked` — a loss becomes a `lost` state that `yoyo goals attribution` reports
+and exits non-zero for, and on claimed and closed work, which the audit does not
+read, it keeps the words so a destroyed attribution can be put back rather than
+judged again.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking
