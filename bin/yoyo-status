@@ -257,6 +257,11 @@ status_of() {
 # conversation's and a branch review's is the timestamp of their first event,
 # which is the same moment and needs no state file to find. All three come from
 # one jq invocation because the report asks this of every row.
+#
+# This is what a row says in its "started" column on the day the work opened on.
+# It is not what decides the day money counts against -- an invocation counts on
+# the day it was made, which for a long-lived conversation is not the day the
+# conversation began.
 started_fields_of() {
   local stamp="" state
   if [ "$(kind_of "$1")" != "run" ]; then
@@ -311,10 +316,16 @@ fi
 # so leaving them out understated every total they belonged in. Cost is what the
 # provider reported, not an estimate.
 #
-# The rows are grouped by the local-timezone day the work started on and each
+# The rows are grouped by the local-timezone day the money was spent on and each
 # group closes with that day's spend, because "what did today cost" is the axis
 # an operator budgets on and the day it asks about is the one their own clock
 # is keeping. Today's group is last, where the eye already is.
+#
+# What counts on a day is each invocation, not the log it was recorded in: a
+# conversation stays open for as long as the role is in it, so a chat opened a
+# fortnight ago and answered again this morning spends on both days, and one
+# row for the day it opened would leave this morning out of what today cost.
+# A log that spans days therefore contributes one row to each day it spent on.
 cost_report() {
   command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
   local pattern="${1:-}" days="${2:-}" files
@@ -331,25 +342,46 @@ cost_report() {
   # falls back to a per-user directory a restricted environment can deny.
   local tmp
   tmp="$(mktemp "${TMPDIR:-/tmp}/yoyo-status.XXXXXX")"; trap 'rm -f "$tmp"' RETURN
+  # Every selected log is read, whatever day it opened on, because the window is
+  # about when the money was spent and a log that opened before it can still
+  # have spent inside it. Only the rows a log yields are held against the
+  # window, which is what keeps this morning's turn of a fortnight-old
+  # conversation in this morning's total.
   printf '%s\n' "$files" | while read -r f; do
     [ -n "$f" ] || continue
-    local epoch day ts
-    IFS=$'\t' read -r epoch day ts <<<"$(started_fields_of "$f")"
-    # Decided before the event log is read rather than after, so the days a
-    # report does not cover cost it nothing to leave out.
-    if [ -n "$oldest" ] && [ "$day" != "undated" ] && [[ "$day" < "$oldest" ]]; then continue; fi
+    local start_epoch start_day start_ts
+    IFS=$'\t' read -r start_epoch start_day start_ts <<<"$(started_fields_of "$f")"
     jq -r 'select(.type=="run.completed")
-           | [ (.payload.total_cost_usd // 0),
+           | ((.timestamp // "") | sub("\\.[0-9]+";"") | try fromdateiso8601 catch null) as $moment
+           | [ (if $moment == null then "undated" else ($moment | strflocaltime("%Y-%m-%d")) end),
+               ($moment // 0),
+               (if $moment == null then "-" else ($moment | strflocaltime("%m %d %Y %H:%M")) end),
+               (.payload.total_cost_usd // 0),
                (.payload.usage.input_tokens // 0),
                (.payload.usage.output_tokens // 0),
                (.payload.usage.cache_creation_input_tokens // 0),
                (.payload.usage.cache_read_input_tokens // 0) ]
            | @tsv' "$f" 2>/dev/null \
-    | awk -v id="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" \
-          -v day="$day" -v epoch="$epoch" -v ts="$ts" '
-        { n++; cost+=$1; in_+=$2; out+=$3; cw+=$4; cr+=$5 }
-        END { if (n>0) printf "%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
-                            day, epoch, id, ts, n, in_, out, cw, cr, cost, st }'
+    | awk -F'\t' -v id="$(basename "$f" .events.jsonl)" -v st="$(status_of "$f")" -v oldest="$oldest" \
+          -v start_day="$start_day" -v start_epoch="$start_epoch" -v start_ts="$start_ts" '
+        # Events arrive in the order they were recorded, so the first one seen
+        # for a day is the earliest that day.
+        { day=$1;
+          if (!(day in n)) { order[++days]=day; first_epoch[day]=$2; first_ts[day]=$3 }
+          n[day]++; cost[day]+=$4; in_[day]+=$5; out[day]+=$6; cw[day]+=$7; cr[day]+=$8 }
+        END {
+          for (i = 1; i <= days; i++) {
+            day=order[i];
+            if (oldest != "" && day != "undated" && day < oldest) continue;
+            # The day the work opened on says when it opened, which is what the
+            # column has always said; a later day says when it next spent,
+            # because on that day there is nothing else the column could mean.
+            epoch = (day == start_day ? start_epoch : first_epoch[day]);
+            ts    = (day == start_day ? start_ts    : first_ts[day]);
+            printf "%s\t%s\t%s\t%s\t%d\t%d\t%d\t%d\t%d\t%.10f\t%s\n",
+                   day, epoch, id, ts, n[day], in_[day], out[day], cw[day], cr[day], cost[day], st;
+          }
+        }'
   done > "$tmp"
 
   # An empty report says which of the two empties it is: nothing has been spent
@@ -408,11 +440,12 @@ cost_report() {
 
 if [ "$cost_only" = "1" ]; then
   # The one argument the report takes is either a number of days or the thing
-  # to price, and a purely numeric one is the count: nothing else about a run
-  # is only digits, and an operator asking for a fortnight would not otherwise
-  # have a way to say so. Naming one run, conversation, or review prices it
-  # whatever day it ran on -- the window is for the report that chooses what to
-  # show, and an id has already chosen.
+  # to price, and a purely numeric one is the count, because an operator asking
+  # for a fortnight would not otherwise have a way to say so. An id prefix can
+  # be all digits too -- ids are hex -- so one that is must be given with its
+  # run-, chat-, or review- prefix to be read as an id rather than as days.
+  # Naming one prices it whatever day it ran on: the window is for the report
+  # that chooses what to show, and an id has already chosen.
   case "$run_arg" in
     ''|*[!0-9]*) ;;
     *)

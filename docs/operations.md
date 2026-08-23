@@ -562,15 +562,20 @@ per branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
 
-The rows are grouped by the local-timezone day the work started on, each day's
-group closing with that day's spend and today's group coming last: what an
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
 operator budgets against is what today cost, and the day they mean is the one
-their own clock is keeping. A report covers the last seven such days, today
-counting as the first of them. A number asks for a different count — `-c 30` —
-and naming a run, a conversation, or a review prices that one whatever day it
-ran on, because an id has already chosen what to show. A window with nothing in
-it says so and says since when, rather than reading like a machine that spent
-nothing.
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `-c 30` — and naming a run,
+a conversation, or a review prices that one whatever day it ran on, because an
+id has already chosen what to show; an id prefix that is all digits has to carry
+its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
+count of days. A window with nothing in it says so and says since when, rather
+than reading like a machine that spent nothing.
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the

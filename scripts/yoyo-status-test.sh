@@ -66,14 +66,17 @@ stamp_days_ago() {
     | todate | sub("Z$"; ".123456Z")'
 }
 
-# The local day $1 days ago, named the way a report's day headings name it.
-day_days_ago() {
+# The local day $1 days ago, named the way a report's day headings name it, and
+# the way a row's own started column spells the same day.
+day_days_ago() { local_day_days_ago "$1" "%Y-%m-%d"; }
+date_shown_days_ago() { local_day_days_ago "$1" "%m %d %Y"; }
+local_day_days_ago() {
   if [ "$have_jq" = "0" ]; then printf 'undated\n'; return; fi
-  jq -rn --argjson back "$1" '
+  jq -rn --argjson back "$1" --arg format "$2" '
     (now | floor) as $moment
     | ($moment | strflocaltime("%H %M %S") | split(" ") | map(tonumber)) as $clock
     | ($moment - ($clock[0] * 3600 + $clock[1] * 60 + $clock[2]) + 43200)
-    | . - $back * 86400 | strflocaltime("%Y-%m-%d")'
+    | . - $back * 86400 | strflocaltime($format)'
 }
 
 # One completed provider invocation, in the shape both a run and a conversation
@@ -122,6 +125,8 @@ answering_chat="chat-5555555555555555555555555555555e"
 # Older than any window the report reaches back over by default, which is the
 # only way to tell a report that chose its days from one that showed everything.
 old_run="run-8888888888888888888888888888888a"
+# Opened outside that window and still being spent on inside it.
+straddling_chat="chat-9999999999999999999999999999999b"
 
 # Two days ago: one run and, later, one branch review, so a closed day's total
 # is a sum over more than one row and over more than one kind of work.
@@ -146,6 +151,17 @@ conversation_state "$demo/conversations" product-manager "$waiting_chat"
   started "$answering_chat" 3; } \
   > "$demo/conversations/$answering_chat.events.jsonl"
 conversation_state "$demo/conversations" architect "$answering_chat"
+
+# A conversation stays open for as long as the role is in it, so its log spans
+# days as a matter of course: this one opened before any default window reaches
+# back to and was answered again today. What it spent this morning is spending
+# that happened today however old the conversation is, and a report that filed
+# the whole log under the day it opened would leave it out of today's total and
+# out of the report entirely. Nothing else here straddles a day boundary.
+{ started "$straddling_chat" 1 9; completed "$straddling_chat" 2 2.00 9
+  started "$straddling_chat" 3 0; completed "$straddling_chat" 4 1.00 0; } \
+  > "$demo/conversations/$straddling_chat.events.jsonl"
+conversation_state "$demo/conversations" developer "$straddling_chat"
 
 # A branch review is recorded in its own directory with its own id prefix and no
 # state file of its own, so what it is doing is read from its own events.
@@ -172,6 +188,7 @@ touch -t 202607010900 "$demo/runs/$old_run.events.jsonl"
 touch -t 202608010900 "$demo/runs/$one_run.events.jsonl"
 touch -t 202608010910 "$demo/conversations/$ended_chat.events.jsonl"
 touch -t 202608010920 "$demo/conversations/$waiting_chat.events.jsonl"
+touch -t 202608010925 "$demo/conversations/$straddling_chat.events.jsonl"
 touch -t 202608010930 "$demo/conversations/$answering_chat.events.jsonl"
 touch -t 202608010935 "$demo/branch-reviews/$reviewed_branch.events.jsonl"
 touch -t 202608010936 "$demo/branch-reviews/$reviewing_branch.events.jsonl"
@@ -316,14 +333,16 @@ else
     (*"mkstemp failed"*|*"Operation not permitted"*)
       skip "the cost totals: this environment denies the temporary file the report needs" ;;
     (*)
-      # The run is $3.00, the conversations are $2.25 between them, and the
-      # branch review is $0.75, so a report that left either of the other two
-      # kinds out would understate the total by exactly what it skipped.
+      # Inside the default window the run is $3.00, the conversations are $3.25
+      # between them -- $2.25 from the three short ones and $1.00 from today's
+      # turn of the long-lived one -- and the branch review is $0.75, so a
+      # report that left any of the kinds out would understate the total by
+      # exactly what it skipped.
       contains "$cost" "$one_run" "the report prices runs"
       contains "$cost" "$waiting_chat" "the report prices conversations"
       contains "$cost" "$reviewed_branch" "the report prices branch reviews"
-      contains "$cost" "cost: \$6.00" "the total is every kind of invocation together"
-      contains "$cost" "runs: \$3.00 from 2 invocation(s)   conversations: \$2.25 from 4 turn(s)   branch reviews: \$0.75 from 1 invocation(s)" \
+      contains "$cost" "cost: \$7.00" "the total is every kind of invocation together"
+      contains "$cost" "runs: \$3.00 from 2 invocation(s)   conversations: \$3.25 from 5 turn(s)   branch reviews: \$0.75 from 1 invocation(s)" \
         "a mixed total says how much of it was each"
       missing "$cost" "$other_run" "a run with no completed invocation is not priced"
 
@@ -341,28 +360,53 @@ else
       # in, read off the rendered report rather than recomputed: a day total
       # line is its date, the word total, and then the same columns a row has,
       # so the last field of it is that day's dollars.
-      day_total() { printf '%s\n' "$cost" | awk -v d="$1" '$1==d && $2=="total" { print $NF }'; }
+      day_total() { printf '%s\n' "$2" | awk -v d="$1" '$1==d && $2=="total" { print $NF }'; }
       last_group="$(printf '%s\n' "$cost" | awk '$2=="total" { day=$1 } END { print day }')"
       contains "$cost" "$earlier" "a day the work ran on heads its group"
       contains "$cost" "$today  (today)" "the current day's group says it is today"
-      contains "$(day_total "$earlier")" "3.75" "a closed day totals every row under it, of every kind"
-      contains "$(day_total "$today")" "2.25" "the current day totals too"
+      contains "$(day_total "$earlier" "$cost")" "3.75" "a closed day totals every row under it, of every kind"
+      contains "$(day_total "$today" "$cost")" "3.25" "the current day totals too"
       contains "$last_group" "$today" "the current day's group is the last one in the list"
       # Grouping is around the rows, not through them: what a row says about one
       # run is what it said before there were groups at all.
-      row="$(printf '%s\n' "$cost" | grep "$one_run" | head -1)"
+      # A row that is missing is a claim that did not hold, so the search for it
+      # is allowed to find nothing: under pipefail an empty grep would otherwise
+      # end the run here and take every later claim with it.
+      row="$(printf '%s\n' "$cost" | grep "$one_run" | head -1 || true)"
       contains "$(printf '%s\n' "$row" | awk '{ printf "%d %s %s\n", NF, $(NF-1), $NF }')" \
         "12 3.00 succeeded" "a run's row still carries id, start, five counts, cost, and status"
+
+      step "an invocation counts on the day it was made, not the day its log opened"
+      # The long-lived conversation opened nine days ago, outside the default
+      # window, and spent $1.00 of its $3.00 today. Attributing the log to the
+      # day it opened would drop that dollar out of today's total and out of the
+      # report, which is the one number the grouping exists to produce.
+      contains "$cost" "$straddling_chat" \
+        "a conversation opened before the window reports what it spent inside it"
+      contains "$(printf '%s\n' "$cost" | grep -c "$straddling_chat")" "1" \
+        "only the days it spent inside the window are reported for it"
+      straddling_row="$(printf '%s\n' "$cost" | grep "$straddling_chat" | head -1 || true)"
+      contains "$(printf '%s\n' "$straddling_row" | awk '{ print $2, $3, $4 }')" \
+        "$(date_shown_days_ago 0)" "its row under today starts at what it spent today"
+      contains "$(printf '%s\n' "$straddling_row" | awk '{ print $(NF-1) }')" "1.00" \
+        "and carries only today's spending, not the whole conversation's"
+      both="$("$status" --product demo -c 10 2>&1)"
+      printf '%s\n' "$both"
+      contains "$(printf '%s\n' "$both" | grep -c "$straddling_chat")" "2" \
+        "a window covering both of its days gives it a row under each"
+      contains "$(day_total "$(day_days_ago 9)" "$both")" "2.00" \
+        "the day it opened on totals what it spent that day"
+      contains "$both" "cost: \$9.00" "and the report totals both of its days"
 
       step "the report covers the last 7 days, and a number asks for another count"
       contains "$cost" "TOTAL (last 7 days)" "the total names the window it is over"
       missing "$cost" "$old_run" "work older than the window is left out of the default report"
       wider="$("$status" --product demo -c 40 2>&1)"
       contains "$wider" "$old_run" "a numeric argument reaches further back"
-      contains "$wider" "cost: \$10.00" "the wider window totals everything it covers"
+      contains "$wider" "cost: \$13.00" "the wider window totals everything it covers"
       contains "$wider" "TOTAL (last 40 days)" "the total names the wider window too"
       one_day="$("$status" --product demo -c 1 2>&1)"
-      contains "$one_day" "cost: \$2.25" "one day is today alone"
+      contains "$one_day" "cost: \$3.25" "one day is today alone"
       missing "$one_day" "$one_run" "a day earlier than the window is left out of it"
       # An id is a choice already made, so the window does not second-guess it:
       # a report that answered "nothing" for a run the operator named by hand
