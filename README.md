@@ -643,8 +643,9 @@ how the product is built rather than what it is for or what it ships. The
 narrowing this partially undoes is described, with what it bought and what it
 cost, in the [configuration guide](docs/configuration.md#what-the-product-manager-sees-besides-them-and-what-it-does-not).
 
-It has no tools: no filesystem, no commands, no network. What it has instead is
-the work tracker, through a fixed set of named operations the harness carries
+It has no tools: no filesystem, no commands, no network. What it has instead are
+capabilities the harness performs on its behalf. The first is the work tracker,
+through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
 retire. One further operation is about none of that: `handle` records
@@ -657,6 +658,61 @@ failed is reported as failed rather than described as done, and a block the
 harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
+
+### Bringing it an idea rather than a work item
+
+Most of what you say to the product manager is intent: build this, do that
+first, stop doing the other. Some of it is not. "What if we did X", "is Y worth
+it", "should we move to Z" is a question, and the answer to it is usually
+neither yes nor no — it is what the evidence says, what the product is already
+committed to, what is still unknown, and a recommendation you can disagree with.
+
+It works through one of those rather than answering off the top of its head. It
+asks what it genuinely needs to know first, one or two questions at a time. Where
+evidence would change what it would recommend, it gathers some. Then it weighs
+the idea against your brief and your goals, because whether an idea is good in
+the abstract is not what you asked.
+
+**Gathering evidence is a second harness capability, and it is off until you turn
+it on.** The role still has no network. What it has is the same arrangement it
+has with the tracker: it names a question and one of the sources you configured,
+the harness runs that source, and it hands back what came out. A source is a
+command you wrote — see
+[research sources](docs/configuration.md#research-sources) — so what the harness may
+reach is exactly what you named and nothing else. Only the question leaves your
+machine, redacted and bounded on the way out; a project that configured no source
+has the capability off, and the product manager is told so and says it could not
+check rather than answering from memory as though it had.
+
+What comes back is untrusted. A search result is a stranger's prose arriving
+inside a prompt, so it is delivered framed as evidence about the world and never
+as instruction, exactly as your own repository documents already are. Every
+question and what it returned is printed to you as it happens, because research
+spends your money outside this machine.
+
+**What it concludes is written down.** The recommendation is one of four — adopt,
+reject, defer, or run a bounded experiment — and it is recorded with the
+reasoning, how the idea sits against the brief and the goals, the sources it
+cites, what the evidence states, what it inferred rather than read, what it is
+still uncertain about, and what argues the other way. Those last four are
+separate fields on purpose: a paragraph is where the difference between a fact
+and a hunch goes to die. Where it could not get adequate evidence it says so and
+the recommendation reflects that, rather than answering confidently anyway.
+
+`yoyo evaluation list` and `yoyo evaluation show <id>` read them back, and the
+record keeps what the harness actually retrieved — from which source, at what
+moment — beside the sources the product manager cited. The two are different
+claims: one is what it says it read, the other is what was fetched.
+
+**An evaluation is advice and the harness treats it as nothing else.** Recording
+one admits no work, changes no document, and approves nothing. Everything it
+might lead to already has a path with an approval on it and none of those paths
+runs through here: work reaches the queue as a proposal, under whatever approval
+[your project asks for](docs/configuration.md#what-reaches-the-queue); a change to the
+brief or the goals is yours to make; a change to a design or a decision record is
+the architect's, through `yoyo amendment`. That separation is the point. Research
+that could quietly turn an idea into approved work would be a way to approve work
+by asking a model to look something up.
 
 The brief and the goals stay yours. The product manager proposes a change to a
 goal and says plainly that it is yours to make; it cannot make one, and with no

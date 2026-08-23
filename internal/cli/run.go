@@ -84,6 +84,11 @@ type components struct {
 	// built beside the reports because it is durable in the same way and for the
 	// same reason: the argument outlives the run that made it.
 	amendments *runstate.AmendmentStore
+	// evaluations is where the product manager's recommendations about the
+	// operator's ideas are kept. It is built beside the amendments for the same
+	// reason: the reasoning outlives the conversation that reached it, and a
+	// decision taken weeks later is the one that most needs it.
+	evaluations *runstate.EvaluationStore
 	// docket is the work that has stopped moving, waiting for the development
 	// manager to decide what becomes of it. It is built beside the reports for
 	// the same reason: an entry outlives the run that produced it, and a run
@@ -166,6 +171,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	evaluations, err := runstate.NewEvaluationStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	docket, err := runstate.NewDocketStore(stateRoot, cfg.Product.ID)
 	if err != nil {
 		return components{}, err
@@ -212,6 +221,7 @@ func buildComponents(configPath string) (components, error) {
 		store:         store,
 		reports:       reports,
 		amendments:    amendments,
+		evaluations:   evaluations,
 		docket:        docket,
 		branchReviews: branchReviews,
 		directives:    directives,

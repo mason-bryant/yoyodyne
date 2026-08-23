@@ -23,6 +23,7 @@ func commandHelp() string {
 		printConfigUsage,
 		printArtifactUsage,
 		printAmendmentUsage,
+		printEvaluationUsage,
 		printGoalsUsage,
 		printStaleUsage,
 		printInvariantUsage,

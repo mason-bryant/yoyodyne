@@ -16,8 +16,10 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/evaluation"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/research"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -58,6 +60,15 @@ type chatOutput struct {
 	// conversation that went and asked another agent something is exactly what an
 	// operator must never have to discover afterwards.
 	Exchanges []chat.ExchangeRound `json:"exchanges,omitempty"`
+	// Research are the rounds of evidence-gathering the reply set off, and
+	// Evaluation the recommendation it recorded. Both already happened, so they
+	// are reported for the reason the actions are: research spends the operator's
+	// money outside this machine, and an evaluation is durable. EvaluationProblem
+	// names one that could not be kept, because a lost evaluation is reasoning
+	// nobody can find afterwards.
+	Research          []chat.ResearchRound   `json:"research,omitempty"`
+	Evaluation        *evaluation.Evaluation `json:"evaluation,omitempty"`
+	EvaluationProblem string                 `json:"evaluation_problem,omitempty"`
 	// ResultsCarriedOver reports that the reply stopped where it did because the
 	// product manager ran out of rounds of tracker actions, with results it has
 	// not seen. They are recorded with the conversation and reach it when the
@@ -220,6 +231,9 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
 			Exchanges:          reply.Exchanges,
+			Research:           reply.Research,
+			Evaluation:         reply.Evaluation,
+			EvaluationProblem:  reply.EvaluationProblem,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
 			Reports:            reply.Reports,
 			ReportProblem:      reply.ReportProblem,
@@ -231,6 +245,8 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	// is the same answer an interactive conversation over the same stream gives.
 	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
+	printChatResearch(stdout, reply.Research)
+	printChatEvaluation(stdout, reply.Evaluation, reply.EvaluationProblem)
 	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
 	printChatReports(stdout, theme, role, reply.Reports, reply.ReportProblem)
@@ -447,6 +463,16 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
 		Amendments: parts.amendments,
+		// How evidence from outside the repository is gathered on the role's
+		// behalf, bounded by what the operator configured. It is the harness's own
+		// hand like the tracker is: the role names a question and a permitted
+		// source, and nothing about what runs or where it reaches is the role's.
+		Research: conversationResearch(parts),
+		// Where a recorded recommendation about an operator's idea is kept. It is
+		// wired for every role because the authority to record one is decided in
+		// the chat package's table rather than here, and a store nobody may write
+		// to is never written to.
+		Evaluations: parts.evaluations,
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
@@ -509,6 +535,26 @@ func conversationAgent(cfg config.Config, role domain.AgentRole, name string) (s
 	return name, agent, nil
 }
 
+// conversationResearch is the evidence-gathering capability a conversation
+// performs on the role's behalf, built from what this project permitted. It is
+// always built, including for a project that permitted nothing: the runner then
+// reports that there are no sources, which is what the role has to be told so it
+// says it could not check rather than answering from memory.
+//
+// The source commands run in the repository, so a source an operator wrote as a
+// script in their own project works the way they expect, and the redact values
+// are the same ones every other provider-facing path uses — a source is the one
+// thing here that reaches outside the machine, so what must not leave it is
+// removed from the question before it does.
+func conversationResearch(parts components) research.Runner {
+	return research.Runner{
+		Process:      parts.runner,
+		Directory:    parts.repository,
+		Policy:       parts.config.Research.Policy(),
+		RedactValues: parts.redactValues,
+	}
+}
+
 // chatTracker is the work-item client a conversation acts through: it reads the
 // tracker state the product context is built from, and it is what an approved
 // proposal is created with. Both are bounded the same way, so no tracker call a
@@ -539,6 +585,11 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		// The same is true of anything it reported: the report is already
 		// collected, and it never had anything to do with the failure.
 		output.Actions = reply.Actions
+		// Research already happened and an evaluation was already recorded, so both
+		// travel with the failure for the same reason the actions do.
+		output.Research = reply.Research
+		output.Evaluation = reply.Evaluation
+		output.EvaluationProblem = reply.EvaluationProblem
 		output.ResultsCarriedOver = reply.ResultsCarriedOver
 		output.Reports = reply.Reports
 		output.ReportProblem = reply.ReportProblem
@@ -554,6 +605,8 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 	}
 	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
+	printChatResearch(stdout, output.Research)
+	printChatEvaluation(stdout, output.Evaluation, output.EvaluationProblem)
 	printChatExchanges(stdout, role, output.Exchanges)
 	printChatAdmitted(stdout, output.Admitted)
 	printChatReports(stdout, theme, role, output.Reports, output.ReportProblem)
@@ -689,6 +742,38 @@ func printChatExchanges(writer io.Writer, role domain.AgentRole, exchanges []cha
 		}
 	}
 	fmt.Fprintln(writer, "  `yoyo exchange show <id>` is the whole of what was said.")
+}
+
+// printChatResearch names what the harness went and looked up while the reply
+// was being written. It lists the questions and what each one returned in size
+// and provenance rather than reprinting the evidence: the answer is in the reply
+// above, and a page of retrieved text under it would bury the answer in its own
+// sources.
+func printChatResearch(writer io.Writer, rounds []chat.ResearchRound) {
+	if len(rounds) == 0 {
+		return
+	}
+	fmt.Fprintln(writer)
+	for _, round := range rounds {
+		fmt.Fprint(writer, round.Render())
+	}
+}
+
+// printChatEvaluation names the recommendation that went into the record, and
+// says in the same breath that it changed nothing. The second half is the part
+// that matters: an evaluation is the one durable thing a conversation writes that
+// decides nothing, and "recorded" read as "settled" is a decision the operator
+// never made.
+func printChatEvaluation(writer io.Writer, recorded *evaluation.Evaluation, problem string) {
+	if recorded != nil {
+		fmt.Fprintf(writer, "\nEvaluation recorded: %s — %s\n", recorded.Entry.Recommendation, recorded.Entry.Recommendation.Headline())
+		fmt.Fprintf(writer, "  [%s] %s\n", recorded.ID, recorded.Entry.Idea)
+		fmt.Fprintln(writer, "  advice only: nothing was admitted, approved, or changed by recording it")
+		fmt.Fprintf(writer, "  `yoyo evaluation show %s` has the reasoning and the sources\n", recorded.ID)
+	}
+	if problem != "" {
+		fmt.Fprintf(writer, "\nAn evaluation could not be kept: %s\n", problem)
+	}
 }
 
 // printChatReports names what the product manager reported for the operator

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/research"
 )
 
 const (
@@ -307,6 +308,17 @@ func (r *resolution) apply(applied layer) error {
 	}
 	if asks := document.Exchange; asks != nil {
 		setValue(r.origins, "exchange.max_rounds", asks.MaxRounds, &r.config.Exchange.MaxRounds, applied.origin)
+	}
+	if evidence := document.Research; evidence != nil {
+		// Copied rather than aliased, like the check list: a layer's own slice must
+		// not become the resolved configuration's, or a later layer would be editing
+		// what an earlier document holds.
+		if evidence.Sources != nil {
+			r.config.Research.Sources = append([]research.Source(nil), (*evidence.Sources)...)
+			r.origins["research.sources"] = applied.origin
+		}
+		setValue(r.origins, "research.max_queries_per_turn", evidence.MaxQueriesPerTurn, &r.config.Research.MaxQueriesPerTurn, applied.origin)
+		setValue(r.origins, "research.timeout", evidence.Timeout, &r.config.Research.Timeout, applied.origin)
 	}
 	if approvals := document.Approvals; approvals != nil {
 		setValue(r.origins, "approvals.brief", approvals.Brief, &r.config.Approvals.Brief, applied.origin)
