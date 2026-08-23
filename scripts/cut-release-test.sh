@@ -258,8 +258,12 @@ else
   fail "the refused cut left tags behind: $(tags "$project")"
 fi
 # The second half of the same story: the operator reads the draft, places each
-# item, commits it, and the cut goes through. This is the daily loop.
-git -C "$project" add -A
+# item, commits it, and the cut goes through. This is the daily loop, and these
+# are the commands docs/developing-yoyo.md tells them to run, spelled the same
+# way on purpose -- the draft is a file git has never seen, so `git commit -a`
+# would stage nothing and stop with "no changes added to commit". A test that
+# staged it some easier way would leave that hole in the documentation.
+git -C "$project" add docs/releases/v0.3.0.md
 git -C "$project" commit -qm "v0.3.0 release notes"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "docs/releases/v0.3.0.md is present" "the gate passes once the notes are committed"
@@ -282,7 +286,7 @@ git -C "$project" remote add origin "$origin"
 git -C "$project" push -q origin main
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "drafted docs/releases/v0.3.0.md" "the first cut drafts the notes"
-git -C "$project" add -A
+git -C "$project" add docs/releases/v0.3.0.md
 git -C "$project" commit -qm "v0.3.0 release notes"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "HEAD is not where origin/main is" "committing the notes is not enough on its own"

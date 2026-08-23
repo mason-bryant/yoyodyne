@@ -54,7 +54,9 @@ jobs:
         run: scripts/cut-release-test.sh
 
       # And that the notes it gates on say what landed, in the shape the
-      # operator asked for. Fabricated repository, stub tracker: no provider, no
-      # network, and this repository's own history is never read.
-      - name: Check that a release's notes are written from what landed
+      # operator asked for, and that the release page's body is composed from
+      # them. Fabricated repository, stub tracker: no provider, no network, and
+      # this repository's own history is never read. The body composition is
+      # covered here because its only other execution is a real publication.
+      - name: Check a release's notes and the body they are published as
         run: bash scripts/release-notes-test.sh

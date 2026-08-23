@@ -47,24 +47,15 @@ jobs:
         run: make dist-verify VERSION="$TAG"
 
       # The release page's body is the notes the repository already carries for
-      # this tag, so the two tell one story instead of two. A tag cut before the
-      # notes home existed carries no file and publishes the preamble alone
-      # rather than failing the workflow: a release with thin notes is worth
-      # more than a pushed tag with no release behind it.
+      # this tag, so the two tell one story instead of two. The composition is a
+      # script rather than inline YAML because inline YAML in a tag-triggered
+      # workflow first executes against a real published release; that one is
+      # exercised by scripts/release-notes-test.sh on every change, including
+      # what it does for a tag whose notes file does not exist.
       - name: Assemble the release notes
         run: |
-          notes="$RUNNER_TEMP/release-notes.md"
-          : > "$notes"
-          if [ -f "docs/releases/$TAG.md" ]; then
-            # The page is already titled with the tag, so the file's own heading
-            # would be the same words twice.
-            sed '1{/^# /d;}' "docs/releases/$TAG.md" >> "$notes"
-            printf '\n' >> "$notes"
-          else
-            echo "no docs/releases/$TAG.md, so this release publishes the preamble alone" >&2
-          fi
-          cat .github/release-notes-preamble.md >> "$notes"
-          echo "NOTES_FILE=$notes" >> "$GITHUB_ENV"
+          bash scripts/release-body.sh "$TAG" "$RUNNER_TEMP/release-body.md"
+          echo "NOTES_FILE=$RUNNER_TEMP/release-body.md" >> "$GITHUB_ENV"
 
       - name: Publish the release
         env:

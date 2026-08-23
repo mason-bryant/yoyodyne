@@ -81,13 +81,17 @@ is the one refusal that leaves something behind: it drafts them and stops.
 ```sh
 make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
 $EDITOR docs/releases/v0.3.1.md    # place each item; the judgement is yours
-git commit -am "v0.3.1 release notes"
+git add docs/releases/v0.3.1.md    # the draft is a new file, so -a will not do
+git commit -m "v0.3.1 release notes"
 git push origin main               # or a pull request, where main is protected
 make release VERSION=v0.3.1        # green, and the tag carries its own notes
 git push origin v0.3.1
 ```
 
-**That fourth line is not optional, and it is not the tag push.** The cut
+The `git add` is not a flourish: the drafted notes are a file git has never seen,
+so `git commit -a` stages nothing and stops with "no changes added to commit".
+
+**The push is not optional, and it is not the tag push.** The cut
 refuses a `HEAD` that is not where `origin/main` is, so a notes commit that
 exists only in your checkout stops the *second* `make release` rather than the
 first — and it stops it before the notes gate, so the message you get names the
@@ -127,4 +131,7 @@ fabricated repository and a stub tracker.
 
 The release workflow publishes that same file as the release page's body, with
 the install preamble under it, so the release page and the repository tell one
-story rather than two.
+story rather than two. [`scripts/release-body.sh`](../scripts/release-body.sh)
+is the composition, kept as a script rather than inline in the workflow because
+workflow YAML on a tag trigger first executes during a real publication; the
+test above covers it, including what a tag with no notes file publishes.

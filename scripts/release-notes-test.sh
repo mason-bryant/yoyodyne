@@ -19,6 +19,10 @@
 # bug rises back to the top. Everything else the file says is the tracker's
 # words carried through.
 #
+# scripts/release-body.sh is covered here too, against the notes these cases
+# just wrote. It is what the release workflow runs on a tag push, so the only
+# other place it would ever execute is a real publication.
+#
 # Everything lives under one temporary root that is removed on exit. The real
 # tracker is never read and nothing outside that root is written.
 #
@@ -195,6 +199,37 @@ if [ "$order" = "## Key functionality|## Enhancements|## Bug fixes|" ]; then
 else
   fail "the sections came out as: $order"
 fi
+
+step "the release page's body is the tag's own notes with the preamble under them"
+# scripts/release-body.sh is what the release workflow runs on a tag push. It is
+# exercised here because the alternative is finding out what it does during a
+# real publication, which is the one run where being wrong is expensive.
+mkdir -p "$project/.github"
+printf '## Install\n\nDownload the archive for your platform below.\n' \
+  > "$project/.github/release-notes-preamble.md"
+cp "$repository/scripts/release-body.sh" "$project/scripts/release-body.sh"
+composed="$scratch/body.md"
+if output="$( ( cd "$project" && bash scripts/release-body.sh v0.2.0 "$composed" ) 2>&1 )"; then
+  pass "composing a body for a tag that has notes succeeds"
+else
+  fail "release-body.sh failed for a tag with notes -- got: $output"
+fi
+body="$(cat "$composed" 2>/dev/null || true)"
+contains "$body" "Watch mode" "the tag's own notes are the body"
+contains "$body" "## Key functionality" "with their sections intact"
+contains "$body" "## Install" "and the install preamble under them"
+missing "$body" "# v0.2.0" "the file's title is dropped, because the page already carries it"
+
+step "a tag with no notes publishes the preamble rather than failing the workflow"
+if output="$( ( cd "$project" && bash scripts/release-body.sh v9.9.9 "$composed" ) 2>&1 )"; then
+  pass "composing a body for a tag with no notes file still succeeds"
+else
+  fail "release-body.sh failed for a tag with no notes -- got: $output"
+fi
+contains "$output" "publishes the preamble alone" "and says so rather than doing it quietly"
+body="$(cat "$composed" 2>/dev/null || true)"
+contains "$body" "## Install" "the preamble is the whole body"
+missing "$body" "Watch mode" "and no other release's notes leaked into it"
 
 step "notes are written once, and then edited"
 output="$(draft v0.2.0)"
