@@ -147,10 +147,11 @@ func showAgent(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "name the agent to show, as `yoyo agent show <name>`; `yoyo agent list` names them")
 		return 2
 	}
@@ -160,7 +161,7 @@ func showAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	name, _, err := resolveAgent(parts.config, flags.Arg(0))
+	name, _, err := resolveAgent(parts.config, positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -236,10 +237,11 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 	message := flags.String("message", "", "send one message and print the reply instead of opening an interactive conversation")
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return "", conversationRequest{}, 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "name the agent to talk to, as `yoyo agent chat <name>`; `yoyo agent list` names them")
 		return "", conversationRequest{}, 2
 	}
@@ -253,7 +255,7 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 		fmt.Fprintln(stderr, err)
 		return "", conversationRequest{}, 1
 	}
-	name, role, err := resolveAgent(resolved.Config, flags.Arg(0))
+	name, role, err := resolveAgent(resolved.Config, positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return "", conversationRequest{}, 1

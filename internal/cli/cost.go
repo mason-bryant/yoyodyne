@@ -43,27 +43,31 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	record := flags.Bool("record", false, "write each price onto its work item in the tracker")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(stderr, "cost accepts at most one Beads work item id")
 		printCostUsage(stderr)
 		return 2
 	}
+	// The item is optional, so it is read through argumentAt rather than indexed:
+	// `yoyo cost` with nothing named prices every item the runs cover.
+	workItemID := argumentAt(positional, 0)
 
 	parts, err := buildComponents(*configPath)
 	if err != nil {
 		return reportCostFailure(stdout, stderr, *jsonOutput, err)
 	}
-	prices, err := readPrices(parts, flags.Arg(0))
+	prices, err := readPrices(parts, workItemID)
 	if err != nil {
 		return reportCostFailure(stdout, stderr, *jsonOutput, err)
 	}
 	output := costOutput{Prices: prices}
 	failed := false
 	if *record {
-		recorded, err := recordPrices(ctx, parts, flags.Arg(0))
+		recorded, err := recordPrices(ctx, parts, workItemID)
 		if err != nil {
 			return reportCostFailure(stdout, stderr, *jsonOutput, err)
 		}
@@ -78,7 +82,7 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 			return code
 		}
 	} else {
-		printPrices(stdout, prices, flags.Arg(0) != "")
+		printPrices(stdout, prices, workItemID != "")
 		printRecordedPrices(stdout, stderr, output.Recorded)
 	}
 	if failed {

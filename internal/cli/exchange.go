@@ -100,10 +100,11 @@ func showExchange(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "name the exchange to show, as `yoyo exchange show <id>`; `yoyo exchange list` names them")
 		return 2
 	}
@@ -115,7 +116,7 @@ func showExchange(args []string, stdout, stderr io.Writer) int {
 	}
 	// A prefix names one exchange the way it names one directive, because nobody
 	// types thirty-two hex digits out of a listing.
-	found, err := store.Find(flags.Arg(0))
+	found, err := store.Find(positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
