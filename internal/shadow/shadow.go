@@ -140,9 +140,14 @@ type Totals struct {
 	ShadowOnlyRate  float64 `json:"shadow_only_rate"`
 	BaselineCostUSD float64 `json:"baseline_cost_usd"`
 	ShadowCostUSD   float64 `json:"shadow_cost_usd"`
-	// UnpricedSides counts the reviews whose event log could not be read, while
-	// which the two totals above are floors rather than prices.
-	UnpricedSides int `json:"unpriced_sides,omitempty"`
+	// UnpricedBaseline and UnpricedShadow count the reviews on each side whose
+	// event log could not be read, while which that side's total is a floor
+	// rather than a price. They are counted per side rather than together
+	// because the figure this experiment is read for is what the cheaper
+	// reviewer cost: marking it as a floor because the other side lost an event
+	// log would understate exactly the number the whole comparison is about.
+	UnpricedBaseline int `json:"unpriced_baseline,omitempty"`
+	UnpricedShadow   int `json:"unpriced_shadow,omitempty"`
 }
 
 // Report is what comparing every recorded shadow review produced.
@@ -388,10 +393,11 @@ func total(comparisons []Comparison) Totals {
 			totals.Missed += class.Missed
 			totals.ShadowOnly += class.ShadowOnly
 		}
-		for _, side := range []Side{comparison.Baseline, comparison.Shadow} {
-			if side.Unpriced != "" {
-				totals.UnpricedSides++
-			}
+		if comparison.Baseline.Unpriced != "" {
+			totals.UnpricedBaseline++
+		}
+		if comparison.Shadow.Unpriced != "" {
+			totals.UnpricedShadow++
 		}
 		totals.BaselineCostUSD += comparison.Baseline.CostUSD
 		totals.ShadowCostUSD += comparison.Shadow.CostUSD

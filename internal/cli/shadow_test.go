@@ -70,7 +70,9 @@ func TestTheComparisonReportsEveryClassTheCostAndTheFindings(t *testing.T) {
 }
 
 // A total nothing could price is a floor rather than a price, marked the same
-// way every other figure the harness reports is.
+// way every other figure the harness reports is — and marked from its own side,
+// because a lost baseline event log says nothing about what the shadow reviewer
+// cost, which is the figure this whole comparison is read for.
 func TestTheComparisonMarksACostItCouldNotRead(t *testing.T) {
 	t.Parallel()
 
@@ -81,11 +83,11 @@ func TestTheComparisonMarksACostItCouldNotRead(t *testing.T) {
 			Baseline: shadow.Side{ReviewID: "review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Model: "opus", Unpriced: "the event log is no longer recorded"},
 			Shadow:   shadow.Side{ReviewID: "review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Model: "sonnet", CostUSD: 0.40, Truncated: true},
 		}},
-		Totals: shadow.Totals{Comparisons: 1, ShadowCostUSD: 0.40, UnpricedSides: 1},
+		Totals: shadow.Totals{Comparisons: 1, ShadowCostUSD: 0.40, UnpricedBaseline: 1},
 	})
 	for _, want := range []string{
 		"unpriced: the event log is no longer recorded",
-		"≥ $0.40",
+		"baseline cost ≥ $0.00, shadow cost $0.40",
 		// Two reviews given different evidence are not a measurement of the
 		// reviewers, and the comparison says so rather than leaving it to be
 		// worked out from the record.

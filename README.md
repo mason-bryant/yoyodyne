@@ -2055,12 +2055,19 @@ Because it decides nothing about the branch, a shadow review exits on the
 question it was actually asked — whether it produced a verdict — so a shadow
 `repair` verdict is a successful measurement rather than a failure.
 
-To measure against a verdict that has already been given, point a local branch at
-the commit that verdict was given on and shadow-review that: two reviews are
-comparable only when they were shown the same branch at the same base and head
-commit, which is what `--compare` pairs them by. Where no branch review of that
-state exists yet, an ordinary `yoyo review` of it is what makes the baseline —
-the configured reviewer, judging the same evidence, before anything shadows it.
+The baselines are the branch reviews already recorded. Every verdict `yoyo
+review` has ever given is in the `branch-reviews` log with the branch, base
+commit, and head commit it was given on, and `--compare` pairs on exactly those
+three — so a branch state the configured reviewer has already judged can be
+shadowed without paying for its baseline again. What that costs is one shadow
+review per state and nothing else.
+
+Reaching one of those states is the only manual step. `--branch` takes a local
+branch name, so a state that is still a branch head is shadow-reviewable as it
+stands; an earlier state needs a local branch pointed at the head commit the
+recorded verdict names (`git branch <name> <commit>`), and `--base` takes the
+base commit from the same record. A state nothing has reviewed has no baseline
+at all, and there an ordinary `yoyo review` is what makes one first.
 
 `--compare` reads what was recorded and invokes nothing. For each shadow review
 it reports, per severity, how many of the baseline reviewer's findings the shadow
@@ -2077,7 +2084,19 @@ candidate false positive rather than a proven one — what this measures against
 the other reviewer, not what is true of the branch.
 
 A shadow review costs money like any other provider invocation, and is priced
-like one: it appears in the harness's totals rather than quietly beside them.
+where every other branch review is: it records the same event stream, so
+[`yoyo-status -c`](#following-a-run-a-conversation-or-a-branch-review) counts it under
+`branch reviews`, and `--compare` reports each side's own cost from that same
+log. It is not in `yoyo cost`, which prices work items from the runs made for
+them — a branch review belongs to no run, and a shadow review belongs to no work
+item either. So measuring a reviewer is spend an operator can see, but not under
+the item that prompted it, and it is indistinguishable in the status total from a
+review that gated something.
+
+The first use of this is recorded in
+[the ifd.92 experiment note](docs/experiments/yoyodyne-ifd-92-shadow-review.md): what the
+instrument is, which recorded verdicts are the benchmark, and what has not been
+measured yet.
 
 ### Publishing, and the merge that follows it
 

@@ -125,7 +125,8 @@ func TestComparePairsAShadowReviewWithTheReviewItShadows(t *testing.T) {
 	if report.Totals.MissRate != 1.0/3.0 {
 		t.Errorf("miss rate = %v, want one of three", report.Totals.MissRate)
 	}
-	if report.Totals.BaselineCostUSD != 2.00 || report.Totals.ShadowCostUSD != 0.40 || report.Totals.UnpricedSides != 0 {
+	if report.Totals.BaselineCostUSD != 2.00 || report.Totals.ShadowCostUSD != 0.40 ||
+		report.Totals.UnpricedBaseline != 0 || report.Totals.UnpricedShadow != 0 {
 		t.Errorf("costs = %#v", report.Totals)
 	}
 }
@@ -180,8 +181,39 @@ func TestCompareCountsWhatNothingCouldPair(t *testing.T) {
 		t.Errorf("totals = %#v", report.Totals)
 	}
 	// Neither review could be priced, so both totals are floors and say so.
-	if report.Totals.UnpricedSides != 2 {
-		t.Errorf("unpriced sides = %d, want both", report.Totals.UnpricedSides)
+	if report.Totals.UnpricedBaseline != 1 || report.Totals.UnpricedShadow != 1 {
+		t.Errorf("unpriced sides = %#v, want one on each", report.Totals)
+	}
+}
+
+// What the cheaper reviewer cost is the figure the experiment is read for, so a
+// baseline whose event log is gone must not make it look like a floor.
+func TestAnUnpricedReviewOnlyMarksItsOwnSide(t *testing.T) {
+	t.Parallel()
+
+	baseline := reviewed("review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)
+	shadowed := reviewed("review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true)
+	comparer := Comparer{Reviews: recordedReviews{
+		reviews: []runstate.BranchReview{baseline, shadowed},
+		// Only the shadow's log survives, which is the ordinary case when the
+		// verdict being measured against is months old.
+		prices: map[string]runstate.ReviewPrice{
+			shadowed.ReviewID: {ReviewID: shadowed.ReviewID, CostUSD: 0.40, Invocations: 1},
+		},
+	}}
+
+	report, err := comparer.Compare("")
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if report.Totals.UnpricedShadow != 0 {
+		t.Errorf("a priced shadow review was counted as unpriced: %#v", report.Totals)
+	}
+	if report.Totals.UnpricedBaseline != 1 {
+		t.Errorf("an unpriced baseline was not counted: %#v", report.Totals)
+	}
+	if report.Totals.ShadowCostUSD != 0.40 || report.Totals.BaselineCostUSD != 0 {
+		t.Errorf("costs = %#v", report.Totals)
 	}
 }
 

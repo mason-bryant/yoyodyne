@@ -131,8 +131,12 @@ func printComparisonTotals(writer io.Writer, totals shadow.Totals) {
 	fmt.Fprintf(writer, "\n%d comparison(s): the shadow reviewer missed %d of %d baseline finding(s) (%.0f%%) and raised %d of its own %d (%.0f%%)\n",
 		totals.Comparisons, totals.Missed, totals.Baseline, 100*totals.MissRate,
 		totals.ShadowOnly, totals.Shadow, 100*totals.ShadowOnlyRate)
+	// Each figure is marked from its own side's unpriced count: a lost baseline
+	// event log says nothing about what the shadow reviewer cost, and marking
+	// that figure as a floor would understate the number the comparison is read
+	// for.
 	fmt.Fprintf(writer, "baseline cost %s, shadow cost %s\n",
-		renderTotal(totals.BaselineCostUSD, totals.UnpricedSides), renderTotal(totals.ShadowCostUSD, totals.UnpricedSides))
+		renderTotal(totals.BaselineCostUSD, totals.UnpricedBaseline), renderTotal(totals.ShadowCostUSD, totals.UnpricedShadow))
 	fmt.Fprintln(writer, "a shadow-only finding is a candidate false positive rather than a proven one:")
 	fmt.Fprintln(writer, "the baseline reviewer is what this measures against, not what is true of the branch")
 }
