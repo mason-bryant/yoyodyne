@@ -1971,10 +1971,13 @@ refused once the budget it spends is gone, and the three do not share one — th
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 
-Recording a decision and carrying it out are two steps, and one of the six
-decisions has an action for the second: `yoyo triage rerun <run-id> --reason
-"<the recorded decision>"` starts a fresh run of the item whose stopped run the
-docket entry names. It is refused unless that run is terminally recorded with
+Recording a decision and carrying it out are two steps, and two of the six
+decisions have an action for the second. They are the two opposite answers to a
+run that stopped: `yoyo triage rerun` starts the item over, and `yoyo triage
+repair` continues the run that stopped on the change it already has.
+
+`yoyo triage rerun <run-id> --reason "<the recorded decision>"` starts a fresh
+run of the item whose stopped run the docket entry names. It is refused unless that run is terminally recorded with
 its blocker standing — read from the run's own record rather than from the
 docket entry — and one docketed stoppage is re-run once, whatever the item's
 budget still says. It is also refused unless a decision of the development
@@ -2044,12 +2047,56 @@ promotion of the run's own. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 
-The other five decisions still carry themselves out no further than the record:
-a repair grant is followed by `yoyo run <id>`, and nothing in the harness repeats
-a merge request the forge dropped. The budget is spent when the decision is
-recorded, which is the same order every counter here is written in — an attempt
-nobody took rather than one nobody counted — so a decision nobody acts on has
-still cost the item its budget.
+`yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
+half of the same pair, and it starts nothing over. It re-enters the stopped run's
+own repair loop: the same branch, the same worktree, the same developer session,
+and the reviewer's findings handed back exactly as they were written.
+
+**What it may hand the run is the grant the development manager already
+recorded**, and it spends nothing of its own. Deciding `repair` is what takes the
+item's grant — `repair_grant_attempts` rounds, truncated there to what the round
+cap had room for — so this reads that record for how many attempts it is worth
+and hands the run exactly that. An item nobody granted a repair is one nobody
+decided this about, and it is refused; so is an item whose grant the harness has
+already carried out, which it counts from the continuations the item's runs
+record. Past the once-per-item cap a second is an escalation rather than a larger
+budget, and an item with no rounds left never gets a grant to carry out at all.
+
+Three more things refuse it. The stopped run has to be really over, terminal with
+its blocker standing, read from the run's own record rather than from the docket
+entry. The run has to have recorded a repair input — a run whose provider kept
+refusing, or whose replay conflicted, never had a failure returned to its
+developer, so there is no repair loop to re-enter. And the preserved worktree has
+to be as the harness left it: what a continued developer is handed back is
+whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
+agent that committed — is a person's to decide about, and the refusal leaves the
+item blocked and says so. The intake hold applies for the reason it applies to a
+re-run: this spends on a provider, and the development manager naming the item is
+not the operator naming it.
+
+**A repair supersedes the blocker rather than needing somebody to remember to.**
+The run that stopped blocked its item and recorded the blocker on its own state,
+which `yoyo status`, `yoyo reconcile`, and the docket all read as the fact that
+it has stopped. So re-entry clears both at the moment it happens: the item is put
+back with the decision recorded on it first, and the run's blocker is cleared onto
+the continuation that supersedes it, which keeps the words it was recorded in and
+the grant that bought the attempt. The order is the item first, because a run
+recorded as running behind an item that still says it is blocked is the one
+half-finished state nothing else here would notice, and every refusal is asked
+before either write, so a refused re-entry leaves the grant exactly where it was.
+
+The continuations are recorded on the run itself, under `repair_continuations` in
+its state file, and they are what the continued run's repair loop adds to
+`execution.repair_attempts_before_replan` to know what it may spend. They are
+also how the harness knows what a grant has already bought: summed across an
+item's runs, they are what a second re-entry is refused against.
+
+The other four decisions still carry themselves out no further than the record:
+nothing in the harness repeats a merge request the forge dropped, and a re-scope,
+a wait, and an escalation ask for no action at all. The budget is spent when the
+decision is recorded, which is the same order every counter here is written in —
+an attempt nobody took rather than one nobody counted — so a decision nobody acts
+on has still cost the item its budget.
 
 `stuck_merge_age` is how long an approved publication may sit unmerged before it
 is docketed. It is an age rather than a deadline because what makes a
@@ -2147,7 +2194,7 @@ Which threshold refuses which action:
 
 | Action | Refused by |
 | --- | --- |
-| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for |
+| another repair grant | one per item, and `triage.review_rounds_cap`, truncated to the rounds it still has room for — one precondition among several: the decision recorded here spends the budget, and `yoyo triage repair` re-enters the stopped run's repair loop on it, which is a claim the harness makes rather than the operator, so `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the run is continued and the reasoning recorded in the run's durable state. That action is bounded again by what the grant has already bought, read back from the continuations the item's runs record, and it refuses a preserved worktree that is not as the harness left it |
 | another whole run of the item | one per item, and `triage.review_rounds_cap`, refused outright once none remain — one precondition among several: the invariant `selected-work-passes-intake-and-records-why` also requires the intake hold consulted before the claim and the selection reason recorded in the run's durable state. The decision recorded here spends the budget; `yoyo triage rerun` starts the run and carries both, is bounded again by one re-run per docketed stoppage, and reads this counter back — against the re-runs already claimed for the item — as the proof that a decision is there to carry out |
 | re-arming a merge the forge dropped | `execution.integration_retries_before_reconciliation` — one precondition among several: a re-arm is an integration retry against the target branch, so `one-promotion-per-target-branch` binds the re-arm action (unbuilt today), which must repeat only the identical already-authorized forge request under the harness's own lease. The decision recorded here spends the per-item integration-retry budget as shipped; the design's once-per-publication counter arrives with the re-arm action, and performing the re-arm is that action's |
 

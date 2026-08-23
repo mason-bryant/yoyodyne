@@ -38,7 +38,12 @@ treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
 `execution.repair_attempts_before_replan` attempts, before the run gives up and
-records a blocker.
+records a blocker. That budget is not always the last word: a development
+manager who decides the change is worth another go can hand the item a grant of
+further attempts, and [`yoyo triage
+repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
+run's repair loop on the change it already has rather than starting the item
+over.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

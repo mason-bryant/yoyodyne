@@ -48,7 +48,11 @@ import (
 // needed to name the work in words meant. The account the run ran under and the
 // configuration revision in force are the two newest, and they behave the same
 // way: absent means nothing recorded which account or which configuration, which
-// is what every run written before either was carried meant.
+// is what every run written before either was carried meant. The grants of
+// further repair attempts triage has continued a stopped run on are the newest
+// and behave identically: absent means nothing ever continued this run, which is
+// what every run written before triage could meant, and the configured budget is
+// then the whole of what bounded its repairs.
 const StateSchemaVersion = 1
 
 // The shape of the two things a run records about how it was configured. They
@@ -420,6 +424,64 @@ func (d DirectivePause) Validate() error {
 	return errors.Join(problems...)
 }
 
+// MaxRepairContinuations bounds how many granted continuations one run's record
+// may carry. What actually bounds them is the item's per-item grant cap, which
+// refuses long before this; this is the record's own bound, so a budget somebody
+// configured absurdly cannot grow a state file without limit.
+const MaxRepairContinuations = 16
+
+// RepairContinuation is one carried-out repair grant that re-entered this run's
+// repair loop after it had already stopped. It is the run's half of a triage
+// decision the item's durable counters record the other half of: the counters
+// say what the development manager granted the item and whether the round cap
+// cut it, and this says what was actually done with that grant here — how many
+// attempts this run may now make, and the reasoning the harness was given when
+// it was asked to continue.
+//
+// The blocker it superseded travels with it. Re-entry clears the run's standing
+// blocker, because a run that is going again has not stopped and the docket,
+// `yoyo status`, and reconciliation all read that field as the fact that it has;
+// keeping the words here is what stops the clearing losing the evidence of what
+// the run was stopped for.
+type RepairContinuation struct {
+	// GrantedAttempts is what this continuation added to the run's repair budget,
+	// out of the rounds the item's record says triage granted it. Summed across
+	// every run of one item it is what says how much of that grant has been
+	// carried out, which is what stops one decision being acted on twice.
+	GrantedAttempts int `json:"granted_attempts"`
+	// Reason is the development manager's triage reasoning as the harness was
+	// given it, which is why this run is going again. A continuation nobody can
+	// account for is exactly the work that looks like it is happening behind
+	// somebody's back.
+	Reason      string    `json:"reason"`
+	ContinuedAt time.Time `json:"continued_at"`
+	// SupersededBlocker is the durable blocker this re-entry cleared, in the
+	// words it was recorded in. It is absent only on a re-entry of a run that
+	// carried none, which nothing here produces.
+	SupersededBlocker string `json:"superseded_blocker,omitempty"`
+}
+
+// Validate reports every contract violation in the recorded continuation at once.
+func (c RepairContinuation) Validate() error {
+	var problems []error
+	if c.GrantedAttempts < 1 {
+		problems = append(problems, errors.New("a continuation grants at least one repair attempt"))
+	}
+	if strings.TrimSpace(c.Reason) == "" {
+		problems = append(problems, errors.New("the triage reasoning this run was continued on is required"))
+	}
+	if len(c.Reason) > MaxSelectionReasonBytes {
+		problems = append(problems, fmt.Errorf("reason is %d bytes, which exceeds the %d byte bound", len(c.Reason), MaxSelectionReasonBytes))
+	}
+	if c.ContinuedAt.IsZero() {
+		problems = append(problems, errors.New("continued_at is required"))
+	}
+	if len(c.SupersededBlocker) > MaxBlockerBytes {
+		problems = append(problems, fmt.Errorf("superseded_blocker is %d bytes, which exceeds the %d byte bound", len(c.SupersededBlocker), MaxBlockerBytes))
+	}
+	return errors.Join(problems...)
+}
+
 // Integration is the durable evidence of a completed promotion: exactly which
 // commit the harness created and which commit the target moved from and to.
 type Integration struct {
@@ -558,6 +620,13 @@ type State struct {
 	// starts, so an interrupted run resumes at the attempt it reached and a
 	// restart cannot buy the run a fresh budget.
 	RepairAttempts int `json:"repair_attempts,omitempty"`
+	// RepairContinuations are the grants of further repair attempts triage has
+	// used to re-enter this run's repair loop after it stopped. They add to the
+	// configured budget rather than replacing it, so the count above stays what it
+	// always was — every attempt this run has handed back — and what bounds it is
+	// read from the two together. Absent is every run nothing continued, which is
+	// all of them until triage does.
+	RepairContinuations []RepairContinuation `json:"repair_continuations,omitempty"`
 	// IntegrationRetries counts the promotions this run has re-prepared after
 	// losing a race for its target branch: the change replayed onto where the
 	// target went, re-checked, and re-reviewed. It is recorded before the retry
@@ -838,6 +907,14 @@ func (s State) Validate() error {
 	if s.RepairAttempts < 0 {
 		problems = append(problems, errors.New("repair_attempts cannot be negative"))
 	}
+	if len(s.RepairContinuations) > MaxRepairContinuations {
+		problems = append(problems, fmt.Errorf("%d repair continuations are recorded, which exceeds the bound of %d", len(s.RepairContinuations), MaxRepairContinuations))
+	}
+	for index, continuation := range s.RepairContinuations {
+		if err := continuation.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("repair_continuations[%d]: %w", index, err))
+		}
+	}
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
 	}
@@ -998,6 +1075,29 @@ func (s State) Validate() error {
 // measured against.
 func (s State) UsageLimitPaused() time.Duration {
 	return time.Duration(s.UsageLimitPausedSeconds) * time.Second
+}
+
+// GrantedRepairAttempts is how many further repair attempts triage has granted
+// this run across every continuation of it.
+func (s State) GrantedRepairAttempts() int {
+	granted := 0
+	for _, continuation := range s.RepairContinuations {
+		granted += continuation.GrantedAttempts
+	}
+	return granted
+}
+
+// RepairBudget is how many repair attempts this run may make in total: what the
+// project configured, plus what triage has granted it since. It is derived here
+// rather than at each reader because the two have to agree — the loop that stops
+// spending and the prompt that tells a developer which attempt of how many this
+// is are the same budget said twice, and a budget that read differently in the
+// two would hand back an attempt describing itself as the last.
+func (s State) RepairBudget(configured int) int {
+	if configured < 0 {
+		configured = 0
+	}
+	return configured + s.GrantedRepairAttempts()
 }
 
 // OperatorHeld reports how much of this run's elapsed time the operator's hold
