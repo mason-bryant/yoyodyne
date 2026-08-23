@@ -610,9 +610,17 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// say the work by.
 		WorkItemTitle: item.Title,
 		Backend:       domain.BackendClaudeCode,
-		Status:        runstate.StatusPending,
-		StartedAt:     now,
-		UpdatedAt:     now,
+		// Which account this run spends and which configuration set it up are
+		// written with the run for the reason the title is: this is where the
+		// answer is in hand. Everything that reads the record afterwards reads only
+		// the record, and neither can be recovered from it later — a configuration
+		// is edited, and an account nobody recorded is an account nobody can bill
+		// the run to.
+		AccountAlias:   p.Config.AccountAlias(),
+		ConfigRevision: p.Config.Revision(),
+		Status:         runstate.StatusPending,
+		StartedAt:      now,
+		UpdatedAt:      now,
 	}
 	// Why this item was chosen is written with the run and never rewritten. A
 	// caller that said nothing records nothing, which is reported afterwards as a
@@ -709,6 +717,18 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	invariants, err := p.loadInvariants()
 	if err != nil {
 		return Outcome{}, err
+	}
+	// A run reserved before either was recorded acquires them as it is picked up,
+	// which is the best either can be: the account is the one this process is
+	// about to spend, and the configuration is the one the rest of the run is
+	// carried out under. A record that already names them keeps what it names —
+	// re-stamping would quietly replace evidence about the run with a reading of
+	// the file as it stands now.
+	if state.AccountAlias == "" {
+		state.AccountAlias = p.Config.AccountAlias()
+	}
+	if state.ConfigRevision == "" {
+		state.ConfigRevision = p.Config.Revision()
 	}
 	run := &activeRun{
 		pipeline:   p,

@@ -425,6 +425,13 @@ type Detail struct {
 	// exactly what carrying the reason exists to make visible.
 	SelectedBy      string `json:"selected_by,omitempty"`
 	SelectionReason string `json:"selection_reason,omitempty"`
+	// Account and Configuration are which provider account a run is spending and
+	// which configuration set it up, read by KindRunStarted. They are said where
+	// the thread opens because they hold for the whole of a run, and they are said
+	// at all because there is one account today and the message that names it is
+	// the one an operator will read on the day there are two.
+	Account       string `json:"account,omitempty"`
+	Configuration string `json:"configuration,omitempty"`
 	// Command and ExitCode are the failing deterministic check, read by
 	// KindChecksFailed. They are the check's own words rather than a summary of
 	// them.
