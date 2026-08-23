@@ -288,6 +288,53 @@ verdict, a review that never answered, a change too large to be seen in full. Th
 findings are then work, and admitting work to the backlog is the product
 manager's.
 
+### Measuring the reviewer against itself
+
+A branch review is a replayable function of a branch state: the same commits over
+the same base, described the same way, judged under the same contract. That is
+what makes a *shadow* review possible — the same review, made to measure the
+reviewer rather than to judge the branch:
+
+```sh
+./bin/yoyo review --shadow --model sonnet --base main --branch milestone
+./bin/yoyo review --compare                   # what the collected ones amount to
+```
+
+A shadow verdict approves nothing, whatever it decided, and that is enforced in
+the record rather than remembered by whoever reads it: the durable review is
+marked, and `Approved` answers no for a shadow verdict exactly as it does for a
+repair one. That is what makes the measurement free of risk — a cheaper reviewer
+pointed at a branch cannot leave an approval of it behind. `--model` is refused
+without `--shadow` for the same reason: a review whose reviewer was chosen at a
+terminal rather than by the configuration is a measurement and only ever that.
+Because it decides nothing about the branch, a shadow review exits on the
+question it was actually asked — whether it produced a verdict — so a shadow
+`repair` verdict is a successful measurement rather than a failure.
+
+To measure against a verdict that has already been given, point a local branch at
+the commit that verdict was given on and shadow-review that: two reviews are
+comparable only when they were shown the same branch at the same base and head
+commit, which is what `--compare` pairs them by. Where no branch review of that
+state exists yet, an ordinary `yoyo review` of it is what makes the baseline —
+the configured reviewer, judging the same evidence, before anything shadows it.
+
+`--compare` reads what was recorded and invokes nothing. For each shadow review
+it reports, per severity, how many of the baseline reviewer's findings the shadow
+also anchored to, how many it missed, and how many it raised alone, with what
+each of the two reviews cost beside it. Findings are paired by the file each
+anchors to, which is the only thing two reviewers reliably agree on — they will
+differ on the line and always on the wording — so a finding that names no file
+cannot be paired at all, and the count of those is reported rather than folded
+silently into the miss rate. Every finding is listed under its comparison for the
+same reason: whether a missed finding was a local, mechanical catch or one that
+only exists in the accumulated shape of the branch is a judgement about its
+content, and the numbers cannot make it. A finding only the shadow raised is a
+candidate false positive rather than a proven one — what this measures against is
+the other reviewer, not what is true of the branch.
+
+A shadow review costs money like any other provider invocation, and is priced
+like one: it appears in the harness's totals rather than quietly beside them.
+
 ## Publishing, and the merge that follows it
 
 Runs are local until a project sets `approvals.publishing` to `automatic`. With
