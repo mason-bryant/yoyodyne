@@ -205,9 +205,9 @@ the role is allowed to do. The set of role names is fixed for the same reason â€
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name â€” so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](../configuration.md#what-fails-closed). The conversation
-guide's [Talking to the other agents](../conversation.md#talking-to-the-other-agents)
-states the table itself.
+[refused when the configuration loads](../configuration.md#what-fails-closed). The README's
+[Talking to the other agents](../../README.md#talking-to-the-other-agents) states
+the table itself.
 
 ## Discovery
 
