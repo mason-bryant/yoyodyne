@@ -696,3 +696,135 @@ func TestGitHubMergeStillReportsAnUnavailableSettingWhenSomethingIsWaiting(t *te
 		t.Errorf("pr merge calls = %v, want no second merge attempt when something is waiting", merges)
 	}
 }
+
+// A publication whose work landed by another vehicle is closed with that
+// vehicle named. The comment is the whole point of closing it here rather than
+// by hand: a pull request closed by a machine with no account of why is the same
+// unexplained state as one left open.
+func TestGitHubCloseRetiresASupersededRequestWithItsComment(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":44,"url":"https://example.invalid/pull/44","state":"OPEN","mergedAt":""}]`,
+	})
+	runner.reply("pr close", execution.ProcessResult{Status: execution.ProcessSucceeded})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	comment := "superseded by pull request #46"
+	closure, err := forge.Close(context.Background(), CloseRequest{Head: "yoyodyne/task/abcd1234", Number: 44, Comment: comment})
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if !closure.Closed || closure.State != "CLOSED" {
+		t.Fatalf("Close() = %#v, want the request closed", closure)
+	}
+	closes := runner.matching("pr close")
+	if len(closes) != 1 {
+		t.Fatalf("pr close calls = %v, want exactly one", closes)
+	}
+	for _, expected := range []string{"44", "--comment", comment, "--repo", "https://example.invalid/acme/thing"} {
+		if !contains(closes[0], expected) {
+			t.Errorf("pr close args = %v, missing %q", closes[0], expected)
+		}
+	}
+	// The branch is the harness's own compare-and-swap deletion, not the forge's:
+	// asking the forge for it would delete a branch somebody else had moved.
+	if contains(closes[0], "--delete-branch") {
+		t.Errorf("pr close args = %v, want the branch left to the harness's own deletion", closes[0])
+	}
+}
+
+// The sweep that closes these repeats on every `yoyo reconcile`, so a request
+// somebody has already closed — by hand, or by an earlier sweep whose record of
+// it never reached disk — must not collect a second comment.
+func TestGitHubCloseLeavesAnAlreadyClosedRequestAlone(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":44,"url":"https://example.invalid/pull/44","state":"CLOSED","mergedAt":""}]`,
+	})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	closure, err := forge.Close(context.Background(), CloseRequest{Head: "yoyodyne/task/abcd1234", Number: 44, Comment: "superseded"})
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if closure.Closed || closure.State != "CLOSED" {
+		t.Fatalf("Close() = %#v, want the request reported as it stands rather than closed again", closure)
+	}
+	if closes := runner.matching("pr close"); len(closes) != 0 {
+		t.Fatalf("pr close calls = %v, want none for a request already closed", closes)
+	}
+}
+
+// A merged request is the one thing this must never touch. Closing it would be a
+// claim about where the work is that the merge has already answered, so the
+// merge is reported back and the caller decides what to make of the record that
+// said otherwise.
+func TestGitHubCloseRefusesToRetireAMergedRequest(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":44,"url":"https://example.invalid/pull/44","state":"MERGED","mergedAt":"2026-08-18T00:00:00Z"}]`,
+	})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	closure, err := forge.Close(context.Background(), CloseRequest{Head: "yoyodyne/task/abcd1234", Number: 44, Comment: "superseded"})
+	if err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if closure.Closed || !closure.Merged {
+		t.Fatalf("Close() = %#v, want the merge reported and nothing closed", closure)
+	}
+	if closes := runner.matching("pr close"); len(closes) != 0 {
+		t.Fatalf("pr close calls = %v, want none for a merged request", closes)
+	}
+}
+
+// The number and the branch have to still describe one request. A number that
+// has stopped naming this branch's request is a record that drifted, and acting
+// on it would close somebody else's pull request.
+func TestGitHubCloseRefusesANumberThatIsNotTheBranchesRequest(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":51,"url":"https://example.invalid/pull/51","state":"OPEN","mergedAt":""}]`,
+	})
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+
+	_, err := forge.Close(context.Background(), CloseRequest{Head: "yoyodyne/task/abcd1234", Number: 44, Comment: "superseded"})
+	if err == nil || !strings.Contains(err.Error(), "carries pull request 51") {
+		t.Fatalf("Close() drifted error = %v", err)
+	}
+	if closes := runner.matching("pr close"); len(closes) != 0 {
+		t.Fatalf("pr close calls = %v, want none when the record and the forge disagree", closes)
+	}
+}
+
+// A close with nothing to say is refused before it reaches the CLI, because a
+// request closed without a comment is exactly the unexplained state this exists
+// to end.
+func TestGitHubCloseRequiresAComment(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	forge := GitHub{Runner: runner, Dir: t.TempDir()}
+	if _, err := forge.Close(context.Background(), CloseRequest{Head: "yoyodyne/task/abcd1234", Number: 44}); err == nil || !strings.Contains(err.Error(), "comment naming where its work landed") {
+		t.Fatalf("Close() commentless error = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("a refused close still ran commands: %v", runner.commands)
+	}
+}

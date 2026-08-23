@@ -85,6 +85,14 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			failed = true
 		}
 	}
+	// A publication left open is a false signal on the forge rather than
+	// something at risk, but it is exactly the state this sweep exists to end, so
+	// a sweep that could not end it reports failure like the rest.
+	for _, publication := range convergence.Publications {
+		if publication.Failure != "" {
+			failed = true
+		}
+	}
 	if jsonOutput {
 		output := reconcileOutput{Runs: results, Convergence: convergence, Docketed: docketed}
 		if results == nil {
@@ -95,6 +103,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		if output.Convergence.Branches == nil {
 			output.Convergence.Branches = []orchestrator.BranchSweep{}
+		}
+		if output.Convergence.Publications == nil {
+			output.Convergence.Publications = []orchestrator.PublicationSweep{}
 		}
 		if err != nil {
 			output.Error = err.Error()
@@ -174,6 +185,27 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 			fmt.Fprintf(stdout, "%s removed: %s is already in %s\n", branch.Branch, branch.Commit, branch.TargetBranch)
 		}
 	}
+	// A pull request somebody else had already closed says nothing here, for the
+	// reason a branch already gone does: it is the status quo, and this sweep
+	// only reports what it changed and what it could not do.
+	for _, publication := range convergence.Publications {
+		switch {
+		case publication.Failure != "":
+			fmt.Fprintf(stderr, "pull request #%d not closed: %s\n", publication.Number, publication.Failure)
+		case publication.Closed:
+			fmt.Fprintf(stdout, "pull request #%d closed: %s superseded it\n", publication.Number, publication.SupersededBy.Vehicle())
+		}
+		// The worktree is reported apart from the request, because it is on this
+		// machine rather than on the forge and because one can be dealt with while
+		// the other is not. A worktree kept says why: it is the reason the branch
+		// under it survives the branch sweep too.
+		switch {
+		case publication.Worktree.Removed:
+			fmt.Fprintf(stdout, "released the worktree run %s kept: %s\n", publication.RunID, publication.Worktree.Path)
+		case publication.Worktree.Kept != "":
+			fmt.Fprintf(stderr, "worktree of run %s kept: %s\n", publication.RunID, publication.Worktree.Kept)
+		}
+	}
 }
 
 func printReconcileUsage(writer io.Writer) {
@@ -183,6 +215,13 @@ Settles every run an interrupted process left outstanding, then converges local
 state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
+
+It also retires the runs whose work landed by another vehicle — a relaunch after
+a killed run, the loser of a duplicate selection. Each one's pull request is
+closed with a comment naming the pull request or commit the work actually landed
+by, the branch it published is deleted, and the worktree it kept is released so
+nothing holds its branch. A request that merged is never touched, and a worktree
+holding uncommitted work is kept with the reason.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

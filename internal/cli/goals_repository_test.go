@@ -92,6 +92,23 @@ func TestThisRepositoryOwnGoalsResolveAsAttributions(t *testing.T) {
 	}
 }
 
+// TestThisRepositoryOwnGoalsAreEachWrittenOnOneLine is the lint itself, run over
+// the documents it is for. A wrapped goal is recorded whole — that is what
+// closed the silent truncation the class is named for — so nothing fails until
+// somebody reads the report, and reading a report by eye is exactly how six
+// items stayed orphaned once already. Failing here is what makes the convention
+// hold: the words an attribution has to match are then what the goals file says
+// outright, rather than what rejoining the wrap produced.
+func TestThisRepositoryOwnGoalsAreEachWrittenOnOneLine(t *testing.T) {
+	t.Parallel()
+
+	for _, problem := range repositoryGoals(t).WrapProblems {
+		// Reported one at a time, because what somebody has to open is one place in
+		// one file and a tally sends them looking for it.
+		t.Errorf("a goal in this repository is not written on one line: %s", problem)
+	}
+}
+
 // repositoryGoals collects the goals from this repository as the harness reads
 // them, through the configuration rather than a guessed set of artifact homes:
 // a test that hardcoded the directories would keep passing after the project

@@ -637,6 +637,46 @@ type fakeForge struct {
 	// lagging the merge it just performed.
 	openReplies int
 	stateCalls  int
+	// closable is the pull requests this forge holds beyond the one it issues for
+	// the run, keyed by the branch that carries each. It is how a test gives the
+	// forge an earlier run's publication, which is what a superseded one is.
+	closable map[string]publish.PullRequest
+	// closed is what this forge was asked to close, comments and all, which is
+	// what a test reads to see whether a superseded request was told where its
+	// work went.
+	closed   []publish.CloseRequest
+	closeErr error
+}
+
+// Close retires a request the forge holds, the way the adapter does: an open one
+// is closed once and a closed one is reported as it stands, so a sweep that
+// repeats leaves one comment rather than one per pass.
+func (f *fakeForge) Close(_ context.Context, request publish.CloseRequest) (publish.Closure, error) {
+	if f.closeErr != nil {
+		return publish.Closure{}, f.closeErr
+	}
+	existing, known := f.closable[request.Head]
+	if !known {
+		return publish.Closure{}, fmt.Errorf("no pull request exists for branch %s", request.Head)
+	}
+	if existing.Merged || !strings.EqualFold(existing.State, "OPEN") {
+		return publish.Closure{State: existing.State, Merged: existing.Merged}, nil
+	}
+	f.closed = append(f.closed, request)
+	existing.State = "CLOSED"
+	f.closable[request.Head] = existing
+	return publish.Closure{Closed: true, State: "CLOSED"}, nil
+}
+
+// holds gives the forge an open pull request on a branch some earlier run
+// published, which is what a superseded publication looks like from here.
+func (f *fakeForge) holds(branch string, number int) publish.PullRequest {
+	if f.closable == nil {
+		f.closable = map[string]publish.PullRequest{}
+	}
+	held := publish.PullRequest{Number: number, URL: fmt.Sprintf("https://example.invalid/pull/%d", number), State: "OPEN"}
+	f.closable[branch] = held
+	return held
 }
 
 func (f *fakeForge) Availability(context.Context) (publish.Availability, error) {

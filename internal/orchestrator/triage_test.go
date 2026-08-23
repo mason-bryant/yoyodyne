@@ -423,6 +423,21 @@ func TestAPublicationIsDocketedOnceItIsStuckAndNotBefore(t *testing.T) {
 			wantEntry: false,
 		},
 		{
+			// A publication the harness closed as superseded is dealt with. It is
+			// unmerged and always will be, so without this it would age into the
+			// docket forever and send somebody to a closed pull request.
+			name: "a publication retired as superseded",
+			state: func() runstate.State {
+				state := publishedState(3 * time.Hour)
+				retired := *state.PullRequest
+				retired.State = "CLOSED"
+				retired.Superseded = "pull request #46, which the forge merged for run run-fedcba9876543210fedcba9876543210"
+				state.PullRequest = &retired
+				return state
+			},
+			wantEntry: false,
+		},
+		{
 			name: "a run that is still working on its own publication",
 			state: func() runstate.State {
 				state := publishedState(3 * time.Hour)

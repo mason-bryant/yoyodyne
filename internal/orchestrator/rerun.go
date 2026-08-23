@@ -165,9 +165,14 @@ type RerunItems interface {
 // optional: an action wired without one starts exactly the same run and records
 // the preserved artifacts as kept, which is what they are.
 //
+// The remote branch is the third artifact and is retired the same way and at the
+// same moment, which is why it is on the same interface: what the stopped run
+// published is as superseded as what it kept locally.
+//
 // It is satisfied by gitworktree.Manager.
 type PreservedRetirer interface {
 	RetirePreserved(ctx context.Context, worktree gitworktree.Worktree, targetBranch string) (gitworktree.Retirement, error)
+	SupersededBranches
 }
 
 // Rerunner starts a fresh run of an item triage decided to run again. It reads
@@ -196,8 +201,17 @@ type Rerunner struct {
 	// Preserved retires the stopped run's branch and worktree once the fresh run
 	// integrates. Optional; see PreservedRetirer.
 	Preserved PreservedRetirer
-	Start     Starter
-	Clock     execution.Clock
+	// Publications closes the pull request the stopped run left open, at the same
+	// moment and for the same reason: the fresh run has integrated, so that
+	// request carries work that has landed by another vehicle and will never
+	// merge. Optional — a project that does not publish has none, and an action
+	// wired without one leaves the request to the convergence sweep, which finds
+	// it either way. It is wired because the sweep is not continuous, and the
+	// close-by-hand practice this replaced missed four such requests inside six
+	// hours of heavy triage.
+	Publications SupersededPublications
+	Start        Starter
+	Clock        execution.Clock
 }
 
 // RerunRequest is one decision to carry out: the run the docket entry names, and
@@ -231,6 +245,11 @@ type RerunResult struct {
 	Outcome      Outcome                 `json:"outcome"`
 	// Preserved is what the stopped run left behind and what became of it.
 	Preserved runstate.PreservedArtifacts `json:"preserved"`
+	// Publication is the pull request the stopped run left open and what became
+	// of it, present only where there was one to retire. It is beside Preserved
+	// rather than part of it because it is the one artifact that is not in this
+	// repository: a reader acting on it goes to the forge.
+	Publication *PublicationRetirement `json:"publication,omitempty"`
 	// RecordProblem names a durable record this action could not update after the
 	// run. The run happened either way, so it is reported beside the result rather
 	// than in place of it — but a disposition nobody wrote down is exactly the
@@ -361,7 +380,14 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 // counted against, so a re-run of something nothing docketed would be a re-run
 // nothing bounds.
 func (r Rerunner) entry(priorRunID string) (triage.Entry, error) {
-	entries, err := r.Docket.List()
+	return docketedStoppage(r.Docket, priorRunID, "run again")
+}
+
+// docketedStoppage finds the docketed stoppage of one run, for whichever action
+// is about to act on it. act names what the caller would do, so a refusal reads
+// as the thing that was refused rather than as a lookup that came back empty.
+func docketedStoppage(docket RerunDocket, priorRunID, act string) (triage.Entry, error) {
+	entries, err := docket.List()
 	if err != nil {
 		return triage.Entry{}, fmt.Errorf("read the triage docket: %w", err)
 	}
@@ -370,7 +396,7 @@ func (r Rerunner) entry(priorRunID string) (triage.Entry, error) {
 			return candidate, nil
 		}
 	}
-	return triage.Entry{}, fmt.Errorf("no stopped run of %s is on the triage docket, so there is no stoppage to run again", priorRunID)
+	return triage.Entry{}, fmt.Errorf("no stopped run of %s is on the triage docket, so there is no stoppage to %s", priorRunID, act)
 }
 
 // stoppageIsOver reports the run's own record proving the stoppage is terminal
@@ -471,7 +497,14 @@ func (r Rerunner) itemCanBeRun(ctx context.Context, workItemID string) error {
 // asked before anything is claimed, so a collision costs the stoppage's re-run
 // nothing.
 func (r Rerunner) noRunInFlight(workItemID string) error {
-	incomplete, err := r.Runs.Incomplete()
+	return noRunInFlight(r.Runs, workItemID)
+}
+
+// noRunInFlight is the same rule for every triage action that would put a
+// developer on an item: an item something is already running is not work that
+// has stopped, whatever the docket entry said when it was written.
+func noRunInFlight(runs RerunRuns, workItemID string) error {
+	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return fmt.Errorf("read what is already in flight: %w", err)
 	}
@@ -499,12 +532,20 @@ func (r Rerunner) noRunInFlight(workItemID string) error {
 // runs in flight, so what is read here and what would refuse the fresh run are
 // one fact rather than two.
 func (r Rerunner) slotIsFree() (runstate.CapacityError, bool, error) {
-	incomplete, err := r.Runs.Incomplete()
+	return slotIsFree(r.Runs, r.Capacity)
+}
+
+// slotIsFree counts the runs in flight against the configured limit, the same
+// way and from the same records the reservation does, so what a triage action
+// reads before it spends anything and what would refuse the run it starts are
+// one fact rather than two.
+func slotIsFree(runs RerunRuns, capacity int) (runstate.CapacityError, bool, error) {
+	incomplete, err := runs.Incomplete()
 	if err != nil {
 		return runstate.CapacityError{}, false, fmt.Errorf("read what is already in flight: %w", err)
 	}
-	if len(incomplete) >= r.Capacity {
-		return runstate.CapacityError{Limit: r.Capacity, Active: len(incomplete)}, false, nil
+	if len(incomplete) >= capacity {
+		return runstate.CapacityError{Limit: capacity, Active: len(incomplete)}, false, nil
 	}
 	return runstate.CapacityError{}, true, nil
 }
@@ -550,9 +591,14 @@ func (r Rerunner) withdraw(ctx context.Context, entry triage.Entry, capacity run
 // orphan nobody discovers.
 func (r Rerunner) settle(ctx context.Context, entry triage.Entry, prior runstate.State, outcome Outcome, result *RerunResult) runstate.PreservedArtifacts {
 	preserved := preservedOf(prior)
-	if preserved.Disposition == runstate.PreservedKept && outcome.Integration != nil {
+	// The fresh run having integrated is what retires everything the stopped run
+	// left: what it kept in this repository, and the pull request it published.
+	// So the vehicle the work landed by is read from the same outcome that
+	// decides there is anything to retire at all.
+	by := supersessionOfOutcome(outcome)
+	if by.Landed() && (preserved.Disposition == runstate.PreservedKept || retirablePublication(prior)) {
 		var problem string
-		preserved, problem = r.retire(ctx, prior, outcome.RunID, preserved)
+		preserved, problem = r.retire(ctx, prior, by, preserved, result)
 		result.note(problem)
 	}
 	settled, err := r.Reruns.Settle(ctx, entry.Key, outcome.RunID, preserved)
@@ -579,19 +625,30 @@ func (result *RerunResult) note(problem string) {
 	}
 }
 
-// retire removes what the stopped run preserved, now that the fresh run has
-// integrated the work, and reports the disposition beside any record it could
-// not update. Nothing here fails the re-run: the work landed, and an artifact
-// that has to be looked at by hand is a fact to record rather than a reason to
-// report a successful run as a failure.
+// retire removes what the stopped run left behind, now that the fresh run has
+// integrated the work: the worktree and branch it kept in this repository, and
+// the pull request it published that nothing will ever merge. It reports the
+// disposition of the local artifacts beside any record it could not update.
+// Nothing here fails the re-run: the work landed, and an artifact that has to be
+// looked at by hand is a fact to record rather than a reason to report a
+// successful run as a failure.
 //
 // It is done under the stopped run's own lease, taken and released here. That is
-// what makes the removal and the record of it one act: the state the flags are
-// written onto is the state read under the lease, so a sweep settling the same
-// run beside this cannot lose either half.
-func (r Rerunner) retire(ctx context.Context, prior runstate.State, freshRunID string, preserved runstate.PreservedArtifacts) (runstate.PreservedArtifacts, string) {
+// what makes the removals and the record of them one act: the state the flags
+// are written onto is the state read under the lease, so a sweep settling the
+// same run beside this cannot lose any of it.
+func (r Rerunner) retire(ctx context.Context, prior runstate.State, by Supersession, preserved runstate.PreservedArtifacts, result *RerunResult) (runstate.PreservedArtifacts, string) {
+	// Nothing is wired to remove anything, and this is reachable for a run that
+	// preserved nothing locally and still holds an open publication, so what is
+	// reported has to name what actually survived rather than only the local
+	// artifacts. A publication left open here is said out loud for the reason one
+	// left open below is: the convergence sweep will close it, and until it does
+	// the forge shows work as pending that is not.
 	if r.Preserved == nil {
-		preserved.Problem = "nothing is wired to retire what the stopped run preserved, so it is still there"
+		if preserved.Disposition == runstate.PreservedKept {
+			preserved.Problem = "nothing is wired to retire what the stopped run preserved, so it is still there"
+		}
+		r.notePublicationLeftOpen(prior, by, "nothing is wired to delete the branch it published", result)
 		return preserved, ""
 	}
 	stopped, lease, err := r.Runs.AdoptRun(ctx, prior.RunID)
@@ -599,16 +656,29 @@ func (r Rerunner) retire(ctx context.Context, prior runstate.State, freshRunID s
 		// Somebody else owns the stopped run, or its record could not be read.
 		// Either way nothing is removed: an artifact retired without its record
 		// being writable is exactly the stale record this took the lease to avoid.
-		preserved.Problem = fmt.Sprintf("what run %s preserved was left where it is, because its record could not be taken to write the removal onto: %v", prior.RunID, err)
+		if preserved.Disposition == runstate.PreservedKept {
+			preserved.Problem = fmt.Sprintf("what run %s preserved was left where it is, because its record could not be taken to write the removal onto: %v", prior.RunID, err)
+		}
+		r.notePublicationLeftOpen(prior, by, fmt.Sprintf("its record could not be taken to write the closure onto: %v", err), result)
 		return preserved, ""
 	}
 	defer lease.Release()
+
+	// The publication goes first, and independently of what is on disk: a pull
+	// request nothing will ever merge is left open by the same omission whether
+	// or not the branch beneath it turns out to be removable.
+	retiredPublication := r.retirePublication(ctx, &stopped, by, result)
+	// Nothing local survives to retire, so the record of the publication is the
+	// whole of what this had to write.
+	if preserved.Disposition != runstate.PreservedKept {
+		return preserved, r.recordRemoval(stopped, by.RunID, gitworktree.Retirement{}, retiredPublication)
+	}
 
 	retirement, retireErr := r.Preserved.RetirePreserved(ctx, worktreeOf(stopped), stopped.TargetBranch)
 	// What was removed is written onto the stopped run before anything else is
 	// decided, because that record is what every other reader in the harness asks
 	// whether these artifacts still exist.
-	recorded := r.recordRemoval(stopped, freshRunID, retirement)
+	recorded := r.recordRemoval(stopped, by.RunID, retirement, retiredPublication)
 	if retireErr == nil && retirement.Retired() {
 		retired := r.now()
 		preserved.Disposition = runstate.PreservedRetired
@@ -633,22 +703,67 @@ func (r Rerunner) retire(ctx context.Context, prior runstate.State, freshRunID s
 	return preserved, recorded
 }
 
-// recordRemoval marks the stopped run's own record with the artifacts this
-// retirement removed, and reports what stopped it where it could not.
+// retirePublication closes the pull request the stopped run left open and
+// deletes the branch it published, and reports whether the run's record now has
+// to say so. What it did goes on the result rather than into the preserved
+// artifacts, because this is the one artifact that is not in this repository: a
+// reader acting on it goes to the forge.
+//
+// It mutates the adopted state rather than saving it, so the close and the note
+// of it reach disk in the same write as the local removals beside them.
+func (r Rerunner) retirePublication(ctx context.Context, stopped *runstate.State, by Supersession, result *RerunResult) bool {
+	if !retirablePublication(*stopped) {
+		return false
+	}
+	if r.Publications == nil {
+		r.notePublicationLeftOpen(*stopped, by, "nothing is wired to close it", result)
+		return false
+	}
+	retirement := retirePublication(ctx, r.Publications, r.Preserved, *stopped, by)
+	result.Publication = &retirement
+	if retirement.Failure != "" {
+		result.note(retirement.Failure)
+		return false
+	}
+	published := *stopped.PullRequest
+	published.Superseded = by.Vehicle()
+	stopped.PullRequest = &published
+	return true
+}
+
+// notePublicationLeftOpen says that the stopped run's pull request is still
+// open and why, for each of the three ways retiring it can be skipped before
+// anything is attempted. It is one sentence in one place because the three are
+// the same fact to whoever reads the result: the forge is still showing this
+// run's work as pending, and the convergence sweep is what will fix it.
+//
+// A run that published nothing, or whose publication is already retired, says
+// nothing at all — there is no request to leave open.
+func (r Rerunner) notePublicationLeftOpen(stopped runstate.State, by Supersession, because string, result *RerunResult) {
+	if !retirablePublication(stopped) {
+		return
+	}
+	result.note(fmt.Sprintf(
+		"pull request %d, which run %s left open and run %s superseded, is still open because %s; it stays open until a convergence sweep closes it",
+		stopped.PullRequest.Number, stopped.RunID, by.RunID, because))
+}
+
+// recordRemoval marks the stopped run's own record with what this retirement
+// removed, and reports what stopped it where it could not.
 //
 // It is the record the rest of the harness reads: `yoyo status`, a docket entry
 // built later, and reconciliation all take these flags as the answer to whether
-// the branch and the worktree are still there. A removal that is not written back
-// leaves every one of them sending somebody after an artifact that is gone, which
-// is the same failure the disposition on the re-run's own record exists to
-// prevent, one reader further out.
+// the branch, the worktree and the publication are still there. A removal that is
+// not written back leaves every one of them sending somebody after an artifact
+// that is gone — or, for the publication, asking the forge about a request that
+// is already closed on every later sweep.
 //
 // A retirement that removed nothing writes nothing: this is called on every
-// retirement, including the ones that kept both artifacts.
-func (r Rerunner) recordRemoval(stopped runstate.State, freshRunID string, retirement gitworktree.Retirement) string {
+// retirement, including the ones that kept everything.
+func (r Rerunner) recordRemoval(stopped runstate.State, freshRunID string, retirement gitworktree.Retirement, publicationRetired bool) string {
 	worktreeGone := retirement.Worktree.Removed && !stopped.WorktreeRemoved
 	branchGone := retirement.Branch.Removed && !stopped.BranchRemoved
-	if !worktreeGone && !branchGone {
+	if !worktreeGone && !branchGone && !publicationRetired {
 		return ""
 	}
 	stopped.WorktreeRemoved = stopped.WorktreeRemoved || worktreeGone
@@ -656,14 +771,18 @@ func (r Rerunner) recordRemoval(stopped runstate.State, freshRunID string, retir
 	// A stopped run promoted nothing, so what earns the removal is the run that
 	// superseded it. Naming it is what keeps the record evidence rather than an
 	// assertion, and it is what the run state requires of a removal with no
-	// integration behind it.
-	stopped.ArtifactsRetiredBy = freshRunID
+	// integration behind it. A retired publication is deliberately not one of
+	// those removals: nothing in this repository was removed for it, and the
+	// vehicle that earned it is recorded on the publication itself.
+	if worktreeGone || branchGone {
+		stopped.ArtifactsRetiredBy = freshRunID
+	}
 	// When the run ended is what dates it; this dates the last thing the harness
 	// did to what it left behind, which is what UpdatedAt has always meant.
 	stopped.UpdatedAt = r.now()
 	if err := r.Runs.Save(stopped); err != nil {
 		return fmt.Sprintf(
-			"what run %s preserved was retired, and its own record still says otherwise, so anything reading that run will name artifacts that are gone: %v",
+			"what run %s left behind was retired, and its own record still says otherwise, so anything reading that run will name artifacts that are gone: %v",
 			stopped.RunID, err)
 	}
 	return ""
@@ -750,7 +869,7 @@ func (result RerunResult) Render() string {
 		if reason := strings.TrimSpace(result.IntakeHeld.Reason); reason != "" {
 			fmt.Fprintln(&rendered, reason)
 		}
-		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; release the hold and ask again\n", result.PriorRunID)
+		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; `yoyo release` lifts the hold, and asking again carries out the same decision\n", result.PriorRunID)
 		return rendered.String()
 	}
 	if result.CapacityFull != nil {
@@ -769,6 +888,12 @@ func (result RerunResult) Render() string {
 		fmt.Fprintf(&rendered, "fresh run: %s\n", result.Outcome.RunID)
 	}
 	rendered.WriteString(result.Preserved.Render())
+	// A publication is reported only where there was one to retire, and only
+	// what became of it: a line on every re-run of a project that does not
+	// publish would say nothing.
+	if result.Publication != nil && result.Publication.Closed {
+		fmt.Fprintf(&rendered, "closed pull request #%d as superseded, and deleted the branch it published\n", result.Publication.Number)
+	}
 	if result.RecordProblem != "" {
 		fmt.Fprintln(&rendered, result.RecordProblem)
 	}

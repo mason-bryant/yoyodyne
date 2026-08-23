@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 // The tracker statuses admitted work can be in. Open work is waiting to be
@@ -57,6 +58,12 @@ type Entry struct {
 	Title    string `json:"title"`
 	Priority int    `json:"priority"`
 	Status   string `json:"status"`
+	// Executor is what carries this item's execution where that is not a
+	// developer run, and is empty for the ordinary work that is. It is on the
+	// entry rather than left in the tracker because the queue is where anybody
+	// decides what to pull: an item nobody can run has to say so where the order
+	// is read, not only where the item is opened.
+	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
 	// Ready reports that nothing is holding this item back, which is what
 	// separates the next item to pull from the next item in the order.
 	Ready bool `json:"ready"`
@@ -96,6 +103,12 @@ type Queue struct {
 // work is done, so inferring the opposite from their presence would hold an item
 // back for a blocker that finished long ago. The tracker answers this from its
 // own dependency graph; this only asks.
+//
+// What the tracker is not asked is what could carry the work. An item whose
+// executor is a persona conversation is admitted work in the order like any
+// other and is never the next thing to pull, because there is no run that could
+// take it — and the tracker, which knows about dependencies and not about the
+// harness's roles, would report it as ready forever.
 func Order(items []beads.WorkItem, ready []string) Queue {
 	pullable := make(map[string]struct{}, len(ready))
 	for _, id := range ready {
@@ -120,12 +133,20 @@ func Order(items []beads.WorkItem, ready []string) Queue {
 	for position, item := range admitted {
 		_, reportedReady := pullable[item.ID]
 		queue.Entries = append(queue.Entries, Entry{
-			Position:  position + 1,
-			ID:        item.ID,
-			Title:     item.Title,
-			Priority:  item.Priority,
-			Status:    item.Status,
-			Ready:     reportedReady && item.Status == statusOpen,
+			Position: position + 1,
+			ID:       item.ID,
+			Title:    item.Title,
+			Priority: item.Priority,
+			Status:   item.Status,
+			Executor: item.Executor,
+			// An item whose execution is not a developer run is never the next thing
+			// to pull, however clean the tracker's answer about it is. That is a
+			// different axis from the readiness taken above rather than a second
+			// opinion on it: the tracker answers whether anything is waiting on
+			// anything, and it has never had an opinion about what could carry the
+			// work. Deciding it here is what keeps the answer the same everywhere the
+			// order is read, instead of one for each thing that reads it.
+			Ready:     reportedReady && item.Status == statusOpen && item.Executor.DeveloperRun(),
 			WaitingOn: waitingOn(item, unfinished),
 		})
 	}
@@ -197,16 +218,24 @@ func (q Queue) Render() string {
 		fmt.Fprintf(&rendered, "next to be pulled: %s\n", next.ID)
 		return rendered.String()
 	}
-	rendered.WriteString("nothing is ready to be pulled; every admitted item is waiting on something.\n")
+	rendered.WriteString("nothing is ready to be pulled; every admitted item is held back by something, and each entry above says by what.\n")
 	return rendered.String()
 }
 
-// hold says what is keeping an unready entry from being pulled. The three
-// answers are different things to act on: named work it waits for, a blocker
-// recorded on the item itself, and the tracker simply not offering it, which is
-// what a dependency the listing did not carry looks like from here.
+// hold says what is keeping an unready entry from being pulled. The four
+// answers are different things to act on: an executor no run can be, named work
+// it waits for, a blocker recorded on the item itself, and the tracker simply
+// not offering it, which is what a dependency the listing did not carry looks
+// like from here.
+//
+// The executor answers first because it is the only one of the four that is not
+// waiting for anything. The other three are an item that will be pulled once
+// something clears; this one never will be, and reading "waiting on" against it
+// would send somebody looking for the blocker to release.
 func (e Entry) hold() string {
 	switch {
+	case !e.Executor.DeveloperRun():
+		return fmt.Sprintf("its executor is %q rather than a developer run, so no run carries it out; the item says which conversation does", e.Executor)
 	case len(e.WaitingOn) > 0:
 		return "waiting on " + strings.Join(e.WaitingOn, ", ")
 	case e.Status == statusBlocked:

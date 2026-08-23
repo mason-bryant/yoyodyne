@@ -15,12 +15,15 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/contextbundle"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/invariant"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -147,6 +150,34 @@ func TestARunRecordsWhatTheItemIsCalled(t *testing.T) {
 	}
 	if state.WorkItemTitle != "Slack thread headers carry the item's title, not just its slug" {
 		t.Fatalf("recorded title = %q, want what the tracker called the item", state.WorkItemTitle)
+	}
+}
+
+// A run says which provider account it spent and which configuration set it up.
+// Both are read back from the record long after the configuration has been
+// edited and, one day, after there is more than one account to have spent: a run
+// that named neither could not be attributed to either afterwards.
+func TestARunRecordsTheAccountAndConfigurationItRanUnder(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.AccountAlias != pipeline.Config.AccountAlias() {
+		t.Fatalf("recorded account = %q, want the configured %q", state.AccountAlias, pipeline.Config.AccountAlias())
+	}
+	if state.ConfigRevision != pipeline.Config.Revision() {
+		t.Fatalf("recorded configuration = %q, want the revision in force %q", state.ConfigRevision, pipeline.Config.Revision())
 	}
 }
 
@@ -449,6 +480,49 @@ func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("blocked run created state: %#v", states)
+	}
+}
+
+// Naming an item runs it, whatever carries it. The executor marker steers what
+// the harness chooses for itself and never what the operator may ask for, which
+// is the same exemption the intake hold makes: naming an item is the operator
+// deciding it is the exception.
+//
+// It is asserted rather than left to the absence of a check, because the marker
+// withholds readiness in backlog.Order — shared state this path does not consult
+// today and could be made to consult by accident. If that ever changed, an
+// operator would be refused the one item they had deliberately reached for, and
+// the two documents that promise otherwise would be silently false.
+func TestPipelineRunsAConversationExecutedItemTheOperatorNamed(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	item := beads.WorkItem{
+		ID:       "yoyodyne-ifd.138",
+		Title:    "Promote the brief",
+		Status:   "open",
+		Executor: domain.WorkItemExecutorConversation,
+	}
+	tracker := &fakeTracker{item: item}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a named item to run whatever carries it", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || !tracker.claimed {
+		t.Fatalf("Run() outcome = %#v, claimed = %v, want the named run carried out", outcome, tracker.claimed)
+	}
+	if _, err := store.Load(outcome.RunID); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// The contrast, in one place: the same item the harness would never have
+	// chosen for itself.
+	queue := backlog.Order([]beads.WorkItem{item}, []string{item.ID})
+	if _, ok := queue.Next(); ok {
+		t.Fatal("the backlog offered an item no run carries, so the two paths no longer differ")
 	}
 }
 
@@ -791,6 +865,105 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 	if strings.Contains(plain, "# Architectural invariants") {
 		t.Errorf("a repository with no invariants produced an invariants section:\n%s", plain)
 	}
+}
+
+// TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic pins both
+// halves of yoyodyne-ifd.84. A provider only charges the cheaper cached rate for
+// a prefix it has seen byte for byte before, so the harness contract, the
+// configured persona, and the constraints that apply to every change have to
+// come before anything that varies with the work item. The other half is the
+// guard on that: a prompt whose prefix is stable because it stopped carrying the
+// item would be worse than an expensive one, so what is dynamic is required to
+// still be there.
+func TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic(t *testing.T) {
+	t.Parallel()
+
+	repository := t.TempDir()
+	persona := "# Developer persona\n\nPrefer the smallest change that satisfies the criteria.\n"
+	set := invariant.Set{
+		Directory: "docs/decisions/invariants",
+		Active: []invariant.Invariant{
+			{
+				ID: "harness-owns-git", Title: "Only the harness commits, pushes, and integrates",
+				EstablishedBy: []string{"yoyodyne-ifd.1"},
+				Statement:     "No agent commits, pushes, or merges; the harness does all three.",
+				Rationale:     "The roles that authorize an integration must not be able to perform one.",
+			},
+			{
+				ID: "one-writer-per-item", Title: "One process at a time acts on an in-flight work item",
+				Scope: []string{"internal/runstate"}, EstablishedBy: []string{"yoyodyne-ifd.2"},
+				Statement: "Every path into an in-flight run reserves it through the state store.",
+				Rationale: "The reservation is the only thing keeping two developers off one item.",
+			},
+		},
+	}
+	items := []beads.WorkItem{
+		{ID: "yoyodyne-prefix", Title: "Audit prompt assembly", Status: "in_progress",
+			Description: "Nothing volatile may precede the stable prefix."},
+		{ID: "yoyodyne-reserve", Title: "Reserve before work", Status: "open",
+			Description: "The claim happens in internal/runstate rather than in the caller."},
+	}
+
+	prompts := make([]string, 0, len(items))
+	for _, item := range items {
+		bundle, err := contextbundle.Assemble(contextbundle.Request{RepositoryRoot: repository, WorkItem: item})
+		if err != nil {
+			t.Fatalf("assemble the context for %s: %v", item.ID, err)
+		}
+		prompts = append(prompts, developerPrompt(persona, set.Select(workItemEvidence(item)...).Text(), bundle.Text))
+	}
+
+	shared := commonPrefix(prompts[0], prompts[1])
+	if !strings.HasPrefix(shared, developerContract) {
+		t.Fatalf("the harness contract is not on the shared prefix:\n%s", shared)
+	}
+	for _, want := range []string{
+		"Prefer the smallest change that satisfies the criteria.",
+		"# Architectural invariants",
+		// The constraint that binds every change, whole: its statement and the
+		// reasoning a developer is meant to weigh it by.
+		"## harness-owns-git: Only the harness commits, pushes, and integrates",
+		"No agent commits, pushes, or merges; the harness does all three.",
+		"The roles that authorize an integration must not be able to perform one.",
+	} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("the shared prefix is missing %q:\n%s", want, shared)
+		}
+	}
+	// Nothing that identifies one run or one item may sit in front of that, or
+	// none of it is shared at all.
+	for _, unwanted := range []string{"yoyodyne-prefix", "yoyodyne-reserve", "# Assigned work item", repository, pipelineRunID} {
+		if strings.Contains(shared, unwanted) {
+			t.Errorf("the shared prefix carries %q, which varies between runs:\n%s", unwanted, shared)
+		}
+	}
+
+	// The guard: a stable prefix must not have become a frozen prompt. Each
+	// prompt still carries its own work item, its description, and the invariants
+	// its own evidence selected.
+	for index, item := range items {
+		for _, want := range []string{"# Assigned work item", item.ID, item.Title, item.Description} {
+			if !strings.Contains(prompts[index], want) {
+				t.Errorf("the prompt for %s lost %q:\n%s", item.ID, want, prompts[index])
+			}
+		}
+	}
+	if strings.Contains(prompts[0], "one-writer-per-item") {
+		t.Errorf("an invariant scoped elsewhere reached the first prompt:\n%s", prompts[0])
+	}
+	if !strings.Contains(prompts[1], "one-writer-per-item") {
+		t.Errorf("the invariant the second item's evidence named did not reach it:\n%s", prompts[1])
+	}
+}
+
+// commonPrefix is the leading bytes two prompts share, which is the most a
+// provider's prefix cache can hold across both of them.
+func commonPrefix(first, second string) string {
+	shared := 0
+	for shared < len(first) && shared < len(second) && first[shared] == second[shared] {
+		shared++
+	}
+	return first[:shared]
 }
 
 func TestPipelineSkipsReviewAndIntegrationWhenChecksFail(t *testing.T) {
@@ -2559,6 +2732,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			ReviewRoundsCap:     4,
 			RepairGrantAttempts: 2,
 		},
+		Exchange: config.Exchange{MaxRounds: 10},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
 			WorkItems: domain.ApprovalHuman, Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,

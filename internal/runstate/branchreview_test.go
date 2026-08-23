@@ -184,3 +184,78 @@ func TestBranchReviewStoreRefusesWhatCannotDescribeAReview(t *testing.T) {
 		t.Fatalf("List() = %#v, %v", reviews, err)
 	}
 }
+
+// A shadow review is recorded in the same log as every other, because it is a
+// provider invocation that happened and cost money. What separates it is what
+// its verdict is allowed to mean, and that has to survive the round trip: the
+// record outlives the process that made it, and is what a later reader asks.
+func TestAShadowVerdictReadsBackAsApprovingNothing(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewBranchReviewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewBranchReviewStore() error = %v", err)
+	}
+	shadowed := newBranchReview()
+	shadowed.Shadow = true
+	shadowed.Model = "sonnet"
+	if shadowed.Approved() {
+		t.Fatal("a shadow verdict approved the branch before it was even recorded")
+	}
+	if err := store.Append(shadowed); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	reviews, err := store.List()
+	if err != nil || len(reviews) != 1 {
+		t.Fatalf("List() = %#v, %v", reviews, err)
+	}
+	if !reviews[0].Shadow || reviews[0].Decision != ReviewApprove {
+		t.Fatalf("recorded shadow review = %#v", reviews[0])
+	}
+	if reviews[0].Approved() {
+		t.Error("a recorded shadow verdict read back as an approval of the branch")
+	}
+}
+
+// A branch review belongs to no run, so what it cost is read from the event log
+// this store keeps rather than a run's. It is the same evidence and the same
+// answer to a review whose log is gone: unknown rather than free.
+func TestBranchReviewStorePricesAReviewFromItsOwnEventLog(t *testing.T) {
+	t.Parallel()
+
+	store, err := NewBranchReviewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewBranchReviewStore() error = %v", err)
+	}
+	if price := store.Price(branchReviewID); price.Known() {
+		t.Errorf("a review with no event log was priced: %#v", price)
+	}
+	for _, event := range []struct {
+		sequence  uint64
+		eventType execution.EventType
+		payload   any
+	}{
+		{1, execution.EventReviewStarted, map[string]any{"scope": "branch"}},
+		{2, execution.EventRunCompleted, map[string]any{"session_id": "review-session", "total_cost_usd": 1.25}},
+	} {
+		created, err := execution.NewEvent(branchReviewID, event.sequence, time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC), event.eventType, "claude-code", event.payload)
+		if err != nil {
+			t.Fatalf("NewEvent() error = %v", err)
+		}
+		if err := store.AppendEvent(created); err != nil {
+			t.Fatalf("AppendEvent() error = %v", err)
+		}
+	}
+	price := store.Price(branchReviewID)
+	if !price.Known() {
+		t.Fatalf("Price() = %#v", price)
+	}
+	if price.CostUSD != 1.25 || price.Invocations != 1 || price.ReviewID != branchReviewID {
+		t.Errorf("Price() = %#v", price)
+	}
+	// An identifier that is not a branch review's cannot reach a log here, so
+	// pricing cannot be aimed at a run's event stream.
+	if priced := store.Price("run-0123456789abcdef0123456789abcdef"); priced.Known() {
+		t.Errorf("Price() of a run id = %#v", priced)
+	}
+}

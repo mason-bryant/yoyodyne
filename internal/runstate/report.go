@@ -49,6 +49,12 @@ func (s *ReportStore) Root() string { return s.root }
 // actually are.
 func (s *ReportStore) Path() string { return filepath.Join(s.root, "reports.jsonl") }
 
+// HandlingPath names the log of what became of those reports. It is a second
+// file beside the first rather than a column in it, which is the whole shape of
+// this: the pile is written once by whoever noticed something and is never
+// rewritten, and a disposition recorded later must not be able to touch it.
+func (s *ReportStore) HandlingPath() string { return filepath.Join(s.root, "report-handlings.jsonl") }
+
 // Append records one report durably. It is an append rather than a rewrite for
 // the same reason the event logs are: a report is written once and never
 // revised, and two processes reporting at the same time must not overwrite each
@@ -61,37 +67,64 @@ func (s *ReportStore) Append(reported report.Report) error {
 	if err != nil {
 		return err
 	}
+	return s.appendLine(s.Path(), "report", encoded)
+}
+
+// Handle records what became of one report. It is an append to a second log
+// rather than a change to the first, so a report and the decision about it are
+// two facts recorded by two hands at two times, and reading the pile can never
+// be reading something somebody edited afterwards.
+//
+// Handling a report twice is not refused here. The store keeps both records and
+// the later one is what is read, which is what an append-only log is for: a
+// second decision about something is history worth having, not a write to
+// reject.
+func (s *ReportStore) Handle(handling report.Handling) error {
+	if err := s.validateHandling(handling); err != nil {
+		return err
+	}
+	encoded, err := encodeReportHandling(handling)
+	if err != nil {
+		return err
+	}
+	return s.appendLine(s.HandlingPath(), "report handling", encoded)
+}
+
+// appendLine writes one encoded record to one of the logs, durably. Both logs
+// are written exactly the same way and for the same reason — two processes
+// recording at once must not overwrite each other — so the writing is one piece
+// of code and what it is writing is a word in the failures.
+func (s *ReportStore) appendLine(path, what string, encoded []byte) error {
 	if len(encoded) > maxEncodedReportBytes {
-		return fmt.Errorf("encoded report is %d bytes, limit is %d", len(encoded), maxEncodedReportBytes)
+		return fmt.Errorf("encoded %s is %d bytes, limit is %d", what, len(encoded), maxEncodedReportBytes)
 	}
 	if err := os.MkdirAll(s.root, 0o700); err != nil {
 		return fmt.Errorf("create report directory: %w", err)
 	}
-	path := s.Path()
 	_, statErr := os.Stat(path)
 	created := errors.Is(statErr, os.ErrNotExist)
 	if statErr != nil && !created {
-		return fmt.Errorf("inspect report log: %w", statErr)
+		return fmt.Errorf("inspect %s log: %w", what, statErr)
 	}
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 	if err != nil {
-		return fmt.Errorf("open report log: %w", err)
+		return fmt.Errorf("open %s log: %w", what, err)
 	}
 	written, err := file.Write(encoded)
 	if err != nil {
 		file.Close()
-		return fmt.Errorf("append report: %w", err)
+		return fmt.Errorf("append %s: %w", what, err)
 	}
 	if written != len(encoded) {
 		file.Close()
-		return fmt.Errorf("append report: %w", io.ErrShortWrite)
+		return fmt.Errorf("append %s: %w", what, io.ErrShortWrite)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		return fmt.Errorf("sync report log: %w", err)
+		return fmt.Errorf("sync %s log: %w", what, err)
 	}
 	if err := file.Close(); err != nil {
-		return fmt.Errorf("close report log: %w", err)
+		return fmt.Errorf("close %s log: %w", what, err)
 	}
 	if created {
 		return syncDirectory(s.root)
@@ -135,6 +168,42 @@ func (s *ReportStore) List() ([]report.Report, error) {
 	return reports, nil
 }
 
+// Handlings returns every recorded disposition in the order it was recorded. A
+// log that does not exist yet is a pile nobody has worked through, which is not
+// a failure to read.
+func (s *ReportStore) Handlings() ([]report.Handling, error) {
+	file, err := os.Open(s.HandlingPath())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("open report handling log: %w", err)
+	}
+	defer file.Close()
+
+	var handlings []report.Handling
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 8*1024), maxEncodedReportBytes)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		var decoded report.Handling
+		if err := json.Unmarshal([]byte(line), &decoded); err != nil {
+			return nil, fmt.Errorf("decode report handling log: %w", err)
+		}
+		if err := s.validateHandling(decoded); err != nil {
+			return nil, fmt.Errorf("decode report handling log: %w", err)
+		}
+		handlings = append(handlings, decoded)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read report handling log: %w", err)
+	}
+	return handlings, nil
+}
+
 func decodeReport(data []byte) (report.Report, error) {
 	var decoded report.Report
 	if err := json.Unmarshal(data, &decoded); err != nil {
@@ -156,9 +225,26 @@ func encodeReport(reported report.Report) ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
+func encodeReportHandling(handling report.Handling) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(handling); err != nil {
+		return nil, fmt.Errorf("encode report handling: %w", err)
+	}
+	return buffer.Bytes(), nil
+}
+
 func (s *ReportStore) validate(reported report.Report) error {
 	if reported.ProductID != s.productID {
 		return fmt.Errorf("report product %q does not match store product %q", reported.ProductID, s.productID)
 	}
 	return reported.Validate()
+}
+
+func (s *ReportStore) validateHandling(handling report.Handling) error {
+	if handling.ProductID != s.productID {
+		return fmt.Errorf("report handling product %q does not match store product %q", handling.ProductID, s.productID)
+	}
+	return handling.Validate()
 }

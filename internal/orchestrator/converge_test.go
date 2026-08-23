@@ -1,11 +1,15 @@
 package orchestrator
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The seam the operator drew a line under: a merge the forge performs after its
@@ -260,5 +264,328 @@ func TestASettleThatCannotFinishThePublicationLeavesTheLocalBranchAlone(t *testi
 	}
 	if local := publishedCommit(t, fixture.repository, "main"); local != outcome.Integration.TargetCommit {
 		t.Errorf("local main = %q, want it still at the promoted commit %q", local, outcome.Integration.TargetCommit)
+	}
+}
+
+// The orphan the operator found, four times over: a run publishes a branch and
+// opens a pull request, dies, and the attempt that replaces it publishes a
+// different branch — the branch name carries the run — so nothing ever revisits
+// the first request. It sits open with a green build and no queued merge,
+// indistinguishable from pending work.
+//
+// The sweep closes it, names the vehicle the work actually landed by, and takes
+// the branch it published with it.
+func TestConvergeClosesThePublicationARelaunchSuperseded(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	landed := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+	if results := fixture.reconcile(t); len(results) != 1 || results[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation = %#v, want the landing run settled", results)
+	}
+	orphan := fixture.orphan(t, landed, 44)
+
+	convergence := fixture.converge(t)
+	if len(convergence.Publications) != 1 {
+		t.Fatalf("publications = %#v, want the superseded one swept", convergence.Publications)
+	}
+	swept := convergence.Publications[0]
+	if !swept.Closed || !swept.BranchDeleted || swept.Failure != "" {
+		t.Fatalf("sweep = %#v, want the request closed and its branch deleted", swept)
+	}
+	if swept.RunID != orphan.RunID || swept.Number != 44 {
+		t.Errorf("sweep = %#v, want run %s and pull request 44 named", swept, orphan.RunID)
+	}
+	if swept.SupersededBy.RunID != landed.RunID || swept.SupersededBy.Commit != landed.Integration.SourceCommit {
+		t.Errorf("superseded by = %#v, want the run that landed the work (%s)", swept.SupersededBy, landed.RunID)
+	}
+
+	// The comment is what makes the close readable by whoever opened the request.
+	if len(fixture.forge.closed) != 1 {
+		t.Fatalf("closed = %#v, want exactly one request closed", fixture.forge.closed)
+	}
+	comment := fixture.forge.closed[0].Comment
+	for _, expected := range []string{landed.RunID, landed.Integration.SourceCommit, orphan.RunID, "yoyodyne-task"} {
+		if !strings.Contains(comment, expected) {
+			t.Errorf("close comment does not name %q:\n%s", expected, comment)
+		}
+	}
+	// The branch the closed request carried is the other half of the orphan.
+	if commit := publishedCommit(t, fixture.remote, orphan.Branch); commit != "" {
+		t.Errorf("remote branch %s is still at %q, want it deleted with the request", orphan.Branch, commit)
+	}
+
+	// The worktree that run kept goes with the publication, and the branch it was
+	// holding is then removable — by the branch sweep of this same pass, which is
+	// the whole reason the worktrees are released before the branches are swept.
+	// Left held, that branch survives every sweep there will ever be.
+	if !swept.Worktree.Removed || swept.Worktree.Kept != "" {
+		t.Fatalf("worktree = %#v, want the checkout the superseded run kept released", swept.Worktree)
+	}
+	if _, err := os.Stat(orphan.WorktreePath); !os.IsNotExist(err) {
+		t.Errorf("worktree %s still exists (stat error = %v)", orphan.WorktreePath, err)
+	}
+	var branchSweep BranchSweep
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID == orphan.RunID {
+			branchSweep = candidate
+		}
+	}
+	if !branchSweep.Removed || branchSweep.Failure != "" {
+		t.Fatalf("branch sweep = %#v, want the released branch removed in the same pass", branchSweep)
+	}
+	if branch := strings.TrimSpace(gitOutput(t, fixture.repository, "for-each-ref", "--format=%(refname)", "refs/heads/"+orphan.Branch)); branch != "" {
+		t.Errorf("local branch %s survived the sweep", orphan.Branch)
+	}
+
+	// The run's own record says which vehicle retired it, which is what stops the
+	// next sweep asking the forge about a request it has already closed — and, for
+	// the worktree, what the run state requires of a removal with no promotion of
+	// its own behind it.
+	retired, err := fixture.store.Load(orphan.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(retired.PullRequest.Superseded, landed.RunID) {
+		t.Errorf("recorded supersession = %q, want the vehicle that landed the work named", retired.PullRequest.Superseded)
+	}
+	if !retired.WorktreeRemoved || retired.ArtifactsRetiredBy != landed.RunID {
+		t.Errorf("retired record = worktree_removed %t, artifacts_retired_by %q, want the release recorded against the run that landed the work",
+			retired.WorktreeRemoved, retired.ArtifactsRetiredBy)
+	}
+	repeated := fixture.converge(t)
+	if len(repeated.Publications) != 0 {
+		t.Fatalf("second convergence = %#v, want nothing left to retire", repeated.Publications)
+	}
+	if len(fixture.forge.closed) != 1 {
+		t.Errorf("closed = %#v after a second sweep, want one comment rather than one per pass", fixture.forge.closed)
+	}
+}
+
+// The publication of a run that *did* integrate is the opposite case and belongs
+// to a person: the forge dropped a merge it had queued, something the base
+// branch required went unmet, and the harness does not merge past a requirement.
+// Closing it would retire a publication that is genuinely outstanding.
+func TestConvergeLeavesThePublicationOfAnIntegratedRunAlone(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	fixture.run(t)
+	fixture.forge.dropQueuedMerge()
+	if results := fixture.reconcile(t); len(results) != 1 {
+		t.Fatalf("reconciliation = %#v, want the dropped merge settled", results)
+	}
+
+	convergence := fixture.converge(t)
+	if len(convergence.Publications) != 0 {
+		t.Fatalf("publications = %#v, want an outstanding publication left for a person", convergence.Publications)
+	}
+	if len(fixture.forge.closed) != 0 {
+		t.Fatalf("closed = %#v, want nothing closed", fixture.forge.closed)
+	}
+}
+
+// An item worked, closed, reopened and worked again has two runs and only the
+// second one's open request is pending — the landing came first. Nothing about
+// the first run supersedes it, so the ordering is part of the evidence rather
+// than an assumption that the failed run must be the older one.
+func TestConvergeLeavesAPublicationOpenedAfterTheLandingAlone(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	landed := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+	if results := fixture.reconcile(t); len(results) != 1 || results[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation = %#v, want the landing run settled", results)
+	}
+	// The same orphan, except that it began after the landing run had finished.
+	fixture.orphanStarted(t, landed, 44, time.Now().UTC().Add(time.Hour))
+
+	convergence := fixture.converge(t)
+	if len(convergence.Publications) != 0 {
+		t.Fatalf("publications = %#v, want a request that postdates the landing left alone", convergence.Publications)
+	}
+	if len(fixture.forge.closed) != 0 {
+		t.Fatalf("closed = %#v, want nothing closed", fixture.forge.closed)
+	}
+}
+
+// orphan records the run a relaunch left behind: an earlier attempt at the same
+// item that published a branch and opened a pull request, and then died without
+// integrating anything.
+func (f queuedFixture) orphan(t *testing.T, landed Outcome, number int) runstate.State {
+	t.Helper()
+	return f.orphanStarted(t, landed, number, time.Now().UTC().Add(-2*time.Hour))
+}
+
+// orphanStarted is the same run with its start stated, because when the dead run
+// began relative to the landing is part of what says its publication is
+// superseded rather than pending.
+func (f queuedFixture) orphanStarted(t *testing.T, landed Outcome, number int, started time.Time) runstate.State {
+	t.Helper()
+	const runID = "run-11112222333344445555666677778888"
+	branch := "yoyodyne/yoyodyne-task/11112222"
+	// The branch sits on the remote exactly as publishing left it, which is what
+	// the deletion is a compare-and-swap against.
+	runPipelineGit(t, f.repository, "push", "origin", landed.BaseCommit+":refs/heads/"+branch)
+	head := publishedCommit(t, f.remote, branch)
+	// Locally the run left the pair the operator found: the branch, and a worktree
+	// still checked out on it. The checkout is what makes the branch unremovable
+	// until something releases it, which is the whole of why it survived.
+	// The manager owns a resolved path, and on a machine where the worktree root
+	// sits under a symlinked temporary directory an unresolved one is a different
+	// path to it — which the ownership check refuses rather than acts on.
+	root, err := filepath.EvalSymlinks(f.worktreeRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	worktreePath := filepath.Join(root, "yoyodyne-task-11112222")
+	runPipelineGit(t, f.repository, "branch", branch, landed.BaseCommit)
+	runPipelineGit(t, f.repository, "worktree", "add", worktreePath, branch)
+	completed := started.Add(time.Minute)
+	state := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    f.tracker.item.ID,
+		WorkItemTitle: f.tracker.item.Title,
+		Backend:       "claude-code",
+		Status:        runstate.StatusFailed,
+		Phase:         runstate.PhaseDeveloping,
+		StartedAt:     started,
+		UpdatedAt:     completed,
+		CompletedAt:   &completed,
+		WorktreePath:  worktreePath,
+		Branch:        branch,
+		BaseCommit:    landed.BaseCommit,
+		TargetBranch:  "main",
+		Failure:       "the process was killed before the change was judged",
+		PullRequest: &runstate.PullRequest{
+			Remote:     "origin",
+			Branch:     branch,
+			Number:     number,
+			URL:        fmt.Sprintf("https://example.invalid/pull/%d", number),
+			HeadCommit: head,
+			State:      "OPEN",
+		},
+	}
+	if err := f.store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	f.forge.holds(branch, number)
+	return state
+}
+
+// The state the two SIGTERM leftovers are actually in: a superseded run whose
+// branch carries commits no promotion ever took. Releasing the worktree is still
+// right — what it was being kept for is over — but the branch itself is kept,
+// because once the remote branch has gone it is the only copy of that work left,
+// and deleting it is a person's decision rather than a sweep's.
+//
+// What the release buys is that the branch sweep now says so. Held by a
+// checkout, it could not even look.
+func TestConvergeReleasesTheWorktreeAndKeepsABranchNothingPromoted(t *testing.T) {
+	t.Parallel()
+
+	fixture := newQueuedFixture(t)
+	landed := fixture.run(t)
+	fixture.forge.performQueuedMerge(t)
+	if results := fixture.reconcile(t); len(results) != 1 || results[0].Action != ActionCompleted {
+		t.Fatalf("reconciliation = %#v, want the landing run settled", results)
+	}
+	orphan := fixture.orphan(t, landed, 44)
+	// The dead run's own work, committed on its branch and promoted by nothing.
+	if err := os.WriteFile(filepath.Join(orphan.WorktreePath, "unpromoted.txt"), []byte("never reviewed\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, orphan.WorktreePath, "add", "-A")
+	runPipelineGit(t, orphan.WorktreePath, "commit", "-m", "work no promotion took")
+
+	convergence := fixture.converge(t)
+	if len(convergence.Publications) != 1 || !convergence.Publications[0].Closed {
+		t.Fatalf("publications = %#v, want the request closed", convergence.Publications)
+	}
+	if !convergence.Publications[0].Worktree.Removed {
+		t.Fatalf("worktree = %#v, want it released even though its branch has to stay", convergence.Publications[0].Worktree)
+	}
+	var branchSweep BranchSweep
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID == orphan.RunID {
+			branchSweep = candidate
+		}
+	}
+	if branchSweep.Removed || branchSweep.Kept == "" {
+		t.Fatalf("branch sweep = %#v, want the branch kept with the reason", branchSweep)
+	}
+	// The reason has to be the work, not the checkout: a checkout is what it would
+	// have said before the release, and it would have been sending somebody after
+	// a directory that is gone.
+	if strings.Contains(branchSweep.Kept, "worktree") || strings.Contains(branchSweep.Kept, "checked out") {
+		t.Errorf("branch kept for %q, want the unpromoted work rather than a checkout that has been released", branchSweep.Kept)
+	}
+	if commit := publishedCommit(t, fixture.repository, orphan.Branch); commit == "" {
+		t.Errorf("local branch %s was deleted, want the only copy of unpromoted work kept", orphan.Branch)
+	}
+}
+
+// An item can be landed twice — worked, closed, reopened, worked again — and
+// which landing is named decides whether a later run's orphan is seen at all.
+// The ordering rule refuses a publication opened after the landing, so naming
+// the earlier of the two would refuse an orphan the later one genuinely
+// supersedes. The records are ordered so that the earlier landing is the one a
+// sweep reads first, which is exactly the case that would go wrong.
+func TestSupersededPublicationsNamesTheLatestLandingOfAnItem(t *testing.T) {
+	t.Parallel()
+
+	at := func(offset time.Duration) time.Time {
+		return time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC).Add(offset)
+	}
+	ended := func(state runstate.State, when time.Time) runstate.State {
+		state.UpdatedAt = when
+		state.CompletedAt = &when
+		return state
+	}
+	landing := func(runID string, when time.Time) runstate.State {
+		return ended(runstate.State{
+			RunID:      runID,
+			WorkItemID: "yoyodyne-task",
+			Status:     runstate.StatusSucceeded,
+			StartedAt:  when.Add(-time.Hour),
+			Integration: &runstate.Integration{
+				TargetBranch: "main",
+				SourceCommit: strings.Repeat(runID[len(runID)-1:], 40),
+				TargetCommit: strings.Repeat(runID[len(runID)-1:], 40),
+			},
+		}, when)
+	}
+	// Sorted by run identifier, which is the order Recorded() reports: the first
+	// landing is read before the orphan and before the landing that supersedes it.
+	recorded := []runstate.State{
+		landing("run-aaa1", at(0)),
+		ended(runstate.State{
+			RunID:      "run-bbb2",
+			WorkItemID: "yoyodyne-task",
+			Status:     runstate.StatusFailed,
+			StartedAt:  at(time.Hour),
+			Branch:     "yoyodyne/yoyodyne-task/bbb2",
+			PullRequest: &runstate.PullRequest{
+				Remote: "origin", Branch: "yoyodyne/yoyodyne-task/bbb2", Number: 77,
+				URL: "https://example.invalid/pull/77", HeadCommit: strings.Repeat("b", 40), State: "OPEN",
+			},
+		}, at(2*time.Hour)),
+		landing("run-ccc3", at(3*time.Hour)),
+	}
+
+	superseded := supersededPublications(recorded)
+	if len(superseded) != 1 {
+		t.Fatalf("superseded = %#v, want the orphan between the two landings selected", superseded)
+	}
+	if superseded[0].state.RunID != "run-bbb2" {
+		t.Fatalf("selected run = %q, want the orphan", superseded[0].state.RunID)
+	}
+	if superseded[0].by.RunID != "run-ccc3" {
+		t.Errorf("vehicle = %q, want the latest landing rather than whichever was read first", superseded[0].by.RunID)
 	}
 }

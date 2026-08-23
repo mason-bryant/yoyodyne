@@ -29,6 +29,13 @@ type ReconcileWorktrees interface {
 	CleanupIntegrated(ctx context.Context, request gitworktree.CleanupRequest) (gitworktree.Cleanup, error)
 	ConfirmRemoteTarget(ctx context.Context, integration gitworktree.Integration) (string, error)
 	DeleteRemoteBranch(ctx context.Context, worktree gitworktree.Worktree, commit string) error
+	// RemovePreservedWorktree releases the checkout a superseded run kept. It is
+	// the one removal here that is not about a ref, and it removes only what it
+	// can prove is the harness's own and holds nothing: a directory Git does not
+	// manage, a registration on some other branch, or uncommitted work is kept
+	// with the reason instead. Releasing it is also what unblocks the branch
+	// sweep, which refuses a branch a checkout still holds.
+	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.WorktreeRemoval, error)
 	// The two writes convergence needs, and the only ones here that move a ref.
 	// Both are fast-forward-or-nothing and both refuse on the evidence rather
 	// than on a record: a target branch is only ever advanced onto a remote
@@ -39,12 +46,18 @@ type ReconcileWorktrees interface {
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
-// forge now says about a pull request whose merge it queued. It can only ask,
-// never merge, and that is the point — a queued merge the forge dropped means a
+// forge now says about a pull request whose merge it queued, and the closing of
+// one whose work landed by another vehicle. It can ask and it can close, never
+// merge, and that is the point — a queued merge the forge dropped means a
 // requirement went unmet, and satisfying it is a person's work rather than
 // something a sweep should force.
+//
+// Closing is the one write, and it is the opposite of forcing anything: it
+// retires a request that will never merge, which is a fact the harness's own
+// promotion record already settles. See supersession.go for what earns it.
 type ReconcilePullRequests interface {
 	State(ctx context.Context, head string) (publish.PullRequest, error)
+	SupersededPublications
 }
 
 // ReconcileStore is the durable run state reconciliation reads and settles.

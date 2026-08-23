@@ -84,7 +84,7 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	// selector the record names: a persona must not narrate a selection it never
 	// made.
 	if started {
-		say(KindRunStarted, report.SeverityNote, selectionSpeaker(after.Selection), selectionDetail(after.Selection))
+		say(KindRunStarted, report.SeverityNote, selectionSpeaker(after.Selection), startedDetail(after))
 	}
 	if parked(before) && !parked(after) && !after.Status.Terminal() {
 		say(KindRunContinued, report.SeverityNote, Harness(), Detail{})
@@ -383,14 +383,12 @@ func HoldLifted(at time.Time) Notification {
 	return productNotification(KindHoldLifted, at, Detail{})
 }
 
-// Nothing here selects KindExchangeTurn or KindExchangeClosed, and so nothing
-// ever addresses a topic to an exchange. That is deliberate and it is not
-// finished work: ask exchanges are yoyodyne-ifd.99's, and they are the recorded
-// second consumer of this interface rather than a producer that exists now. The
-// envelope, the addressing, and every persona's line for both kinds are here so
-// that arriving later costs that work a selection function and nothing else —
-// but until it lands, an exchange thread is a path this package can describe and
-// cannot yet reach, and it should not be read as behaviour already delivered.
+// KindExchangeTurn and KindExchangeClosed are selected in conversation.go rather
+// than here, because an ask exchange is something a conversation did and this
+// file reads runs. That is where the prediction this file used to carry came
+// out: the envelope, the addressing, and every persona's line for both kinds
+// were written before the channel existed, and the channel arriving cost one
+// selection function and nothing in the sink, the threading, or the envelope.
 
 func productNotification(kind Kind, at time.Time, detail Detail) Notification {
 	return Notification{
@@ -439,6 +437,18 @@ func selectionDetail(selection *runstate.Selection) Detail {
 		return Detail{}
 	}
 	return Detail{SelectedBy: selection.By, SelectionReason: selection.Reason}
+}
+
+// startedDetail is what a run's opening message says about it: why it is
+// running, and what it is running as. The account and the configuration are said
+// once, where the thread opens, rather than on every crossing after it — they
+// are fixed for the life of a run, and a fact repeated on every message is one
+// nobody reads on the message where it changed.
+func startedDetail(after runstate.State) Detail {
+	detail := selectionDetail(after.Selection)
+	detail.Account = after.AccountAlias
+	detail.Configuration = after.ConfigRevision
+	return detail
 }
 
 // checksBehind reports a run with the deterministic checks behind it: the record
