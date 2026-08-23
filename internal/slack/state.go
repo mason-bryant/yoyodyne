@@ -87,10 +87,12 @@ type Thread struct {
 	Channel  string    `json:"channel"`
 	ThreadTS string    `json:"thread_ts"`
 	OpenedAt time.Time `json:"opened_at"`
-	// Status is the status this thread's opening message is currently marked
-	// with, which is remembered for one reason: it is what says which mark to
-	// take off when the item moves. Reading it back from the workspace would be a
-	// call per thread per pass to learn something the sink itself put there.
+	// Status is the status this thread's opening message was last marked with. It
+	// is remembered for one reason — so a pass that finds nothing has moved does
+	// nothing — and it is deliberately not treated as evidence of which symbol is
+	// on the message: a sink killed between the workspace taking a mark and this
+	// being written would make it a lie, so what replaces a mark sweeps the whole
+	// vocabulary rather than trusting this to name what is there.
 	//
 	// It is an added field rather than a new schema version because a map written
 	// before there were status marks is a correct map of unmarked threads: absent
