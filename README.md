@@ -3384,6 +3384,10 @@ slack:
   channel: C0123456789
 ```
 
+`yoyo init` already wrote that block into the file, commented out and pointing at
+the setup recipe, so opting in is deleting the comment markers and naming your
+own channel.
+
 ```sh
 export SLACK_BOT_TOKEN=xoxb-...   # this process's environment, and nowhere else
 export SLACK_APP_TOKEN=xapp-...
