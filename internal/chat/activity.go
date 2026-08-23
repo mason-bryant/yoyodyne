@@ -24,6 +24,7 @@ const (
 	phaseWriting   = "writing the reply"
 	phaseTracker   = "carrying out the tracker actions it asked for"
 	phaseExchange  = "putting its question to the other role"
+	phaseResearch  = "gathering evidence from the sources it named"
 	phaseRecording = "recording the turn"
 )
 

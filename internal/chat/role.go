@@ -54,6 +54,22 @@ type Authority struct {
 	// proposing. Both belong to the role that decides what is admitted.
 	Proposals bool
 	Concerns  bool
+	// Research is whether this role may have the harness gather evidence from
+	// outside the repository on its behalf, and Evaluations whether it may record
+	// a durable recommendation about an idea. Both belong to the role the
+	// operator brings an idea to, which is the product manager: an evaluation is
+	// a judgement about product intent, and research that nothing evaluates is a
+	// bill with no answer at the end of it.
+	//
+	// They are two flags rather than one because they are two capabilities and
+	// keeping them apart is the point. Research reaches outside this machine and
+	// decides nothing; recording an evaluation decides nothing either but is
+	// authority over what the product's own record says it was advised. A role
+	// that could do the first without the second, or the second without the
+	// first, is a coherent thing to configure — and neither of them is authority
+	// to admit work or change a document, which stays where it already is.
+	Research    bool
+	Evaluations bool
 	// Asks is whether this role is on the inter-role ask channel — both ends of
 	// it, because the two are the same judgement: a role worth asking for an
 	// opinion is one whose own opinion is worth asking for. It is not the
@@ -87,9 +103,11 @@ var authorities = map[domain.AgentRole]Authority{
 			actionReparent, actionReprioritize, actionLink, actionUnlink,
 			actionClose, actionRetire, actionHandle,
 		},
-		Proposals: true,
-		Concerns:  true,
-		Asks:      true,
+		Proposals:   true,
+		Concerns:    true,
+		Research:    true,
+		Evaluations: true,
+		Asks:        true,
 	},
 	domain.RoleArchitect: {
 		Role:           domain.RoleArchitect,
@@ -201,6 +219,20 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Role:    authority.Role,
 			Refused: "a concern to be put to the operator",
 			Reason:  "stopping work over a goal belongs to the product manager, and this role raises what it found in prose instead",
+		}
+	}
+	if len(parsed.Queries) > 0 && !authority.Research {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "evidence to be gathered from outside the repository",
+			Reason:  "research is the product manager's, and this role reasons over the evidence it was given",
+		}
+	}
+	if parsed.Evaluation != nil && !authority.Evaluations {
+		return &AuthorityError{
+			Role:    authority.Role,
+			Refused: "an evaluation to be recorded",
+			Reason:  "judging an idea the operator brought is the product manager's, and this role says what it thinks in prose instead",
 		}
 	}
 	// An ask is refused above the tracker rather than beside it, because it is

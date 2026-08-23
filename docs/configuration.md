@@ -2006,6 +2006,66 @@ allowed, however many exchanges it spreads them over. That bounds a reply
 opening thread after thread, which is a different question from how long one
 thread may run.
 
+## Research sources
+
+The product manager can have the harness find something out for it, so an idea
+you bring it is evaluated against evidence rather than against what a model
+remembers. **The capability is off until you name a source**, and a project that
+names none has a product manager that says it could not check rather than
+answering from memory as though it had.
+
+```yaml
+research:
+  max_queries_per_turn: 4    # how many questions one reply may set off
+  timeout: 60s               # how long one source has to answer
+  sources:
+    - name: web              # what the role names, and what every record cites
+      command: my-search     # run with the question on standard input
+      describes: public web search, no login
+```
+
+**A source is a command you wrote.** The harness runs it with the question on
+standard input and reads its standard output as the evidence — nothing else is
+passed, and the question is never part of a command line the shell parses. That
+is the same arrangement `checks` uses, and for the same reason: what the harness
+may run is a thing you write down in the file you write everything else in, so
+what it can reach is exactly what you named. There is no built-in provider and no
+default source, deliberately. A conversational role reaching the network is
+something you turn on, not something you acquire by extending a bundle or
+upgrading the executable.
+
+**The role still has no network.** It names a question and one of these sources;
+it does not choose what runs, where the command reaches, or how often. Only the
+question leaves your machine, redacted with the same values every other
+provider-facing path is redacted with and bounded at 512 bytes — generous for a
+sentence somebody would type into a search box, and far too small to carry a
+document out inside one. Which sources exist is delivered to the role with each
+turn rather than written into its contract, so a source you add or remove is in
+force on the next thing you say.
+
+**What comes back is untrusted.** It is delivered framed as evidence about the
+world and never as instruction, exactly as your repository documents and your
+work items already are, and it is bounded at 4KB per answer with any cut
+declared. A source that fails, times out, or answers with nothing produces a
+finding that says so rather than silence — a role that gets silence for an answer
+concludes there was nothing to find, which is the one conclusion it must never
+draw from a source that broke. Every question and what it returned is printed to
+you as it happens.
+
+**The bounds are yours and the protocol has its own.** `max_queries_per_turn`
+narrows how many questions one reply may ask and cannot widen it past four, which
+is what the block itself permits; `timeout` is per question. Both take a harness
+default when you leave them out, so naming a source is enough to have the
+capability rather than something you configure twice. Zero is a choice for each —
+it takes the default — and a negative number is refused. One further bound is the
+harness's rather than yours: one thing you say sets off at most two rounds of
+gathering, so a message cannot spend itself searching its way around a question.
+
+What the product manager does with the evidence is an evaluation, which is
+advice and nothing else: recording one admits no work, changes no document, and
+approves nothing. That path, and how to read the evaluations back, is described
+in [the conversation guide](conversation.md#bringing-it-an-idea-rather-than-a-work-item).
+
 ## Triage thresholds
 
 Triage is what looks at work that has stopped moving. Its numbers are

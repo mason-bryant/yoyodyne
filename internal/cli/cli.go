@@ -50,6 +50,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runArtifact(args[1:], stdout, stderr)
 	case "amendment":
 		return runAmendment(args[1:], stdout, stderr)
+	case "evaluation":
+		return runEvaluation(args[1:], stdout, stderr)
 	case "goals":
 		return runGoals(ctx, args[1:], stdout, stderr)
 	case "stale":
@@ -348,6 +350,7 @@ Commands:
   config show       print the effective configuration and value origins
   artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
+  evaluation        read what the product manager made of the ideas you brought it
   goals             read the recorded goals and what work serves, and witness it
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
