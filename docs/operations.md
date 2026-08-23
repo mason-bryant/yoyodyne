@@ -25,7 +25,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](../skills/yoyo-setup/SKILL.md) has your own agent session act on rather
+than parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about

@@ -236,6 +236,16 @@ never consent to alter the machine. `yoyo setup --yes --json` is what carries a
 walk out with nobody at the terminal — it leaves the keychain step, and only
 that step, to a walk somebody is watching.
 
+**Or have your own agent walk it.**
+[`skills/yoyo-setup/SKILL.md`](skills/yoyo-setup/SKILL.md) is a prompt rather
+than a document to read: paste it into your own coding session, or install it
+into `~/.claude/skills/` with the one command at the top of it, and ask for yoyo
+to be set up here. It walks the same path — and repairs an installation that
+used to work and stopped — acting on the structured findings `yoyo setup --json`
+and `yoyo doctor --json` return, which is what keeps it running the commands
+those reports carry rather than commands it invented. It asks before each one,
+and hands you back anything that needs your editor, a login, or a credential.
+
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
@@ -2338,7 +2348,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](skills/yoyo-setup/SKILL.md) has your own agent session act on rather than
+parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
@@ -3000,6 +3013,10 @@ built.
 
 ## Further reading
 
+- [Setting up and repairing an installation with your own agent](skills/yoyo-setup/SKILL.md)
+  — the shipped prompt that walks a blank or broken installation to a passing
+  `yoyo doctor`, acting on what `yoyo setup --json` and `yoyo doctor --json`
+  report.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.
