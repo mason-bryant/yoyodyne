@@ -73,7 +73,7 @@ var authorities = map[domain.AgentRole]Authority{
 		TrackerActions: []string{
 			actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate,
 			actionReparent, actionReprioritize, actionLink, actionUnlink,
-			actionClose, actionRetire,
+			actionClose, actionRetire, actionHandle,
 		},
 		Proposals: true,
 		Concerns:  true,
