@@ -236,10 +236,10 @@ func gitAt(t *testing.T, directory string, arguments ...string) {
 	}
 }
 
-// The third settle outcome: the forge performed the merge and the finishing
-// steps failed. The break on that path is the only thing keeping the local
-// branch off a publication nothing confirmed, and this is what fails if it is
-// removed.
+// The second outcome that reaches a person: the forge performed the merge and
+// the finishing steps failed. The break on that path is the only thing keeping
+// the local branch off a publication nothing confirmed, and this is what fails
+// if it is removed.
 func TestASettleThatCannotFinishThePublicationLeavesTheLocalBranchAlone(t *testing.T) {
 	t.Parallel()
 
