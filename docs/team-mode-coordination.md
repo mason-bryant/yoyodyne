@@ -6,19 +6,41 @@ questions at the end are outstanding.**
 
 It lives outside the artifact homes for the reason
 [team mode scope](team-mode-scope.md) and [the documentation map](docs-map.md)
-do, plus one of its own. The shared reason is that this run may not write into
-`docs/designs/`; the reason of its own is that it should not want to. Designs are
-the architect's, creating one refuses every other role, and a design a developer
-filed under the architect's name would be exactly the silent redefinition of
-upstream intent the protected homes exist to stop. So this is a draft to be
-adopted: when the architect ratifies it, it moves under `docs/designs/` with
-identity frontmatter, `supports: v1-goals`, and the architect's own revision
-entry.
+do, plus one of its own. (The map is a structure decision for two documentation
+splits rather than an index of `docs/`, so it enumerates neither that document nor
+this one, and neither needs a row in it.) The shared reason is that this run may
+not write into `docs/designs/`; the reason of its own is that it should not want
+to.
+Designs are the architect's, creating one refuses every other role, and a design a
+developer filed under the architect's name would be exactly the silent
+redefinition of upstream intent the protected homes exist to stop. So this is a
+draft to be adopted: when the architect ratifies it, it moves under
+`docs/designs/` with identity frontmatter, the architect's own revision entry, and
+`supports: v1-goals` — subject to the note below on that goal's standing.
 
-It designs against [team mode scope](team-mode-scope.md), which the operator
-approved on 2026-08-19, and serves the v1 goal *"A team can run Yoyodyne against
-one shared repository: collaborators each run their own harness without losing
-work, splitting the tracker, or weakening any safety invariant."*
+It designs against [team mode scope](team-mode-scope.md), which states on its own
+first line that the product manager drafted it and the operator approved it in
+conversation on 2026-08-19, and it serves the v1 goal *"A team can run Yoyodyne
+against one shared repository: collaborators each run their own harness without
+losing work, splitting the tracker, or weakening any safety invariant."*
+
+**On that goal's standing.** The work item commissioning this design carries a
+caveat: the team goal awaited the operator's pen, was accepted while goal
+validation was down, and should be verified when yoyodyne-ifd.1.9 seeds the
+store. The record answers the first half of that. `docs/product/goals/v1-goals.md`
+states the goal; its revision log records the product manager adding it on
+2026-08-19, in the amendment that also amended the non-goals; and its approvals
+carry an operator entry against exactly that revision, reading *"Approved by the
+operator in conversation on 2026-08-18, 'Both Approved': the team goal, drafted by
+the product manager for the team-mode epic (yoyodyne-ifd.82)."* So the goal is
+recorded and approved rather than provisional, and the sentence above cites that
+record rather than asserting it.
+
+The second half is open, and the `supports` line above is conditional on it. This
+document's drafting run could not confirm that the harness *resolves* the goal —
+`yoyo goals list` and `yoyo artifact show v1-goals` were both unreachable in its
+environment — so it rests on what the file states. The architect should run those
+two commands when adopting, rather than take this paragraph's word for it.
 
 It covers the five recorded gaps — tracker sync, distributed claim, a promotion
 lease that survives leaving one machine, state that has to travel, and operator
@@ -87,6 +109,28 @@ exactly what union-merges without a conflict.
 So: **the tracker carries the backlog and the claims; a shared record store on the
 same remote carries the harness's product facts.** Both sync at the same moments,
 in one operation, so an operator has one thing to think about and not two.
+
+**Where these records are written is constrained, and the constraint is named here
+rather than left for an implementer to rediscover.** This store is a new family of
+writers — a file per claim, report, directive, budget increment, and promotion
+turn — and
+[`repository-writes-are-physically-confined`](decisions/invariants/repository-writes-are-physically-confined.md)
+holds over every one of them. Two cases, and which one applies is decided by where
+the bytes land rather than by what the record is called:
+
+- A record written into any repository the harness manages — a checkout it stages
+  the shared ref from, or the Dolt database directory beside the tracker — is a
+  repository-scoped write. It goes through `internal/repowrite` declaring that
+  repository as its root, like every artifact and invariant write already does. No
+  new low-level writer is introduced and no caller opts out.
+- A record staged in the machine's own state root, beside runs and reports, is
+  runtime state rather than a repository write, and is written the way the run
+  state store already writes.
+
+The boundary between the two must be explicit in the implementation rather than
+incidental. The invariant's stated risk is precisely a new writer silently
+lacking containment somebody else's writer has, and a store whose records move
+between a state root and a repository is where that would happen unnoticed.
 
 ### What this costs, stated up front
 
