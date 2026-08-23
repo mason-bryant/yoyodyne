@@ -192,7 +192,10 @@ func invariantsHome(directory string) Home {
 			"does not is record who changed the constraint and why, so an edit made by hand " +
 			"leaves a history that has stopped accounting for itself. Retiring one is " +
 			"`yoyo invariant retire` rather than deleting the file: the file stays, the " +
-			"constraint stops being delivered, and the reason it was lifted stays readable.",
+			"constraint stops being delivered, and the reason it was lifted stays readable. " +
+			"Then say what you changed in `" + conversationCommand(domain.RoleArchitect) + "`, because a " +
+			"conversation that is already open is working from these constraints as they read " +
+			"when it opened — and every run started since is being handed the ones you edited.",
 		Note: "These carry a scheme of their own rather than artifact identity frontmatter — " +
 			"the file name is the id — which is why this directory is skipped when the " +
 			"artifacts are loaded even though it usually sits inside the decisions home.",

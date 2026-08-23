@@ -45,6 +45,29 @@ func TestEveryHomeStatesTheThreeThings(t *testing.T) {
 	}
 }
 
+// The hand-edit answer has a second half: whether editing one of these by hand
+// means telling an agent. It is the half a reader acts on rather than merely
+// notes, because a conversation already open is reasoning from these documents
+// as they read when it opened, so an edit nobody mentioned is an agent
+// confidently describing a file that no longer says that. Every home answers it,
+// and answers it with the command that reaches its own owner.
+func TestEveryHomeSaysHowToTellItsOwnerWhatChanged(t *testing.T) {
+	t.Parallel()
+
+	for _, home := range Homes(defaults()) {
+		reach := conversationCommand(home.Owner)
+		if !strings.Contains(home.HandEdit, reach) {
+			t.Errorf("%s says nothing about telling the %s a hand edit happened; it should name `%s`",
+				home.Path(), home.Owner.Title(), reach)
+		}
+	}
+	// And the two owners are reached differently, so a home that named the wrong
+	// command would be caught rather than passing on the substring alone.
+	if conversationCommand(domain.RoleProductManager) == conversationCommand(domain.RoleArchitect) {
+		t.Fatal("both owners are reached by the same command, so the check above proves nothing")
+	}
+}
+
 // An index is exempt from artifact governance because it is an index. Writing
 // one that carried identity frontmatter would claim an id in a home where every
 // other file's id is checked, which is the one thing this file must never do.
