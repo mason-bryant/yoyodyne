@@ -1073,6 +1073,51 @@ priced retroactively rather than the ledger starting today.
 ./bin/yoyo cost --record            # write each price onto its work item
 ```
 
+#### Where the money went
+
+Every price `yoyo cost` reports is split by what the money bought, per run, per
+item, and across everything the harness has run:
+
+```text
+item                                     runs  unpriced      develop       review       repair         cost    waited
+yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43     3h37m
+TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2731.57    21h01m
+```
+
+**develop** is each run's first developer attempt, **review** is every reviewer
+invocation it made, and **repair** is every developer attempt after the first —
+the failing check, the refused path, and the reviewer's findings handed back are
+all repair, because from the money's point of view each is the same thing: the
+change being made again because it was not right the first time. Every priced
+invocation lands in exactly one of the three, so nothing is missing from them
+and the split is a decomposition of the price rather than a second opinion about
+it. An invocation the provider refused or killed and the harness reissued is
+charged to the attempt it was reissuing, not counted as a repair nobody asked
+for: what an attempt cost is what it took to get it made.
+
+**waited** is time rather than money — a provider that would not serve the
+account, and the harness parked on the operator's hold — and it is counted apart
+for that reason, since adding it to the money would make a run that waited
+overnight read as expensive when what it was is slow. It comes from the run's
+own record rather than from its event log, which is why a run nothing can price
+still says how long it was held up.
+
+Naming an item says the same thing per run, under each attempt:
+
+```text
+yoyodyne-ifd.1.5: $49.43 across 4 run(s)
+  development $29.18 from 4 invocation(s), review $5.78 from 4, repair $14.47 from 3; waited 3h37m for the provider
+  run-c25525d6…  started 2026-08-18T14:31:34Z [cancelled, developing] $26.93 from 3 invocation(s)
+    development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
+```
+
+The split is read out of the run's event log rather than out of a phase the
+harness wrote down beside each invocation, which is what makes it answer for
+runs that finished long before it existed. A review announces itself and then
+makes exactly one invocation, so the terminal after it is the reviewer's and no
+other terminal is; the rest are the developer's, and they group into attempts by
+how each one ended.
+
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is
 cleaned up once it integrates, its worktree removed and its branch deleted, so
