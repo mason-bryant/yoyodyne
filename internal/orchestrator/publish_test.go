@@ -357,6 +357,69 @@ func TestPipelineRefusesToMergeIntoARemoteTargetThatMoved(t *testing.T) {
 	}
 }
 
+// The other half of the same claim is what the refusal does afterwards, and it
+// is not a replay. The remote target is checked after the local promotion has
+// already moved the branch, and remote drift is not one of the contended
+// promotions that re-prepare a change — so the promotion stands, the item
+// closes, and what is left for a person is an outstanding publication and a
+// local target branch the remote does not carry. A reader who assumed the run
+// replayed onto wherever the target went would be assuming a recovery that does
+// not happen.
+func TestPipelineDoesNotReplayAPromotionTheRemoteTargetRefused(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	forge.onEnsure = func() { driftRemoteTarget(t, remote, "main") }
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want the local promotion to stand", outcome)
+	}
+	// The check is consulted before the merge is asked for, so the forge is never
+	// asked at all.
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
+	}
+	// Nothing re-prepared the change and nothing asked for a second verdict: the
+	// one review that authorized this promotion is the only one there is.
+	if outcome.IntegrationRetries != 0 {
+		t.Errorf("integration retries = %d, want a refusal that re-prepares nothing", outcome.IntegrationRetries)
+	}
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 1 {
+		t.Errorf("reviews = %d, want only the review that authorized the promotion", reviews)
+	}
+	if !outcome.WorkItemClosed || !tracker.closed {
+		t.Errorf("work item closed = %t (tracker %t), want the item closed on the promotion that stands", outcome.WorkItemClosed, tracker.closed)
+	}
+	// What is left is the divergence somebody has to settle: the local target
+	// carries the promotion and the remote target does not.
+	if local := publishedCommit(t, repository, "main"); local != outcome.Integration.TargetCommit {
+		t.Errorf("local main = %q, want the promoted commit %q", local, outcome.Integration.TargetCommit)
+	}
+	if head := publishedCommit(t, remote, "main"); head == outcome.Integration.TargetCommit {
+		t.Errorf("remote main = %q, want a target the promotion never reached", head)
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.IntegrationRetries != 0 {
+		t.Errorf("durable integration retries = %d, want none", state.IntegrationRetries)
+	}
+	if state.PublishFailure == "" || state.PublishFailure != outcome.PublishFailure {
+		t.Errorf("durable publish failure = %q, want the reported one %q", state.PublishFailure, outcome.PublishFailure)
+	}
+}
+
 // A forge that replays what it merges — which is what GitHub's rebase and
 // squash methods do — never puts the reviewed commit on the base at all. The
 // harness asks for a merge commit precisely so that cannot happen, and reports

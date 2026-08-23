@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist release
+.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
 build:
@@ -120,3 +120,12 @@ dist-verify: dist
 # rather than cutting whatever the checkout happens to describe itself as.
 release:
 	scripts/cut-release.sh $(if $(filter command line environment,$(origin VERSION)),$(VERSION))
+
+# One release's notes, drafted from the work items that landed since the last
+# tag and then edited: which work is key functionality, which is an enhancement,
+# and which fix is critical enough to go to the top is a judgement the draft
+# does not make. `release` above refuses a tag whose notes are missing and
+# drafts them for you, so this is for drafting ahead of the cut, or again after
+# more work lands. VERSION is withheld the same way, for the same reason.
+release-notes:
+	bash scripts/release-notes.sh $(if $(filter command line environment,$(origin VERSION)),$(VERSION))

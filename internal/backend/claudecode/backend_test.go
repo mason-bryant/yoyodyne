@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -107,7 +108,11 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if runner.prompts[0] != "implement the task" {
 		t.Fatalf("prompt = %q", runner.prompts[0])
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
+	wantSettings, err := developerSettings("/worktree")
+	if err != nil {
+		t.Fatalf("developerSettings() error = %v", err)
+	}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", wantSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
 	}
@@ -729,6 +734,156 @@ func TestRunRequiresWorktreeScopedDeveloperWriteTools(t *testing.T) {
 		if len(runner.commands) != 0 {
 			t.Fatalf("rejected developer run still started %d process(es)", len(runner.commands))
 		}
+	}
+}
+
+// notesGuardSettings is the part of the developer settings this test reads: the
+// hooks, keyed by the event they run on. Named types rather than one nested
+// anonymous struct so what is being asserted stays legible.
+type notesGuardSettings struct {
+	Hooks map[string][]notesGuardMatcher `json:"hooks"`
+}
+
+type notesGuardMatcher struct {
+	Matcher string             `json:"matcher"`
+	Hooks   []notesGuardAction `json:"hooks"`
+}
+
+type notesGuardAction struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}
+
+// TestDeveloperRunsPutBashThroughTheNotesGuard holds the developer settings to
+// running the notes-writer guard, and to running the one that is in this
+// repository.
+//
+// A developer run is the population an interactive session's stanza does not
+// cover, and `beads.Client.Update` does not cover it either: that only makes
+// the writes the harness issues safe, and an agent can type
+// `bd update <id> --notes=` into Bash inside a developer run exactly as one did
+// from an interactive session twelve times. This hook is what makes the two
+// populations get the same refusal, so a settings string that stopped naming
+// the script would silently reopen the harness half.
+//
+// The script is asserted to exist because the failure is quiet: Claude Code
+// reports a hook whose command is missing as a non-blocking error and lets the
+// call through, so a rename fails open rather than red.
+func TestDeveloperRunsPutBashThroughTheNotesGuard(t *testing.T) {
+	t.Parallel()
+
+	if _, err := os.Stat("../../../" + NotesGuardScript); err != nil {
+		t.Fatalf("Stat(%s) error = %v; the developer settings name a script this repository does not have",
+			NotesGuardScript, err)
+	}
+
+	// A worktree path with a space and a quote in it, because this repository's
+	// own worktrees live under "Application Support" and the hook command is
+	// read by a shell. A path pasted in raw would end the argument early here.
+	worktree := "/tmp/work trees/it's here"
+	encoded, err := developerSettings(worktree)
+	if err != nil {
+		t.Fatalf("developerSettings() error = %v", err)
+	}
+	var settings notesGuardSettings
+	if err := json.Unmarshal([]byte(encoded), &settings); err != nil {
+		t.Fatalf("developerSettings() is not JSON (%v); Claude Code is handed it as --settings", err)
+	}
+	matchers := settings.Hooks["PreToolUse"]
+	if len(matchers) == 0 {
+		t.Fatalf("developerSettings() wires no PreToolUse hook, which is the only event that can refuse a write")
+	}
+	// The command has to name the script inside the worktree this run was given.
+	// Reaching it through $CLAUDE_PROJECT_DIR would fail open where the variable
+	// is unset or points elsewhere, and Claude Code reports a hook command that
+	// does not resolve as a non-blocking error -- so the run would go unguarded
+	// and look exactly like one that was guarded.
+	want := "bash '/tmp/work trees/it'\\''s here/" + NotesGuardScript + "'"
+	named := false
+	for _, matcher := range matchers {
+		if matcher.Matcher != "Bash" {
+			t.Errorf("developerSettings() wires the guard for tool %q; a `bd update` is a Bash call and nothing else",
+				matcher.Matcher)
+		}
+		for _, hook := range matcher.Hooks {
+			if hook.Type != "command" {
+				t.Errorf("developerSettings() wires the guard as hook type %q, want \"command\"", hook.Type)
+			}
+			if hook.Command == want {
+				named = true
+			}
+			if strings.Contains(hook.Command, "$CLAUDE_PROJECT_DIR") {
+				t.Errorf("developerSettings() reaches the guard through $CLAUDE_PROJECT_DIR (%q); an unset or differently-rooted value fails open silently",
+					hook.Command)
+			}
+		}
+	}
+	if !named {
+		t.Errorf("developerSettings(%q) wires no PreToolUse command equal to %q, so a developer run's Bash is unguarded or the path is misquoted",
+			worktree, want)
+	}
+}
+
+// TestDeveloperSettingsSurviveAWorktreePathAShellWouldMangle is the same claim
+// from the shell's side: whatever the path, the command has to be one argument
+// that resolves to the script. A path holding a quote is the case that turns a
+// misquoted command into a different command rather than into an error.
+func TestDeveloperSettingsSurviveAWorktreePathAShellWouldMangle(t *testing.T) {
+	t.Parallel()
+
+	for _, worktree := range []string{
+		"/plain/worktree",
+		"/tmp/Application Support/yoyodyne/wt",
+		"/tmp/it's/a $PATH; rm -rf /",
+	} {
+		encoded, err := developerSettings(worktree)
+		if err != nil {
+			t.Fatalf("developerSettings(%q) error = %v", worktree, err)
+		}
+		var settings notesGuardSettings
+		if err := json.Unmarshal([]byte(encoded), &settings); err != nil {
+			t.Fatalf("developerSettings(%q) is not JSON: %v", worktree, err)
+		}
+		matchers := settings.Hooks["PreToolUse"]
+		if len(matchers) != 1 || len(matchers[0].Hooks) != 1 {
+			t.Fatalf("developerSettings(%q) wires %d PreToolUse matcher(s); want exactly one running one command",
+				worktree, len(matchers))
+		}
+		command := matchers[0].Hooks[0].Command
+		want := "bash " + shellQuoted(filepath.Join(worktree, NotesGuardScript))
+		if command != want {
+			t.Errorf("developerSettings(%q) command = %q, want %q", worktree, command, want)
+		}
+		// Nothing outside the single-quoted argument, which is what keeps a
+		// path carrying shell syntax from becoming shell syntax.
+		if _, quoted, found := strings.Cut(command, "bash '"); !found || !strings.HasSuffix(quoted, "'") {
+			t.Errorf("developerSettings(%q) command = %q is not one quoted argument", worktree, command)
+		}
+	}
+}
+
+// TestDeveloperRunsStayConfinedToTheirWorktree holds the half of the same
+// settings string that was there before the guard joined it. Both live in one
+// string, so a change made for either reason can drop the other.
+func TestDeveloperRunsStayConfinedToTheirWorktree(t *testing.T) {
+	t.Parallel()
+
+	encoded, err := developerSettings("/worktree")
+	if err != nil {
+		t.Fatalf("developerSettings() error = %v", err)
+	}
+	var settings struct {
+		Sandbox struct {
+			Enabled                  bool `json:"enabled"`
+			FailIfUnavailable        bool `json:"failIfUnavailable"`
+			AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands"`
+		} `json:"sandbox"`
+	}
+	if err := json.Unmarshal([]byte(encoded), &settings); err != nil {
+		t.Fatalf("developerSettings() is not JSON (%v)", err)
+	}
+	if !settings.Sandbox.Enabled || !settings.Sandbox.FailIfUnavailable || settings.Sandbox.AllowUnsandboxedCommands {
+		t.Errorf("developerSettings() no longer confines a developer run's Bash: %+v", settings.Sandbox)
 	}
 }
 
