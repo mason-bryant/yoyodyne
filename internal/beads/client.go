@@ -333,6 +333,18 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if created.Title != item.Title {
 		return WorkItem{}, fmt.Errorf("bd created work item %s with title %q, want %q", created.ID, created.Title, item.Title)
 	}
+	// An executor that was asked for and not stored is a failure, because
+	// admission is the path this marker exists for: the item is in the queue and
+	// pullable the moment this returns, so a caller told the marker was set would
+	// have admitted exactly the item the guard does not cover. It is read back
+	// where the priority beside it is not, and the difference is what an absent
+	// field means. bd's creation response omits a key it was never given, so a
+	// missing executor is unambiguously one that was not stored — where a missing
+	// priority is indistinguishable from the default having been applied, which is
+	// why refusing on that one would lose items rather than protect the order.
+	if executor := strings.TrimSpace(string(item.Executor)); executor != "" && string(created.Executor) != executor {
+		return WorkItem{}, fmt.Errorf("bd created work item %s with executor %q, want %q", created.ID, created.Executor, executor)
+	}
 	// The requested priority is deliberately not read back, for the reason the
 	// parent is not read back after an update: an unset field and a field bd's
 	// response does not carry are indistinguishable here, and refusing a creation

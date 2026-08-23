@@ -165,6 +165,14 @@ says nothing is a developer run, which is nearly all of it.
 Naming the item yourself is unaffected. `yoyo run <id>` is you deciding, and the
 marker steers what the harness chooses rather than what you may ask for.
 
+The marker is not retroactive, and that is the part worth knowing before you
+rely on it: it covers exactly the items that carry it, so work admitted before
+it existed carries none and is selected as ordinary developer work until
+somebody sets one. Marking that work is a product decision rather than something
+the harness can infer — no reading of an item tells a conversation from a diff —
+so it is done in the product manager's conversation, one `update` per item, and
+until it is the guard is in place over a queue it does not yet cover.
+
 An eighth thing deliberately keeps nothing out: an item whose goal was amended
 after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),

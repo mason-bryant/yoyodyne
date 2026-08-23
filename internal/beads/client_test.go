@@ -743,14 +743,22 @@ func TestTheExecutorIsWrittenWhereSelectionCanReadItAndTheNotesCannot(t *testing
 	}
 
 	// A marker bd did not actually store is a failure rather than a reported
-	// success: what rests on it is that nothing selects the item afterwards, and a
-	// caller told it was marked would believe the item covered by exactly the
-	// guard it is not covered by.
+	// success, on both doors: what rests on it is that nothing selects the item
+	// afterwards, and a caller told it was marked would believe the item covered
+	// by exactly the guard it is not covered by. Admission is the sharper of the
+	// two, because the item is in the queue and pullable the moment the call
+	// returns.
 	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task"}]`}}
 	if _, err := (Client{Runner: unstored}).Update(context.Background(), "yoyodyne-ifd.138", WorkItemChange{
 		Executor: domain.WorkItemExecutorConversation,
 	}); err == nil {
 		t.Fatal("Update() with an executor bd did not store = nil error, want a failure")
+	}
+	unmarked := &fakeRunner{responses: []string{`{"id":"yoyodyne-ifd.138","title":"Promote the brief","status":"open","priority":1,"issue_type":"task"}`}}
+	if _, err := (Client{Runner: unmarked}).Create(context.Background(), NewWorkItem{
+		Title: "Promote the brief", Description: "d", Type: "task", Executor: domain.WorkItemExecutorConversation,
+	}); err == nil {
+		t.Fatal("Create() with an executor bd did not store = nil error, want a failure")
 	}
 
 	// A creation that says nothing about an executor writes no metadata at all,

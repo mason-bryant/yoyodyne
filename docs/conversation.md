@@ -283,7 +283,12 @@ item for a developer run: it keeps its place in your order, the queue says what
 carries it rather than reporting it as ready, and a pass that reaches it says it
 passed it over rather than counting it among the work about to become pullable.
 Naming an item yourself with `yoyo run` is unaffected, because that is you
-deciding. Work that says nothing is a developer run, which is nearly all of it.
+deciding. Work that says nothing is a developer run, which is nearly all of it —
+which is also why the marker is not retroactive: everything admitted before it
+existed says nothing, and is chosen as ordinary developer work until the product
+manager marks it. Sweeping the queue for the items that need one is a product
+judgement rather than something the harness can infer, so it is asked for rather
+than assumed done.
 Before this the harness could not tell, and it cost a whole run and two review
 rounds on an item no developer could execute — with those rounds counted against
 the item's cap, so a second mis-selection would have escalated work nobody had
