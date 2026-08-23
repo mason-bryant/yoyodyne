@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -53,6 +54,17 @@ type Authority struct {
 	// proposing. Both belong to the role that decides what is admitted.
 	Proposals bool
 	Concerns  bool
+	// Asks is whether this role is on the inter-role ask channel — both ends of
+	// it, because the two are the same judgement: a role worth asking for an
+	// opinion is one whose own opinion is worth asking for. It is not the
+	// authority to decide anything, since an ask carries none; it is whether the
+	// harness will carry a question to or from this role at all.
+	//
+	// The roles that hold judgement about the product have it. The developer and
+	// the reviewer do not: their judgement is exercised inside runs, against a
+	// change and a worktree, and an opinion from one of them with none of that in
+	// front of it is worth less than the round it would cost.
+	Asks bool
 }
 
 // MayAct reports whether this role may ask for one tracker action.
@@ -77,6 +89,7 @@ var authorities = map[domain.AgentRole]Authority{
 		},
 		Proposals: true,
 		Concerns:  true,
+		Asks:      true,
 	},
 	domain.RoleArchitect: {
 		Role:           domain.RoleArchitect,
@@ -84,6 +97,7 @@ var authorities = map[domain.AgentRole]Authority{
 		Owns:           "the designs, the decision records, and the architectural invariants",
 		Contract:       architectContract,
 		TrackerActions: []string{actionRead, actionSurvey},
+		Asks:           true,
 	},
 	domain.RoleDevelopmentManager: {
 		Role:     domain.RoleDevelopmentManager,
@@ -95,6 +109,7 @@ var authorities = map[domain.AgentRole]Authority{
 			actionReparent, actionLink, actionUnlink, actionTriage,
 		},
 		ParentRequired: true,
+		Asks:           true,
 	},
 	domain.RoleDeveloper: {
 		Role:           domain.RoleDeveloper,
@@ -187,6 +202,13 @@ func (s *Session) authorize(parsed parsedReply) error {
 			Refused: "a concern to be put to the operator",
 			Reason:  "stopping work over a goal belongs to the product manager, and this role raises what it found in prose instead",
 		}
+	}
+	// An ask is refused above the tracker rather than beside it, because it is
+	// the one block that most replies carrying it carry alone: checking it after
+	// the early return below would leave a role asking whatever it liked as long
+	// as it acted on nothing.
+	if err := refuseUnauthorizedAsk(authority, parsed); err != nil {
+		return err
 	}
 	if len(parsed.Actions) == 0 {
 		return nil
@@ -397,6 +419,8 @@ Some turns carry changes other roles have proposed to documents you own. Each on
 
 ` + readOnlyTrackerClause + `
 
+` + exchange.AskingContract + `
+
 ` + reportClause
 
 // developmentManagerContract is the harness policy every development-manager
@@ -454,6 +478,8 @@ An unfinished publication is decided like this. A merge the forge still has queu
 Escalating is what reaches the operator, and it is the decision to be sparing with: the whole point of this workflow is that stopped work is yours rather than theirs. An escalation is a durable blocker on the item and a report at "warning" severity or above in the same reply. Prose alone is not one, and the harness refuses an escalation that carries no such report — nothing is carried out, and the item is not blocked. Escalate a dispute about the design or the goals, work that needs new scope admitted, an item triage has already been round once, a capacity or account limit, and anything that needs a repository setting changed.
 
 Recording the decision is what you do; the harness does not carry it out. A repair, a re-run, and a re-arm each spend the item's durable budget as they are recorded, and each is refused once that budget is gone: you get one repair and one re-run per item, a repair grant is cut down to the review rounds the cap still has room for, and past the round cap neither is given at all. A refusal is not something to work around — it is your evidence for escalating instead. Starting the run itself is the operator's, so say plainly what you decided and what it now needs from them. One decision per entry, and never a decision on work that is closed.
+
+` + exchange.AskingContract + `
 
 ` + reportClause
 

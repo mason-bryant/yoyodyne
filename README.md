@@ -1256,6 +1256,68 @@ invariants; the product manager gets none of them, which is the same decision
 read the other way — intent is what it reasons from, and the implementation must
 not be able to argue about what the product is for.
 
+### Roles asking each other things
+
+A question one role cannot answer itself used to cost you one of two things:
+relaying it between two conversations by hand, or a whole work-item cycle. Now
+the role asks directly and the harness carries it. The product manager asking the
+architect *what does this goal cost, and what am I missing?* before it orders the
+backlog, and the architect asking the product manager *if we sacrifice some
+performance, is that an unacceptable trade-off from the user's standpoint?*
+before it settles a design, are the two cases it exists for. They are one
+mechanism with the parties swapped, and everything below holds identically in
+both directions.
+
+Three things are true of every exchange, and each is enforced rather than asked
+for:
+
+- **It is durable and visible.** An exchange is a record of its own under the
+  product's state, written before each round is taken, and `yoyo exchange list`
+  and `yoyo exchange show <id>` read the whole thread. Two roles cannot say
+  anything to each other that you cannot read afterwards, which is the
+  no-side-conversations property traceability implies. The conversation that
+  asked tells you at the time as well, and where the project reports to Slack
+  each round arrives in a thread of its own.
+- **It is judgment-only.** Both halves are toolless: the role being asked has no
+  filesystem, no commands, and nothing to check anything against, so an ask moves
+  opinion and never evidence. An answer reaching for any harness block at all is
+  refused whole and the asker is told its question went unanswered. Work that
+  needs something verified is still commissioned as bounded developer work.
+- **It is decisionless.** No authority moves through an ask. Nothing an answering
+  role says admits work, orders a backlog, edits a document, or resolves
+  anything, and decisions still land as amendments, proposals, and directives.
+
+```sh
+./bin/yoyo exchange list           # every exchange, the open ones first, with what each cost
+./bin/yoyo exchange show <id>      # one exchange in full: every question and every answer
+./bin/yoyo exchange list --json    # the records themselves, for a script
+```
+
+The channel runs between the three roles that hold judgement about the product —
+the product manager, the architect, and the development manager. The developer
+and the reviewer are not on it: their judgement is exercised inside a run,
+against a change and a worktree, and an opinion from either with none of that in
+front of it is worth less than the round it would cost.
+
+The answer comes back inside the reply you were already waiting for, as a further
+round of it, and the asking role then either asks again in the same thread or
+closes it with what it took from the exchange. Closing is the ordinary ending.
+
+**Every exchange is opened with a hard limit on rounds**, which is
+[`exchange.max_rounds`](docs/configuration.md#how-long-one-role-may-ask-another) and defaults
+to ten. The limit is copied onto the exchange as it opens and is durable with it,
+so neither a process dying nor an edit to the configuration lengthens a thread
+that is already running long. Reaching it is not a silent cutoff: the exchange
+closes as unresolved and is escalated to you as a report at warning severity,
+naming what the two roles did not settle. That is the one way this fails — two
+judgement models deferring to each other politely for ever — and a limit that
+ended the conversation quietly would hide exactly the case worth seeing.
+
+**What an exchange cost is reported beside the rounds it took**, wherever one is
+read. Rounds alone say how long a conversation went on and cost alone says what
+it came to; the question you actually have — was that worth it — is answerable
+only from the two together.
+
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
@@ -1602,6 +1664,16 @@ The pile lives outside the repository under the operating system's state
 directory, beside the run and conversation records rather than among them. It
 outlives them: a run is settled and its worktree and branch are removed, and
 what it reported is still there for you to read.
+
+One entry in the pile is filed by the harness rather than by an agent: an
+[inter-role ask exchange](#roles-asking-each-other-things) that reached the
+round limit it was opened with closes as unresolved and escalates itself here, at
+`warning` severity, naming the two roles, the question, the rounds it spent, and
+what it cost. It is a report rather than a blocker for the same reason everything
+else here is — nothing was stopped, and two roles simply did not settle something
+one of them needed — and it is filed at all because an exchange that ended in a
+silent limit is exactly the failure nobody would otherwise see.
+
 
 ### What agents propose changing, and who decides
 

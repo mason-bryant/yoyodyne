@@ -1,0 +1,467 @@
+// Package exchange is the inter-role ask channel: one role puts a question to
+// another through the harness, and the whole of what they say to each other is
+// recorded where anybody can read it.
+//
+// It exists because a one-question exchange used to cost either an operator
+// relaying it by hand or a whole work-item cycle. Three properties are what make
+// it safe to let roles talk to each other directly, and every one of them is
+// enforced here rather than asked for in a persona:
+//
+// It is durable and visible. An exchange is a record under the product's state,
+// written before each round is taken and read by `yoyo exchange`, so there are
+// no side conversations: two roles cannot say anything to each other that
+// nobody else can see afterwards.
+//
+// It is judgment-only. Both halves are toolless conversations, so an ask moves
+// opinion and never evidence. An answer that carries any harness block at all is
+// refused rather than acted on, and work that needs something verified is
+// commissioned as developer work exactly as it was before.
+//
+// It is decisionless. No authority moves through an ask. Nothing an answering
+// role says admits work, reorders a backlog, edits a document, or resolves
+// anything; decisions still land as amendments, proposals, and directives.
+//
+// The channel is bidirectional and both directions are first-class. The product
+// manager asking the architect "what does this goal cost, and what am I
+// missing?" and the architect asking the product manager "if we sacrifice some
+// performance, is that an unacceptable trade-off from the user's standpoint?"
+// are the same mechanism with the parties swapped, and every property above
+// holds identically either way.
+package exchange
+
+import (
+	"bytes"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/fenced"
+)
+
+// SchemaVersion is 1 and has never changed. An exchange is written as it goes:
+// each round is recorded before it is taken and revised once the answer is in,
+// and the record is closed exactly once.
+const SchemaVersion = 1
+
+// Fence opens the one block a reply may ask through. It is a distinct language
+// tag for the same reason the report and proposal fences are: an ask can never
+// be confused with JSON the conversation happens to be discussing.
+const Fence = "```yoyodyne-ask"
+
+// The bounds on one ask. A question is a question rather than a document, and
+// the context around it is the asker's own framing rather than an attempt to
+// re-brief the role being asked — both are generous for what they are and small
+// enough that nothing can push a specification through this channel.
+const (
+	MaxQuestionBytes = 4 << 10
+	MaxContextBytes  = 8 << 10
+	// MaxAnswerBytes bounds what an answering role says back. It is larger than
+	// the question because judgment is the thing being asked for, and it is still
+	// bounded: an answer that runs past this is truncated in the record rather
+	// than being allowed to become the whole of a turn.
+	MaxAnswerBytes = 16 << 10
+	// MaxSettledBytes bounds what the asker records as the outcome when it closes
+	// an exchange itself.
+	MaxSettledBytes = 4 << 10
+	// MaxBlockBytes bounds the untrusted ask payload one turn may carry.
+	MaxBlockBytes = 16 << 10
+)
+
+// DefaultMaxRounds is the hard limit on rounds in one exchange where a project
+// configures none. Ten is far more than any real question needs and small enough
+// that the pathological case — two judgment models deferring to each other
+// politely for ever — costs a bounded amount before it becomes one legible
+// question for the operator.
+const DefaultMaxRounds = 10
+
+// Outcome is how an exchange ended. An exchange that has not ended carries none,
+// which is the ordinary state of one being conducted.
+type Outcome string
+
+const (
+	// OutcomeResolved is the ordinary ending: the asker had what it needed and
+	// said so.
+	OutcomeResolved Outcome = "resolved"
+	// OutcomeUnresolved is the cap being reached. It is deliberately not a silent
+	// cutoff: the exchange closes as this, and the harness escalates it to the
+	// operator, so a conversation that would have gone round for ever becomes a
+	// rare question somebody can answer instead.
+	OutcomeUnresolved Outcome = "unresolved-after-rounds"
+)
+
+func (o Outcome) Valid() bool {
+	switch o {
+	case OutcomeResolved, OutcomeUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Party is one side of an exchange: the role whose authority is in play, the
+// configured agent that filled it, and the durable conversation it spoke from.
+// The role and the agent are both recorded for the reason a report records both:
+// a project may configure two architects, and "which architect said this" is a
+// different question from "the architect said this".
+type Party struct {
+	Role  domain.AgentRole `json:"role"`
+	Agent string           `json:"agent,omitempty"`
+	// Conversation is the record the party spoke from, where it spoke from one.
+	// The asking side always has one; the answering side is a provider invocation
+	// the harness makes for the exchange rather than a conversation an operator
+	// holds, so it names none.
+	Conversation string `json:"conversation,omitempty"`
+}
+
+func (p Party) validate(what string) error {
+	if !p.Role.Valid() {
+		return fmt.Errorf("%s role %q is not one of the harness's roles", what, p.Role)
+	}
+	return nil
+}
+
+// Round is one question and the answer to it. The question is recorded before
+// the answering provider is invoked, so a process that dies between the two
+// leaves a round that was spent rather than one that was taken and never
+// counted — the same direction every other durable budget here fails in.
+type Round struct {
+	Number   int    `json:"number"`
+	Question string `json:"question"`
+	Context  string `json:"context,omitempty"`
+	Answer   string `json:"answer,omitempty"`
+	// Problem is why this round has no answer, where it has none. A round the
+	// answering provider failed is still a round the exchange spent, and saying
+	// what happened is what stops it reading as a question nobody asked.
+	Problem string `json:"problem,omitempty"`
+	// CostUSD is what this round cost, as the provider reported it: the answering
+	// invocation, plus the asking invocation the harness took only to carry the
+	// answer back. The invocation that produced the question belongs to whatever
+	// the asker was already doing and is charged there.
+	CostUSD    float64    `json:"cost_usd,omitempty"`
+	AskedAt    time.Time  `json:"asked_at"`
+	AnsweredAt *time.Time `json:"answered_at,omitempty"`
+}
+
+// Exchange is one durable ask thread.
+type Exchange struct {
+	SchemaVersion int              `json:"schema_version"`
+	ID            string           `json:"id"`
+	ProductID     domain.ProductID `json:"product_id"`
+	RepositoryID  string           `json:"repository_id,omitempty"`
+	Asker         Party            `json:"asker"`
+	Answerer      Party            `json:"answerer"`
+	// Question is the opening question, kept as it was asked. The rounds hold
+	// every question including this one; this is here so a listing can say what an
+	// exchange is about without reading the thread.
+	Question string `json:"question"`
+	// MaxRounds is the hard limit this exchange is held to. It is copied onto the
+	// exchange when it opens rather than read from the configuration each time,
+	// so a process death, a configuration edit, or a second process cannot reset
+	// what a thread already in flight is allowed to spend.
+	MaxRounds int     `json:"max_rounds"`
+	Rounds    []Round `json:"rounds,omitempty"`
+	// AnswererSessionID is the provider session the answering side continues
+	// across rounds, so round three is answered by something that remembers
+	// rounds one and two.
+	AnswererSessionID string `json:"answerer_session_id,omitempty"`
+	// Outcome is empty while the exchange is open.
+	Outcome Outcome `json:"outcome,omitempty"`
+	// Settled is what the asker says the exchange came to, recorded when it
+	// closes one itself. An exchange the cap closed has none: that is the whole
+	// meaning of unresolved.
+	Settled   string     `json:"settled,omitempty"`
+	OpenedAt  time.Time  `json:"opened_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+}
+
+var idPattern = regexp.MustCompile(`^exchange-[a-f0-9]{32}$`)
+
+func NewID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", fmt.Errorf("generate exchange id: %w", err)
+	}
+	return "exchange-" + hex.EncodeToString(bytes), nil
+}
+
+// ValidID reports an identifier of the shape this package issues. A store names
+// a file after it, so it is checked before anything built from outside is used
+// as a path.
+func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// Open reports whether this exchange is still being conducted.
+func (e Exchange) Open() bool { return e.Outcome == "" }
+
+// Spent is how many rounds this exchange has taken.
+func (e Exchange) Spent() int { return len(e.Rounds) }
+
+// RoundsRemaining is how many further rounds this exchange may still take. It is
+// never negative: an exchange at its cap has nothing remaining rather than a
+// debt.
+func (e Exchange) RoundsRemaining() int {
+	if remaining := e.MaxRounds - len(e.Rounds); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+// CostUSD is what conducting this exchange has cost, summed from what the
+// provider reported for each round. It is reported beside the rounds wherever an
+// exchange is read, because what a conversation between two roles spent is
+// exactly the thing an operator cannot otherwise see.
+func (e Exchange) CostUSD() float64 {
+	var total float64
+	for _, round := range e.Rounds {
+		total += round.CostUSD
+	}
+	return total
+}
+
+// Validate reports every contract violation in the exchange at once.
+func (e Exchange) Validate() error {
+	var problems []error
+	if e.SchemaVersion != SchemaVersion {
+		problems = append(problems, fmt.Errorf("exchange schema version %d is not supported", e.SchemaVersion))
+	}
+	if !ValidID(e.ID) {
+		problems = append(problems, fmt.Errorf("exchange id %q is invalid", e.ID))
+	}
+	if err := domain.ValidateIdentifier("product id", string(e.ProductID)); err != nil {
+		problems = append(problems, err)
+	}
+	problems = append(problems, e.Asker.validate("asker"), e.Answerer.validate("answerer"))
+	if e.Asker.Role == e.Answerer.Role && e.Asker.Role.Valid() {
+		problems = append(problems, errors.New("an exchange is between two roles; a role does not ask itself"))
+	}
+	problems = append(problems, boundedText("question", e.Question, MaxQuestionBytes, true))
+	if e.MaxRounds < 1 {
+		problems = append(problems, fmt.Errorf("max rounds is %d; an exchange is allowed at least one round", e.MaxRounds))
+	}
+	if len(e.Rounds) > e.MaxRounds {
+		problems = append(problems, fmt.Errorf("%d rounds are recorded against a cap of %d", len(e.Rounds), e.MaxRounds))
+	}
+	for i, round := range e.Rounds {
+		if round.Number != i+1 {
+			problems = append(problems, fmt.Errorf("rounds[%d] is numbered %d", i, round.Number))
+		}
+		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] question", i), round.Question, MaxQuestionBytes, true))
+		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] context", i), round.Context, MaxContextBytes, false))
+		problems = append(problems, boundedText(fmt.Sprintf("rounds[%d] answer", i), round.Answer, MaxAnswerBytes, false))
+		if round.AskedAt.IsZero() {
+			problems = append(problems, fmt.Errorf("rounds[%d] records no moment it was asked", i))
+		}
+		if round.CostUSD < 0 {
+			problems = append(problems, fmt.Errorf("rounds[%d] cost cannot be negative", i))
+		}
+	}
+	if e.Outcome != "" && !e.Outcome.Valid() {
+		problems = append(problems, fmt.Errorf("outcome %q is not one an exchange ends with", e.Outcome))
+	}
+	problems = append(problems, boundedText("settled", e.Settled, MaxSettledBytes, false))
+	// An exchange the cap closed is exactly the one nothing settled, so a record
+	// claiming both is one the conductor cannot have written.
+	if e.Outcome == OutcomeUnresolved && strings.TrimSpace(e.Settled) != "" {
+		problems = append(problems, errors.New("an exchange closed unresolved settled nothing"))
+	}
+	if (e.Outcome == "") != (e.ClosedAt == nil) {
+		problems = append(problems, errors.New("an outcome and the moment it was reached are recorded together"))
+	}
+	if e.OpenedAt.IsZero() {
+		problems = append(problems, errors.New("opened at is required"))
+	}
+	if e.UpdatedAt.IsZero() {
+		problems = append(problems, errors.New("updated at is required"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid exchange: %w", err)
+	}
+	return nil
+}
+
+// Ask is one question a role puts to another, as the fenced block carries it.
+type Ask struct {
+	// Role is who is being asked. It is required and it is a role rather than an
+	// agent: which configured agent fills it is the harness's to resolve, exactly
+	// as it is when an operator addresses one.
+	Role domain.AgentRole `json:"role"`
+	// Question is what is being asked. It is required and it has to ask
+	// something: a statement put through this channel is an opinion posted at
+	// another role, and nobody answers one.
+	Question string `json:"question"`
+	// Context is the asker's own framing — what it already believes, and what it
+	// is about to decide with the answer. It is optional and it is never
+	// evidence: the role being asked reads it as what the asker thinks.
+	Context string `json:"context,omitempty"`
+	// Exchange continues a thread already open, named by its identifier. An ask
+	// naming none opens a new exchange.
+	Exchange string `json:"exchange,omitempty"`
+	// Settled closes the named exchange instead of asking it anything further,
+	// recording what the asker took from it. It is the ordinary way an exchange
+	// ends, and it requires the exchange it closes to be named.
+	Settled string `json:"settled,omitempty"`
+}
+
+// Closing reports an ask that ends its exchange rather than continuing it.
+func (a Ask) Closing() bool { return strings.TrimSpace(a.Settled) != "" }
+
+// Validate reports every contract violation in the ask at once.
+func (a Ask) Validate() error {
+	var problems []error
+	if !a.Role.Valid() {
+		problems = append(problems, fmt.Errorf("role %q is not one of the harness's roles; ask %s",
+			a.Role, strings.Join(roleNames(), ", ")))
+	}
+	if reference := strings.TrimSpace(a.Exchange); reference != "" && !ValidID(reference) {
+		problems = append(problems, fmt.Errorf("exchange %q is not an exchange identifier", reference))
+	}
+	problems = append(problems, boundedText("context", a.Context, MaxContextBytes, false))
+	problems = append(problems, boundedText("settled", a.Settled, MaxSettledBytes, false))
+	if a.Closing() {
+		// Closing is about a thread, so there has to be a thread to close, and
+		// there is nothing further to ask in the same breath.
+		if strings.TrimSpace(a.Exchange) == "" {
+			problems = append(problems, errors.New(`"settled" closes an exchange, so it names the exchange it closes`))
+		}
+		if strings.TrimSpace(a.Question) != "" {
+			problems = append(problems, errors.New(`an ask either asks something or settles an exchange, not both`))
+		}
+	} else {
+		problems = append(problems, boundedText("question", a.Question, MaxQuestionBytes, true))
+		if question := strings.TrimSpace(a.Question); question != "" && !strings.HasSuffix(question, "?") {
+			problems = append(problems, errors.New("question must ask something and end with a question mark"))
+		}
+	}
+	if err := errors.Join(problems...); err != nil {
+		return fmt.Errorf("invalid ask: %w", err)
+	}
+	return nil
+}
+
+func roleNames() []string {
+	names := make([]string, 0, len(domain.Roles()))
+	for _, role := range domain.Roles() {
+		names = append(names, string(role))
+	}
+	return names
+}
+
+// askDocument is the payload shape of the fenced block. One block carries one
+// ask: an exchange is a thread between two roles, and a reply that opened three
+// of them at once would be a role broadcasting rather than asking.
+type askDocument struct {
+	Ask Ask `json:"ask"`
+}
+
+// Extract splits a reply into the prose and the one ask it carries. An ask comes
+// only from the fenced block: prose that wonders what the architect would say is
+// not an ask and reaches nobody, which is the whole point of having a block for
+// it.
+func Extract(reply string) (string, *Ask, error) {
+	block, err := fenced.Split(reply, Fence, "ask")
+	if err != nil {
+		return block.Before, nil, err
+	}
+	if !block.Found {
+		return block.Before, nil, nil
+	}
+	ask, err := Decode(block.Payload)
+	if err != nil {
+		return block.Before, nil, err
+	}
+	return block.Rest, &ask, nil
+}
+
+// Decode strictly decodes the block payload. Unknown fields, trailing content,
+// and oversized input are refused rather than tolerated: what one role puts to
+// another has to be exactly what it said.
+func Decode(payload string) (Ask, error) {
+	trimmed := strings.TrimSpace(payload)
+	if trimmed == "" {
+		return Ask{}, errors.New("decode ask: the ask block is empty")
+	}
+	if len(trimmed) > MaxBlockBytes {
+		return Ask{}, fmt.Errorf("decode ask: block is %d bytes, limit is %d", len(trimmed), MaxBlockBytes)
+	}
+	decoder := json.NewDecoder(bytes.NewReader([]byte(trimmed)))
+	decoder.DisallowUnknownFields()
+	var document askDocument
+	if err := decoder.Decode(&document); err != nil {
+		return Ask{}, fmt.Errorf("decode ask: %w", err)
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		return Ask{}, errors.New("decode ask: unexpected trailing content after the ask")
+	}
+	if err := document.Ask.Validate(); err != nil {
+		return Ask{}, err
+	}
+	return document.Ask, nil
+}
+
+// harnessFencePrefix opens every block the harness reads out of an agent's
+// reply. An answering role is refused all of them at once rather than block by
+// block, so a channel added later is refused here without this having to learn
+// about it.
+const harnessFencePrefix = "```yoyodyne-"
+
+// ReadAnswer takes what an answering role said and returns it, or refuses it.
+// This is where judgment-only and decisionless stop being descriptions and
+// become a rule: the answering half of an exchange may say what it thinks and
+// nothing else, so a reply carrying any harness block at all is refused whole.
+// Nothing in it is carried out, the round records why, and the asker is told
+// that its question went unanswered rather than being handed half an answer.
+func ReadAnswer(reply string) (string, error) {
+	trimmed := strings.TrimSpace(reply)
+	if trimmed == "" {
+		return "", errors.New("the answering role said nothing")
+	}
+	if at := indexHarnessFence(trimmed); at >= 0 {
+		return "", fmt.Errorf("the answering role asked for %q, and an ask carries no authority: an answer is judgment and nothing else",
+			strings.TrimSpace(trimmed[at:at+lineLength(trimmed[at:])]))
+	}
+	if len(trimmed) > MaxAnswerBytes {
+		return "", fmt.Errorf("the answer is %d bytes, limit is %d", len(trimmed), MaxAnswerBytes)
+	}
+	return trimmed, nil
+}
+
+// indexHarnessFence finds a harness block that opens its own line, so a fence
+// quoted inside prose is text rather than a request.
+func indexHarnessFence(text string) int {
+	if strings.HasPrefix(text, harnessFencePrefix) {
+		return 0
+	}
+	if at := strings.Index(text, "\n"+harnessFencePrefix); at >= 0 {
+		return at + 1
+	}
+	return -1
+}
+
+func lineLength(text string) int {
+	if at := strings.IndexByte(text, '\n'); at >= 0 {
+		return at
+	}
+	return len(text)
+}
+
+// boundedText checks one value the record keeps verbatim.
+func boundedText(field, value string, limit int, required bool) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		if required {
+			return fmt.Errorf("%s is required", field)
+		}
+		return nil
+	}
+	if len(trimmed) > limit {
+		return fmt.Errorf("%s is %d bytes, limit is %d", field, len(trimmed), limit)
+	}
+	return nil
+}

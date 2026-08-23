@@ -1,0 +1,219 @@
+package exchange
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+)
+
+// An ask comes only from the block. Prose that wonders aloud what the architect
+// would say reaches nobody, which is what stops a channel with three enforced
+// properties being bypassed by writing a sentence.
+func TestAnAskComesOnlyFromItsBlock(t *testing.T) {
+	t.Parallel()
+
+	prose, ask, err := Extract("I wonder what the architect would say about the cost of this goal.")
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if ask != nil {
+		t.Fatalf("prose was read as an ask: %+v", ask)
+	}
+	if prose != "I wonder what the architect would say about the cost of this goal." {
+		t.Fatalf("prose = %q", prose)
+	}
+
+	reply := "The cost is the open question.\n\n" + Fence + `
+{"ask":{"role":"architect","question":"what would this goal cost, and what am I missing?","context":"I am about to order the backlog with it."}}
+` + "```" + "\n"
+	prose, ask, err = Extract(reply)
+	if err != nil {
+		t.Fatalf("Extract() error = %v", err)
+	}
+	if ask == nil {
+		t.Fatal("the block was not read as an ask")
+	}
+	if ask.Role != domain.RoleArchitect || !strings.HasPrefix(ask.Question, "what would this goal cost") {
+		t.Fatalf("ask = %+v", *ask)
+	}
+	if prose != "The cost is the open question." {
+		t.Fatalf("prose = %q", prose)
+	}
+}
+
+// The channel is bidirectional and the two directions are one mechanism, so the
+// architect's canonical question decodes exactly as the product manager's does.
+func TestBothCanonicalDirectionsAreOneMechanism(t *testing.T) {
+	t.Parallel()
+
+	for _, direction := range []struct {
+		name string
+		role domain.AgentRole
+		text string
+	}{
+		{
+			name: "product manager asks the architect",
+			role: domain.RoleArchitect,
+			text: `{"ask":{"role":"architect","question":"what does this goal cost, and what am I missing?"}}`,
+		},
+		{
+			name: "architect asks the product manager",
+			role: domain.RoleProductManager,
+			text: `{"ask":{"role":"product-manager","question":"if we sacrifice some performance, is that an unacceptable trade-off from the user's standpoint?"}}`,
+		},
+	} {
+		ask, err := Decode(direction.text)
+		if err != nil {
+			t.Fatalf("%s: Decode() error = %v", direction.name, err)
+		}
+		if ask.Role != direction.role {
+			t.Fatalf("%s: role = %q, want %q", direction.name, ask.Role, direction.role)
+		}
+	}
+}
+
+func TestAnAskIsRefusedWhenItAsksNothing(t *testing.T) {
+	t.Parallel()
+
+	for name, payload := range map[string]string{
+		"no role":             `{"ask":{"question":"what would this cost?"}}`,
+		"role nobody fills":   `{"ask":{"role":"designer","question":"what would this cost?"}}`,
+		"no question":         `{"ask":{"role":"architect"}}`,
+		"a statement":         `{"ask":{"role":"architect","question":"this will be expensive."}}`,
+		"asking and settling": `{"ask":{"role":"architect","exchange":"exchange-` + strings.Repeat("a", 32) + `","question":"and?","settled":"done"}}`,
+		"settling nothing":    `{"ask":{"role":"architect","settled":"done"}}`,
+		"unknown field":       `{"ask":{"role":"architect","question":"what?","urgency":"high"}}`,
+		"trailing content":    `{"ask":{"role":"architect","question":"what?"}} and also`,
+	} {
+		if _, err := Decode(payload); err == nil {
+			t.Errorf("%s: Decode() accepted %s", name, payload)
+		}
+	}
+}
+
+// Judgment-only and decisionless are the same rule from the answering side: an
+// answer is prose, and a reply reaching for any harness block at all is refused
+// whole rather than half carried out.
+func TestAnAnswerCarryingAnyHarnessBlockIsRefusedWhole(t *testing.T) {
+	t.Parallel()
+
+	for name, answer := range map[string]string{
+		"a tracker action": "I would admit this.\n\n```yoyodyne-tracker\n{\"actions\":[{\"action\":\"survey\"}]}\n```",
+		"a proposal":       "Worth doing.\n\n```yoyodyne-proposal\n{\"items\":[]}\n```",
+		"a report":         "Worth knowing.\n\n```yoyodyne-report\n{\"reports\":[]}\n```",
+		"an ask of its own": "Let me ask them.\n\n" + Fence + "\n" +
+			`{"ask":{"role":"developer","question":"what?"}}` + "\n```",
+	} {
+		if _, err := ReadAnswer(answer); err == nil {
+			t.Errorf("%s: ReadAnswer() accepted a block", name)
+		}
+	}
+
+	// A fence quoted inside prose is text. An answer that talks about the
+	// protocol is still an answer.
+	answer, err := ReadAnswer("The asker should use a ```yoyodyne-tracker block for that, not me.")
+	if err != nil {
+		t.Fatalf("ReadAnswer() refused quoted prose: %v", err)
+	}
+	if !strings.HasPrefix(answer, "The asker") {
+		t.Fatalf("answer = %q", answer)
+	}
+	if _, err := ReadAnswer("   "); err == nil {
+		t.Error("ReadAnswer() accepted an empty answer")
+	}
+}
+
+func TestAnExchangeRecordIsRefusedWhenItContradictsItself(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC)
+	sound := func() Exchange {
+		return Exchange{
+			SchemaVersion: SchemaVersion,
+			ID:            "exchange-" + strings.Repeat("a", 32),
+			ProductID:     "yoyodyne",
+			Asker:         Party{Role: domain.RoleProductManager},
+			Answerer:      Party{Role: domain.RoleArchitect},
+			Question:      "what would this cost?",
+			MaxRounds:     10,
+			OpenedAt:      at,
+			UpdatedAt:     at,
+		}
+	}
+	if err := sound().Validate(); err != nil {
+		t.Fatalf("a sound exchange was refused: %v", err)
+	}
+
+	closed := at.Add(time.Minute)
+	for name, broken := range map[string]func(*Exchange){
+		"a role asking itself": func(e *Exchange) { e.Answerer.Role = e.Asker.Role },
+		"no rounds allowed":    func(e *Exchange) { e.MaxRounds = 0 },
+		"more rounds than the cap": func(e *Exchange) {
+			e.MaxRounds = 1
+			e.Rounds = []Round{{Number: 1, Question: "a?", AskedAt: at}, {Number: 2, Question: "b?", AskedAt: at}}
+		},
+		"an outcome with no moment": func(e *Exchange) { e.Outcome = OutcomeResolved },
+		"unresolved but settled": func(e *Exchange) {
+			e.Outcome = OutcomeUnresolved
+			e.ClosedAt = &closed
+			e.Settled = "we agreed"
+		},
+	} {
+		one := sound()
+		broken(&one)
+		if err := one.Validate(); err == nil {
+			t.Errorf("%s: Validate() accepted it", name)
+		}
+	}
+}
+
+// The rounds and the cost are read together everywhere, because either alone
+// answers the operator's question wrongly.
+func TestAnExchangeReportsItsCostBesideItsRounds(t *testing.T) {
+	t.Parallel()
+
+	at := time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC)
+	one := Exchange{
+		SchemaVersion: SchemaVersion,
+		ID:            "exchange-" + strings.Repeat("b", 32),
+		ProductID:     "yoyodyne",
+		Asker:         Party{Role: domain.RoleProductManager, Agent: "product-manager"},
+		Answerer:      Party{Role: domain.RoleArchitect, Agent: "architect"},
+		Question:      "what would this cost?",
+		MaxRounds:     10,
+		Rounds: []Round{
+			{Number: 1, Question: "what would this cost?", Answer: "more than you think", CostUSD: 0.25, AskedAt: at},
+			{Number: 2, Question: "how much more?", Answer: "twice", CostUSD: 0.5, AskedAt: at},
+		},
+		OpenedAt:  at,
+		UpdatedAt: at,
+	}
+	if got := one.CostUSD(); got != 0.75 {
+		t.Fatalf("cost = %v, want 0.75", got)
+	}
+	if got := one.RoundsRemaining(); got != 8 {
+		t.Fatalf("remaining = %d, want 8", got)
+	}
+	summary := one.Summary()
+	for _, wanted := range []string{"2/10 round(s)", "$0.7500", "product manager asked architect"} {
+		if !strings.Contains(summary, wanted) {
+			t.Fatalf("summary %q is missing %q", summary, wanted)
+		}
+	}
+	thread := one.RenderThread()
+	for _, wanted := range []string{"more than you think", "twice", "round 2 of 10"} {
+		if !strings.Contains(thread, wanted) {
+			t.Fatalf("thread is missing %q:\n%s", wanted, thread)
+		}
+	}
+	// What the asker is handed back says where the thread has got to against its
+	// cap, because the cap is configurable and the contract cannot state it.
+	delivery := one.Delivery()
+	for _, wanted := range []string{"round 2 of the 10", "8 round(s)", "twice"} {
+		if !strings.Contains(delivery, wanted) {
+			t.Fatalf("delivery is missing %q:\n%s", wanted, delivery)
+		}
+	}
+}

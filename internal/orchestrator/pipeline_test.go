@@ -2631,6 +2631,7 @@ func newSharedPipeline(t *testing.T, repository, worktreeRoot string, store Stat
 			ReviewRoundsCap:     4,
 			RepairGrantAttempts: 2,
 		},
+		Exchange: config.Exchange{MaxRounds: 10},
 		Approvals: config.Approvals{
 			Brief: domain.ApprovalHuman, Goals: domain.ApprovalHuman, Designs: domain.ApprovalAutomatic,
 			WorkItems: domain.ApprovalHuman, Integration: domain.ApprovalHuman, Publishing: domain.ApprovalHuman,

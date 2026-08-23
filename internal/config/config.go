@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 )
 
 const CurrentVersion = 1
@@ -60,6 +61,7 @@ type Config struct {
 	Product   Product                `yaml:"product" json:"product"`
 	Execution Execution              `yaml:"execution" json:"execution"`
 	Triage    Triage                 `yaml:"triage" json:"triage"`
+	Exchange  Exchange               `yaml:"exchange" json:"exchange"`
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
@@ -346,6 +348,32 @@ const (
 	minimumRepairGrant = 1
 )
 
+// Exchange is what the inter-role ask channel is bounded by. Two roles talking
+// to each other is the one thing here with no natural end: each of them is a
+// judgement model, each can always find something further worth saying, and
+// neither is the operator. So an exchange is opened with a hard limit on rounds,
+// and the limit is a project's judgement about how long a question between two
+// of its roles is worth going on for.
+type Exchange struct {
+	// MaxRounds is the most rounds one exchange thread may take. Reaching it
+	// closes the exchange as unresolved and escalates it to the operator, which
+	// is what turns the pathological case — two roles deferring to each other for
+	// ever — into a rare, legible question somebody can answer. It is copied onto
+	// each exchange as it opens, so changing it never lengthens a thread already
+	// running long.
+	//
+	// Zero is not a choice here, unlike the triage caps: an exchange allowed no
+	// round at all is a channel that is off, and turning the channel off is
+	// leaving the block out of a persona rather than configuring a limit nothing
+	// can be spent against. It is refused, and one is the floor.
+	MaxRounds int `yaml:"max_rounds" json:"max_rounds"`
+}
+
+// defaultExchangeMaxRounds is far more rounds than a question between two roles
+// has ever needed and few enough that the loop this bounds costs a knowable
+// amount before it reaches the operator.
+const defaultExchangeMaxRounds = exchange.DefaultMaxRounds
+
 type Approvals struct {
 	// Brief, Goals, and Designs decide which canonical documents the operator's
 	// approval is asked for. `human` means the operator approves the document and
@@ -570,6 +598,12 @@ func (c Config) Validate() error {
 	// silently spent.
 	if c.Triage.RepairGrantAttempts < minimumRepairGrant {
 		problems = append(problems, "triage.repair_grant_attempts must be at least 1")
+	}
+	// And nor is zero a choice here: an exchange that may take no round is a
+	// question nobody can put, which is what leaving the channel unused already
+	// is.
+	if c.Exchange.MaxRounds < 1 {
+		problems = append(problems, "exchange.max_rounds must be at least 1")
 	}
 
 	approvalValues := []struct {

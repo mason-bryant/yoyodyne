@@ -243,6 +243,18 @@ triage:
   stuck_merge_age: %s
   review_rounds_cap: %d
 
+# How long one role may go on asking another one something. Roles can put a
+# question to each other through the harness -- the product manager asking the
+# architect what a goal costs, the architect asking the product manager whether a
+# trade-off is one a user would accept -- and every exchange is recorded where
+# you can read it. This is the hard limit on rounds in one thread. Reaching it
+# closes the exchange as unresolved and tells you about it, because two judgement
+# models can defer to each other politely for ever and the only thing that ends
+# that is a number. It may not be zero: the way to leave the channel unused is to
+# leave it unused.
+exchange:
+  max_rounds: %d
+
 # What you approve, and what runs without asking. The brief and the goals are
 # "human" deliberately: they are what you state, and everything else traces back
 # to them. "yoyo artifact approve <id>" records your approval in the document's
@@ -297,6 +309,7 @@ approvals:
 		effective.Execution.BlockedRunsBeforeIntakeHold,
 		renderScaffoldDuration(effective.Triage.StuckMergeAge),
 		effective.Triage.ReviewRoundsCap,
+		effective.Exchange.MaxRounds,
 		effective.Approvals.Brief,
 		effective.Approvals.Goals,
 		effective.Approvals.Designs,

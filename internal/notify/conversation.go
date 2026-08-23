@@ -63,6 +63,12 @@ const (
 	trackerClose        = "close"
 )
 
+// exchangeUnresolved is the outcome an ask exchange records when it reaches the
+// round limit it was opened with. It is named here rather than imported for the
+// reason the tracker operations above are: what is reported stays independent of
+// how the channel writes its own record down.
+const exchangeUnresolved = "unresolved-after-rounds"
+
 // FromConversation says what the event at one position of a conversation's log
 // did to the backlog, and says nothing at all — the zero notification — for the
 // events that did nothing to it, which is most of them.
@@ -95,9 +101,90 @@ func FromConversation(conversation runstate.Conversation, events []execution.Eve
 		return fromApprovedWork(conversation, events[:index], event)
 	case execution.EventProposalRejected:
 		return fromDeclinedWork(conversation, event)
+	case execution.EventExchangeRound, execution.EventExchangeClosed:
+		// An ask exchange is the second thing a conversation does that an operator
+		// cannot otherwise see. It is addressed to the exchange rather than to the
+		// product or to a work item, so a thread of its own carries it and the
+		// operator can follow one conversation between two roles without reading
+		// past everything else the asking conversation did.
+		return fromExchange(conversation, event)
 	default:
 		return Notification{}, nil
 	}
+}
+
+// exchangeRound is the part of a recorded ask round this reads. It is a narrow
+// local shape for the reason the tracker action's is: what is read here is a
+// durable record that outlives the code that wrote it.
+type exchangeRound struct {
+	Exchange string  `json:"exchange"`
+	Asked    string  `json:"asked"`
+	Round    int     `json:"round"`
+	Rounds   int     `json:"rounds"`
+	Outcome  string  `json:"outcome"`
+	CostUSD  float64 `json:"cost_usd"`
+	Question string  `json:"question"`
+	Text     string  `json:"text"`
+}
+
+// fromExchange says what one round of one role asking another came to.
+//
+// A round and a closing are separate kinds because they ask different things of
+// a reader, and they are said in different voices for the same reason. A round
+// carries the answering role's own words, so that role speaks it: agent-authored
+// text is posted as its author wrote it, and putting an architect's judgement in
+// the product manager's voice would attribute an opinion to a persona that did
+// not hold it. A closing is the harness saying an exchange is over, which is
+// nobody's opinion at all. The closing that settled nothing is the one worth
+// interrupting for, so it alone is said at warning severity.
+func fromExchange(conversation runstate.Conversation, event execution.Event) (Notification, error) {
+	var recorded exchangeRound
+	if err := json.Unmarshal(event.Payload, &recorded); err != nil {
+		return Notification{}, fmt.Errorf("read an ask exchange recorded in %s: %w", conversation.ConversationID, err)
+	}
+	topic, err := Exchange(recorded.Exchange)
+	if err != nil {
+		return Notification{}, fmt.Errorf("address the ask exchange recorded in %s: %w", conversation.ConversationID, err)
+	}
+	answering := domain.AgentRole(strings.TrimSpace(recorded.Asked))
+	if !answering.Valid() {
+		return Notification{}, fmt.Errorf("the ask exchange recorded in %s names %q as the role that answered", conversation.ConversationID, recorded.Asked)
+	}
+	kind := KindExchangeTurn
+	speaker := Persona(answering, "")
+	severity := report.SeverityNote
+	detail := Detail{
+		Round:  recorded.Round,
+		Rounds: recorded.Rounds,
+	}
+	text := strings.TrimSpace(recorded.Text)
+	if event.Type == execution.EventExchangeClosed {
+		kind = KindExchangeClosed
+		speaker = Harness()
+		// What an exchange left unsettled is what the voice reads to say it closed
+		// unresolved; an exchange that settled leaves it empty, which is the
+		// ordinary ending.
+		if recorded.Outcome == exchangeUnresolved {
+			severity = report.SeverityWarning
+			detail.Unresolved = strings.TrimSpace(recorded.Question)
+		}
+		text = ""
+	}
+	return Notification{
+		Topic:   topic,
+		Speaker: speaker,
+		Event: Event{
+			Kind:     kind,
+			At:       event.Timestamp,
+			Severity: severity,
+			Refs: Refs{
+				ConversationID: conversation.ConversationID,
+				ExchangeID:     recorded.Exchange,
+			},
+			Text:   text,
+			Detail: detail,
+		},
+	}, nil
 }
 
 // trackerAction is the part of a recorded tracker outcome this reads. It is a
