@@ -252,6 +252,9 @@ held_intake="$("$status" --product demo -l 2>&1)"
 contains "$held_intake" "INTAKE HELD: the harness starts nothing more on its own since 2026-08-18T18:15:00Z" \
   "a held intake leads with when it was held"
 contains "$held_intake" "the queue looks wrong" "the banner says why intake was held"
+# A hold announced at a terminal has to carry a remedy that can be run from one:
+# `/release` lives in a conversation the reader may not have open.
+contains "$held_intake" 'yoyo release' "the banner names the command that lifts the hold"
 contains "$held_intake" "$one_run" "the listing itself is still reported while intake is held"
 other_intake="$("$status" --product chatty -l 2>&1)"
 missing "$other_intake" "INTAKE HELD" "holding one product's intake says nothing about another's"

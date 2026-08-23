@@ -28,13 +28,17 @@ import (
 // agentReport is one configured agent as the operator reads it: what it is,
 // what it decides, and what durable state it has.
 type agentReport struct {
-	Name           string           `json:"name"`
-	Role           domain.AgentRole `json:"role"`
-	Backend        domain.Backend   `json:"backend"`
-	Model          string           `json:"model"`
-	Instances      int              `json:"instances"`
-	PersonaPath    string           `json:"persona_path,omitempty"`
-	PersonaVersion string           `json:"persona_version,omitempty"`
+	Name    string           `json:"name"`
+	Role    domain.AgentRole `json:"role"`
+	Backend domain.Backend   `json:"backend"`
+	Model   string           `json:"model"`
+	// Account is the provider account this agent runs under. Which role runs
+	// where is the operator's and it is fixed, so it is read here beside the
+	// model rather than reconstructed from the configuration by hand.
+	Account        string `json:"account,omitempty"`
+	Instances      int    `json:"instances"`
+	PersonaPath    string `json:"persona_path,omitempty"`
+	PersonaVersion string `json:"persona_version,omitempty"`
 	// Owns is what this role decides, from the authority table rather than from
 	// the persona: a project can rewrite the persona and cannot rewrite this.
 	Owns string `json:"owns,omitempty"`
@@ -290,6 +294,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			Role:           agent.Role,
 			Backend:        agent.Backend,
 			Model:          agent.Model,
+			Account:        agent.Account,
 			Instances:      agent.Instances,
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
@@ -410,8 +415,9 @@ func resolveAgent(cfg config.Config, requested string) (string, domain.AgentRole
 
 func renderAgent(report agentReport) string {
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, %d instance(s)\n",
-		report.Name, report.Role, report.Backend, report.Model, report.Instances)
+	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, account %s, %d instance(s)\n",
+		report.Name, report.Role, report.Backend, report.Model,
+		recorded(report.Account, "none the configuration names"), report.Instances)
 	if report.Owns != "" {
 		fmt.Fprintf(&rendered, "  owns %s\n", report.Owns)
 	}

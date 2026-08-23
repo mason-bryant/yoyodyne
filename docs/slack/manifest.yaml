@@ -18,6 +18,14 @@
 #                          under its own name and face, and what no persona did
 #                          arrives from the harness itself; without this scope
 #                          the voice would be the only thing telling them apart.
+#   reactions:write        mark the message a thread hangs from with what its
+#                          item is doing — working, with the reviewer, blocked,
+#                          landed — and take the mark off again as the record
+#                          moves. It is what makes the channel's top level a
+#                          status board that answers which threads need somebody
+#                          without any of them being opened. Without it the
+#                          messages are unaffected and the marks are simply
+#                          absent.
 #   channels:history       read replies in the thread the sink opened, in public
 #                          channels. Nothing acts on a reply today: the sink
 #                          acknowledges what arrives so Slack stops redelivering
@@ -30,21 +38,46 @@
 # Socket Mode is on and there is no request URL, which is the point: the harness
 # runs on operators' machines behind NAT, and the Events API would demand a
 # public HTTPS endpoint per operator.
+#
+# The two descriptions below are folded (">-") rather than literal ("|"), and
+# that is not a style choice. Slack renders the About text exactly as it arrives,
+# so a literal block ships this file's own line wrapping as hard breaks
+# mid-sentence — the profile reads as a column of broken lines. Folding joins
+# each wrapped paragraph back into one line, which leaves the break between the
+# two paragraphs as the only one in the text, where it is meant to be.
+#
+# The doubled blank line inside long_description is deliberate and not a stray:
+# a folded scalar collapses n+1 line breaks into n, so one empty line would give
+# the two paragraphs a bare line break and two give them the empty line between
+# them. Rewrap these paragraphs freely; just keep exactly two empty lines there,
+# which is what renders as one blank line. Three would render as two.
+#
+# One part of the profile is not here at all: a manifest cannot carry an image,
+# so the app's icon is uploaded by hand. It is already checked in, as
+# docs/slack/app-icon-v1.png beside this file and beside the role faces in
+# docs/slack/avatars/, and step 1 of setup.md walks the upload.
 display_information:
   name: Yoyodyne
-  description: Reports what the Yoyodyne harness is doing, one thread per work item.
-  long_description: |
-    Yoyodyne runs development work on your own machine: it claims a work item,
-    develops it, runs the checks, has it reviewed, and promotes it. This app is
-    how that work is visible while it happens. One thread per work item, one
-    message per milestone, and every report an agent files at the severity it
-    was filed under. Each role speaks under its own name, in its own voice, and
-    what no persona did arrives from the harness itself.
+  # What it is, in one line. The About text below is the fuller story, so this
+  # one does not start telling it.
+  description: >-
+    Yoyodyne runs development work on your own machine. This is where you watch
+    it happen.
+  long_description: >-
+    A work item gets a thread, and everything that happens to it is a message in
+    that thread: the run starting and why that item was chosen, the checks
+    passing or failing, the reviewer's verdict, the promotion onto the target
+    branch. Every report an agent files is carried through word for word, at the
+    severity it was filed under, and each role speaks under its own name and
+    face — the developer about the change it is making, the reviewer about the
+    change it is judging. What no persona did, like a promotion or a merge,
+    arrives from Yoyodyne itself.
 
-    It reports and does not act. Messages are read from the harness's own
-    durable records by a process you start yourself, so nothing here can change
-    what the harness does, and a workspace that is down delays messages rather
-    than losing them.
+
+    It reports and it does not act. A separate process you start reads the
+    harness's own durable records and posts from them, so nothing said in this
+    workspace can change what the harness does, and a workspace that is down
+    delays messages rather than losing them.
   background_color: "#1f2933"
 features:
   bot_user:
@@ -57,6 +90,7 @@ oauth_config:
     bot:
       - chat:write
       - chat:write.customize
+      - reactions:write
       - channels:history
       - groups:history
 settings:

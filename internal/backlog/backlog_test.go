@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
 func TestOrderIsPriorityFirstAndHoldsWhatTheProductManagerDidNotDecide(t *testing.T) {
@@ -133,6 +134,48 @@ func TestADependencyOnFinishedWorkHoldsNothingBack(t *testing.T) {
 	}
 	if strings.Contains(queue.Render(), "waiting on") {
 		t.Fatalf("a finished blocker was named as a wait: %q", queue.Render())
+	}
+}
+
+// The failure this exists for, at the grain the queue is read at: an item whose
+// execution is a conversation with a role, sitting at the top of the order with
+// the tracker reporting it as perfectly pullable — which it is, for anything but
+// a developer run. It keeps its place and is never what comes next, and the line
+// that says so says it will not become pullable rather than reading like a wait.
+func TestWorkAConversationCarriesIsNeverTheNextThingToPull(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{
+			ID: "yoyodyne-ifd.138", Title: "Promote the brief", Status: statusOpen, Priority: 0,
+			Executor: domain.WorkItemExecutorConversation,
+		},
+		{ID: "yoyodyne-ifd.144", Title: "Mark the conversation items", Status: statusOpen, Priority: 1},
+	}, []string{"yoyodyne-ifd.138", "yoyodyne-ifd.144"})
+
+	held := queue.Entries[0]
+	if held.Ready {
+		t.Fatalf("work no run can carry was reported ready: %#v", held)
+	}
+	// It is passed over rather than reordered: where the product manager put it is
+	// still where it is.
+	if held.Position != 1 || held.Executor != domain.WorkItemExecutorConversation {
+		t.Fatalf("the entry moved or lost its marker: %#v", held)
+	}
+	if next, ok := queue.Next(); !ok || next.ID != "yoyodyne-ifd.144" {
+		t.Fatalf("Next() = %#v, %v", next, ok)
+	}
+	if queue.Ready() != 1 {
+		t.Fatalf("ready = %d, want the conversation item out of the count", queue.Ready())
+	}
+	rendered := queue.Render()
+	if !strings.Contains(rendered, `its executor is "conversation" rather than a developer run`) {
+		t.Fatalf("rendered backlog = %q", rendered)
+	}
+	// The three other holds are waits, and reading this one as one would send
+	// somebody looking for a blocker to release.
+	if strings.Contains(rendered, "waiting on") {
+		t.Fatalf("an executor was reported as a wait: %q", rendered)
 	}
 }
 

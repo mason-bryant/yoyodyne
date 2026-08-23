@@ -32,7 +32,10 @@ func TestWorkStartsNothingWhileIntakeIsHeld(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("work code = %d, stderr = %q", code, stderr)
 	}
-	for _, want := range []string{"nothing was started", "holding intake", "the queue needs reordering first", "/release", "yoyo run"} {
+	// The remedy is named as something runnable from this terminal: `/release`
+	// is said beside it rather than instead of it, because whoever is reading
+	// this may have no conversation open.
+	for _, want := range []string{"nothing was started", "holding intake", "the queue needs reordering first", "yoyo release", "/release", "yoyo run"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("work stdout = %q, want it to mention %q", stdout, want)
 		}

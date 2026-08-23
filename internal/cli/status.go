@@ -358,6 +358,14 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	} else {
 		fmt.Fprintln(writer, "  selected: no reason recorded")
 	}
+	// What the run was spent on and what set it up are printed for every run, and
+	// for the reason the selection line is: there is one account today, so a line
+	// that appeared only where several existed would be a line nobody was reading
+	// on the day the second one arrived. A record that names neither is a record
+	// written before either was carried, and says so.
+	fmt.Fprintf(writer, "  ran under %s, configuration %s\n",
+		recorded(run.AccountAlias, "an account the record does not name"),
+		recorded(run.ConfigRevision, "a configuration the record does not name"))
 	printed := true
 	for _, reason := range []struct {
 		label string
@@ -390,6 +398,17 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		printed = true
 	}
 	return printed
+}
+
+// recorded says what a record holds for one field, or states the absence in
+// words. A blank in a listing reads as a bug in the listing rather than as a
+// record that was written before the field existed, which is what an absence
+// here actually is.
+func recorded(value, absence string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return absence
 }
 
 // printOutstandingSteps says what a finished run still owes, so a run marked

@@ -131,10 +131,10 @@ time of drafting.
 | `#scheduling-ready-work` | `README.md:1616` | `configuration/runs.md` |
 | `#protected-paths-in-a-developers-change` | `README.md:1516` | `configuration/artifacts.md` |
 | `#personas` | `README.md:537` | `configuration/agents.md` |
-| `#operators` | `docs/slack/setup.md:161` | `configuration/agents.md` |
+| `#operators` | `docs/slack/setup.md:190` | `configuration/agents.md` |
 | `#losing-a-race-for-the-target-branch` | `README.md:2461` | `configuration/publishing.md` |
 | `#how-long-a-check-may-take` | `README.md:328` | `configuration/runs.md` |
-| `#avatars` | `docs/slack/setup.md:139` | `configuration/agents.md` |
+| `#avatars` | `docs/slack/setup.md:169` | `configuration/agents.md` |
 | `#approving-a-document` | `README.md:1895` | `configuration/artifacts.md` |
 
 ### Citations of `README.md` anchors

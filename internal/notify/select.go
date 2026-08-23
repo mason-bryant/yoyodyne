@@ -84,7 +84,7 @@ func FromRun(before, after runstate.State) ([]Notification, error) {
 	// selector the record names: a persona must not narrate a selection it never
 	// made.
 	if started {
-		say(KindRunStarted, report.SeverityNote, selectionSpeaker(after.Selection), selectionDetail(after.Selection))
+		say(KindRunStarted, report.SeverityNote, selectionSpeaker(after.Selection), startedDetail(after))
 	}
 	if parked(before) && !parked(after) && !after.Status.Terminal() {
 		say(KindRunContinued, report.SeverityNote, Harness(), Detail{})
@@ -439,6 +439,18 @@ func selectionDetail(selection *runstate.Selection) Detail {
 		return Detail{}
 	}
 	return Detail{SelectedBy: selection.By, SelectionReason: selection.Reason}
+}
+
+// startedDetail is what a run's opening message says about it: why it is
+// running, and what it is running as. The account and the configuration are said
+// once, where the thread opens, rather than on every crossing after it — they
+// are fixed for the life of a run, and a fact repeated on every message is one
+// nobody reads on the message where it changed.
+func startedDetail(after runstate.State) Detail {
+	detail := selectionDetail(after.Selection)
+	detail.Account = after.AccountAlias
+	detail.Configuration = after.ConfigRevision
+	return detail
 }
 
 // checksBehind reports a run with the deterministic checks behind it: the record

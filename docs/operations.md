@@ -125,6 +125,22 @@ stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
 
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
+
 ## Waiting out a provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
@@ -397,9 +413,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -410,6 +428,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
