@@ -5,11 +5,15 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 )
 
@@ -34,6 +38,9 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	base := flags.String("base", "", "the base ref the branch accumulated over")
 	branch := flags.String("branch", "", "the branch to review (default: the repository's current branch)")
+	shadow := flags.Bool("shadow", false, "review to measure the reviewer; the verdict approves nothing")
+	model := flags.String("model", "", "the model selector to review with, instead of the configured one (requires --shadow)")
+	compare := flags.Bool("compare", false, "compare the recorded shadow reviews with the reviews they shadow, and review nothing")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -43,10 +50,36 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		printReviewUsage(stderr)
 		return 2
 	}
+	if *compare {
+		// Comparing reads what is already recorded, so everything that describes
+		// a review to make is refused rather than quietly ignored: an operator who
+		// passed --base meant a review to happen.
+		if *base != "" || *shadow || *model != "" {
+			fmt.Fprintln(stderr, "review --compare reads the recorded reviews and makes none, so it takes neither --base, --shadow, nor --model")
+			printReviewUsage(stderr)
+			return 2
+		}
+		return compareShadowReviews(*configPath, *branch, *jsonOutput, stdout, stderr)
+	}
 	if *base == "" {
 		fmt.Fprintln(stderr, "review requires --base: an accumulated change is measured against the commit it grew from")
 		printReviewUsage(stderr)
 		return 2
+	}
+	// A model chosen at the terminal is only ever a measurement. Letting one
+	// gate a branch would put the choice of what a verdict is worth in a command
+	// line rather than in the configuration, and the cheapest reviewer anybody
+	// happened to type would leave an approval behind it.
+	if *model != "" && !*shadow {
+		fmt.Fprintln(stderr, "review --model only makes sense with --shadow: a review the configuration did not choose the reviewer for cannot approve a branch")
+		printReviewUsage(stderr)
+		return 2
+	}
+	if *model != "" {
+		if err := config.ValidateModelSelector(*model); err != nil {
+			fmt.Fprintf(stderr, "review --model is invalid: %v\n", err)
+			return 2
+		}
 	}
 
 	parts, err := buildComponents(*configPath)
@@ -73,9 +106,10 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return reportBranchReview(stdout, stderr, *jsonOutput, orchestrator.BranchReviewOutcome{}, err)
 		}
 	}
-	outcome, err := branchReviewerFrom(parts).Review(ctx, orchestrator.BranchReviewRequest{
+	outcome, err := branchReviewerFrom(parts, *model).Review(ctx, orchestrator.BranchReviewRequest{
 		Branch:  reviewed,
 		BaseRef: *base,
+		Shadow:  *shadow,
 	})
 	return reportBranchReview(stdout, stderr, *jsonOutput, outcome, err)
 }
@@ -84,13 +118,22 @@ func reviewBranch(ctx context.Context, args []string, stdout, stderr io.Writer) 
 // is given the reviewer and nothing else that acts: no run store, no tracker,
 // and no integration, because a verdict on already-integrated work must not be
 // able to reach the runs that produced it.
-func branchReviewerFrom(parts components) orchestrator.BranchReviewer {
+//
+// An overriding model is what a shadow review is made with. Nothing else about
+// the reviewer changes with it — the same persona, the same contract, the same
+// evidence — because a measurement of what a model is worth is only a
+// measurement if the model is the only thing that differed.
+func branchReviewerFrom(parts components, model string) orchestrator.BranchReviewer {
 	cfg := parts.config
+	reviewerModel := agentModel(cfg, domain.RoleReviewer)
+	if model != "" {
+		reviewerModel = model
+	}
 	return orchestrator.BranchReviewer{
 		Worktrees: parts.worktrees,
 		Reviewer: review.Reviewer{
 			Backend: claudecode.Backend{Runner: parts.runner},
-			Model:   agentModel(cfg, domain.RoleReviewer),
+			Model:   reviewerModel,
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 		},
 		Reviews: parts.branchReviews,
@@ -110,6 +153,11 @@ func branchReviewerFrom(parts components) orchestrator.BranchReviewer {
 // branch was approved. A repair verdict is not a failed review — the review
 // worked, and it asked for repairs — but it is not an approval either, and the
 // exit code answers that question rather than the other one.
+//
+// A shadow review was never asked that question, so the exit code answers the
+// one it was asked instead: whether a verdict was obtained at all. Failing a
+// shadow review for asking about repairs would make measuring a reviewer look
+// like judging the branch, which is exactly what a shadow review is not.
 func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orchestrator.BranchReviewOutcome, err error) int {
 	if jsonOutput {
 		result := branchReviewOutput{}
@@ -122,18 +170,20 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 		if code := writeJSON(stdout, stderr, result); code != 0 {
 			return code
 		}
-		if err != nil || !outcome.Approved() {
-			return 1
-		}
-		return 0
+		return branchReviewCode(outcome, err)
 	}
 
 	if err != nil {
 		fmt.Fprintf(stderr, "branch review failed: %v\n", err)
 	}
 	if outcome.ReviewID != "" {
-		fmt.Fprintf(stdout, "reviewed %s against %s: %d commit(s) from %s to %s\n",
-			outcome.Branch, outcome.BaseRef, outcome.Commits, outcome.BaseCommit, outcome.HeadCommit)
+		theme := console.ThemeFor(stdout, os.Getenv)
+		reviewed := "reviewed"
+		if outcome.Shadow {
+			reviewed = "shadow-reviewed"
+		}
+		fmt.Fprintf(stdout, "%s %s against %s: %d commit(s) from %s to %s\n",
+			reviewed, outcome.Branch, outcome.BaseRef, outcome.Commits, outcome.BaseCommit, outcome.HeadCommit)
 		if outcome.Decision != "" {
 			fmt.Fprintf(stdout, "review: %s (session %s, model %s)\n", outcome.Decision, outcome.SessionID, outcome.Model)
 		}
@@ -158,19 +208,47 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 		if outcome.RecordFailure != "" {
 			fmt.Fprintf(stderr, "the verdict above was not recorded: %s\n", outcome.RecordFailure)
 		}
+		// Marked and dressed by the worst of them, for the reason a run's own
+		// closing line is: this is one line under a verdict and a list of findings,
+		// and a count alone reads the same whether the reviewer noticed three
+		// routine things or one that is already costing somebody.
 		if len(outcome.Reports) > 0 {
-			fmt.Fprintf(stdout, "reported %d thing(s) beside the verdict; `yoyo reports` shows them, as does /reports in `yoyo chat`\n", len(outcome.Reports))
+			worst := report.Worst(outcome.Reports)
+			fmt.Fprint(stdout, theme.Severity(console.Severity(worst), fmt.Sprintf(
+				"%sreported %d thing(s) beside the verdict (%s); `yoyo reports` shows them, as does /reports in `yoyo chat`\n",
+				worst.Prefix(), len(outcome.Reports), report.Tally(outcome.Reports))))
 		}
 		if outcome.ReportProblem != "" {
 			fmt.Fprintln(stdout, outcome.ReportProblem)
 		}
-		// The per-item work is integrated already, so this says what the branch
-		// now needs rather than holding anything back from it.
-		if !outcome.Approved() && err == nil {
+		// A shadow review decided nothing about the branch, and says so where a
+		// gating review would say what the branch now needs: what it produced is a
+		// measurement of the reviewer, and `yoyo review --compare` is what reads it.
+		if outcome.Shadow {
+			fmt.Fprintf(stdout, "this verdict measures the reviewer and approves nothing; `yoyo review --compare` holds it up against the review it shadows\n")
+		} else if !outcome.Approved() && err == nil {
+			// The per-item work is integrated already, so this says what the branch
+			// now needs rather than holding anything back from it.
 			fmt.Fprintf(stderr, "%s is not approved as an accumulated change; the work on it stays integrated and the findings above are work to be admitted\n", outcome.Branch)
 		}
 	}
-	if err != nil || !outcome.Approved() {
+	return branchReviewCode(outcome, err)
+}
+
+// branchReviewCode is what the command exits on, which depends on what it was
+// asked. A gating review is asked whether the branch is approved; a shadow
+// review is asked for a verdict to measure, and produced one or did not.
+func branchReviewCode(outcome orchestrator.BranchReviewOutcome, err error) int {
+	if err != nil {
+		return 1
+	}
+	if outcome.Shadow {
+		if !outcome.Decided() {
+			return 1
+		}
+		return 0
+	}
+	if !outcome.Approved() {
 		return 1
 	}
 	return 0
@@ -178,14 +256,24 @@ func reportBranchReview(stdout, stderr io.Writer, jsonOutput bool, outcome orche
 
 func printReviewUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo review --base <ref> [options]
+       yoyo review --compare [options]
 
 Reviews what a branch accumulated over a base commit, as one change, with the
 same independent reviewer that judges a single work item. The work it covers is
 already integrated: this reports on the branch and never revises a run.
 
+A shadow review is the same review made to measure the reviewer rather than to
+judge the branch: its verdict approves nothing, so a different model can be
+pointed at a branch state something else already decided without its answer ever
+gating anything. --compare holds those verdicts up against the ones they shadow.
+
 Options:
-  --base <ref>      the base the branch accumulated over (required)
-  --branch <name>   the branch to review (default: the current branch)
+  --base <ref>      the base the branch accumulated over (required unless --compare)
+  --branch <name>   the branch to review (default: the current branch), or with
+                    --compare the only branch to compare (default: every branch)
+  --shadow          measure the reviewer; the verdict approves nothing
+  --model <name>    review with this model instead of the configured one (requires --shadow)
+  --compare         compare the recorded shadow reviews with the reviews they shadow
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --json            emit machine-readable JSON`)
 }

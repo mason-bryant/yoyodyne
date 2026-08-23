@@ -18,13 +18,23 @@
 #                          under its own name and face, and what no persona did
 #                          arrives from the harness itself; without this scope
 #                          the voice would be the only thing telling them apart.
+#   reactions:write        mark the message a thread hangs from with what its
+#                          item is doing — working, with the reviewer, blocked,
+#                          landed — and take the mark off again as the record
+#                          moves. It is what makes the channel's top level a
+#                          status board that answers which threads need somebody
+#                          without any of them being opened. Without it the
+#                          messages are unaffected and the marks are simply
+#                          absent.
 #   channels:history       read replies in the thread the sink opened, in public
-#                          channels. Nothing acts on a reply today: the sink
-#                          acknowledges what arrives so Slack stops redelivering
-#                          it and does no more. The scope is declared now so the
-#                          inbound half is a feature flag rather than a
-#                          reinstall, and an operator who does not want it yet
-#                          can remove it and the two message events below.
+#                          channels. It is what carries a reply back to the
+#                          machine the harness runs on: a reply from somebody the
+#                          project authorized by name is recorded as a directive
+#                          against that thread's work item, and anybody else's is
+#                          answered saying it was not acted on. An operator who
+#                          does not want the harness steered from Slack at all
+#                          can remove it and the two message events below, and
+#                          replies then never arrive.
 #   groups:history         the same, for a private channel.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness
@@ -41,10 +51,12 @@ display_information:
     was filed under. Each role speaks under its own name, in its own voice, and
     what no persona did arrives from the harness itself.
 
-    It reports and does not act. Messages are read from the harness's own
-    durable records by a process you start yourself, so nothing here can change
-    what the harness does, and a workspace that is down delays messages rather
-    than losing them.
+    Messages are read from the harness's own durable records by a process you
+    start yourself, so a workspace that is down delays them rather than losing
+    them. Replies go the other way: a reply in a work item's thread, from
+    somebody the project has authorized by name, is recorded as a directive
+    against that item. Nobody else's reply changes anything, and a project that
+    has authorized nobody is steered by nobody.
   background_color: "#1f2933"
 features:
   bot_user:
@@ -57,6 +69,7 @@ oauth_config:
     bot:
       - chat:write
       - chat:write.customize
+      - reactions:write
       - channels:history
       - groups:history
 settings:

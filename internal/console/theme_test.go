@@ -159,6 +159,65 @@ func TestColourIsAnAdditionAndNeverTheMeaning(t *testing.T) {
 	}
 }
 
+// Severity is the one distinction a reader is meant to catch without reading
+// the line, so it is the one the theme spends the most emphasis on: colour and
+// weight for something already wrong, colour alone for a risk that has not cost
+// anything, and nothing at all for a note. Like every other colour here it is an
+// addition — the marker and the word survive stripping, and this only makes them
+// findable.
+func TestSeverityIsEmphasizedWithoutCarryingTheMeaning(t *testing.T) {
+	t.Parallel()
+
+	const line = "  !! report-0123 [critical] something is already wrong\n"
+	for _, test := range []struct {
+		name    string
+		env     map[string]string
+		dressed bool
+		want    string
+	}{
+		{name: "a colour terminal", env: map[string]string{"TERM": "xterm-256color"}, dressed: true, want: criticalDeep},
+		{name: "a sixteen-colour terminal", env: map[string]string{"TERM": "xterm"}, dressed: true, want: criticalBasic},
+		{name: "NO_COLOR", env: map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1"}},
+		{name: "a dumb terminal", env: map[string]string{"TERM": "dumb"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			theme := NewTheme(environment(test.env), func() int { return 40 })
+			dressed := theme.Severity(SeverityCritical, line)
+			if !test.dressed {
+				// The marker and the word are the whole of it here, which is what
+				// makes a dumb terminal show the same distinction as a colour one.
+				if dressed != line {
+					t.Fatalf("a critical report was dressed anyway: %q", dressed)
+				}
+				return
+			}
+			if !strings.HasPrefix(dressed, test.want) {
+				t.Fatalf("critical = %q, want it wrapped in %q", dressed, test.want)
+			}
+			// Weight as well as colour: this is the one thing meant to be caught
+			// out of the corner of an eye.
+			if !strings.Contains(test.want, emphasisOn) {
+				t.Fatalf("a critical report is coloured but not weighted: %q", test.want)
+			}
+			if stripped := escapes.ReplaceAllString(dressed, ""); stripped != line {
+				t.Fatalf("stripping colour changed the line: %q", stripped)
+			}
+			// The three are told apart from each other, not only from undressed
+			// text, and a note is dressed as nothing: a listing where every line is
+			// coloured has no emphasis left for the line that matters.
+			warning := theme.Severity(SeverityWarning, line)
+			if warning == dressed || warning == line {
+				t.Fatalf("a warning is not told from a critical report or from nothing: %q", warning)
+			}
+			if note := theme.Severity(SeverityNote, line); note != line {
+				t.Fatalf("a note was dressed: %q", note)
+			}
+		})
+	}
+}
+
 // A card is a frame around something the operator has to act on. Like the rule
 // it is decoration: it makes the boundary between two of them findable, and
 // everything that carries meaning is in the heading and the body, which is what

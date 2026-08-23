@@ -1071,8 +1071,17 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 		listed = listed[:maxProductWorkItems]
 	}
 	for _, item := range listed {
-		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d, %s] %s\n",
-			item.ID, item.Status, item.Priority, item.IssueType, singleLine(item.Title, maxWorkItemTitleBytes)))
+		// An item no developer run carries says so here, because this listing is
+		// what the queue's owner orders from: work that will never be pulled is a
+		// different thing to put at the top of it from work that will be pulled
+		// next. Ordinary work says nothing, which is nearly all of it.
+		executor := ""
+		if !item.Executor.DeveloperRun() {
+			executor = ", executor " + string(item.Executor)
+		}
+		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d, %s%s] %s\n",
+			item.ID, item.Status, item.Priority, item.IssueType, executor,
+			singleLine(item.Title, maxWorkItemTitleBytes)))
 	}
 	if len(items) > len(listed) {
 		rendered.WriteString(fmt.Sprintf("\n%d further work item(s) are not listed here.\n", len(items)-len(listed)))

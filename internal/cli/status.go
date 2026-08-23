@@ -18,17 +18,26 @@ package cli
 // It is read-only in the strongest sense. Reading a run is not acting on it, so
 // this holds nothing, adopts nothing, and settles nothing — a run another
 // process is executing is listed exactly as a finished one is. Settling what a
-// run left behind is `yoyo reconcile`, and following one live is
-// `bin/yoyo-status`; this is the record afterwards.
+// run left behind is `yoyo reconcile`; this is the record afterwards.
+//
+// Watching one happen is the same verb under `--follow`, `--list`, and
+// `--spend`, which live in statusstream.go: the record afterwards and the
+// stream as it arrives are the same question asked at two moments, and an
+// operator should not have to install a second thing to ask the other half of
+// it.
 
 import (
+	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -60,7 +69,11 @@ type statusOutput struct {
 	// does: an unreadable watch log costs this answer a line rather than the runs
 	// it found.
 	WatchError string `json:"watch_error,omitempty"`
-	Error      string `json:"error,omitempty"`
+	// What the operator has stopped is carried by every mode of this verb, for
+	// the reason it is announced by every mode: a paused machine and a dead one
+	// look identical to anything reading only the runs.
+	statusHolds
+	Error string `json:"error,omitempty"`
 }
 
 // defaultStatusRuns is how many runs are reported when nobody says. It is a
@@ -68,32 +81,113 @@ type statusOutput struct {
 // about what has happened lately; --limit 0 reports everything.
 const defaultStatusRuns = 20
 
-func reportRunStatus(args []string, stdout, stderr io.Writer) int {
+func reportRunStatus(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("status", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	failedOnly := flags.Bool("failed", false, "only the runs that ended without succeeding")
-	limit := flags.Int("limit", defaultStatusRuns, "report at most this many runs, newest first (0 reports all of them)")
+	limit := flags.Int("limit", defaultStatusRuns, "report at most this many, newest first (0 reports all of them)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	follow := flags.Bool("follow", false, "follow a run, conversation, or branch review as its events arrive")
+	events := flags.Bool("events", false, "print a stream's recent events and exit, without following")
+	list := flags.Bool("list", false, "list the recent runs, conversations, and branch reviews")
+	spend := flags.Bool("spend", false, "report what was spent, grouped by the local day it was spent on")
+	latest := flags.Bool("latest", false, "with --follow, move to a later stream when one starts")
+	lines := flags.Int("lines", defaultStreamLines, "replay this many recorded events first (0 replays the whole log)")
+	kind := flags.String("kind", "", "narrow to one kind: runs, chats, reviews, or all (default all)")
+	includeAll := flags.Bool("all", false, "include the thinking-token events the default leaves out")
+	raw := flags.Bool("raw", false, "emit each event exactly as it was recorded")
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 {
-		fmt.Fprintln(stderr, "status accepts at most one Beads work item id")
+	if len(positional) > 1 {
+		fmt.Fprintln(stderr, "status accepts at most one id")
 		printStatusUsage(stderr)
 		return 2
 	}
+	// The argument is optional, so it is read through argumentAt rather than
+	// indexed: `yoyo status` with nothing named reports the whole recent history.
+	// Which id it is depends on the mode — a work item for the run records, a
+	// stream for the live ones — because those are different collections and an
+	// argument that meant the same thing in both would name nothing in one.
+	named := argumentAt(positional, 0)
 	if *limit < 0 {
-		fmt.Fprintln(stderr, "limit cannot be negative; 0 reports every recorded run")
+		fmt.Fprintln(stderr, "limit cannot be negative; 0 reports everything")
 		return 2
 	}
+	if *lines < 0 {
+		fmt.Fprintln(stderr, "lines cannot be negative; 0 replays the whole log")
+		return 2
+	}
+	kinds, err := resolveStreamKinds(*kind)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	mode, err := selectedStatusMode(*follow, *events, *list, *spend)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		printStatusUsage(stderr)
+		return 2
+	}
+	if *latest && mode != statusFollows {
+		fmt.Fprintln(stderr, "--latest moves a follow to a later stream, so it needs --follow")
+		return 2
+	}
+	// An option that belongs to the other half of the verb is refused rather than
+	// ignored: an operator who narrowed a listing and was silently given the
+	// unnarrowed one reads a true answer as the answer to their question.
+	if mode != statusReadsRecords && *failedOnly {
+		fmt.Fprintln(stderr, "--failed selects among the recorded runs, so it cannot narrow a stream")
+		return 2
+	}
+	// Following emits the recorded events themselves, which are already the
+	// machine-readable form: --raw is what asks for them untouched. Like every
+	// other refusal here it is decided from the flags alone, so a request that
+	// cannot be honored is refused before any configuration is loaded or any
+	// state directory is opened to answer it.
+	if *jsonOutput && (mode == statusFollows || mode == statusShowsEvents) {
+		fmt.Fprintln(stderr, "a followed stream emits its own recorded events; --raw is what asks for them untouched")
+		return 2
+	}
+	if mode != statusReadsRecords {
+		options := streamOptions{
+			kinds:  kinds,
+			match:  named,
+			lines:  *lines,
+			limit:  *limit,
+			follow: mode == statusFollows,
+			latest: *latest,
+			raw:    *raw,
+			all:    *includeAll,
+		}
+		if mode == statusPricesStreams {
+			days, match, err := spendWindow(named)
+			if err != nil {
+				fmt.Fprintln(stderr, err)
+				return 2
+			}
+			options.days, options.match = days, match
+		}
+		return reportStreamStatus(ctx, mode, options, *configPath, *jsonOutput, stdout, stderr)
+	}
+	if *raw || *includeAll {
+		fmt.Fprintln(stderr, "--raw and --all shape a followed event stream, so they need --follow or --events")
+		return 2
+	}
+	if *kind != "" {
+		fmt.Fprintln(stderr, "--kind narrows which event streams are read, so it needs --follow, --events, --list, or --spend")
+		return 2
+	}
+	workItemID := named
 
-	store, caps, err := recordedRunStore(*configPath)
+	store, caps, roots, err := recordedRunStore(*configPath)
 	if err != nil {
 		return reportStatusFailure(stdout, stderr, *jsonOutput, err)
 	}
 	history, err := store.History(runstate.RunQuery{
-		WorkItemID: flags.Arg(0),
+		WorkItemID: workItemID,
 		FailedOnly: *failedOnly,
 		Limit:      *limit,
 	})
@@ -110,7 +204,7 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// reported beside them instead.
 	var counters *runstate.TriageCounters
 	var triageFailure string
-	if workItemID := flags.Arg(0); workItemID != "" {
+	if workItemID != "" {
 		read, err := store.Triage().Counters(workItemID)
 		if err != nil {
 			triageFailure = fmt.Sprintf("the item's triage record could not be read: %v", err)
@@ -125,14 +219,16 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 	// still choosing work — is the one an operator asks before any question
 	// about a particular run.
 	watched, watchFailure := latestWatch(*configPath)
+	holds := readStatusHolds(roots)
 
 	if *jsonOutput {
 		output := statusOutput{
-			Runs:     history.Runs,
-			Matched:  history.Matched,
-			Recorded: history.Recorded,
-			Triage:   counters,
-			Watch:    watched,
+			Runs:        history.Runs,
+			Matched:     history.Matched,
+			Recorded:    history.Recorded,
+			Triage:      counters,
+			Watch:       watched,
+			statusHolds: holds,
 		}
 		if counters != nil {
 			recorded := caps
@@ -142,8 +238,9 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 		output.WatchError = watchFailure
 		return writeJSON(stdout, stderr, output)
 	}
+	announceHolds(stderr, holds)
 	printWatch(stdout, watched)
-	printRunHistory(stdout, history, flags.Arg(0), *failedOnly)
+	printRunHistory(stdout, history, workItemID, *failedOnly)
 	if counters != nil {
 		printItemTriage(stdout, *counters, caps)
 	}
@@ -170,23 +267,132 @@ func reportRunStatus(args []string, stdout, stderr io.Writer) int {
 // The state root is runstate.SystemDefaultRoot for every command that has one,
 // so the product id is the whole of what decides which records these are, and a
 // test pins this path to the one buildComponents builds.
-func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, error) {
+func recordedRunStore(configPath string) (*runstate.Store, runstate.TriageCaps, statusRoots, error) {
+	roots, err := statusStateRoots(configPath)
+	if err != nil {
+		return nil, runstate.TriageCaps{}, statusRoots{}, err
+	}
+	store, err := runstate.NewStore(roots.stateRoot, roots.productID)
+	if err != nil {
+		return nil, runstate.TriageCaps{}, statusRoots{}, err
+	}
 	resolved, err := loadConfiguration(configPath)
 	if err != nil {
-		return nil, runstate.TriageCaps{}, err
-	}
-	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
-	if err != nil {
-		return nil, runstate.TriageCaps{}, err
-	}
-	store, err := runstate.NewStore(stateRoot, resolved.Config.Product.ID)
-	if err != nil {
-		return nil, runstate.TriageCaps{}, err
+		return nil, runstate.TriageCaps{}, statusRoots{}, err
 	}
 	// The caps come back with the store because the counters are only legible
 	// beside them: "three review rounds" says nothing about whether this item is
 	// nearly out of them.
-	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), nil
+	return store, orchestrator.TriageCaps(resolved.Config.Execution, resolved.Config.Triage), roots, nil
+}
+
+// statusRoots is what every mode of this verb reads from: the product the
+// configuration names, and the state root the harness keeps its records under.
+// Resolving them once is what makes the live modes agree with the recorded ones
+// about which machine's work is being reported.
+type statusRoots struct {
+	productID domain.ProductID
+	stateRoot string
+}
+
+func statusStateRoots(configPath string) (statusRoots, error) {
+	resolved, err := loadConfiguration(configPath)
+	if err != nil {
+		return statusRoots{}, err
+	}
+	stateRoot, err := runstate.SystemDefaultRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return statusRoots{}, err
+	}
+	return statusRoots{productID: resolved.Config.Product.ID, stateRoot: stateRoot}, nil
+}
+
+// statusMode is which question of the verb was asked. The record afterwards is
+// the default because it is the one that needs no argument and refuses nothing;
+// the other three are the live surface this verb absorbed.
+type statusMode int
+
+const (
+	statusReadsRecords statusMode = iota
+	statusFollows
+	statusShowsEvents
+	statusListsStreams
+	statusPricesStreams
+)
+
+// selectedStatusMode reads which mode the flags asked for. They are exclusive
+// because they are different answers rather than different amounts of one:
+// combining them would have to invent a precedence, and an operator who typed
+// two of them meant one of them.
+func selectedStatusMode(follow, events, list, spend bool) (statusMode, error) {
+	selected := statusReadsRecords
+	named := 0
+	for _, mode := range []struct {
+		asked bool
+		mode  statusMode
+	}{
+		{follow, statusFollows},
+		{events, statusShowsEvents},
+		{list, statusListsStreams},
+		{spend, statusPricesStreams},
+	} {
+		if mode.asked {
+			selected = mode.mode
+			named++
+		}
+	}
+	if named > 1 {
+		return statusReadsRecords, errors.New("--follow, --events, --list, and --spend are different questions; ask one of them")
+	}
+	return selected, nil
+}
+
+// reportStreamStatus answers the three modes that read the event streams rather
+// than the run records. They share the holds banner and the state root with the
+// recorded listing, and nothing else: what they read is being written right now.
+func reportStreamStatus(ctx context.Context, mode statusMode, options streamOptions, configPath string, jsonOutput bool, stdout, stderr io.Writer) int {
+	roots, err := statusStateRoots(configPath)
+	if err != nil {
+		return reportStatusFailure(stdout, stderr, jsonOutput, err)
+	}
+	store, err := runstate.NewStreamStore(roots.stateRoot, roots.productID)
+	if err != nil {
+		return reportStatusFailure(stdout, stderr, jsonOutput, err)
+	}
+	holds := readStatusHolds(roots)
+	announceHolds(stderr, holds)
+	switch mode {
+	case statusListsStreams:
+		return listStreams(store, options, holds, jsonOutput, stdout, stderr)
+	case statusPricesStreams:
+		return reportSpend(store, options, holds, time.Now(), jsonOutput, stdout, stderr)
+	default:
+		// --json is refused for these two before anything is resolved, so by here
+		// there is nothing left to decide about the shape of what they emit.
+		return followStreams(ctx, store, options, stdout, stderr)
+	}
+}
+
+// spendWindow reads the one argument a spend report takes, which is either the
+// number of local days to cover or the stream to price. A purely numeric one is
+// the count, because an operator asking for a fortnight would not otherwise have
+// a way to say so. An id prefix can be all digits too — ids are hex — so one
+// that is has to be given with its `run-`, `chat-`, or `review-` prefix to be
+// read as an id rather than as days. Naming a stream prices it whatever day it
+// ran on: the window is for a report that has to choose what to show, and an id
+// has already chosen.
+func spendWindow(named string) (int, string, error) {
+	if named == "" {
+		return defaultSpendDays, "", nil
+	}
+	if strings.TrimLeft(named, "0123456789") != "" {
+		return 0, named, nil
+	}
+	days, err := strconv.Atoi(named)
+	if err != nil || days <= 0 {
+		return 0, "", fmt.Errorf("%q is neither a positive number of days nor a stream id", named)
+	}
+	return days, "", nil
 }
 
 // latestWatch reads where the session that chooses work got to. A product
@@ -358,6 +564,14 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	} else {
 		fmt.Fprintln(writer, "  selected: no reason recorded")
 	}
+	// What the run was spent on and what set it up are printed for every run, and
+	// for the reason the selection line is: there is one account today, so a line
+	// that appeared only where several existed would be a line nobody was reading
+	// on the day the second one arrived. A record that names neither is a record
+	// written before either was carried, and says so.
+	fmt.Fprintf(writer, "  ran under %s, configuration %s\n",
+		recorded(run.AccountAlias, "an account the record does not name"),
+		recorded(run.ConfigRevision, "a configuration the record does not name"))
 	printed := true
 	for _, reason := range []struct {
 		label string
@@ -390,6 +604,17 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 		printed = true
 	}
 	return printed
+}
+
+// recorded says what a record holds for one field, or states the absence in
+// words. A blank in a listing reads as a bug in the listing rather than as a
+// record that was written before the field existed, which is what an absence
+// here actually is.
+func recorded(value, absence string) string {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		return trimmed
+	}
+	return absence
 }
 
 // printOutstandingSteps says what a finished run still owes, so a run marked
@@ -482,6 +707,10 @@ func reportStatusFailure(stdout, stderr io.Writer, jsonOutput bool, err error) i
 
 func printStatusUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo status [options] [<beads-id>]
+       yoyo status --follow [options] [<id>]
+       yoyo status --events [options] [<id>]
+       yoyo status --list [options]
+       yoyo status --spend [options] [<id>|<days>]
 
 What became of the runs the harness made, newest first: the work item, the
 status it reached, the phase it was in, what it cost, and the reasons its record
@@ -501,11 +730,41 @@ authoritative home.
 Reading a run decides nothing about it, so this holds nothing and settles
 nothing, and reporting a failure is not itself a failure: the exit status says
 whether the records could be read. Settling what an interrupted run left behind
-is `+"`yoyo reconcile`"+`; following a live run is `+"`bin/yoyo-status`"+`.
+is `+"`yoyo reconcile`"+`.
+
+--follow, --events, --list, and --spend read the event stream a run, a
+conversation, and a branch review each record, rather than the run records. It
+is the same question asked of all three -- is this alive, what is it doing, and
+what did it cost -- so every one of them covers all three and the default never
+asks which kind you meant; --kind narrows it when that is what you want. There,
+the id names a stream or a unique prefix of one rather than a work item.
+
+--spend groups what was spent by the local-timezone day it was spent on, each
+day's group closing with that day's spend and today's coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation open for a fortnight appears under
+every day it spent on. A number asks for a different count of days; naming a
+stream prices that one whatever day it ran on. `+"`yoyo cost`"+` is the same run
+spending grouped by the work item the runs were for.
+
+Every mode leads with a banner while activity is paused or intake is held: a
+machine somebody paused and a machine that died look identical otherwise.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
   --failed          only the runs that ended without succeeding
-  --limit <n>       report at most this many runs, newest first (default 20; 0 reports all)
-  --json            emit machine-readable JSON`)
+  --limit <n>       report at most this many, newest first (default 20; 0 reports all)
+  --json            emit machine-readable JSON
+
+Live options:
+  --follow          follow a stream's events as they arrive
+  --events          print a stream's recent events and exit, without following
+  --list            list the recent runs, conversations, and branch reviews
+  --spend           report what was spent, by the local day it was spent on
+  --latest          with --follow, move to a later stream when one starts
+  --lines <n>       replay this many recorded events first (default 50; 0 the whole log)
+  --kind <kind>     runs, chats, reviews, or all (default all)
+  --all             include the thinking-token events the default leaves out
+  --raw             emit each event exactly as it was recorded`)
 }

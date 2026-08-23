@@ -35,10 +35,11 @@ func resumeWorkItem(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(stderr, "resume takes one Beads work item id, or none at all to lift a pause on everything")
 		printResumeUsage(stderr)
 		return 2
@@ -52,10 +53,10 @@ func resumeWorkItem(args []string, stdout, stderr io.Writer) int {
 	// It is the same verb because it is the same act — stop waiting and carry on —
 	// and what the argument says is whose decision is being withdrawn: the
 	// provider's refusal of one run, or the operator's hold over all of them.
-	if flags.NArg() == 0 {
+	if len(positional) == 0 {
 		return resumeHarness(stdout, stderr, *jsonOutput, parts.holds)
 	}
-	workItemID := flags.Arg(0)
+	workItemID := positional[0]
 	// The waiting run is found by reading, never by adopting: a run another
 	// process is serving must keep serving it, and taking its lease to release its
 	// wait would be the harness stopping the very run this exists to keep alive.

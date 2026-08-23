@@ -121,10 +121,10 @@ func showAmendment(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportAmendmentError(stdout, stderr, *flags.jsonOutput, err)
 	}
-	found, ok := amendment.Find(records, flags.set.Arg(0))
+	found, ok := amendment.Find(records, flags.id())
 	if !ok {
 		return reportAmendmentError(stdout, stderr, *flags.jsonOutput,
-			fmt.Errorf("no proposed change %q was raised for this product", flags.set.Arg(0)))
+			fmt.Errorf("no proposed change %q was raised for this product", flags.id()))
 	}
 	decided := decisionsOn(records, []amendment.Proposal{found})
 	if *flags.jsonOutput {
@@ -160,10 +160,10 @@ func decideAmendment(verb string, verdict amendment.Verdict, args []string, stdo
 	if err != nil {
 		return reportAmendmentError(stdout, stderr, *flags.jsonOutput, err)
 	}
-	found, ok := amendment.Find(records, flags.set.Arg(0))
+	found, ok := amendment.Find(records, flags.id())
 	if !ok {
 		return reportAmendmentError(stdout, stderr, *flags.jsonOutput,
-			fmt.Errorf("no proposed change %q was raised for this product", flags.set.Arg(0)))
+			fmt.Errorf("no proposed change %q was raised for this product", flags.id()))
 	}
 	decision, err := found.Decide(verdict, amendment.DeciderOperator, *reason, time.Now())
 	if err != nil {
@@ -243,6 +243,9 @@ type amendmentFlags struct {
 	name       string
 	configPath *string
 	jsonOutput *bool
+	// args are the positional arguments, collected by parse rather than read off
+	// the flag set, because the flags may come after them.
+	args []string
 }
 
 func newAmendmentFlags(name string, stderr io.Writer) *amendmentFlags {
@@ -256,11 +259,16 @@ func newAmendmentFlags(name string, stderr io.Writer) *amendmentFlags {
 	}
 }
 
+// parse reads the flags and the positional arguments, in whatever order they
+// were typed, which is what parseArguments is for: `amendment approve <id>
+// --reason ...` is what the usage text and the documentation say to type.
 func (f *amendmentFlags) parse(args []string, positional int) (int, bool) {
-	if err := f.set.Parse(args); err != nil {
+	parsed, err := parseArguments(f.set, args)
+	if err != nil {
 		return 2, false
 	}
-	if f.set.NArg() != positional {
+	f.args = parsed
+	if len(f.args) != positional {
 		if positional == 0 {
 			fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)
 		} else {
@@ -270,6 +278,11 @@ func (f *amendmentFlags) parse(args []string, positional int) (int, bool) {
 		return 2, false
 	}
 	return 0, true
+}
+
+// id is the proposal a command was given, for the commands that take one.
+func (f *amendmentFlags) id() string {
+	return argumentAt(f.args, 0)
 }
 
 // store opens the product's proposal log. It is the same log the runs append

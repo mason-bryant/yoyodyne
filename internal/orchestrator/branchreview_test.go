@@ -423,3 +423,41 @@ func TestBranchReviewRefusesABranchThatAccumulatedNothing(t *testing.T) {
 		t.Fatalf("List() = %#v, %v", recorded, err)
 	}
 }
+
+// A shadow review is the same review made to measure the reviewer. It runs and
+// records exactly as any other does; what it must not do is leave an approval of
+// the branch behind it, however it decided.
+func TestAShadowBranchReviewIsRecordedAndApprovesNothing(t *testing.T) {
+	t.Parallel()
+
+	repository := accumulatedRepository(t)
+	provider := branchProvider(`{"decision":"approve","summary":"the three commits agree with one another"}`)
+	reviewer, reviews, _ := newBranchReviewer(t, repository, provider)
+
+	outcome, err := reviewer.Review(context.Background(), BranchReviewRequest{Branch: "milestone", BaseRef: "main", Shadow: true})
+	if err != nil {
+		t.Fatalf("Review() error = %v", err)
+	}
+	// The verdict is what the reviewer said, and it decided; what it is not is
+	// an approval of this branch, which is the only question anything downstream
+	// asks of it.
+	if outcome.Decision != review.DecisionApprove || !outcome.Decided() {
+		t.Fatalf("Review() = %#v", outcome)
+	}
+	if outcome.Approved() {
+		t.Fatal("a shadow review approved the branch")
+	}
+	if !outcome.Shadow {
+		t.Errorf("the outcome does not say it was a shadow review: %#v", outcome)
+	}
+
+	recorded, err := reviews.List()
+	if err != nil || len(recorded) != 1 {
+		t.Fatalf("List() = %#v, %v", recorded, err)
+	}
+	// The durable record carries the same enforcement, because it outlives the
+	// process that made it and is what a later reader actually asks.
+	if !recorded[0].Shadow || recorded[0].Approved() || recorded[0].Decision != runstate.ReviewApprove {
+		t.Errorf("recorded review = %#v", recorded[0])
+	}
+}

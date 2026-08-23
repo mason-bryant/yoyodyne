@@ -31,13 +31,15 @@ func TestThisRepositoryOwnArtifactsAreReadableByTheHarness(t *testing.T) {
 	for _, problem := range set.Problems {
 		t.Errorf("a governed document is not read as an artifact: %s", problem)
 	}
-	// Ownership is reported over documents that loaded rather than refusing them,
-	// so a green load is not on its own evidence that every recorded change was
-	// made under the role that owns it.
+	// Every reference problem is reported over documents that loaded rather than
+	// refusing them, so a green load is not on its own evidence that the chain
+	// holds. All three kinds fail here rather than only the unauthorized
+	// revision: a `supports` entry naming a document nobody wrote and a document
+	// nothing connects to the brief are the links this repository's own
+	// traceability rests on, and a warning nobody is made to read is what let one
+	// of them break unnoticed.
 	for _, problem := range set.ReferenceProblems {
-		if problem.Kind == artifact.ProblemUnauthorizedRevision {
-			t.Errorf("a governed document records a change by a role that does not own it: %s", problem)
-		}
+		t.Errorf("a governed document's place in the chain is wrong: %s", problem)
 	}
 }
 

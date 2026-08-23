@@ -33,6 +33,102 @@ import (
 // rather than as though it had been free.
 var pricedEvents = []execution.EventType{execution.EventRunCompleted, execution.EventRunFailed}
 
+// spendEvidenceEvents are every event the phase split is read from: the priced
+// terminals above, and the review that brackets one of them. A review announcing
+// itself costs nothing and is decoded anyway, because it is what says the next
+// terminal is the reviewer's rather than the developer's.
+var spendEvidenceEvents = append([]execution.EventType{execution.EventReviewStarted}, pricedEvents...)
+
+// PhaseCost is what one part of a run cost and how many provider invocations it
+// took. The count travels with the money because the money alone does not say
+// whether a phase was one expensive invocation or five cheap ones, and what a
+// figure like this is read for -- how often work has to be repaired, how much a
+// review round costs -- is as much about how often as about how much.
+type PhaseCost struct {
+	CostUSD     float64 `json:"cost_usd"`
+	Invocations int     `json:"invocations,omitempty"`
+}
+
+func (p *PhaseCost) add(cost float64) {
+	p.CostUSD += cost
+	p.Invocations++
+}
+
+func (p *PhaseCost) merge(other PhaseCost) {
+	p.CostUSD += other.CostUSD
+	p.Invocations += other.Invocations
+}
+
+// Waits is time a run spent not working: waiting out a provider that refused it
+// for want of capacity or could not serve it at all, and parked at a provider
+// call while the operator held activity. It is counted in seconds rather than in
+// dollars because a wait spends nothing, and adding it to the money would make a
+// run that waited overnight read as expensive when what it was is slow.
+//
+// It is read from the run's own durable state rather than from its event log,
+// which is why it survives what the money does not: a run whose log is gone
+// still says how long it was held up.
+type Waits struct {
+	UsageLimitSeconds   int64 `json:"usage_limit_seconds,omitempty"`
+	OperatorHoldSeconds int64 `json:"operator_hold_seconds,omitempty"`
+}
+
+// Total is how long the waits held work up altogether.
+func (w Waits) Total() time.Duration {
+	return time.Duration(w.UsageLimitSeconds+w.OperatorHoldSeconds) * time.Second
+}
+
+func (w *Waits) merge(other Waits) {
+	w.UsageLimitSeconds += other.UsageLimitSeconds
+	w.OperatorHoldSeconds += other.OperatorHoldSeconds
+}
+
+// PhaseSpend splits what was spent by the part of the work each invocation
+// served. A single total says a piece of work was expensive; this says whether
+// it was expensive because the change was hard, because it was reviewed over and
+// over, or because it had to be repaired -- which is the difference between a
+// number to look at and a number to act on.
+//
+// Every priced invocation in a run's log lands in exactly one of the three, so
+// the money always adds back up to the total beside it. That is what makes this
+// a decomposition of the price rather than a second opinion about it.
+type PhaseSpend struct {
+	// Development is the developer's first attempt at the change, including any
+	// invocation reissued into it after the provider refused or killed one: what
+	// the attempt cost is what it took to get it made.
+	Development PhaseCost `json:"development"`
+	// Review is every reviewer invocation the run made, whichever way each
+	// verdict went and including the ones that produced no verdict at all.
+	Review PhaseCost `json:"review"`
+	// Repair is every developer attempt after the first -- the failing check, the
+	// refused path, and the reviewer's findings handed back are all repair, since
+	// each is the same thing from the money's point of view: the change being made
+	// again because it was not right the first time.
+	Repair PhaseCost `json:"repair"`
+	// Waits is time rather than money, and is here rather than beside this because
+	// it answers the same question: where a piece of work went.
+	Waits Waits `json:"waits"`
+}
+
+// TotalUSD is what the split adds up to, which is the total it was split from.
+func (p PhaseSpend) TotalUSD() float64 {
+	return p.Development.CostUSD + p.Review.CostUSD + p.Repair.CostUSD
+}
+
+// Invocations is how many provider invocations the split covers.
+func (p PhaseSpend) Invocations() int {
+	return p.Development.Invocations + p.Review.Invocations + p.Repair.Invocations
+}
+
+// Merge adds another split into this one, which is what an aggregate across
+// several runs or several work items is made of.
+func (p *PhaseSpend) Merge(other PhaseSpend) {
+	p.Development.merge(other.Development)
+	p.Review.merge(other.Review)
+	p.Repair.merge(other.Repair)
+	p.Waits.merge(other.Waits)
+}
+
 // RunPrice is what one recorded run cost, as its own event log reports it.
 type RunPrice struct {
 	RunID       string     `json:"run_id"`
@@ -48,6 +144,10 @@ type RunPrice struct {
 	// which is the developer's, the reviewer's, and one more per repair attempt.
 	Invocations int     `json:"invocations,omitempty"`
 	CostUSD     float64 `json:"cost_usd"`
+	// Phases splits that cost by the part of the run each invocation served. Its
+	// money is zero on a run that could not be priced; its waits are not, because
+	// they come from the run's own state rather than from the log that is gone.
+	Phases PhaseSpend `json:"phases"`
 	// Unknown says why this run could not be priced, and is empty on one that
 	// was. A run carrying it is not a run that cost nothing: nothing survives to
 	// say what it cost, which is a different fact and is stated as itself.
@@ -64,6 +164,10 @@ type ItemPrice struct {
 	WorkItemID string     `json:"work_item_id"`
 	Runs       []RunPrice `json:"runs,omitempty"`
 	TotalUSD   float64    `json:"total_usd"`
+	// Phases splits that total across every run made for the item, which is where
+	// the split earns its keep: an item that took three attempts is where the
+	// money that went on repair rather than on the change itself is visible.
+	Phases PhaseSpend `json:"phases"`
 	// UnknownRuns counts the runs whose evidence is gone. While it is non-zero
 	// the total is a lower bound on what the item cost.
 	UnknownRuns int `json:"unknown_runs,omitempty"`
@@ -134,6 +238,10 @@ func (s *Store) price(workItemID string, states []State) ItemPrice {
 	for _, state := range states {
 		run := s.priceRun(state)
 		price.Runs = append(price.Runs, run)
+		// The split is merged before the run is judged priceable, which is what
+		// keeps an unpriceable run's waits in the item's total: it spent no money
+		// anybody can name and it still held the work up for as long as it did.
+		price.Phases.Merge(run.Phases)
 		if !run.Known() {
 			price.UnknownRuns++
 			continue
@@ -156,12 +264,21 @@ func (s *Store) priceRun(state State) RunPrice {
 		CompletedAt: state.CompletedAt,
 		Integrated:  state.Integration != nil,
 	}
+	// What the run waited is read from its own state rather than from its event
+	// log, so it is recorded before anything that can fail: a run whose log is
+	// gone still says how long it was held up, because what held it up was never
+	// written in the log to begin with.
+	waits := Waits{
+		UsageLimitSeconds:   state.UsageLimitPausedSeconds,
+		OperatorHoldSeconds: state.OperatorHeldSeconds,
+	}
+	run.Phases.Waits = waits
 	path, err := s.eventPath(state.RunID)
 	if err != nil {
 		run.Unknown = err.Error()
 		return run
 	}
-	cost, invocations, err := scanEventCost(path)
+	spend, err := scanEventSpend(path)
 	if err != nil {
 		run.Unknown = err.Error()
 		return run
@@ -170,56 +287,111 @@ func (s *Store) priceRun(state State) RunPrice {
 	// log with none in it is a log that lost them rather than a run that never
 	// spent anything. A run with no session recorded never got as far as invoking
 	// a provider, and costing nothing is the truth about it.
-	if invocations == 0 && (strings.TrimSpace(state.ProviderSessionID) != "" || strings.TrimSpace(state.ReviewSessionID) != "") {
+	if spend.Invocations() == 0 && (strings.TrimSpace(state.ProviderSessionID) != "" || strings.TrimSpace(state.ReviewSessionID) != "") {
 		run.Unknown = "the run recorded a provider session but its event log holds no invocation to price"
 		return run
 	}
-	run.CostUSD = cost
-	run.Invocations = invocations
+	spend.Waits = waits
+	run.Phases = spend
+	run.CostUSD = spend.TotalUSD()
+	run.Invocations = spend.Invocations()
 	return run
 }
 
 // scanEventCost sums what the provider reported for every invocation in one
-// event log. It reads the log a line at a time and decodes only the lines that
-// can carry a cost, because an event log is mostly the invocation's own chatter
-// and pricing a run must not mean decoding all of it.
+// event log, without regard for which part of the run each served. It is what a
+// log with no phases in it is priced by -- a branch review is one reviewer and
+// nothing else -- and it is the split's own total said the short way.
 func scanEventCost(path string) (float64, int, error) {
+	spend, err := scanEventSpend(path)
+	if err != nil {
+		return 0, 0, err
+	}
+	return spend.TotalUSD(), spend.Invocations(), nil
+}
+
+// scanEventSpend splits what the provider reported for every invocation in one
+// event log by the part of the run that invocation served. It reads the log a
+// line at a time and decodes only the lines that can carry a cost or open a
+// review, because an event log is mostly the invocation's own chatter and
+// pricing a run must not mean decoding all of it.
+//
+// The split comes out of the log's own shape rather than out of a phase the
+// harness had to remember to write down beside each invocation. A review is
+// bracketed: the reviewer announces itself and then makes exactly one
+// invocation, so the terminal after a review.started is the reviewer's and no
+// other terminal is. Every remaining terminal is a developer invocation, and
+// those group into attempts by how each one ended. An attempt that reached a
+// terminal of its own is over, so the next developer invocation is the next
+// attempt; an attempt the provider refused for want of capacity or killed
+// mid-flight is reissued in the same session, so the invocation after it is the
+// same attempt still being made and its cost belongs to that attempt. The first
+// attempt is the development and every attempt after it is a repair.
+func scanEventSpend(path string) (PhaseSpend, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, 0, errors.New("the run's event log is no longer recorded, so what it cost cannot be read")
+		return PhaseSpend{}, errors.New("the event log is no longer recorded, so what it cost cannot be read")
 	}
 	if err != nil {
-		return 0, 0, fmt.Errorf("open event log to price the run: %w", err)
+		return PhaseSpend{}, fmt.Errorf("open event log to price the run: %w", err)
 	}
 	defer file.Close()
 
 	var (
-		cost        float64
-		invocations int
+		spend PhaseSpend
+		// reviewing is set by a review announcing itself and cleared by the single
+		// invocation it makes rather than by the review closing, because a review
+		// the provider never answered closes with nothing at all -- and a bracket
+		// waiting for a close that never comes would charge the developer
+		// invocations after it to the reviewer.
+		reviewing bool
+		// attempt is which developer attempt the log has reached and ended says
+		// the last one finished being made. Together they are what puts a reissued
+		// invocation on the attempt it is reissuing rather than on a repair nobody
+		// asked for.
+		attempt int
+		ended   bool
 	)
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), maxEncodedEventBytes)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		if !carriesCost(line) {
+		if !carriesSpendEvidence(line) {
 			continue
 		}
 		var priced pricedEvent
 		if err := json.Unmarshal(line, &priced); err != nil {
-			return 0, 0, fmt.Errorf("decode event log to price the run: %w", err)
+			return PhaseSpend{}, fmt.Errorf("decode event log to price the run: %w", err)
 		}
 		// The quick filter matches text anywhere in the line, so the decoded type
-		// is what decides: an agent quoting an event name is not an invocation.
+		// is what decides: an agent quoting an event name is not an invocation and
+		// does not open a review either.
+		if priced.Type == execution.EventReviewStarted {
+			reviewing = true
+			continue
+		}
 		if !priced.priced() {
 			continue
 		}
-		cost += priced.Payload.TotalCostUSD
-		invocations++
+		if reviewing {
+			spend.Review.add(priced.Payload.TotalCostUSD)
+			reviewing = false
+			continue
+		}
+		if ended {
+			attempt++
+		}
+		if attempt == 0 {
+			spend.Development.add(priced.Payload.TotalCostUSD)
+		} else {
+			spend.Repair.add(priced.Payload.TotalCostUSD)
+		}
+		ended = priced.Type == execution.EventRunCompleted
 	}
 	if err := scanner.Err(); err != nil {
-		return 0, 0, fmt.Errorf("read event log to price the run: %w", err)
+		return PhaseSpend{}, fmt.Errorf("read event log to price the run: %w", err)
 	}
-	return cost, invocations, nil
+	return spend, nil
 }
 
 // pricedEvent is the little of an event pricing needs: which event it is, and
@@ -240,11 +412,12 @@ func (p pricedEvent) priced() bool {
 	return false
 }
 
-// carriesCost is the cheap test that decides whether a line is worth decoding.
-// It over-matches deliberately: what it must never do is skip a line that does
-// carry a cost, and the decoded type rejects everything else.
-func carriesCost(line []byte) bool {
-	for _, candidate := range pricedEvents {
+// carriesSpendEvidence is the cheap test that decides whether a line is worth
+// decoding. It over-matches deliberately: what it must never do is skip a line
+// that carries a cost or opens a review, and the decoded type rejects everything
+// else.
+func carriesSpendEvidence(line []byte) bool {
+	for _, candidate := range spendEvidenceEvents {
 		if bytes.Contains(line, []byte(`"`+string(candidate)+`"`)) {
 			return true
 		}

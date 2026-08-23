@@ -17,8 +17,7 @@
 # The provider step is opt-in because it spends real capacity: it hands an item
 # to a developer agent. Everything before it is free and deterministic.
 #
-# Requires go, git, bd, and python3. jq is optional and only the yoyo-status
-# cost report needs it.
+# Requires go, git, bd, and python3.
 #
 # No state an operator owns is written: the scratch project, the worktrees, the
 # binary `go install` produces, and the run state all live under one temporary
@@ -562,25 +561,26 @@ contains "$origins" "$project/.yoyodyne/config.yaml" "config show --origins name
 missing "$origins" "builtin:v1" "nothing is inherited from the built-in bundle"
 
 step "11. following a run or a conversation"
-# yoyo-status resolves the state directory the same way the harness does, which
-# is what makes the temporary state root above enough to keep this off an
-# operator's real runs. Both spellings are exercised. What it reports about
-# runs and conversations is checked by scripts/yoyo-status-test.sh, which needs
-# no provider and no repository to build both.
+# `yoyo status --list` resolves the state directory the same way the harness
+# does, which is what makes the temporary state root above enough to keep this
+# off an operator's real runs. Both spellings are exercised. What it reports
+# about runs, conversations, and branch reviews is checked by the Go tests in
+# internal/cli and internal/runstate, which need no provider and no repository
+# to build all three.
 # Both are pointed at roots that hold nothing, so what is being checked is which
-# directory the tool resolved rather than what happens to be in this walk's own.
+# directory the verb resolved rather than what happens to be in this walk's own.
 status_listing="$(YOYODYNE_STATE_HOME="$scratch/named" \
-  "$repository/bin/yoyo-status" -l 2>&1 || true)"
-contains "$status_listing" "no Yoyodyne state at $scratch/named/products" \
-  "yoyo-status honors YOYODYNE_STATE_HOME"
+  "$yoyo" status --list 2>&1 || true)"
+contains "$status_listing" "recorded under $scratch/named/products/calc" \
+  "yoyo status --list honors YOYODYNE_STATE_HOME"
 status_listing="$(env -u YOYODYNE_STATE_HOME XDG_STATE_HOME="$scratch/xdg" \
-  "$repository/bin/yoyo-status" -l 2>&1 || true)"
-contains "$status_listing" "no Yoyodyne state at $scratch/xdg/yoyodyne/products" \
-  "yoyo-status honors XDG_STATE_HOME by appending yoyodyne"
-if ! command -v jq >/dev/null 2>&1; then
-  cost="$("$repository/bin/yoyo-status" -c 2>&1 || true)"
-  contains "$cost" "needs jq" "yoyo-status -c says it needs jq when jq is absent"
-fi
+  "$yoyo" status --list 2>&1 || true)"
+contains "$status_listing" "recorded under $scratch/xdg/yoyodyne/products/calc" \
+  "yoyo status --list honors XDG_STATE_HOME by appending yoyodyne"
+# The spend report needs nothing installed beside the binary, which is half of
+# why it stopped being a shell script.
+spend="$("$yoyo" status --spend 2>&1 || true)"
+contains "$spend" "recorded under" "yoyo status --spend reports on a machine with nothing recorded"
 
 step "12. drive it from the conversation"
 if [ "${WALK_PROVIDER:-0}" = "1" ]; then
@@ -594,26 +594,19 @@ if [ "${WALK_PROVIDER:-0}" = "1" ]; then
   missing "$outcome" "uncommitted changes" "the run got past the repository readiness gate"
   contains "$outcome" "run-" "a run was created and reported an outcome by id"
 
-  # There is a run to look at now, so the tool the README points at for watching
+  # There is a run to look at now, so the verb the README points at for watching
   # one is exercised against a real record rather than an empty directory.
-  listing="$("$repository/bin/yoyo-status" -l 2>&1 || true)"
+  listing="$("$yoyo" status --list 2>&1 || true)"
   printf '%s\n' "$listing"
-  contains "$listing" "run-" "yoyo-status -l lists the run"
-  if command -v jq >/dev/null 2>&1; then
-    cost="$("$repository/bin/yoyo-status" -c 2>&1 || true)"
-    printf '%s\n' "$cost"
-    case "$cost" in
-      (*"USD"*|*"TOTAL"*|*"no completed provider invocations"*)
-        pass "yoyo-status -c reports spend when jq is installed" ;;
-      (*"Operation not permitted"*|*"mkstemp failed"*)
-        # The report aggregates through a temporary file under TMPDIR, and a
-        # restricted environment can deny even that. That is the environment
-        # refusing the tool, not the tool being wrong.
-        skip "yoyo-status -c: this environment denies the temporary file it needs" ;;
-      (*)
-        fail "yoyo-status -c produced no report -- got: $cost" ;;
-    esac
-  fi
+  contains "$listing" "run-" "yoyo status --list lists the run"
+  cost="$("$yoyo" status --spend 2>&1 || true)"
+  printf '%s\n' "$cost"
+  case "$cost" in
+    (*"USD"*|*"TOTAL"*|*"no completed provider invocations"*)
+      pass "yoyo status --spend reports what the run spent" ;;
+    (*)
+      fail "yoyo status --spend produced no report -- got: $cost" ;;
+  esac
 
   chat="$("$yoyo" chat --message "What should we do first?" 2>&1 || true)"
   printf '%s\n' "$chat"

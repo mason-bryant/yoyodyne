@@ -53,6 +53,20 @@ const (
 	failedBasic  = "\x1b[91m"
 )
 
+// How much attention something reported is asking for, dressed the same way
+// wherever it is shown. Critical borrows the colour a failed run is reported in
+// and adds the weight, because that is what it says: something already wrong.
+// Warning borrows the orange of work waiting on somebody, which is what a risk
+// that has not cost anything yet is. A note is dressed in nothing at all — it
+// asks for nothing, and a listing where every line is coloured has no emphasis
+// left to spend on the line that matters.
+const (
+	criticalDeep  = emphasisOn + failedDeep
+	criticalBasic = emphasisOn + failedBasic
+	warningDeep   = questionDeep
+	warningBasic  = questionBasic
+)
+
 // State is one of the states work is reported in. A caller names the state and
 // the theme decides what it looks like, so the colour of "blocked" is decided
 // once rather than at every place that prints it.
@@ -63,6 +77,19 @@ const (
 	StateBlocked State = "blocked"
 	StateDone    State = "done"
 	StateFailed  State = "failed"
+)
+
+// Severity is how much attention a report or a concern is asking for. The words
+// are the ones the collected pile is filed under, so a caller names the severity
+// something was recorded at and the theme decides what that looks like — which
+// is what keeps a critical report looking the same in a listing, in a run's
+// closing lines, and in the middle of a conversation.
+type Severity string
+
+const (
+	SeverityCritical Severity = "critical"
+	SeverityWarning  Severity = "warning"
+	SeverityNote     Severity = "note"
 )
 
 // ruleWidth bounds the horizontal rule, and unknownWidth is how wide it is
@@ -103,6 +130,10 @@ type Theme struct {
 	// states is what each state of work looks like. It is nil when nothing may
 	// be coloured, so a state is named in words and dressed in nothing.
 	states map[State]string
+	// severities is what each severity looks like. It is nil with the rest when
+	// nothing may be coloured, and it never holds SeverityNote even when
+	// everything may be: a note asks for nothing and is dressed as nothing.
+	severities map[Severity]string
 	// width is how wide the rule may be drawn, and is nil where there is no
 	// rule to draw.
 	width func() int
@@ -134,6 +165,10 @@ func NewTheme(env func(string) string, width func() int) Theme {
 			StateDone:    doneBasic,
 			StateFailed:  failedBasic,
 		},
+		severities: map[Severity]string{
+			SeverityCritical: criticalBasic,
+			SeverityWarning:  warningBasic,
+		},
 	}
 	if deepColour(term, env("COLORTERM")) {
 		theme.question, theme.proposal, theme.harness = questionDeep, proposalDeep, harnessDeep
@@ -142,6 +177,10 @@ func NewTheme(env func(string) string, width func() int) Theme {
 			StateBlocked: blockedDeep,
 			StateDone:    doneDeep,
 			StateFailed:  failedDeep,
+		}
+		theme.severities = map[Severity]string{
+			SeverityCritical: criticalDeep,
+			SeverityWarning:  warningDeep,
 		}
 	}
 	return theme
@@ -322,6 +361,17 @@ func (t Theme) Questions(reply string) string {
 // else here, the colour never outlives the line it began on.
 func (t Theme) State(state State, text string) string {
 	return dress(t.states[state], text)
+}
+
+// Severity dresses a piece of text by how much attention what it describes is
+// asking for, so a reader scanning a pile of reports finds the critical ones
+// without reading any of them. What it is given already says the severity in
+// words and already carries the marker that says it where nothing may be
+// dressed, so this adds nothing to the meaning: a listing captured to a file, or
+// read where colour was never permitted, still tells a critical report from a
+// note.
+func (t Theme) Severity(severity Severity, text string) string {
+	return dress(t.severities[severity], text)
 }
 
 // asksSomething reports a line that puts a question to the operator.

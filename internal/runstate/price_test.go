@@ -264,6 +264,172 @@ func TestStorePricesOnlyRealInvocations(t *testing.T) {
 	}
 }
 
+// A price that says only what a piece of work cost invites the question it
+// cannot answer: whether the money went on making the change, on judging it, or
+// on making it again. The split comes out of the log's own shape -- a review
+// announces itself and makes one invocation, and the developer invocations
+// between the reviews group into attempts -- and it always adds back up to the
+// total it was split from.
+func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.83"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The change, a review that asked for repair, the repair, and the review that
+	// took it: the shape every run of any length has.
+	appendCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 9.0)
+	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
+	appendCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, 2.0)
+	appendEvent(t, store, state.RunID, 4, execution.EventReviewCompleted, nil)
+	appendCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 4.0)
+	appendEvent(t, store, state.RunID, 6, execution.EventReviewStarted, nil)
+	appendCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, 1.5)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first attempt alone", phases.Development)
+	}
+	if phases.Review != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
+		t.Fatalf("review = %#v, want both reviewer invocations", phases.Review)
+	}
+	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want the second developer attempt", phases.Repair)
+	}
+	// The split is a decomposition of the price rather than a second opinion
+	// about it, so it has to reconstruct what it decomposed.
+	if phases.TotalUSD() != price.Runs[0].CostUSD || phases.Invocations() != price.Runs[0].Invocations {
+		t.Fatalf("split = %v across %d, run = %v across %d",
+			phases.TotalUSD(), phases.Invocations(), price.Runs[0].CostUSD, price.Runs[0].Invocations)
+	}
+	if price.Phases.TotalUSD() != price.TotalUSD {
+		t.Fatalf("item split = %v, item total = %v", price.Phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
+// An attempt the provider refused or killed is reissued in the same session, so
+// the invocation after it is the same attempt still being made. Counting it as a
+// fresh attempt would charge the change to repair for something nobody asked a
+// developer to fix.
+func TestStoreChargesAReissuedInvocationToTheAttemptItReissues(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.83"
+	state.ProviderSessionID = "session-developer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The provider refused the first attempt for want of capacity, the reissue
+	// finished it, and only then did a review send it back for repair.
+	appendCostEvents(t, store, state.RunID, 1, execution.EventRunFailed, 10.5)
+	appendCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 8.0)
+	appendEvent(t, store, state.RunID, 3, execution.EventReviewStarted, nil)
+	appendCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.0)
+	appendCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 3.0)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Development != (PhaseCost{CostUSD: 18.5, Invocations: 2}) {
+		t.Fatalf("development = %#v, want the refused attempt and its reissue", phases.Development)
+	}
+	if phases.Repair != (PhaseCost{CostUSD: 3.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want only the attempt the review asked for", phases.Repair)
+	}
+	if phases.TotalUSD() != price.TotalUSD {
+		t.Fatalf("split = %v, total = %v", phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
+// A review the provider never answered closes with nothing at all. The bracket
+// is closed by the one invocation a review makes rather than by the review
+// closing, so an unanswered one cannot swallow whatever the run does next.
+func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusFailed)
+	state.WorkItemID = "yoyodyne-ifd.83"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 6.0)
+	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
+	// The reviewer died without a verdict, so nothing closed the review.
+	appendCostEvents(t, store, state.RunID, 3, execution.EventRunFailed, 0.5)
+	appendCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.5)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Review != (PhaseCost{CostUSD: 0.5, Invocations: 1}) {
+		t.Fatalf("review = %#v, want only the reviewer's own invocation", phases.Review)
+	}
+	if phases.Repair != (PhaseCost{CostUSD: 2.5, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want the developer invocation after the lost review", phases.Repair)
+	}
+}
+
+// What a run waited comes from its own state rather than from its event log,
+// which is why it survives what the money does not: a run nothing can price
+// still says how long it was held up, and by whom.
+func TestStoreReportsWhatARunWaitedEvenWhenItCannotBePriced(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	priced := testState(t, StatusSucceeded)
+	priced.WorkItemID = "yoyodyne-ifd.83"
+	priced.ProviderSessionID = "session-developer"
+	priced.UsageLimitPausedSeconds = 3600
+	priced.OperatorHeldSeconds = 900
+	if err := store.Create(priced); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendCostEvents(t, store, priced.RunID, 1, execution.EventRunCompleted, 4.0)
+
+	lost := testState(t, StatusFailed)
+	lost.RunID = mustRunID(t)
+	lost.WorkItemID = priced.WorkItemID
+	lost.StartedAt = priced.StartedAt.Add(time.Hour)
+	lost.UpdatedAt = lost.StartedAt
+	lost.ProviderSessionID = "session-developer-2"
+	lost.UsageLimitPausedSeconds = 1800
+	if err := store.Create(lost); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	price, err := store.Price(priced.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	if price.Runs[0].Phases.Waits != (Waits{UsageLimitSeconds: 3600, OperatorHoldSeconds: 900}) {
+		t.Fatalf("priced run waits = %#v", price.Runs[0].Phases.Waits)
+	}
+	if price.Runs[1].Known() || price.Runs[1].Phases.Waits.UsageLimitSeconds != 1800 {
+		t.Fatalf("unpriced run = %#v, want its wait recorded anyway", price.Runs[1])
+	}
+	if price.Phases.Waits.Total() != 105*time.Minute {
+		t.Fatalf("item waits = %v, want every run's wait including the unpriced one", price.Phases.Waits.Total())
+	}
+}
+
 func appendCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, cost float64) {
 	t.Helper()
 	appendEvent(t, store, runID, sequence, eventType, map[string]any{

@@ -25,7 +25,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](../skills/yoyo-setup/SKILL.md) has your own agent session act on rather
+than parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
@@ -114,7 +117,7 @@ verb in the first place.
 Time a run spends held is accounted under its own kind, separately from what a
 provider's refusals are allowed to spend: a hold never eats a run's
 `execution.usage_limit_max_pause` budget, and nothing bounds it, because the
-thing that lifts it is you. Both `bin/yoyo-status` and the conversation's
+thing that lifts it is you. Both `yoyo status` and the conversation's
 `/status` lead with a PAUSED banner naming when the pause was placed, because a
 system somebody paused and forgot looks exactly like a system that died.
 
@@ -124,6 +127,22 @@ they have; the conversation's [`/hold`](conversation.md#steering-the-work-from-t
 stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
+
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
 
 ## Waiting out a provider usage limit
 
@@ -397,9 +416,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -410,6 +431,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -489,27 +521,41 @@ against the answer.
 
 ## Following a run, a conversation, or a branch review
 
-`bin/yoyo-status` follows the normalized event stream a run, a conversation, or
-a [branch review](work.md#reviewing-what-a-branch-adds-up-to) records, which is the
-closest thing there is to watching an agent work. It is a different thing from
-the `yoyo status` verb above despite the name: that reads back what the records
-hold now — a run still in flight as readily as one that finished — and this
-follows a run's events as they arrive. It is a shell script that
-lives in a checkout of this repository rather than part of the `yoyo` binary, so
-`go install` and a release download do not carry it; clone the repository, or
-copy the single file out of it, if you want it:
+`yoyo status --follow` follows the normalized event stream a run, a
+conversation, or a [branch review](work.md#reviewing-what-a-branch-adds-up-to) records, which is the closest
+thing there is to watching an agent work. It is the same verb as the run listing
+above asking a different question: that reads back what the records hold now,
+and this follows the events as they arrive.
 
 ```sh
-./bin/yoyo-status          # follow the newest of any kind
-./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+yoyo status --follow           # follow the newest of any kind
+yoyo status --follow --latest  # follow the newest, and move on when a later one starts
+yoyo status --events           # a stream's recent events, without following
+yoyo status --list             # list recent runs, conversations, and reviews
+yoyo status --spend            # the last 7 days of spend, by day and in total
+yoyo status --spend 30         # that many days instead of 7
 ```
+
+Until it was folded in here this was `bin/yoyo-status`, a shell script that
+lived only in a checkout of this repository: `go install` and a release download
+did not carry it, so the surface an operator watches the harness through was
+absent for everyone who had never seen the internals. It ships now, and it needs
+no `jq`.
+
+One thing the script did that this does not is take a `--product`. Which product
+is being read comes from the configuration, the same way it does for every other
+verb, so reading a second product's streams means pointing `--config` at that
+project's configuration or running from inside it — there is no way to name a
+product that the configuration in force does not.
 
 A conversation and a branch review each record the same kind of event stream a
 run does, and "is this alive" is the same question asked of all three, so every
 mode covers all of them and the default never asks which kind you meant.
-Selecting one by id or by a unique id prefix works the same for each. `--runs`,
-`--chats`, and `--reviews` narrow it to one kind when that is what you want.
+Selecting one by id or by a unique id prefix works the same for each. `--kind
+runs`, `--kind chats`, and `--kind reviews` narrow it to one kind when that is
+what you want. Under these modes the id names a stream rather than a work item,
+because they are different collections and an id that meant the same thing in
+both would name nothing in one of them.
 
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
@@ -519,25 +565,47 @@ branch review has no state file either — its verdicts share one log rather tha
 having a record each — so its status comes from its own events: `reviewing`
 while the verdict is being made, and `reviewed` once it has been.
 
-Every mode leads with a PAUSED banner while
-[activity is paused](#pausing-everything-and-resuming-it), naming when the pause
-was placed: a quiet machine somebody paused and a quiet machine that died look
-identical, and this is the one place an operator is already looking.
+Every mode leads with a banner while
+[activity is paused](#pausing-everything-and-resuming-it) or intake is held,
+naming when it was placed: a quiet machine somebody paused and a quiet machine
+that died look identical, and this is the one place an operator is already
+looking. The banners go to standard error, so `--json` stays machine-readable.
 
 It resolves the state directory the same way the harness does, so it keeps
-working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
-of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run, per conversation, and
-per branch review, and a mixed total says how much of it was each — a
-conversation turn and a branch review are each a provider invocation like any
-other, and leaving either out understated every total it belonged in.
-[`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
-item the runs were for, which is what answers "what did that piece of work
-cost"; it leaves conversations and branch reviews out, deliberately and for the
-same reason — a conversation that discussed five items, and a review of a branch
-that carried a dozen, cannot be attributed to any one of them.
+working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`, and an answer with
+nothing in it names the directory it read — a true answer about a directory you
+did not mean is the one failure this surface cannot afford. `yoyo status --help`
+lists the rest: `--raw` emits each event exactly as it was recorded, `--all`
+keeps the thinking-token pings the default leaves out, and `--lines` says how
+much of the log to replay before following it.
 
-[`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
+What `--spend` prices is every run, every conversation, and every branch review,
+and a mixed total says how much of it was each — a conversation turn and a
+branch review are each a provider invocation like any other, and leaving either
+out understated every total it belonged in. An invocation the provider ended in
+an error is priced with them, for the same reason: it cost money like any other.
+
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `--spend 30` — and naming a
+run, a conversation, or a review prices that one whatever day it ran on, because
+an id has already chosen what to show; an id prefix that is all digits has to
+carry its `run-`, `chat-`, or `review-` prefix to be read as an id rather than
+as a count of days. A window with nothing in it says so and says since when,
+rather than reading like a machine that spent nothing.
+
+[`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work item the runs
+were for, which is what answers "what did that piece of work cost"; it leaves
+conversations and branch reviews out, deliberately and for the same reason — a
+conversation that discussed five items, and a review of a branch that carried a
+dozen, cannot be attributed to any one of them.
+
+The Go tests in `internal/cli` and `internal/runstate` check these claims
 against a fabricated state directory holding runs, conversations, and branch
-reviews, without a provider or a repository and without reading your real
-state.
+reviews, without a provider or a repository and without reading your real state.

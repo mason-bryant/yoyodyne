@@ -68,8 +68,8 @@ type API struct {
 }
 
 // NewAPI builds the client. Both tokens are required: a sink that cannot post is
-// not a sink, and one that cannot open its connection cannot receive the replies
-// the inbound half will read.
+// not a sink, and one that cannot open its connection never sees the replies
+// that steer the work.
 func NewAPI(botToken, appToken string) (*API, error) {
 	if strings.TrimSpace(botToken) == "" {
 		return nil, errors.New("SLACK_BOT_TOKEN is required")
@@ -124,18 +124,25 @@ type Message struct {
 	Username  string
 	IconEmoji string
 	IconURL   string
+	// Broadcast asks Slack to show a thread reply in the main channel view as
+	// well as inside its thread. It is Slack's also-send-to-channel, and it means
+	// nothing on a message that is not a reply: what decides it is severity, and
+	// that decision is made where a message is turned into a post rather than
+	// here.
+	Broadcast bool
 }
 
 // postRequest is the wire shape of chat.postMessage. The fields are omitted
 // when empty so a top-level message is a top-level message rather than a reply
 // to an empty thread.
 type postRequest struct {
-	Channel   string `json:"channel"`
-	Text      string `json:"text"`
-	ThreadTS  string `json:"thread_ts,omitempty"`
-	Username  string `json:"username,omitempty"`
-	IconEmoji string `json:"icon_emoji,omitempty"`
-	IconURL   string `json:"icon_url,omitempty"`
+	Channel        string `json:"channel"`
+	Text           string `json:"text"`
+	ThreadTS       string `json:"thread_ts,omitempty"`
+	ReplyBroadcast bool   `json:"reply_broadcast,omitempty"`
+	Username       string `json:"username,omitempty"`
+	IconEmoji      string `json:"icon_emoji,omitempty"`
+	IconURL        string `json:"icon_url,omitempty"`
 }
 
 // Post sends one message and reports the timestamp Slack gave it. That
@@ -153,12 +160,16 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 		TS string `json:"ts"`
 	}
 	request := postRequest{
-		Channel:   message.Channel,
-		Text:      message.Text,
-		ThreadTS:  message.ThreadTS,
-		Username:  message.Username,
-		IconEmoji: message.IconEmoji,
-		IconURL:   message.IconURL,
+		Channel:  message.Channel,
+		Text:     message.Text,
+		ThreadTS: message.ThreadTS,
+		// Slack takes the broadcast as a property of a reply, so it is only ever
+		// sent with the thread it is a reply into: asking to also-send a message
+		// that is already in the channel is a flag that says nothing.
+		ReplyBroadcast: message.ThreadTS != "" && message.Broadcast,
+		Username:       message.Username,
+		IconEmoji:      message.IconEmoji,
+		IconURL:        message.IconURL,
 	}
 	if err := a.call(ctx, "chat.postMessage", a.botToken, request, &response); err != nil {
 		return "", err
@@ -167,6 +178,53 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 		return "", errors.New("chat.postMessage returned no timestamp, so nothing could be threaded onto it")
 	}
 	return response.TS, nil
+}
+
+// reactionRequest is the wire shape of reactions.add and reactions.remove. Both
+// take the same three fields, because both name one reaction on one message.
+type reactionRequest struct {
+	Channel   string `json:"channel"`
+	Timestamp string `json:"timestamp"`
+	Name      string `json:"name"`
+}
+
+// React marks one message with one emoji, and Unreact takes the mark off again.
+// They are how a thread's opening message carries the item's current status: a
+// reaction is replaced as the record moves, where a message is said once and
+// stands forever.
+//
+// Each treats the workspace already agreeing with it as success. Slack refuses
+// adding a reaction that is already there and removing one that is not, and
+// neither is a failure of what was asked for: the message ends up in exactly the
+// state the caller wanted. Treating them as errors would make a sink that was
+// interrupted between two calls unable to settle, which is the one thing a mark
+// reconciled on every pass has to be able to do.
+func (a *API) React(ctx context.Context, channel, timestamp, name string) error {
+	return a.reaction(ctx, "reactions.add", channel, timestamp, name, "already_reacted")
+}
+
+func (a *API) Unreact(ctx context.Context, channel, timestamp, name string) error {
+	return a.reaction(ctx, "reactions.remove", channel, timestamp, name, "no_reaction")
+}
+
+func (a *API) reaction(ctx context.Context, method, channel, timestamp, name, settled string) error {
+	if strings.TrimSpace(channel) == "" || strings.TrimSpace(timestamp) == "" {
+		return errors.New("a channel and a message are required to react to one")
+	}
+	if strings.TrimSpace(name) == "" {
+		return errors.New("an unnamed reaction marks nothing")
+	}
+	var response apiResponse
+	err := a.call(ctx, method, a.botToken, reactionRequest{
+		Channel:   channel,
+		Timestamp: timestamp,
+		Name:      strings.TrimSpace(name),
+	}, &response)
+	var refusal Error
+	if errors.As(err, &refusal) && refusal.Code == settled {
+		return nil
+	}
+	return err
 }
 
 // OpenConnection asks Slack for a Socket Mode websocket URL. The URL is
@@ -225,6 +283,20 @@ func (e Error) Permanent() bool {
 	case "invalid_auth", "not_authed", "account_inactive", "token_revoked",
 		"token_expired", "missing_scope", "not_in_channel", "channel_not_found",
 		"is_archived", "restricted_action", "org_login_required":
+		return true
+	default:
+		return false
+	}
+}
+
+// agreed reports a refusal that is the workspace saying it already holds what
+// was asked for: a reaction that is already on a message, one that is already
+// off it. Repeating the call cannot change the answer and does not need to, so
+// it is neither retried here nor treated as permanent — the caller that knows
+// which answer it asked for reads it as success.
+func (e Error) agreed() bool {
+	switch e.Code {
+	case "already_reacted", "no_reaction":
 		return true
 	default:
 		return false
@@ -320,7 +392,7 @@ func (a *API) attempt(ctx context.Context, method, token string, encoded []byte,
 			code = "unknown"
 		}
 		refusal := Error{Method: method, Code: code}
-		if refusal.Permanent() {
+		if refusal.Permanent() || refusal.agreed() {
 			return 0, refusal
 		}
 		if code == "rate_limited" && envelope.RetryAfter > 0 {
