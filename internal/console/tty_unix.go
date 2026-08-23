@@ -85,3 +85,24 @@ func terminalWidth(fd uintptr) int {
 	}
 	return int(size.columns)
 }
+
+// raiseSignal delivers the signal the terminal driver would have raised itself.
+// A negotiated keyboard reports Ctrl-C as a key rather than raising anything, so
+// the console raises it — to the whole process group, which is what the driver
+// does, so a conversation and whatever it started are interrupted exactly as
+// they were before any of this was negotiated. A key the driver is still
+// handling never reaches here, so nothing is raised twice.
+func raiseSignal(pressed signalKey) {
+	var signal syscall.Signal
+	switch pressed {
+	case signalInterrupt:
+		signal = syscall.SIGINT
+	case signalSuspend:
+		signal = syscall.SIGTSTP
+	case signalQuit:
+		signal = syscall.SIGQUIT
+	default:
+		return
+	}
+	syscall.Kill(0, signal)
+}

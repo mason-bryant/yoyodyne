@@ -1,18 +1,22 @@
 package console
 
-import "unicode/utf8"
+import (
+	"strconv"
+	"strings"
+	"unicode/utf8"
+)
 
-// keyCode is what one keystroke means to the line being composed. The set is
-// deliberately small: this edits one line of prose, and anything it does not
-// understand is ignored rather than inserted, because a stray escape sequence
-// in the middle of a message to the product manager is worse than a keystroke
-// that did nothing.
+// keyCode is what one keystroke means to the message being composed. The set is
+// deliberately small: this edits prose, and anything it does not understand is
+// ignored rather than inserted, because a stray escape sequence in the middle of
+// a message to the product manager is worse than a keystroke that did nothing.
 type keyCode int
 
 const (
 	keyIgnored keyCode = iota
 	keyRune
 	keyEnter
+	keyNewline
 	keyBackspace
 	keyDelete
 	keyLeft
@@ -21,11 +25,16 @@ const (
 	keyEnd
 	keyKillLine
 	keyKillWord
+	// keySignal is a key the terminal driver would have turned into a signal and
+	// which a negotiated keyboard reports as a key instead. It is not an edit:
+	// the console raises what the terminal stopped raising.
+	keySignal
 )
 
 type key struct {
-	code  keyCode
-	value rune
+	code   keyCode
+	value  rune
+	signal signalKey
 }
 
 // maxEscapeBytes bounds how long an escape sequence may be before it is taken
@@ -84,6 +93,12 @@ func decodeEscape(buffer []byte) (key, int, bool) {
 	if len(buffer) == 1 {
 		return key{}, 0, false
 	}
+	if buffer[1] == '\r' || buffer[1] == '\n' {
+		// Alt-return, which is the newline that needs nothing negotiated: a
+		// terminal that will not say whether shift was held still sends the escape
+		// in front of the return, so this is the key that works everywhere.
+		return key{code: keyNewline}, 2, true
+	}
 	if buffer[1] != '[' && buffer[1] != 'O' {
 		// Escape followed by something else is not a sequence this understands.
 		return key{code: keyIgnored}, 1, true
@@ -114,6 +129,10 @@ func escapeKey(parameters string, final byte) key {
 		return key{code: keyHome}
 	case 'F':
 		return key{code: keyEnd}
+	case 'u':
+		// The kitty keyboard protocol: the key's own code point, then what was
+		// held with it.
+		return reportedKey(field(parameters, 0), field(parameters, 1))
 	case '~':
 		switch parameters {
 		case "1", "7":
@@ -123,6 +142,77 @@ func escapeKey(parameters string, final byte) key {
 		case "4", "8":
 			return key{code: keyEnd}
 		}
+		// xterm's modifyOtherKeys says the same thing the other way round: the
+		// literal 27, what was held, and then the key's code point.
+		if field(parameters, 0) == 27 {
+			return reportedKey(field(parameters, 2), field(parameters, 1))
+		}
 	}
 	return key{code: keyIgnored}
+}
+
+// The modifiers both protocols report, as they encode them: one more than the
+// bits that were held, so an unmodified key is 1 rather than 0.
+const (
+	modifierShift = 1
+	modifierAlt   = 2
+	modifierCtrl  = 4
+)
+
+// reportedKey is what a key reported with its modifiers means to the message
+// being composed. The two protocols spell it differently and are saying the
+// same thing, so both arrive here.
+//
+// A terminal that reports modifiers reports the signal keys too, and stops
+// raising the signals itself. They are named here rather than ignored, because
+// a Ctrl-C that did nothing is worse than one this console has to raise.
+func reportedKey(code, modifiers int) key {
+	held := modifiers - 1
+	if held < 0 {
+		held = 0
+	}
+	switch code {
+	case '\r':
+		// Return with anything held is the newline this exists for. Return alone
+		// still sends, which is what keeps the common case the one it always was.
+		if held&(modifierShift|modifierAlt) != 0 {
+			return key{code: keyNewline}
+		}
+		return key{code: keyEnter}
+	case 0x7f, '\b':
+		return key{code: keyBackspace}
+	}
+	if held&modifierCtrl != 0 {
+		if signal, raised := signalFor(rune(code)); raised {
+			return key{code: keySignal, signal: signal}
+		}
+		if code < 'a' || code > 'z' {
+			return key{code: keyIgnored}
+		}
+		// Everything else the terminal used to send as a control byte means what
+		// it always meant, so Ctrl-U and Ctrl-W still edit.
+		pressed, _, _ := decodeKey([]byte{byte(code - 'a' + 1)})
+		return pressed
+	}
+	if held&modifierAlt != 0 || code < 0x20 || code > utf8.MaxRune {
+		return key{code: keyIgnored}
+	}
+	return key{code: keyRune, value: rune(code)}
+}
+
+// field reads one semicolon-separated parameter as a number. A parameter that
+// is absent, empty, or carries a sub-parameter this does not read — the event
+// type a terminal may attach to a key — is the number in front of the colon, or
+// nothing at all.
+func field(parameters string, index int) int {
+	parts := strings.Split(parameters, ";")
+	if index >= len(parts) {
+		return 0
+	}
+	number, _, _ := strings.Cut(parts[index], ":")
+	value, err := strconv.Atoi(number)
+	if err != nil {
+		return 0
+	}
+	return value
 }

@@ -43,6 +43,77 @@ func TestEachCallCarriesTheTokenThatAuthenticatesIt(t *testing.T) {
 	}
 }
 
+// A workspace that already agrees is not a refusal. Adding a mark that is
+// already on a message and taking off one that is not both leave the message in
+// exactly the state the caller asked for, and a sink interrupted between two
+// reaction calls settles by repeating itself — so neither may be an error, and
+// neither is worth a retry.
+func TestAReactionTheWorkspaceAlreadyAgreesWithIsNotAFailure(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		code    string
+		perform func(*API) error
+	}{
+		{
+			name: "a mark that is already there",
+			code: "already_reacted",
+			perform: func(api *API) error {
+				return api.React(context.Background(), "C1", "1755.0001", "eyes")
+			},
+		},
+		{
+			name: "a mark that is already off",
+			code: "no_reaction",
+			perform: func(api *API) error {
+				return api.Unreact(context.Background(), "C1", "1755.0001", "eyes")
+			},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			attempts := 0
+			api := newTestAPI(t, func(writer http.ResponseWriter, _ *http.Request) {
+				attempts++
+				writeJSON(writer, map[string]any{"ok": false, "error": testCase.code})
+			})
+			if err := testCase.perform(api); err != nil {
+				t.Fatalf("error = %v, want the workspace already agreeing read as success", err)
+			}
+			if attempts != 1 {
+				t.Fatalf("attempts = %d, want an answer that cannot change asked for once", attempts)
+			}
+		})
+	}
+}
+
+// A reaction names one message in one channel: without the timestamp there is no
+// message to mark, and a mark on the channel is not a mark on the thread.
+func TestAReactionNamesTheMessageItMarks(t *testing.T) {
+	t.Parallel()
+
+	var marked reactionRequest
+	api := newTestAPI(t, func(writer http.ResponseWriter, incoming *http.Request) {
+		body, _ := io.ReadAll(incoming.Body)
+		if err := json.Unmarshal(body, &marked); err != nil {
+			t.Errorf("Unmarshal() error = %v", err)
+		}
+		writeJSON(writer, map[string]any{"ok": true})
+	})
+
+	if err := api.React(context.Background(), "C1", "1755.0001", "white_check_mark"); err != nil {
+		t.Fatalf("React() error = %v", err)
+	}
+	want := reactionRequest{Channel: "C1", Timestamp: "1755.0001", Name: "white_check_mark"}
+	if marked != want {
+		t.Fatalf("reaction = %#v, want %#v", marked, want)
+	}
+	if err := api.React(context.Background(), "C1", "", "white_check_mark"); err == nil {
+		t.Fatal("React() with no message accepted, want a mark with nothing to go on refused")
+	}
+}
+
 // A post carries the thread it belongs in and the identity it speaks under.
 // Losing the thread timestamp is what turns one thread per topic into a channel
 // of loose messages.

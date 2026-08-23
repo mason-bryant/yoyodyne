@@ -20,6 +20,7 @@ package slack
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -55,6 +56,10 @@ type pacer struct {
 	// pace without spending it.
 	now   func() time.Time
 	sleep func(ctx context.Context, wait time.Duration) error
+	// mu holds one message in here at a time. Two goroutines post through a sink
+	// — the delivery loop, and the connection acknowledging a reply — and a pace
+	// two callers each advanced from their own reading of it is not a pace.
+	mu sync.Mutex
 	// next is the earliest moment the next message may go.
 	next time.Time
 }
@@ -66,6 +71,8 @@ func (p *pacer) wait(ctx context.Context) error {
 	if p == nil || p.every <= 0 {
 		return nil
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	at := p.now()
 	if due := p.next.Sub(at); due > 0 {
 		if err := p.sleep(ctx, due); err != nil {

@@ -435,6 +435,75 @@ func TestProductLevelNewsIsNotBuriedInAnItemsThread(t *testing.T) {
 	}
 }
 
+// The main channel view hides thread replies by design, which is right for a
+// routine note and wrong for a warning: a run parked out of tokens can sit
+// unseen inside a thread while the channel looks quiet. So the severity the
+// envelope already carries decides — a note stays where the narrative is, and
+// anything asking for attention is also sent to the channel.
+func TestRepliesThatAskForAttentionAreAlsoSentToTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		filedReport(1, report.SeverityNote, "the replay was clean"),
+		filedReport(2, report.SeverityWarning, "the replay conflicted with the merged package"),
+		filedReport(3, report.SeverityCritical, "the target branch has diverged under the change"),
+	}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 4 {
+		t.Fatalf("posts = %d, want the thread opened and all three reports in it", len(posts.requests))
+	}
+	// The message a thread hangs from is already in the channel, so asking for it
+	// to be sent there as well is a flag that says nothing.
+	if posts.requests[0].ReplyBroadcast {
+		t.Fatalf("thread header = %#v, want no broadcast on a message that is not a reply", posts.requests[0])
+	}
+	for index, want := range []bool{false, true, true} {
+		reply := posts.requests[index+1]
+		if reply.ThreadTS != posts.timestamps[0] {
+			t.Fatalf("reply = %#v, want every severity still inside the topic's thread", reply)
+		}
+		if reply.ReplyBroadcast != want {
+			t.Fatalf("reply %q broadcast = %v, want %v", reply.Text, reply.ReplyBroadcast, want)
+		}
+	}
+}
+
+// Product-level news is already at the top of the channel, so nothing about its
+// severity turns it into a reply Slack is asked to send there twice.
+func TestProductLevelNewsIsNeverBroadcastBackIntoTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream: reportStream,
+		Cursor: Cursor{Position: 1},
+		Notification: notify.Notification{
+			Topic:   notify.Product(),
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: report.SeverityCritical,
+				Text:     "the provider refused every account",
+			},
+		},
+	}}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %d, want one unthreaded message", len(posts.requests))
+	}
+	if posts.requests[0].ThreadTS != "" || posts.requests[0].ReplyBroadcast {
+		t.Fatalf("post = %#v, want product news posted once at the top level", posts.requests[0])
+	}
+}
+
 // A message leads back to the durable record it was read from rather than
 // standing in for it.
 func TestAMessageNamesTheRecordItWasReadFrom(t *testing.T) {
@@ -725,15 +794,231 @@ func TestStoppingTheSinkStopsIt(t *testing.T) {
 	}
 }
 
+// The channel's top level is a status board. The message a thread hangs from
+// carries what its item is doing now, and the mark that has stopped being true
+// comes off as the record moves — so a scan of the channel answers what is
+// working, what is with the reviewer, and what landed without a thread being
+// opened.
+func TestAThreadsOpenerCarriesTheItemsStatusAndTheStaleMarkComesOff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{}
+	feed := &fixedFeed{
+		deliveries: []Delivery{milestone(1, notify.KindRunStarted)},
+		statuses:   map[string]notify.Status{"work-item:yoyodyne-ifd.68.3": notify.StatusWorking},
+	}
+	sink := newTestSink(t, root, feed, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	opener := posts.timestamps[0]
+	wantWearing(t, posts, opener, notify.StatusWorking)
+
+	// A status that has not moved is left alone. Most passes are this one, and a
+	// sink that re-marked every fifteen seconds would spend a workspace's
+	// tolerance saying what it had already said.
+	posts.marks = nil
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	if len(posts.marks) != 0 {
+		t.Fatalf("marks = %#v, want a status that has not moved marked again by nothing", posts.marks)
+	}
+
+	// The record moves and the mark moves with it. Every other status in the
+	// vocabulary comes off first — three calls, two of which hit nothing — because
+	// what is on the message is the question, and only the sweep answers it
+	// without trusting a record that a crash could have left behind.
+	feed.statuses["work-item:yoyodyne-ifd.68.3"] = notify.StatusInReview
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("third pass() error = %v", err)
+	}
+	wantMarks(t, posts.marks,
+		mark{method: "reactions.remove", ts: opener, name: notify.StatusWorking.Symbol()},
+		mark{method: "reactions.remove", ts: opener, name: notify.StatusBlocked.Symbol()},
+		mark{method: "reactions.remove", ts: opener, name: notify.StatusCompleted.Symbol()},
+		mark{method: "reactions.add", ts: opener, name: notify.StatusInReview.Symbol()})
+	wantWearing(t, posts, opener, notify.StatusInReview)
+
+	// A restart is a second sink over the same durable state: what the opener is
+	// already marked with is remembered, so the item moving once more leaves it
+	// wearing the new status and nothing else.
+	posts.marks = nil
+	feed.statuses["work-item:yoyodyne-ifd.68.3"] = notify.StatusCompleted
+	if err := newTestSink(t, root, feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("restarted pass() error = %v", err)
+	}
+	wantWearing(t, posts, opener, notify.StatusCompleted)
+}
+
+// The record of which mark is on a thread is written after the workspace has
+// taken it, so a sink killed between the two leaves a record naming a status the
+// message is not wearing. The mark that is actually there has to come off anyway:
+// a removal aimed at what the record named would leave the real one on the opener
+// for good, saying "working" under a run that failed hours ago.
+func TestAMarkTheRecordDoesNotNameIsStillTakenOff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{}
+	feed := &fixedFeed{
+		deliveries: []Delivery{milestone(1, notify.KindRunStarted)},
+		statuses:   map[string]notify.Status{"work-item:yoyodyne-ifd.68.3": notify.StatusWorking},
+	}
+	sink := newTestSink(t, root, feed, posts)
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	opener := posts.timestamps[0]
+	wantWearing(t, posts, opener, notify.StatusWorking)
+
+	// The write that would have said so never landed: the opener wears working
+	// and the durable record still names the status before it.
+	store, err := NewStore(root, testProduct)
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	threads, err := store.LoadThreads()
+	if err != nil {
+		t.Fatalf("LoadThreads() error = %v", err)
+	}
+	stale := threads.Threads["work-item:yoyodyne-ifd.68.3"]
+	stale.Status = notify.StatusInReview
+	threads.Record("work-item:yoyodyne-ifd.68.3", stale)
+	if err := store.SaveThreads(threads); err != nil {
+		t.Fatalf("SaveThreads() error = %v", err)
+	}
+
+	feed.statuses["work-item:yoyodyne-ifd.68.3"] = notify.StatusBlocked
+	if err := newTestSink(t, root, feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	wantWearing(t, posts, opener, notify.StatusBlocked)
+}
+
+// A sink stopped while a mark is waiting out the pace is not a workspace
+// refusing anything. The line it would otherwise log is the one the setup
+// document teaches an operator to read as a missing scope, so a shutdown must
+// not print it — a diagnosis somebody has to rule out later is worse than
+// silence on the way out.
+func TestASinkStoppedWhileMarkingSaysNothingAboutARefusal(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{}, posts)
+	var said []string
+	sink.log = func(format string, args ...any) { said = append(said, fmt.Sprintf(format, args...)) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// The pace is the only blocking call in a mark, so it is where a shutdown is
+	// actually met: the wait is made due and the sink stopped inside it.
+	sink.pace.next = time.Now().Add(time.Hour)
+	sink.pace.sleep = func(context.Context, time.Duration) error {
+		cancel()
+		return context.Canceled
+	}
+
+	topic := "work-item:yoyodyne-ifd.68.3"
+	threads := ThreadMap{Threads: map[string]Thread{
+		topic: {Channel: "C1", ThreadTS: "1755.0001"},
+	}}
+	sink.mark(ctx, &threads, map[string]notify.Status{topic: notify.StatusWorking})
+
+	if len(said) != 0 {
+		t.Fatalf("said %q on the way out, want a shutdown to say nothing about a refusal", said)
+	}
+	if sink.marking != "" {
+		t.Fatalf("marking = %q, want a shutdown not remembered as a standing refusal", sink.marking)
+	}
+}
+
+// wantWearing checks that a message carries exactly one status and that it is
+// this one. Two at once is the failure worth naming: a thread that says both
+// working and blocked is worse than one that says neither.
+func wantWearing(t *testing.T, posts *recordedPosts, ts string, status notify.Status) {
+	t.Helper()
+	worn := posts.wearing[ts]
+	if len(worn) != 1 || !worn[status.Symbol()] {
+		t.Fatalf("the opener wears %v, want %q alone", worn, status.Symbol())
+	}
+}
+
+// A topic nobody has said anything about has no thread and nothing to mark.
+// Opening one to carry a status would put a thread in the channel whose whole
+// content is that nothing has happened yet.
+func TestATopicWithNoThreadIsNotMarked(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{statuses: map[string]notify.Status{
+		"work-item:yoyodyne-ifd.68.3": notify.StatusWorking,
+	}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 0 || len(posts.marks) != 0 {
+		t.Fatalf("posted %#v and marked %#v, want an item nothing has been said about left alone", posts.requests, posts.marks)
+	}
+}
+
+// Marking is not a delivery and it is never a gate. A workspace that refuses the
+// reaction — an app installed before the manifest asked for the scope — costs
+// the channel its status board and not one message; and because nothing durable
+// says the mark went on, it goes on by itself once somebody reinstalls, without
+// the item having to move again.
+func TestAWorkspaceThatRefusesAMarkStillGetsEveryMessage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{refuseMarks: "missing_scope"}
+	feed := &fixedFeed{
+		deliveries: []Delivery{milestone(1, notify.KindRunStarted)},
+		statuses:   map[string]notify.Status{"work-item:yoyodyne-ifd.68.3": notify.StatusBlocked},
+	}
+	sink := newTestSink(t, root, feed, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v, want a refused mark to cost the pass nothing", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread opened and the milestone in it", len(posts.requests))
+	}
+
+	posts.refuseMarks = ""
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	wantWearing(t, posts, posts.timestamps[0], notify.StatusBlocked)
+}
+
+func wantMarks(t *testing.T, got []mark, want ...mark) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("marks = %#v, want %#v", got, want)
+	}
+	for index, marked := range want {
+		if got[index] != marked {
+			t.Fatalf("marks = %#v, want %#v", got, want)
+		}
+	}
+}
+
 // fixedFeed is a feed with a fixed answer, so the sink's own behavior is what a
 // test exercises rather than the reading of durable records. Every delivery
 // carries a position, which is how it knows what a cursor has already covered.
 type fixedFeed struct {
 	deliveries []Delivery
+	// statuses is what each topic is doing at the end of this pass, which is a
+	// reading rather than a history: a test moves it and polls again exactly as a
+	// record moving underneath the sink would.
+	statuses map[string]notify.Status
 }
 
 func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
-	batch := Batch{Streams: map[string]struct{}{}}
+	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses}
 	for _, delivery := range f.deliveries {
 		batch.Streams[delivery.Stream] = struct{}{}
 		if delivery.Cursor.Position <= cursors.Streams[delivery.Stream].Position {
@@ -744,11 +1029,37 @@ func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
 	return batch, nil
 }
 
-// recordedPosts is the workspace: what it was asked to post, and what it
-// refused.
+// mark is one reaction the workspace was asked to put on or take off a message:
+// which call, which message, and which emoji.
+type mark struct {
+	method string
+	ts     string
+	name   string
+}
+
+// recordedPosts is the workspace: what it was asked to post, what it was asked
+// to mark, and what it refused.
 type recordedPosts struct {
+	// mutex is here because the real thing is a web service and this stands in for
+	// one: a sink posts from its delivery loop and from the connection answering a
+	// reply, and a workspace that could not take two calls at once would be the
+	// double failing rather than the sink.
+	mutex      sync.Mutex
 	requests   []postRequest
 	timestamps []string
+	// marks is every reaction call in the order it was made, which is what says a
+	// stale mark came off before the new one went on.
+	marks []mark
+	// wearing is what each message actually carries once those calls have been
+	// applied. It is kept as well as the calls because the two answer different
+	// questions: the calls say what the sink did, and this says what somebody
+	// scanning the channel would see — which is the only thing that is wrong when
+	// a mark is orphaned.
+	wearing map[string]map[string]bool
+	// refuseMarks, when set, is the error every reaction call is refused with —
+	// an app installed before the manifest asked for the scope, which is what
+	// every workspace looks like the first time it runs a sink that marks.
+	refuseMarks string
 	// allow, when set, is how many posts this workspace accepts before it
 	// starts refusing — which is how a test puts an outage exactly where it
 	// matters. It has to refuse every attempt rather than one, because a
@@ -758,6 +1069,8 @@ type recordedPosts struct {
 }
 
 func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request) {
+	r.mutex.Lock()
+	defer r.mutex.Unlock()
 	// A running sink asks the workspace who it is before it posts anything, and
 	// that call carries no body at all.
 	if request.Body == nil {
@@ -765,6 +1078,43 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
+	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
+		var reaction reactionRequest
+		if err := json.Unmarshal(body, &reaction); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseMarks != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseMarks})
+			return
+		}
+		r.marks = append(r.marks, mark{method: method, ts: reaction.Timestamp, name: reaction.Name})
+		// The workspace answers the way Slack does: a mark that is already there
+		// and one that is already off are refusals rather than successes, which is
+		// what a sweep over the vocabulary meets three times out of four.
+		if r.wearing == nil {
+			r.wearing = map[string]map[string]bool{}
+		}
+		if r.wearing[reaction.Timestamp] == nil {
+			r.wearing[reaction.Timestamp] = map[string]bool{}
+		}
+		worn := r.wearing[reaction.Timestamp]
+		if method == "reactions.add" {
+			if worn[reaction.Name] {
+				writeJSON(writer, map[string]any{"ok": false, "error": "already_reacted"})
+				return
+			}
+			worn[reaction.Name] = true
+		} else {
+			if !worn[reaction.Name] {
+				writeJSON(writer, map[string]any{"ok": false, "error": "no_reaction"})
+				return
+			}
+			delete(worn, reaction.Name)
+		}
+		writeJSON(writer, map[string]any{"ok": true})
+		return
+	}
 	var decoded postRequest
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
@@ -904,6 +1254,27 @@ func milestone(position uint64, kind notify.Kind) Delivery {
 				At:       time.Now(),
 				Severity: report.SeverityNote,
 				Refs:     notify.Refs{RunID: "run-a", WorkItemID: "yoyodyne-ifd.68.3"},
+			},
+		},
+	}
+}
+
+// filedReport is one agent's report against a work item, at the severity it was
+// filed under. It is what a test needs to watch severity decide anything: the
+// milestones above are all notes.
+func filedReport(position uint64, severity report.Severity, text string) Delivery {
+	return Delivery{
+		Stream: reportStream,
+		Cursor: Cursor{Position: position},
+		Notification: notify.Notification{
+			Topic:   notify.Topic{Kind: notify.TopicWorkItem, ID: "yoyodyne-ifd.68.12"},
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: severity,
+				Refs:     notify.Refs{RunID: "run-a", WorkItemID: "yoyodyne-ifd.68.12"},
+				Text:     text,
 			},
 		},
 	}

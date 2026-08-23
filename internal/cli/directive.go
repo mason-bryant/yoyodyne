@@ -122,7 +122,7 @@ func recordDirective(args []string, stdout, stderr io.Writer) int {
 		Kind:          directive.Kind(strings.TrimSpace(*kind)),
 		ReceivedBy:    domain.AgentRole(strings.TrimSpace(*receivedBy)),
 		ReceivedAt:    time.Now().UTC(),
-		Text:          strings.TrimSpace(flags.set.Arg(0)),
+		Text:          strings.TrimSpace(flags.argument()),
 		Artifact:      strings.TrimSpace(*artifact),
 		Unresolved:    strings.TrimSpace(*unresolved),
 		Scope:         splitList(*scope),
@@ -157,7 +157,7 @@ func resolveDirective(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	resolved, err := store.Resolve(flags.set.Arg(0), *resolution, time.Now())
+	resolved, err := store.Resolve(flags.argument(), *resolution, time.Now())
 	if err != nil {
 		return reportDirectiveError(stdout, stderr, *flags.jsonOutput, err)
 	}
@@ -179,6 +179,9 @@ type directiveFlags struct {
 	// productID is filled in when the store is built, because recording a
 	// directive has to stamp it with the product whose records it lands in.
 	productID domain.ProductID
+	// args are the positional arguments, collected by parse rather than read off
+	// the flag set, because the flags may come after them.
+	args []string
 }
 
 func newDirectiveFlags(name string, stderr io.Writer) *directiveFlags {
@@ -192,11 +195,16 @@ func newDirectiveFlags(name string, stderr io.Writer) *directiveFlags {
 	}
 }
 
+// parse reads the flags and the positional arguments, in whatever order they
+// were typed, which is what parseArguments is for: `directive resolve <id>
+// --resolution ...` is how anybody settles one out of a listing.
 func (f *directiveFlags) parse(args []string, positional int) (int, bool) {
-	if err := f.set.Parse(args); err != nil {
+	parsed, err := parseArguments(f.set, args)
+	if err != nil {
 		return 2, false
 	}
-	if f.set.NArg() != positional {
+	f.args = parsed
+	if len(f.args) != positional {
 		switch {
 		case positional == 0:
 			fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)
@@ -209,6 +217,12 @@ func (f *directiveFlags) parse(args []string, positional int) (int, bool) {
 		return 2, false
 	}
 	return 0, true
+}
+
+// argument is what a command was given to act on: the directive id for the
+// commands that name one, and what the operator said for `record`.
+func (f *directiveFlags) argument() string {
+	return argumentAt(f.args, 0)
 }
 
 // store resolves the same product-scoped directive records every run reads, so a

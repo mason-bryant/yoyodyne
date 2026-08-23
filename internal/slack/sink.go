@@ -14,11 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 const (
@@ -91,9 +93,20 @@ type Options struct {
 	// the channel, the workspace -- so a caller supplies the rest. It carries no
 	// credential; see Presence.
 	Identity Presence
-	// Inbound is what to do with a message that arrives on the connection.
-	// Nothing today: the inbound half maps a reply onto the existing directive
-	// record, and until it exists a reply is acknowledged and no more.
+	// Directives is where a thread reply is recorded, which is the existing
+	// directive record every run already consults. It is optional: a sink
+	// assembled without one reports and does not steer, and every reply on its
+	// connection is acknowledged to Slack and read no further.
+	Directives Directives
+	// Operators is the allow-list of Slack member ids whose replies are acted on,
+	// derived by the configuration from the humans it granted direct-work. It
+	// defaults to empty, which is a product nobody may steer from a thread — so a
+	// workspace changes nothing about how it behaves until an operator names
+	// themselves.
+	Operators []string
+	// Inbound is what to do with a message that arrives on the connection. It is
+	// how a test drives the connection without a workspace; a sink the harness
+	// builds leaves it unset and gets the steering above.
 	Inbound InboundHandler
 	// Dial opens the websocket transport. It is optional and exists so a test
 	// can exercise the connection without a network.
@@ -116,6 +129,25 @@ type Titles interface {
 }
 
 // Sink is the long-running reporting process for one product.
+//
+// Two goroutines run inside it and both of them post: the delivery loop, which
+// reads the durable records and says what has happened, and the connection,
+// which answers a reply in a thread. The division between them is a rule rather
+// than a lock, and it is worth stating because a lock would only be as good as
+// the next thing somebody adds to either side:
+//
+// Everything above `pace` is written once, by New, and only read afterwards.
+// Everything below it belongs to exactly one goroutine — `marking` to the
+// delivery pass, which is the only thing that reconciles a status mark, and
+// `steering`'s own memory to the connection, which guards it itself.
+//
+// What both touch is three things, and each one carries its own answer. The
+// pacer is shared on purpose, since a pace two callers each advanced from their
+// own reading of it is not a pace, and it holds a mutex for exactly that. The
+// API is an HTTP client, which is safe to use from several goroutines. And the
+// store is read from both and written from one: the delivery pass owns the thread
+// map, and the acknowledgment path is structurally unable to write it, because
+// the poster it is given cannot open a thread (see `poster.opens`).
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -140,8 +172,21 @@ type Sink struct {
 	// pace is what keeps a catch-up from being posted faster than Slack will
 	// carry it. Every post goes through it, including the message that opens a
 	// thread: what the workspace counts is messages, not what they are for.
-	pace       *pacer
-	log        func(format string, args ...any)
+	pace *pacer
+	// marking is the refusal the status marks are currently getting, empty when
+	// they are working. A mark is reconciled on every pass, so a workspace that
+	// refuses one refuses it every fifteen seconds, and the first refusal is news
+	// while the tenth is noise — the same rule the delivery loop follows for the
+	// same reason.
+	//
+	// It is the delivery pass's alone, and nothing on the acknowledgment path
+	// reads or writes it: an acknowledgment is a message rather than a mark.
+	marking string
+	log     func(format string, args ...any)
+	// steering is the inbound half, nil on a sink that was given nowhere to record
+	// a directive. It is held as well as handed to the connection so the sink can
+	// say at startup whether replies steer anything and who may send them.
+	steering   *steering
 	connection *connection
 }
 
@@ -182,7 +227,7 @@ func New(options Options) (*Sink, error) {
 	if poll <= 0 {
 		poll = DefaultPollInterval
 	}
-	return &Sink{
+	sink := &Sink{
 		channel: strings.TrimSpace(options.Channel),
 		appearance: notify.Appearance{
 			Product: options.Store.Product(),
@@ -203,12 +248,22 @@ func New(options Options) (*Sink, error) {
 		},
 		log: log,
 		connection: &connection{
-			api:    options.API,
-			dial:   options.Dial,
-			handle: options.Inbound,
-			log:    log,
+			api:  options.API,
+			dial: options.Dial,
+			log:  log,
 		},
-	}, nil
+	}
+	// A sink with somewhere to record a directive steers; one without reports and
+	// no more. The handler a caller supplied wins, because the only caller that
+	// can name that type is a test driving the connection itself.
+	if options.Directives != nil {
+		sink.steering = newSteering(sink, options.Directives, options.Operators)
+		sink.connection.handle = sink.steering.handle
+	}
+	if options.Inbound != nil {
+		sink.connection.handle = options.Inbound
+	}
+	return sink, nil
 }
 
 // Run holds the connection open and posts until the context ends.
@@ -250,6 +305,12 @@ func (s *Sink) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Whether a reply steers anything is the one thing about this process an
+	// operator cannot see from the channel until they try it, and the answer for
+	// a workspace that has named nobody is "no". Saying it at startup is how
+	// somebody following the setup document finds that out before they rely on it.
+	s.log("%s", s.steer())
+
 	connected := make(chan struct{})
 	go func() {
 		defer close(connected)
@@ -272,6 +333,21 @@ func (s *Sink) Once(ctx context.Context) error {
 	}
 	defer release()
 	return s.pass(ctx)
+}
+
+// steer says what a reply in one of this sink's threads will do, which is
+// nothing at all for a product that has granted nobody. The refusal an unlisted
+// reply gets is visible in the thread, but only to whoever sent it; this is the
+// same fact where an operator setting the sink up is looking.
+func (s *Sink) steer() string {
+	switch {
+	case s.steering == nil:
+		return "replies in these threads are read and not acted on: this sink was assembled without the directive record"
+	case len(s.steering.operators) == 0:
+		return "replies in these threads are acknowledged and not acted on: no human in this project holds direct-work with a bound Slack member id"
+	default:
+		return fmt.Sprintf("replies in these threads steer the work, from the %d Slack member(s) this project granted direct-work", len(s.steering.operators))
+	}
 }
 
 // hold makes this process the product's only sink and reports how to stop
@@ -365,7 +441,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// Rendering is the notifier's, posting is the sink's, and this is the seam
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
-	into := &poster{sink: s, threads: &threads}
+	into := &poster{sink: s, threads: &threads, opens: true}
 	notifier := notify.New(into, s.appearance)
 
 	// How deep the backlog is has to be decided over the whole batch before any of
@@ -398,6 +474,12 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 
+	// The marks go on after the messages, so a thread this pass opened is marked
+	// in the same pass rather than on the next one. They are reconciled against
+	// the record rather than driven by what was posted: a run that finished with
+	// nothing left to say still has to stop reading as working.
+	s.mark(ctx, &threads, batch.Statuses)
+
 	// Cursors for streams that no longer exist are dropped only after a pass
 	// that read them all, so a feed that failed halfway never looks like a
 	// product whose runs have gone away.
@@ -407,6 +489,119 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// mark puts each item's current status on the message its thread hangs from, so
+// the channel's top level reads as a status board: a scan says what is working,
+// what is with the reviewer, what is blocked, and what landed, without a single
+// thread being opened. A status that has not moved is left alone, which is what
+// keeps this quiet — most passes mark nothing.
+//
+// It reports no error, and the reasons are the sink's own. The messages of this
+// pass are posted and their cursors written, so failing here would repeat all of
+// them next time in exchange for an emoji; and a mark stands for a thread whose
+// whole account is already in the thread, so a workspace that will not take one
+// costs a reader a glance rather than the record.
+//
+// What makes an interrupted marking settle is that a change takes every other
+// mark off rather than the one the record happens to name, and writes the record
+// last. The record is therefore only ever a claim that the thread is already
+// where it should be, never evidence about which symbol is on the message — so a
+// process killed after the workspace took a mark and before the write landed is
+// a thread whose record is merely out of date, and the next change sweeps the
+// symbol it actually wears off with the rest. Trusting the record for that is
+// what would strand one: the sweep is affordable exactly because the vocabulary
+// is four words and cannot grow.
+func (s *Sink) mark(ctx context.Context, threads *ThreadMap, statuses map[string]notify.Status) {
+	topics := make([]string, 0, len(statuses))
+	for topic := range statuses {
+		topics = append(topics, topic)
+	}
+	// Sorted, so what a pass does is the same twice over rather than whatever
+	// order a map handed back.
+	sort.Strings(topics)
+
+	for _, topic := range topics {
+		if ctx.Err() != nil {
+			return
+		}
+		status := statuses[topic]
+		// A status this build has no symbol for is left unsaid rather than marked
+		// with nothing, which is the same refusal an unrecognized kind gets: a
+		// record written by a newer harness is read past, not mistranslated.
+		if !status.Valid() {
+			continue
+		}
+		// A topic with no thread is one nothing has been said about yet. There is
+		// no message to mark, and opening one to carry a status would put a thread
+		// in the channel that says nothing happened.
+		thread, found := threads.Lookup(s.channel, topic)
+		if !found || thread.Status == status {
+			continue
+		}
+		if err := s.remark(ctx, thread, status); err != nil {
+			// A sink being shut down mid-mark is not a workspace refusing
+			// anything, and the line below is the one the setup document teaches
+			// an operator to read as a missing scope. The wait inside is where a
+			// shutdown is actually met, since it is the only blocking call here.
+			if ctx.Err() != nil {
+				return
+			}
+			if refusal := err.Error(); refusal != s.marking {
+				s.marking = refusal
+				s.log("the status mark on %s could not be set, so the channel's top level is stale until it can be; the messages are unaffected: %v", topic, err)
+			}
+			continue
+		}
+		s.marking = ""
+		thread.Status = status
+		threads.Record(topic, thread)
+		if err := s.store.SaveThreads(*threads); err != nil {
+			// The mark is already on the message; what could not be written is the
+			// note that it is. The next pass sets the same mark again, which is
+			// four calls rather than a wrong answer — and a store that will not
+			// take a write is not going to take the next thread's either, so this
+			// stops rather than spending the workspace on the rest of them.
+			s.log("the status mark on %s could not be remembered, so the next pass sets it again: %v", topic, err)
+			return
+		}
+		s.log("marked %s as %s", topic, status)
+	}
+}
+
+// remark makes one thread's opener wear one status and no other: every other
+// mark in the vocabulary comes off, and then the one that is true goes on.
+//
+// It sweeps rather than removing the one the record names, because what the
+// record says and what the message wears can differ — a process killed between
+// the workspace taking a mark and the record being written leaves exactly that,
+// and a targeted removal would take off a symbol that is not there and leave the
+// one that is on the message forever. A sweep cannot: whatever the opener wears,
+// it is one of four and three of them are being removed. The removals that hit
+// nothing are answered no_reaction and cost a call each, which is what the
+// vocabulary being small and fixed buys, and they happen only when a status has
+// actually moved.
+//
+// Every call goes through the pacer that holds the sink to what the workspace
+// sustains. Slack counts a reaction against a different allowance from a message,
+// but a sink that is catching up is the one moment it can least afford to be
+// suppressed, and nothing about a status mark is urgent.
+func (s *Sink) remark(ctx context.Context, thread Thread, status notify.Status) error {
+	for _, stale := range notify.Statuses() {
+		if stale == status {
+			continue
+		}
+		if err := s.pace.wait(ctx); err != nil {
+			return err
+		}
+		if err := s.api.Unreact(ctx, thread.Channel, thread.ThreadTS, stale.Symbol()); err != nil {
+			return err
+		}
+	}
+	if err := s.pace.wait(ctx); err != nil {
+		return err
+	}
+	return s.api.React(ctx, thread.Channel, thread.ThreadTS, status.Symbol())
 }
 
 // post puts one message in the workspace at the pace the workspace sustains.
@@ -438,6 +633,16 @@ func (s *Sink) advance(cursors *Cursors, delivery Delivery) error {
 type poster struct {
 	sink    *Sink
 	threads *ThreadMap
+	// opens says this poster may open a thread for a topic nothing has been said
+	// about yet, and write the map that remembers it. Only the delivery pass may:
+	// it is the one thing that owns the thread map, and it runs while the
+	// connection is answering replies on its own goroutine. An acknowledgment was
+	// correlated through a thread that already exists, so a lookup that failed
+	// there would mean the map had moved underneath it — and opening a second
+	// thread from that stale copy, and writing it back over the map the pass owns,
+	// is the one way this path could damage anything. It cannot, because it is not
+	// given the capability rather than because it never takes it.
+	opens bool
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -465,6 +670,9 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	if topic.Kind != notify.TopicProduct {
 		thread, found := p.threads.Lookup(sink.channel, message.Topic)
 		if !found {
+			if !p.opens {
+				return fmt.Errorf("say %s about %s: its thread is not in the map this was given, and this poster does not open one", message.Kind, message.Topic)
+			}
 			opened, err := sink.openThread(ctx, topic)
 			if err != nil {
 				return err
@@ -486,6 +694,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 		Channel:   sink.channel,
 		Text:      renderText(message),
 		ThreadTS:  threadTS,
+		Broadcast: broadcast(message.Severity),
 		Username:  message.Identity.Name,
 		IconEmoji: emoji,
 		IconURL:   url,
@@ -591,6 +800,27 @@ func label(topic notify.Topic) string {
 		return "this product"
 	default:
 		return topic.ID
+	}
+}
+
+// broadcast reports whether a thread reply should also be shown in the main
+// channel view. A thread is where a narrative belongs, and the channel view
+// hiding replies is what keeps three items in flight readable — but it hides a
+// warning exactly as thoroughly as it hides a routine note, and a run that
+// parked out of tokens sitting unseen inside a thread is the ten-silent-hours
+// problem at a different layer.
+//
+// So the line is the severity the envelope already carries: a note stays where
+// the narrative is, and anything asking for attention is shown where somebody
+// who has opened no threads is looking. No new judgment anywhere — a surface
+// that decided this for itself would be a second severity model disagreeing with
+// the recorded one.
+func broadcast(severity report.Severity) bool {
+	switch severity {
+	case report.SeverityCritical, report.SeverityWarning:
+		return true
+	default:
+		return false
 	}
 }
 

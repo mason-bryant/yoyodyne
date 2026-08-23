@@ -79,12 +79,21 @@ func TestScaffoldedProjectLoadsWithoutTheBundle(t *testing.T) {
 		if strings.HasPrefix(agent.Persona.Source, BuiltinV1) {
 			t.Errorf("agent %q persona source = %q, want the project directory", name, agent.Persona.Source)
 		}
-		for _, field := range []string{"role", "backend", "model", "instances", "persona"} {
+		// The account the agent runs under is stated in the generated file like
+		// everything else about it, rather than left to be derived from a mapping
+		// the operator would have to know exists.
+		if agent.Account != DefaultAccountAlias {
+			t.Errorf("agent %q account = %q, want %q", name, agent.Account, DefaultAccountAlias)
+		}
+		for _, field := range []string{"role", "backend", "model", "account", "instances", "persona"} {
 			key := "agents." + name + "." + field
 			if got := resolved.Origins[key]; got != resolved.Path {
 				t.Errorf("origin[%q] = %q, want %q", key, got, resolved.Path)
 			}
 		}
+	}
+	if aliases := resolved.Config.AccountAliases(); len(aliases) != 1 || aliases[0] != DefaultAccountAlias {
+		t.Errorf("accounts = %v, want the one account the generated file states", aliases)
 	}
 }
 

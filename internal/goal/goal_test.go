@@ -425,6 +425,111 @@ An introduction.
 	}
 }
 
+func TestAGoalHardWrappedAcrossLinesIsReportedThoughItIsStillRecorded(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// Rejoining the wrap is a reading of the file rather than something the file
+	// says. The goal it produces is what an attribution has to match word for
+	// word, so a goal that only exists once the wrap is rejoined can be changed
+	// into a different goal by an edit that changes none of its words.
+	write(t, root, "docs/product/goals/v1-goals.md", frontmatter("v1-goals", "goals", "V1 goals", []string{"brief"})+`
+# V1 goals
+
+An introduction.
+
+## Goals
+
+- Run development nearly autonomously. The human's routine interface is the
+  product manager: they state intent, approve the brief and goals, and answer
+  questions the product manager escalates.
+  *Supports: the human's attention goes only where it is needed.*
+- Maintain a traceable chain.
+  *Supports: every change traces to intent somebody approved.*
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(set.Problems) != 0 {
+		t.Fatalf("problems = %v", set.Problems)
+	}
+	// Nothing is dropped over one: the wrapped goal is still a goal work can be
+	// attributed to, exactly as a goal with a broken link upstream is.
+	if statements := stated(set.Goals); len(statements) != 2 {
+		t.Fatalf("goals = %q", statements)
+	}
+	if len(set.WrapProblems) != 1 {
+		t.Fatalf("wrap problems = %v", set.WrapProblems)
+	}
+	problem := set.WrapProblems[0]
+	if problem.Lines != 3 || problem.ArtifactID != "v1-goals" || problem.Path != "docs/product/goals/v1-goals.md" {
+		t.Fatalf("wrap problem = %#v", problem)
+	}
+	// The line is counted from the top of the file rather than from the end of
+	// the frontmatter, because what is reported has to name a place to open.
+	if got := lineOf(t, root, "docs/product/goals/v1-goals.md", problem.Line); !strings.HasPrefix(got, "- Run development nearly autonomously.") {
+		t.Fatalf("line %d is %q, want the entry the goal opens on", problem.Line, got)
+	}
+	if problem.Statement != set.Goals[0].Statement {
+		t.Fatalf("wrap problem names %q, want the goal as it was rejoined", problem.Statement)
+	}
+}
+
+func TestAGoalOnOneLineIsNotReportedForWhatIsWrittenUnderIt(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The trailer, a wrapped trailer, and a paragraph about the goal are all
+	// written under the entry and none of them is the statement. Counting any of
+	// them as a wrap would report every goal in this repository, which is a check
+	// nobody could satisfy without deleting what the documents say.
+	write(t, root, "docs/product/goals/v1-goals.md", `# V1 goals
+
+An introduction.
+
+## Goals
+
+- Maintain a traceable chain from the product brief through goals, designs, work, code changes, and verification.
+  *Supports: every change traces to intent somebody approved, from the brief
+  through the goals and down to the work.*
+
+  This matters because a change nobody can trace is a change nobody approved.
+
+- Review every change independently.
+  *Supports: nothing lands unreviewed by someone other than its author.*
+`)
+
+	set := Collect(root, setOf(recorded("v1-goals", artifact.KindGoals, artifact.StatusActive, "docs/product/goals/v1-goals.md")))
+	if len(set.WrapProblems) != 0 {
+		t.Fatalf("wrap problems = %v", set.WrapProblems)
+	}
+}
+
+func TestAWrappedGoalInADocumentNoLongerInForceIsNotReported(t *testing.T) {
+	t.Parallel()
+
+	root := newRepository(t)
+	// The same rule the link upstream is judged by: a goal in a superseded
+	// document is not one work can name, and reporting how it is written would
+	// leave a permanent finding against a file nobody is going to open again.
+	write(t, root, "docs/product/goals/v0-goals.md", `# V0 goals
+
+An introduction.
+
+## Goals
+
+- Run development nearly autonomously. The human's routine interface is the
+  product manager.
+`)
+
+	set := Collect(root, setOf(recorded("v0-goals", artifact.KindGoals, artifact.StatusSuperseded, "docs/product/goals/v0-goals.md")))
+	if len(set.Goals) != 1 {
+		t.Fatalf("goals = %q", stated(set.Goals))
+	}
+	if len(set.WrapProblems) != 0 {
+		t.Fatalf("wrap problems = %v", set.WrapProblems)
+	}
+}
+
 func TestProseUnderAGoalIsNotJoinedIntoIt(t *testing.T) {
 	t.Parallel()
 
@@ -1033,6 +1138,22 @@ func recorded(id string, kind artifact.Kind, status artifact.Status, path string
 
 func setOf(artifacts ...artifact.Artifact) artifact.Set {
 	return artifact.Set{Artifacts: artifacts}
+}
+
+// lineOf is what a document says on one physical line, counted from one, so a
+// test about a reported position checks where the position lands rather than
+// restating the arithmetic that produced it.
+func lineOf(t *testing.T, root, relative string, line int) string {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	lines := strings.Split(string(content), "\n")
+	if line < 1 || line > len(lines) {
+		t.Fatalf("line %d is outside %s, which has %d lines", line, relative, len(lines))
+	}
+	return lines[line-1]
 }
 
 func stated(goals []Goal) []string {

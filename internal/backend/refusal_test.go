@@ -45,7 +45,12 @@ var providerInvocations = map[string]string{
 	"internal/review/reviewer.go": "a review: the refusal travels back on review.Result, and whoever asked for the " +
 		"review accounts for it — the pipeline by parking the run, BranchReviewer by recording it",
 	"internal/chat/chat.go": "a conversation turn: Session.noteUsageLimit records the refusal against the " +
-		"conversation, because a turn has no run to park and fails at the operator's terminal",
+		"conversation, and Session.waitOutUsageLimit waits it out and reissues the invocation under the " +
+		"bounds a run waits under; a turn has no run to park, so a wait the harness will not take fails at " +
+		"the operator's terminal with the reset stated",
+	"internal/cli/exchange.go": "an inter-role ask exchange answering a round: exchangeVoice.noteUsageLimit " +
+		"records the refusal naming the exchange it stopped, because an answering round has neither a run " +
+		"to park nor a conversation of its own to fail at anybody's terminal",
 }
 
 // TestEveryProviderInvocationAccountsForAnExhaustedLimit fails when the tree

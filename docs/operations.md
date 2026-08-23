@@ -25,7 +25,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](../skills/yoyo-setup/SKILL.md) has your own agent session act on rather
+than parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
@@ -125,6 +128,22 @@ stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
 
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
+
 ## Waiting out a provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
@@ -168,9 +187,33 @@ same machinery on a much shorter clock.
 An exhausted limit is not only a run's problem, either. The harness asks a
 provider for work in three places: inside a run, which parks as above; a
 conversation turn; and an independent `yoyo review`, which uses the same reviewer
-with no run around it. The last two have no run to park, so each records the
-refusal instead — what was stopped, the limit the provider named, and when it
-said it lifts. Nothing waits on it: the turn or the review fails at your terminal
+with no run around it. All three record the refusal — what was stopped, the limit
+the provider named, and when it said it lifts — and the last two have no run to
+park in.
+
+A conversation turn waits anyway, under the bounds above and on the same polling
+discipline: it sleeps the probe interval or the time left to the quoted reset,
+whichever is shorter, and asks the refused invocation again on the same provider
+session. Nothing the turn had already done is done twice — tracker actions applied
+by a round that finished stay applied, because what is reissued is the single
+invocation the provider declined, with the prompt it was declined with. In an
+interactive conversation the wait is on the activity line, saying what is being
+waited out and when the turn will ask again; `yoyo chat --message` waits the same
+way, because an unattended caller is exactly the one who cannot retry by hand. The
+budget covers the message the operator is waiting for rather than each wait inside
+it, so a provider that keeps refusing reaches the configured maximum instead of
+walking one message past it a wait at a time. The refusal is written down once for
+as long as one message is waiting it out, so a wait is one warning in the channel
+rather than one per probe — a limit whose quoted reset moves is written down
+again, because that is the provider saying something new about it.
+
+What a conversation cannot do is what a run does when the wait is one the harness
+will not take — a reset already behind us, or a wait past
+`execution.usage_limit_max_pause` or `execution.usage_limit_in_process_pause`. A
+run leaves its deadline in durable state and a later invocation continues it; a
+turn has no such record to be continued from, so it fails at your terminal with
+the limit and its reset time stated, and saying the same thing again takes the
+turn that was refused. An independent `yoyo review` still fails on a refusal
 exactly as it did before. What the record buys is that
 [reporting into Slack](reporting.md#reporting-into-slack) says it as a `warning` without you
 there, and a run that parks on the same limit is said at that weight too. Hours
@@ -397,9 +440,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -410,6 +455,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -502,7 +558,8 @@ copy the single file out of it, if you want it:
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind
 ./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
+./bin/yoyo-status -c 30    # report that many days instead of 7
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -527,10 +584,26 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run, per conversation, and
-per branch review, and a mixed total says how much of it was each — a
+reporting requires it. What it prices is every run, every conversation, and
+every branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
+
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `-c 30` — and naming a run,
+a conversation, or a review prices that one whatever day it ran on, because an
+id has already chosen what to show; an id prefix that is all digits has to carry
+its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
+count of days. A window with nothing in it says so and says since when, rather
+than reading like a machine that spent nothing.
+
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the

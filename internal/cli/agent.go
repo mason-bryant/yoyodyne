@@ -28,13 +28,17 @@ import (
 // agentReport is one configured agent as the operator reads it: what it is,
 // what it decides, and what durable state it has.
 type agentReport struct {
-	Name           string           `json:"name"`
-	Role           domain.AgentRole `json:"role"`
-	Backend        domain.Backend   `json:"backend"`
-	Model          string           `json:"model"`
-	Instances      int              `json:"instances"`
-	PersonaPath    string           `json:"persona_path,omitempty"`
-	PersonaVersion string           `json:"persona_version,omitempty"`
+	Name    string           `json:"name"`
+	Role    domain.AgentRole `json:"role"`
+	Backend domain.Backend   `json:"backend"`
+	Model   string           `json:"model"`
+	// Account is the provider account this agent runs under. Which role runs
+	// where is the operator's and it is fixed, so it is read here beside the
+	// model rather than reconstructed from the configuration by hand.
+	Account        string `json:"account,omitempty"`
+	Instances      int    `json:"instances"`
+	PersonaPath    string `json:"persona_path,omitempty"`
+	PersonaVersion string `json:"persona_version,omitempty"`
 	// Owns is what this role decides, from the authority table rather than from
 	// the persona: a project can rewrite the persona and cannot rewrite this.
 	Owns string `json:"owns,omitempty"`
@@ -143,10 +147,11 @@ func showAgent(args []string, stdout, stderr io.Writer) int {
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "name the agent to show, as `yoyo agent show <name>`; `yoyo agent list` names them")
 		return 2
 	}
@@ -156,7 +161,7 @@ func showAgent(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	name, _, err := resolveAgent(parts.config, flags.Arg(0))
+	name, _, err := resolveAgent(parts.config, positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
@@ -232,10 +237,11 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 	message := flags.String("message", "", "send one message and print the reply instead of opening an interactive conversation")
 	fresh := flags.Bool("new", false, "start a new conversation instead of resuming the recorded one")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON (requires --message)")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return "", conversationRequest{}, 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "name the agent to talk to, as `yoyo agent chat <name>`; `yoyo agent list` names them")
 		return "", conversationRequest{}, 2
 	}
@@ -249,7 +255,7 @@ func agentConversationRequest(args []string, stderr io.Writer) (domain.AgentRole
 		fmt.Fprintln(stderr, err)
 		return "", conversationRequest{}, 1
 	}
-	name, role, err := resolveAgent(resolved.Config, flags.Arg(0))
+	name, role, err := resolveAgent(resolved.Config, positional[0])
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return "", conversationRequest{}, 1
@@ -290,6 +296,7 @@ func readAgents(parts components) ([]agentReport, error) {
 			Role:           agent.Role,
 			Backend:        agent.Backend,
 			Model:          agent.Model,
+			Account:        agent.Account,
 			Instances:      agent.Instances,
 			PersonaPath:    agent.Persona.Path,
 			PersonaVersion: agent.Persona.Version,
@@ -410,8 +417,9 @@ func resolveAgent(cfg config.Config, requested string) (string, domain.AgentRole
 
 func renderAgent(report agentReport) string {
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, %d instance(s)\n",
-		report.Name, report.Role, report.Backend, report.Model, report.Instances)
+	fmt.Fprintf(&rendered, "%s (%s) %s, model %s, account %s, %d instance(s)\n",
+		report.Name, report.Role, report.Backend, report.Model,
+		recorded(report.Account, "none the configuration names"), report.Instances)
 	if report.Owns != "" {
 		fmt.Fprintf(&rendered, "  owns %s\n", report.Owns)
 	}

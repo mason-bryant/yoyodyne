@@ -22,6 +22,7 @@ import (
 	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 )
 
 const CurrentVersion = 1
@@ -60,9 +61,18 @@ type Config struct {
 	Product   Product                `yaml:"product" json:"product"`
 	Execution Execution              `yaml:"execution" json:"execution"`
 	Triage    Triage                 `yaml:"triage" json:"triage"`
+	Exchange  Exchange               `yaml:"exchange" json:"exchange"`
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
+	// Accounts are the provider accounts this project runs agents under, keyed by
+	// the alias each one is named by. It is top level rather than under `agents`
+	// because an account is a thing several agents share: which roles run on which
+	// account is stated on the agents, and what accounts exist is stated once
+	// here. A project that names none runs under the default alias, which is what
+	// makes a single-account project write nothing and still record what it ran
+	// under.
+	Accounts map[string]Account `yaml:"accounts,omitempty" json:"accounts,omitempty"`
 	// Operators are the humans the project recognizes, keyed by a short name for
 	// each one. It is top level rather than under any one surface because a human
 	// is known by several, and the authority is the human's: an act is authorized
@@ -338,6 +348,32 @@ const (
 	minimumRepairGrant = 1
 )
 
+// Exchange is what the inter-role ask channel is bounded by. Two roles talking
+// to each other is the one thing here with no natural end: each of them is a
+// judgement model, each can always find something further worth saying, and
+// neither is the operator. So an exchange is opened with a hard limit on rounds,
+// and the limit is a project's judgement about how long a question between two
+// of its roles is worth going on for.
+type Exchange struct {
+	// MaxRounds is the most rounds one exchange thread may take. Reaching it
+	// closes the exchange as unresolved and escalates it to the operator, which
+	// is what turns the pathological case — two roles deferring to each other for
+	// ever — into a rare, legible question somebody can answer. It is copied onto
+	// each exchange as it opens, so changing it never lengthens a thread already
+	// running long.
+	//
+	// Zero is not a choice here, unlike the triage caps: an exchange allowed no
+	// round at all is a channel that is off, and turning the channel off is
+	// leaving the block out of a persona rather than configuring a limit nothing
+	// can be spent against. It is refused, and one is the floor.
+	MaxRounds int `yaml:"max_rounds" json:"max_rounds"`
+}
+
+// defaultExchangeMaxRounds is far more rounds than a question between two roles
+// has ever needed and few enough that the loop this bounds costs a knowable
+// amount before it reaches the operator.
+const defaultExchangeMaxRounds = exchange.DefaultMaxRounds
+
 type Approvals struct {
 	// Brief, Goals, and Designs decide which canonical documents the operator's
 	// approval is asked for. `human` means the operator approves the document and
@@ -422,7 +458,13 @@ type AgentConfig struct {
 	// agent. There is no implicit harness default: a family alias such as
 	// "opus" intentionally floats to the backend's current default for that
 	// family, while an exact provider identifier pins a version.
-	Model     string `yaml:"model" json:"model"`
+	Model string `yaml:"model" json:"model"`
+	// Account is the alias of the provider account this agent runs under, from
+	// the top-level accounts mapping. The assignment is the operator's and it is
+	// fixed: an agent runs where the configuration says it runs, and nothing
+	// chooses at run time. A project that states nothing has every agent assigned
+	// to its single account, which is the only arrangement v1 executes.
+	Account   string `yaml:"account,omitempty" json:"account,omitempty"`
 	Instances int    `yaml:"instances,omitempty" json:"instances"`
 	// Persona is the resolved role guidance handed to this agent's prompt. It
 	// may specialize how an agent works; it can never remove a harness
@@ -557,6 +599,12 @@ func (c Config) Validate() error {
 	if c.Triage.RepairGrantAttempts < minimumRepairGrant {
 		problems = append(problems, "triage.repair_grant_attempts must be at least 1")
 	}
+	// And nor is zero a choice here: an exchange that may take no round is a
+	// question nobody can put, which is what leaving the channel unused already
+	// is.
+	if c.Exchange.MaxRounds < 1 {
+		problems = append(problems, "exchange.max_rounds must be at least 1")
+	}
 
 	approvalValues := []struct {
 		name string
@@ -672,6 +720,7 @@ func (c Config) Validate() error {
 		}
 	}
 
+	problems = append(problems, c.accountProblems()...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
 

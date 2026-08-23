@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"time"
 
@@ -52,6 +53,11 @@ type chatOutput struct {
 	// Unlike proposals they already happened, so they are reported rather than
 	// offered.
 	Actions []chat.TrackerOutcome `json:"actions,omitempty"`
+	// Exchanges are the rounds of asking another role the reply conducted. They
+	// are reported for the reason the actions are, and for one more: a
+	// conversation that went and asked another agent something is exactly what an
+	// operator must never have to discover afterwards.
+	Exchanges []chat.ExchangeRound `json:"exchanges,omitempty"`
 	// ResultsCarriedOver reports that the reply stopped where it did because the
 	// product manager ran out of rounds of tracker actions, with results it has
 	// not seen. They are recorded with the conversation and reach it when the
@@ -213,16 +219,22 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
+			Exchanges:          reply.Exchanges,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
 			Reports:            reply.Reports,
 			ReportProblem:      reply.ReportProblem,
 		})
 	}
 	fmt.Fprintln(stdout, reply.Text)
+	// A one-shot message has no console to ask, so what it may be dressed with is
+	// asked of the stream it is writing to. A redirected one is undressed, which
+	// is the same answer an interactive conversation over the same stream gives.
+	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
+	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
-	printChatReports(stdout, role, reply.Reports, reply.ReportProblem)
-	printChatConcerns(stdout, role, reply.Concerns)
+	printChatReports(stdout, theme, role, reply.Reports, reply.ReportProblem)
+	printChatConcerns(stdout, theme, role, reply.Concerns)
 	// Everything undecided is listed rather than only what this turn proposed: a
 	// decision arrives as its own message, so what the operator has to be able to
 	// name is the whole of what is still waiting on them.
@@ -417,10 +429,25 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// records one in, so an exhausted limit reaches the channel from wherever
 		// it was met rather than only from a run.
 		UsageLimits: parts.usageLimits,
+		// And how long a turn it refused may wait for it to serve again. They are
+		// the bounds a run waits under, taken from the same configuration: an
+		// exhausted limit stops a conversation exactly as it stops a run, and an
+		// operator who said how long the harness may wait out one said it about
+		// every invocation they pay for.
+		UsageLimitPause: chat.UsageLimitPause{
+			Maximum:   cfg.Execution.UsageLimitMaxPause.Duration(),
+			InProcess: cfg.Execution.UsageLimitInProcessPause.Duration(),
+			Probe:     cfg.Execution.UsageLimitUnknownResetPause.Duration(),
+		},
 		// The operator's switch over the work the harness chooses for itself, so
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.
 		Intake: parts.intake,
+		// The inter-role ask channel, wired for the roles that are on it. A
+		// question one role cannot answer itself reaches the role that can through
+		// here, rather than through the operator or through a work item.
+		Exchanges:           conversationExchanges(parts, role, provider),
+		AskRoundsPerMessage: cfg.Exchange.MaxRounds,
 		// The durable budget the development manager's triage decisions spend.
 		// It is wired for that role alone, like the docket those decisions are
 		// about, so a repair grant or a re-run is bounded by what the operator
@@ -535,10 +562,12 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 	if output.Reply != "" {
 		fmt.Fprintln(stdout, output.Reply)
 	}
+	theme := console.ThemeFor(stdout, os.Getenv)
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
+	printChatExchanges(stdout, role, output.Exchanges)
 	printChatAdmitted(stdout, output.Admitted)
-	printChatReports(stdout, role, output.Reports, output.ReportProblem)
-	printChatConcerns(stdout, role, output.Concerns)
+	printChatReports(stdout, theme, role, output.Reports, output.ReportProblem)
+	printChatConcerns(stdout, theme, role, output.Concerns)
 	printChatProposals(stdout, role, output.Proposals)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
@@ -646,18 +675,44 @@ func printChatActions(writer io.Writer, role domain.AgentRole, actions []chat.Tr
 	}
 }
 
+// printChatExchanges reports what one role asked another while it answered. It
+// is printed wherever the actions are, and for the same reason with one added:
+// the exchange already happened and was already paid for, and a question put to
+// another agent that the operator is not told about is the side conversation
+// this channel exists not to be. The whole thread is durable; this is the line
+// that says to go and read it.
+func printChatExchanges(writer io.Writer, role domain.AgentRole, exchanges []chat.ExchangeRound) {
+	if len(exchanges) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\nThe %s asked another role (%d round(s)):\n", chat.RoleTitle(role), len(exchanges))
+	for _, round := range exchanges {
+		fmt.Fprintf(writer, "  asked the %s: %s\n", chat.RoleTitle(round.Asked), round.Question)
+		if round.ID != "" {
+			fmt.Fprintf(writer, "    %s, %s, round %d of %d, $%.4f\n", round.ID, round.State, round.Round, round.Rounds, round.CostUSD)
+		}
+		if round.Settled != "" {
+			fmt.Fprintf(writer, "    settled: %s\n", round.Settled)
+		}
+		if round.Problem != "" {
+			fmt.Fprintf(writer, "    unanswered: %s\n", round.Problem)
+		}
+	}
+	fmt.Fprintln(writer, "  `yoyo exchange show <id>` is the whole of what was said.")
+}
+
 // printChatReports names what the product manager reported for the operator
 // while it answered. It is printed for a one-shot message as well as a
 // conversation: the report is already collected, and one that is only in the
 // pile is one nobody has been told about yet.
-func printChatReports(writer io.Writer, role domain.AgentRole, reports []report.Report, problem string) {
+func printChatReports(writer io.Writer, theme console.Theme, role domain.AgentRole, reports []report.Report, problem string) {
 	if len(reports) == 0 && problem == "" {
 		return
 	}
 	if len(reports) > 0 {
 		fmt.Fprintf(writer, "\nThe %s reported %d thing(s) for you:\n", chat.RoleTitle(role), len(reports))
 		for _, reported := range reports {
-			fmt.Fprint(writer, reported.Render())
+			fmt.Fprint(writer, theme.Severity(console.Severity(reported.Severity), reported.Render()))
 		}
 	}
 	if problem != "" {
@@ -701,33 +756,40 @@ func printChatProposals(writer io.Writer, role domain.AgentRole, proposals []cha
 // printChatConcerns reports what a one-shot message would not propose. There is
 // nobody to answer it here, so the questions are printed with what they are:
 // raised, unanswered, and holding work that was never proposed.
-func printChatConcerns(writer io.Writer, role domain.AgentRole, concerns []chat.PendingConcern) {
+func printChatConcerns(writer io.Writer, theme console.Theme, role domain.AgentRole, concerns []chat.PendingConcern) {
 	if len(concerns) == 0 {
 		return
 	}
 	fmt.Fprintf(writer, "\nThe %s will not propose %d thing(s) until it is answered. Nothing was proposed or created: answer it in `yoyodyne chat`.\n\n", chat.RoleTitle(role), len(concerns))
 	for _, concern := range concerns {
-		fmt.Fprint(writer, concern.Render())
+		fmt.Fprint(writer, concern.Render(theme))
 	}
 }
 
 // printOpenConcerns names the questions a conversation ended without answering,
 // so one nobody answered is a visible loose end rather than silence that reads
 // as agreement.
+// Each one is marked and dressed by what its kind asks for rather than the
+// whole list being dressed as questions, because this is the listing where a
+// conversation's loose ends are counted together: they are all unanswered, and
+// which of them says the work would cut against a goal is the thing a count
+// cannot say.
 func printOpenConcerns(writer io.Writer, theme console.Theme, concerns []chat.PendingConcern) {
 	if len(concerns) == 0 {
 		return
 	}
-	var open strings.Builder
-	fmt.Fprintf(&open, "%d question(s) from the product manager were left unanswered, and the work behind them was never proposed:\n", len(concerns))
+	fmt.Fprintf(writer, "%d question(s) from the product manager were left unanswered, and the work behind them was never proposed:\n", len(concerns))
 	for _, concern := range concerns {
+		severity := concern.Concern.Kind.Severity()
+		var one strings.Builder
 		// The question itself is printed rather than only named, because what an
 		// operator has to come back to is what was asked and not that something
 		// was.
-		fmt.Fprintf(&open, "  [%s] %s: %s\n", concern.ID, concern.Concern.Kind.Headline(), concern.Concern.Subject)
-		fmt.Fprintf(&open, "      %s\n", strings.TrimSpace(concern.Concern.Question))
+		fmt.Fprintf(&one, "  %-*s [%s] %s: %s\n", report.MarkerWidth, severity.Marker(),
+			concern.ID, concern.Concern.Kind.Headline(), concern.Concern.Subject)
+		fmt.Fprintf(&one, "      %s\n", strings.TrimSpace(concern.Concern.Question))
+		fmt.Fprint(writer, theme.Severity(console.Severity(severity), theme.Questions(one.String())))
 	}
-	fmt.Fprint(writer, theme.Questions(open.String()))
 }
 
 // printUndecidedProposals names what a conversation left open, so a proposal

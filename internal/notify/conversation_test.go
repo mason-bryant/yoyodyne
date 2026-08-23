@@ -7,6 +7,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -45,6 +46,22 @@ func applied(t *testing.T, sequence uint64, workItemID string, action map[string
 		"action":       action,
 		"work_item_id": workItemID,
 		"summary":      "the harness's own account of it",
+	})
+}
+
+// appliedTo is a tracker action carried out against an item the tracker already
+// says something carries, which is the reading the harness takes as the action
+// runs rather than anything the action itself said.
+func appliedTo(t *testing.T, sequence uint64, workItemID, executor string, action map[string]any) execution.Event {
+	t.Helper()
+	return recorded(t, sequence, execution.EventTrackerActionApplied, map[string]any{
+		"action_id":          "t1.1",
+		"turn":               1,
+		"action":             action,
+		"work_item_id":       workItemID,
+		"work_item_title":    "Promote the brief to its next revision",
+		"work_item_executor": executor,
+		"summary":            "the harness's own account of it",
 	})
 }
 
@@ -348,6 +365,351 @@ func TestNothingIsSaidAboutWhatDidNotMoveTheBacklog(t *testing.T) {
 	}
 }
 
+// Routing work to a role's conversation is the transition that had no
+// representation at all: the item stops being a run's to carry, and from there
+// nothing happens to it until somebody opens a conversation about it.
+func TestMarkingWorkForAConversationIsSaidAsAHandoff(t *testing.T) {
+	conversation := conversationWith(domain.RoleDevelopmentManager)
+	events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+		"action":   "update",
+		"id":       "yoyodyne-ifd.138",
+		"executor": string(domain.ConversationWith(domain.RoleArchitect)),
+		"reason":   "no developer run can promote a document the architect owns",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindWorkHandedOff {
+		t.Fatalf("marking work for a conversation is %s", notification.Event.Kind)
+	}
+	if notification.Speaker.Role != domain.RoleDevelopmentManager {
+		t.Fatalf("spoken by %q", notification.Speaker.Key())
+	}
+	if !strings.Contains(message.Body, "conversation") {
+		t.Fatalf("body %q does not say what carries the work now", message.Body)
+	}
+	if !strings.Contains(message.Body, "no developer run can promote a document the architect owns") {
+		t.Fatalf("body %q loses why the work was routed", message.Body)
+	}
+	// A thread that goes quiet here is waiting on a person opening a conversation,
+	// and nothing else in the record would ever tell the reader that.
+	if !strings.Contains(message.Body, "no run will ever be started for this") {
+		t.Fatalf("body %q does not say whose move follows the handoff", message.Body)
+	}
+	// And it says which person, which is the whole of the difference between a
+	// thread an operator can read and one they have to reconstruct: the pickup
+	// names the role, so without this the wait before it belongs to nobody.
+	if !strings.Contains(message.Body, "the architect's conversation") {
+		t.Fatalf("body %q does not say whose conversation carries the item", message.Body)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+"the architect's, in conversation — no run will ever be started for this.") {
+		t.Fatalf("body %q leaves the wait for the pickup unattributed", message.Body)
+	}
+}
+
+// Every role can be handed work, and the handoff names whichever one it was.
+// Which roles carry work in conversation is a product judgement rather than a
+// fact about the harness, so a handoff that could only name some of them would
+// be back to the silence for the rest.
+func TestAHandoffNamesWhicheverRoleCarriesTheWork(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	for _, role := range domain.Roles() {
+		t.Run(string(role), func(t *testing.T) {
+			events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+				"action":   "update",
+				"id":       "yoyodyne-ifd.138",
+				"executor": string(domain.ConversationWith(role)),
+				"reason":   "no run carries this one",
+			})}
+			_, message := said(t, conversation, events, 0)
+			if !strings.Contains(message.Body, "the "+role.Title()+"'s conversation") {
+				t.Fatalf("body %q does not name the %s", message.Body, role)
+			}
+			if !strings.HasSuffix(message.Body, nextMoveLead+"the "+role.Title()+"'s, in conversation — no run will ever be started for this.") {
+				t.Fatalf("body %q does not leave the move with the %s", message.Body, role)
+			}
+		})
+	}
+}
+
+// Work marked before the marker named a role is still narrated, and is still
+// narrated as unattributed. The record does not say whose conversation it went
+// to, and a thread that picked a role would send the operator to somebody who
+// was never handed the item — which is worse than the silence it replaced.
+func TestAHandoffWhoseMarkerNamesNoRoleSaysOnlyWhatTheRecordHolds(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+		"action":   "update",
+		"id":       "yoyodyne-ifd.138",
+		"executor": string(domain.WorkItemExecutorConversation),
+		"reason":   "marked before the marker carried a role",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindWorkHandedOff {
+		t.Fatalf("an unattributed marker is %s, want it still read as a handoff", notification.Event.Kind)
+	}
+	if !strings.Contains(message.Body, "a role's conversation") {
+		t.Fatalf("body %q does not say a conversation carries it", message.Body)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
+		t.Fatalf("body %q names a role the record never did", message.Body)
+	}
+}
+
+// The routing being recorded is not the routing being acted on, and the second
+// is what a reader waiting on a handoff is actually waiting for. It is said once
+// per conversation: a role carrying work writes on the item repeatedly, and a
+// pickup said every time would stop meaning anything.
+func TestTheFirstThingARoleDoesToHandedWorkIsSaidAsPickingItUp(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{
+		appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "read",
+			"id":     "yoyodyne-ifd.138",
+		}),
+		appliedTo(t, 2, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "update",
+			"id":     "yoyodyne-ifd.138",
+			"note":   "the revision the brief needs",
+			"reason": "starting on the promotion",
+		}),
+		appliedTo(t, 3, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "update",
+			"id":     "yoyodyne-ifd.138",
+			"note":   "the second half of it",
+			"reason": "carrying on",
+		}),
+	}
+	// Reading an item is what a role does before deciding anything, so it is not
+	// the work starting.
+	if notification, err := FromConversation(conversation, events, 0); err != nil || !notification.Silent() {
+		t.Fatalf("a read said %s (%v), want nothing", notification.Event.Kind, err)
+	}
+	notification, message := said(t, conversation, events, 1)
+	if notification.Event.Kind != KindWorkPickedUp {
+		t.Fatalf("the first change to handed work is %s", notification.Event.Kind)
+	}
+	if notification.Speaker.Role != domain.RoleArchitect {
+		t.Fatalf("spoken by %q", notification.Speaker.Key())
+	}
+	if !strings.Contains(message.Body, "yoyodyne-ifd.138") {
+		t.Fatalf("body %q does not name the item taken up", message.Body)
+	}
+	// A pickup names no title of its own — the action is a note on an item that
+	// already exists — so the item's own name is what the message says, rather
+	// than a sentence stating the record carried none.
+	if !strings.Contains(message.Body, "Promote the brief to its next revision") {
+		t.Fatalf("body %q does not say what the item taken up is called", message.Body)
+	}
+	if repeated, err := FromConversation(conversation, events, 2); err != nil || !repeated.Silent() {
+		t.Fatalf("a second change said %s (%v), want the pickup said once", repeated.Event.Kind, err)
+	}
+}
+
+// Keeping the queue around handed work is not carrying it. An item marked for a
+// conversation is still attributed to a goal and still reordered, both are still
+// what they always were, and a reading that took either for somebody starting the
+// work would report a pickup nobody performed and lose the change that did
+// happen.
+func TestKeepingTheQueueAroundHandedWorkIsNotPickingItUp(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	for _, tidying := range []struct {
+		name   string
+		action map[string]any
+		want   Kind
+		says   string
+	}{
+		{
+			name: "reprioritize",
+			action: map[string]any{
+				"action":   "reprioritize",
+				"id":       "yoyodyne-ifd.138",
+				"priority": 1,
+				"reason":   "the brief matters more than the rest of the epic",
+			},
+			want: KindItemReprioritized,
+			says: "priority 1",
+		},
+		{
+			name: "attribute",
+			action: map[string]any{
+				"action": "attribute",
+				"id":     "yoyodyne-ifd.138",
+				"goal":   "Run development nearly autonomously",
+				"reason": "it was admitted before goals were checked",
+			},
+			want: KindItemAttributed,
+			says: "Run development nearly autonomously",
+		},
+	} {
+		t.Run(tidying.name, func(t *testing.T) {
+			// The first act of the conversation, which is exactly where a pickup arm
+			// reading every change would swallow it.
+			events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", tidying.action)}
+			notification, message := said(t, conversation, events, 0)
+			if notification.Event.Kind != tidying.want {
+				t.Fatalf("a %s on conversation-carried work is %s, want %s", tidying.name, notification.Event.Kind, tidying.want)
+			}
+			if !strings.Contains(message.Body, tidying.says) {
+				t.Fatalf("body %q loses what the %s actually changed", message.Body, tidying.name)
+			}
+			// The item is still not queued for a run and never will be, so what
+			// follows is the handoff's answer rather than the queue's.
+			if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
+				t.Fatalf("body %q says this is waiting for a run", message.Body)
+			}
+		})
+	}
+}
+
+// Tidying the queue must not consume the pickup either: a conversation that
+// reorders an item and then starts working on it has started working on it, and
+// the reordering is no reason to leave the thread's most important message
+// unsaid.
+func TestQueueTidyingDoesNotConsumeThePickupThatFollowsIt(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{
+		appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action":   "reprioritize",
+			"id":       "yoyodyne-ifd.138",
+			"priority": 0,
+			"reason":   "doing this one first",
+		}),
+		appliedTo(t, 2, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "update",
+			"id":     "yoyodyne-ifd.138",
+			"note":   "the revision as promoted",
+			"reason": "starting the promotion",
+		}),
+	}
+	if reordered, _ := said(t, conversation, events, 0); reordered.Event.Kind != KindItemReprioritized {
+		t.Fatalf("the reordering is %s", reordered.Event.Kind)
+	}
+	taken, _ := said(t, conversation, events, 1)
+	if taken.Event.Kind != KindWorkPickedUp {
+		t.Fatalf("the first act that carries the work is %s, want the pickup", taken.Event.Kind)
+	}
+}
+
+// Handing work back to the run queue is the inverse of a handoff, and nothing
+// reports it yet. Saying nothing is a gap; narrating it as a role taking the work
+// up would be a message that is exactly wrong, so the executor being spoken about
+// at all keeps the action out of the pickup.
+func TestTakingTheMarkerOffWorkIsNeverSaidToBePickingItUp(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":   "update",
+			"id":       "yoyodyne-ifd.138",
+			"executor": "",
+			"reason":   "a run can carry this after all",
+		},
+		"work_item_id":       "yoyodyne-ifd.138",
+		"work_item_executor": "conversation",
+		"summary":            "the harness's own account of it",
+	})}
+	notification, err := FromConversation(conversation, events, 0)
+	if err != nil {
+		t.Fatalf("select from a cleared executor: %v", err)
+	}
+	if notification.Event.Kind == KindWorkPickedUp {
+		t.Fatal("work handed back to the run queue was said to have been picked up")
+	}
+}
+
+// Closing an item is otherwise said by the run that finished it, and work a
+// conversation carries has no run. Without this its thread simply stops, which
+// is the silence that reads exactly like abandoned work.
+func TestClosingWorkAConversationCarriedIsTheAccountOfItFinishing(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", map[string]any{
+		"action": "close",
+		"id":     "yoyodyne-ifd.138",
+		"reason": "the brief is promoted and the revision is recorded",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindWorkCarriedOut {
+		t.Fatalf("closing work a conversation carried is %s", notification.Event.Kind)
+	}
+	if !strings.Contains(message.Body, "nobody's — the item is done") {
+		t.Fatalf("body %q does not say the thread is waiting on nobody", message.Body)
+	}
+	// Ordinary work keeps the rule it always had: its run says it finished, and a
+	// second account of that from the conversation would say one thing twice.
+	ordinary := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.113", "", map[string]any{
+		"action": "close",
+		"id":     "yoyodyne-ifd.113",
+		"reason": "the run landed it",
+	})}
+	if closed, err := FromConversation(conversation, ordinary, 0); err != nil || !closed.Silent() {
+		t.Fatalf("closing ordinary work said %s (%v), want the run to say it", closed.Event.Kind, err)
+	}
+}
+
+// The journey the operator read and found missing: an item admitted, routed to
+// the architect after a run could not carry it, taken up there, and finished
+// there. Replayed against the thread it should read end to end, with nothing
+// between the handoff and the pickup left for the reader to infer.
+func TestTheReroutedItemReadsCompleteInItsThread(t *testing.T) {
+	admitted := conversationWith(domain.RoleProductManager)
+	routed := conversationWith(domain.RoleDevelopmentManager)
+	carried := conversationWith(domain.RoleArchitect)
+
+	admission := []execution.Event{applied(t, 1, "yoyodyne-ifd.138", map[string]any{
+		"action":      "create",
+		"title":       "Promote the brief to its next revision",
+		"description": "the item's own words",
+		"goal":        "Run development nearly autonomously",
+		"reason":      "the brief has outrun what it says",
+	})}
+	handoff := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+		"action":   "update",
+		"id":       "yoyodyne-ifd.138",
+		"executor": "conversation",
+		"reason":   "a run produced an empty diff; the architect owns the document",
+	})}
+	work := []execution.Event{
+		appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "update",
+			"id":     "yoyodyne-ifd.138",
+			"note":   "the revision as promoted",
+			"reason": "starting the promotion",
+		}),
+		appliedTo(t, 2, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "close",
+			"id":     "yoyodyne-ifd.138",
+			"reason": "the brief is promoted",
+		}),
+	}
+
+	type step struct {
+		conversation runstate.Conversation
+		events       []execution.Event
+		index        int
+	}
+	thread := []step{
+		{admitted, admission, 0},
+		{routed, handoff, 0},
+		{carried, work, 0},
+		{carried, work, 1},
+	}
+	wantKinds := []Kind{KindItemAdmitted, KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut}
+	for position, taken := range thread {
+		notification, message := said(t, taken.conversation, taken.events, taken.index)
+		if notification.Event.Kind != wantKinds[position] {
+			t.Fatalf("step %d of the journey is %s, want %s", position, notification.Event.Kind, wantKinds[position])
+		}
+		if notification.Topic.Key() != "work-item:yoyodyne-ifd.138" {
+			t.Fatalf("step %d is addressed to %q, want the item's own thread", position, notification.Topic.Key())
+		}
+		// The whole point of the journey being readable is that no message in it
+		// leaves the reader guessing who holds the ball next.
+		if !strings.Contains(message.Body, nextMoveLead) {
+			t.Fatalf("step %d reads as %q, which never says whose move follows", position, message.Body)
+		}
+	}
+}
+
 func TestAnEventOutsideTheLogIsRefusedRatherThanInvented(t *testing.T) {
 	conversation := conversationWith(domain.RoleProductManager)
 	if _, err := FromConversation(conversation, nil, 0); err == nil {
@@ -363,5 +725,109 @@ func TestARecordThatCannotBeReadIsReportedRatherThanSaidWrongly(t *testing.T) {
 	event.Payload = json.RawMessage(`{"action":"not an action object"}`)
 	if _, err := FromConversation(conversation, []execution.Event{event}, 0); err == nil {
 		t.Fatal("an unreadable tracker payload was selected without complaint")
+	}
+}
+
+// An ask exchange is the second thing a conversation does that an operator
+// cannot otherwise see, and it reaches them in a thread of its own so one
+// conversation between two roles can be followed without reading past
+// everything else the asking conversation did.
+func TestAnAskExchangeIsSaidInAThreadOfItsOwn(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	exchangeID := "exchange-7f3a000000000000000000000000000a"
+	events := []execution.Event{
+		recorded(t, 1, execution.EventExchangeRound, map[string]any{
+			"exchange": exchangeID,
+			"asked":    "architect",
+			"round":    1,
+			"rounds":   10,
+			"state":    "open",
+			"cost_usd": 0.25,
+			"question": "what does this goal cost, and what am I missing?",
+			"text":     "More than the ordering assumes.",
+		}),
+		recorded(t, 2, execution.EventExchangeClosed, map[string]any{
+			"exchange": exchangeID,
+			"asked":    "architect",
+			"round":    1,
+			"rounds":   10,
+			"state":    "resolved",
+			"outcome":  "resolved",
+			"cost_usd": 0.25,
+			"question": "what does this goal cost, and what am I missing?",
+			"text":     "",
+		}),
+	}
+
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindExchangeTurn {
+		t.Fatalf("a round is %s", notification.Event.Kind)
+	}
+	if notification.Topic.Kind != TopicExchange || notification.Topic.ID != exchangeID {
+		t.Fatalf("topic = %+v, want the exchange", notification.Topic)
+	}
+	// The words are the architect's, so the architect speaks them: agent-authored
+	// text is posted as its author wrote it, and an architect's judgement in the
+	// product manager's voice would attribute an opinion to a persona that did not
+	// hold it.
+	if notification.Speaker.Role != domain.RoleArchitect {
+		t.Fatalf("speaker = %+v, want the answering role", notification.Speaker)
+	}
+	for _, wanted := range []string{"round 1 of 10", "More than the ordering assumes."} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("body %q does not carry %q", message.Body, wanted)
+		}
+	}
+
+	closed, closing := said(t, conversation, events, 1)
+	if closed.Event.Kind != KindExchangeClosed || closed.Event.Severity != report.SeverityNote {
+		t.Fatalf("a resolved close is %s at %s", closed.Event.Kind, closed.Event.Severity)
+	}
+	// A closing is the harness saying an exchange is over, which is nobody's
+	// opinion.
+	if !closed.Speaker.IsHarness() {
+		t.Fatalf("a closing speaker = %+v, want the harness", closed.Speaker)
+	}
+	if !strings.Contains(closing.Body, "resolved") {
+		t.Fatalf("body %q does not say how it ended", closing.Body)
+	}
+}
+
+// The ending nobody wants is the one worth interrupting for: an exchange that
+// reached its cap says what it left unsettled, at a severity that carries.
+func TestAnExchangeClosedAtItsCapIsSaidAsUnresolved(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{recorded(t, 1, execution.EventExchangeClosed, map[string]any{
+		"exchange": "exchange-7f3a000000000000000000000000000b",
+		"asked":    "product-manager",
+		"round":    10,
+		"rounds":   10,
+		"state":    "unresolved-after-rounds",
+		"outcome":  "unresolved-after-rounds",
+		"cost_usd": 2.5,
+		"question": "if we sacrifice some performance, is that an unacceptable trade-off?",
+		"text":     "",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Severity != report.SeverityWarning {
+		t.Fatalf("an unresolved close is %s, want warning", notification.Event.Severity)
+	}
+	for _, wanted := range []string{"unresolved at its round cap", "unacceptable trade-off"} {
+		if !strings.Contains(message.Body, wanted) {
+			t.Fatalf("body %q does not carry %q", message.Body, wanted)
+		}
+	}
+}
+
+// A round the record cannot be read from says so rather than being posted with
+// the exchange it belongs to left blank.
+func TestAnUnreadableExchangeRecordIsRefusedRatherThanSaid(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventExchangeRound, map[string]any{
+		"asked": "architect",
+		"round": 1,
+	})}
+	if _, err := FromConversation(conversation, events, 0); err == nil {
+		t.Fatal("a round naming no exchange was said anyway")
 	}
 }

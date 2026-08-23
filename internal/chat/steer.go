@@ -124,6 +124,12 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		return true, nil
 	case "/help":
 		fmt.Fprint(out, commandHelp)
+		// How a message of more than one line is typed depends on what this
+		// console turned out to support, so it is said here rather than written
+		// into the list above, which is the same on every terminal there is.
+		if s.composing != "" {
+			fmt.Fprintln(out, s.composing)
+		}
 		fmt.Fprintln(out)
 		return false, nil
 	case "/status":
@@ -194,11 +200,18 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 		fmt.Fprintln(out)
 		return false, nil
 	case "/reports":
-		reports, err := s.ReadReports()
-		if err != nil {
+		reports, handled, err := s.ReadReports()
+		// A pile that could not be read at all is the answer failing. A pile that
+		// was read while what became of it was not is the annotation failing, and
+		// the reports are still what the operator asked for: they are printed,
+		// with the gap named rather than shown as nothing having been handled.
+		if err != nil && reports == nil {
 			return false, err
 		}
-		fmt.Fprint(out, renderCollectedReports(reports))
+		if err != nil {
+			fmt.Fprintf(out, "none of these is shown as handled: %v\n", err)
+		}
+		fmt.Fprint(out, renderCollectedReports(s.theme, reports, handled))
 		fmt.Fprintln(out)
 		return false, nil
 	case "/work":
@@ -397,9 +410,9 @@ func (s *Session) printFinishedRun(out io.Writer, finished *FinishedRun, recordE
 	headline := finished.Report.Headline()
 	if alert := s.theme.Alert(headline); alert != "" {
 		s.titled = true
-		fmt.Fprintf(out, "\n%s%s", alert, finished.Report.Render())
+		fmt.Fprintf(out, "\n%s%s", alert, finished.Report.Render(s.theme))
 	} else {
-		fmt.Fprintf(out, "\n%s", finished.Report.Render())
+		fmt.Fprintf(out, "\n%s", finished.Report.Render(s.theme))
 	}
 	if finished.Err != nil {
 		fmt.Fprintf(out, "  the harness reported: %v\n", finished.Err)
