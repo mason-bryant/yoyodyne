@@ -55,10 +55,11 @@ func rerunStoppage(ctx context.Context, args []string, stdout, stderr io.Writer)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	reason := flags.String("reason", "", "the development manager's recorded reasoning for deciding a re-run")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "triage rerun requires exactly one run identifier, the run the docket entry names")
 		printTriageUsage(stderr)
 		return 2
@@ -68,7 +69,7 @@ func rerunStoppage(ctx context.Context, args []string, stdout, stderr io.Writer)
 	if err != nil {
 		return reportRerun(stdout, stderr, *jsonOutput, orchestrator.RerunResult{}, err)
 	}
-	result, err := rerunner.Rerun(ctx, orchestrator.RerunRequest{Run: flags.Arg(0), Reason: *reason})
+	result, err := rerunner.Rerun(ctx, orchestrator.RerunRequest{Run: positional[0], Reason: *reason})
 	return reportRerun(stdout, stderr, *jsonOutput, result, err)
 }
 
@@ -78,10 +79,11 @@ func repairStoppage(ctx context.Context, args []string, stdout, stderr io.Writer
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	reason := flags.String("reason", "", "the development manager's recorded reasoning for deciding a repair")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "triage repair requires exactly one run identifier, the run the docket entry names")
 		printTriageUsage(stderr)
 		return 2
@@ -91,7 +93,7 @@ func repairStoppage(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err != nil {
 		return reportRepair(stdout, stderr, *jsonOutput, orchestrator.RepairContinueResult{}, err)
 	}
-	result, err := continuer.Continue(ctx, orchestrator.RepairContinueRequest{Run: flags.Arg(0), Reason: *reason})
+	result, err := continuer.Continue(ctx, orchestrator.RepairContinueRequest{Run: positional[0], Reason: *reason})
 	return reportRepair(stdout, stderr, *jsonOutput, result, err)
 }
 

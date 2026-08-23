@@ -258,6 +258,43 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// parseArguments reads a command's flags and its positional arguments in
+// whatever order they were typed, and returns the positional ones. Go's flag
+// package stops parsing at the first word that is not a flag, so
+// `amendment approve <id> --reason ...` would otherwise arrive as three
+// positional arguments and be refused for naming three proposals — and an id
+// before the flags that describe what is being done to it is how anybody types
+// it, and what the usage text and the documentation say to type.
+//
+// Every command that takes an id parses through here rather than calling Parse
+// itself, because an ordering that works for one command and not the next is
+// worse than one that never worked: the operator learns the rule from the
+// command they happened to type first.
+func parseArguments(set *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	remaining := args
+	for {
+		if err := set.Parse(remaining); err != nil {
+			return nil, err
+		}
+		if set.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, set.Arg(0))
+		remaining = set.Args()[1:]
+	}
+}
+
+// argumentAt is the positional argument a command was given at one place, for
+// the commands whose argument is optional. It is empty when nothing was typed
+// there rather than a bounds failure.
+func argumentAt(positional []string, index int) string {
+	if index >= len(positional) {
+		return ""
+	}
+	return positional[index]
+}
+
 // loadConfiguration resolves an explicit path when one is given and otherwise
 // discovers the nearest project configuration, so Yoyodyne runs from a project
 // root or any directory beneath it.

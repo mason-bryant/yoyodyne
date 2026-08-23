@@ -100,10 +100,10 @@ func showInvariant(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportInvariantError(stdout, stderr, *flags.jsonOutput, err)
 	}
-	found, ok := set.Find(flags.set.Arg(0))
+	found, ok := set.Find(flags.id())
 	if !ok {
 		return reportInvariantError(stdout, stderr, *flags.jsonOutput,
-			fmt.Errorf("no invariant %q is recorded in %s", flags.set.Arg(0), set.Directory))
+			fmt.Errorf("no invariant %q is recorded in %s", flags.id(), set.Directory))
 	}
 	if *flags.jsonOutput {
 		return writeJSON(stdout, stderr, invariantOutput{Invariants: []invariant.Invariant{found}})
@@ -136,7 +136,7 @@ func createInvariant(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	created, err := store.Create(domain.RoleArchitect, invariant.Draft{
-		ID:            flags.set.Arg(0),
+		ID:            flags.id(),
 		Title:         *title,
 		Statement:     *statement,
 		Rationale:     *rationale,
@@ -182,7 +182,7 @@ func amendInvariant(args []string, stdout, stderr io.Writer) int {
 			amendment.Scope = listPointer(*scope)
 		}
 	})
-	amended, err := store.Amend(domain.RoleArchitect, flags.set.Arg(0), amendment, time.Now())
+	amended, err := store.Amend(domain.RoleArchitect, flags.id(), amendment, time.Now())
 	if err != nil {
 		return reportInvariantError(stdout, stderr, *flags.jsonOutput, err)
 	}
@@ -199,7 +199,7 @@ func retireInvariant(args []string, stdout, stderr io.Writer) int {
 	if code != 0 {
 		return code
 	}
-	retired, err := store.Retire(domain.RoleArchitect, flags.set.Arg(0), *reason, time.Now())
+	retired, err := store.Retire(domain.RoleArchitect, flags.id(), *reason, time.Now())
 	if err != nil {
 		return reportInvariantError(stdout, stderr, *flags.jsonOutput, err)
 	}
@@ -215,6 +215,9 @@ type invariantFlags struct {
 	name       string
 	configPath *string
 	jsonOutput *bool
+	// args are the positional arguments, collected by parse rather than read off
+	// the flag set, because the flags may come after them.
+	args []string
 }
 
 func newInvariantFlags(name string, stderr io.Writer) *invariantFlags {
@@ -228,11 +231,16 @@ func newInvariantFlags(name string, stderr io.Writer) *invariantFlags {
 	}
 }
 
+// parse reads the flags and the positional arguments, in whatever order they
+// were typed, which is what parseArguments is for: `invariant show <id> --json`
+// is how anybody reads one out of a listing.
 func (f *invariantFlags) parse(args []string, positional int) (int, bool) {
-	if err := f.set.Parse(args); err != nil {
+	parsed, err := parseArguments(f.set, args)
+	if err != nil {
 		return 2, false
 	}
-	if f.set.NArg() != positional {
+	f.args = parsed
+	if len(f.args) != positional {
 		if positional == 0 {
 			fmt.Fprintf(f.set.Output(), "%s does not accept positional arguments\n", f.name)
 		} else {
@@ -242,6 +250,11 @@ func (f *invariantFlags) parse(args []string, positional int) (int, bool) {
 		return 2, false
 	}
 	return 0, true
+}
+
+// id is the invariant a command was given, for the commands that take one.
+func (f *invariantFlags) id() string {
+	return argumentAt(f.args, 0)
 }
 
 // store resolves the invariants directory the same way every other command
@@ -326,7 +339,8 @@ act with the architect's authority and record that they did.
   amend [options] <id>            change one that exists, recording why
   retire --reason <why> <id>      stop enforcing one; the file and the reason stay
 
-Options come before the invariant id, as they do for every other command.
+Options may come before or after the invariant id, as they may for every other
+command that takes one.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)

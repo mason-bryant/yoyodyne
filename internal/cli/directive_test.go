@@ -86,6 +86,53 @@ func TestDirectiveLifecycleFromTheCommandLine(t *testing.T) {
 	}
 }
 
+// What the operator said is typed first and the options that describe it after,
+// and a directive id read out of a listing is typed the same way. What proves
+// each flag was read as a flag is that its value arrives on the record.
+func TestDirectiveOptionsAreReadAfterTheArgument(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	configPath := writeConfig(t, validConfig)
+
+	stdout, stderr, code := runCLI(t, "directive", "record", "do publishing differently",
+		"--config", configPath,
+		"--kind", "ambiguous",
+		"--received-by", "reviewer",
+		"--unresolved", "which of the two publishing behaviours was meant")
+	if code != 0 {
+		t.Fatalf("record code = %d, stderr = %q", code, stderr)
+	}
+	for _, want := range []string{"do publishing differently", "by the reviewer", "is paused"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("record stdout = %q, want it to mention %q", stdout, want)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "directive", "list", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	var listed struct {
+		Directives []struct {
+			ID string `json:"id"`
+		} `json:"directives"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if len(listed.Directives) != 1 {
+		t.Fatalf("listed = %#v, want the one directive the flags after the text recorded", listed.Directives)
+	}
+
+	stdout, stderr, code = runCLI(t, "directive", "resolve", listed.Directives[0].ID,
+		"--config", configPath, "--resolution", "the second behaviour was meant")
+	if code != 0 {
+		t.Fatalf("resolve code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "the second behaviour was meant") {
+		t.Fatalf("resolve stdout = %q, want the resolution typed after the id kept with the record", stdout)
+	}
+}
+
 // Everything here would produce a directive nobody could act on or lift, so it
 // is refused rather than recorded.
 func TestDirectiveRefusesWhatCannotBeEnforcedOrLifted(t *testing.T) {
