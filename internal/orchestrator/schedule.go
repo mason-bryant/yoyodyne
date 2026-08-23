@@ -1347,7 +1347,10 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
 	}
 	if s.Braked != nil {
-		fmt.Fprintf(&rendered, "the harness held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
+		// The brake places a hold nobody chose, so the line that reports it carries
+		// the command that lifts it: whoever meets this is reading a terminal, and
+		// a remedy they cannot run from there is no remedy.
+		fmt.Fprintf(&rendered, "the harness held intake after %d run(s) blocked in a row; `yoyo release` lifts it and the line carries on\n", s.BlockedInARow)
 	}
 	if s.BrakeProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)

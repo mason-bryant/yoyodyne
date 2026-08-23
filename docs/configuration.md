@@ -1470,7 +1470,7 @@ touching the item, is what asks for another attempt.
 different thing from that cooldown: it is aimed at a broken machine rather than a
 broken item. That many runs blocking one after another, with nothing landing
 between them, holds intake — the same hold you would place — and it stays held
-until you release it. Any run that lands clears the count, and `0` turns the
+until you release it, with `yoyo release` or the conversation's `/release`. Any run that lands clears the count, and `0` turns the
 brake off entirely, leaving you as the only thing that holds intake.
 
 And the session says what it is doing, because an idle session and a dead one are

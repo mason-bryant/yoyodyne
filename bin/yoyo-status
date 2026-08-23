@@ -126,7 +126,11 @@ announce_intake_hold() {
   reason="$(sed -n 's/^[[:space:]]*"reason":[[:space:]]*"\(.*\)".*/\1/p' "$hold" | head -1)"
   echo "INTAKE HELD: the harness starts nothing more on its own${since:+ since $since}" >&2
   [ -n "$reason" ] && echo "$reason" >&2
-  echo "work already running carries on; /release in a conversation lets it choose work again" >&2
+  # The remedy is named as something runnable from the terminal this was read
+  # at. `/release` in a conversation lifts the same record, but a person reading
+  # a status listing may have no conversation open, and a remedy they cannot run
+  # from where they are standing is not one.
+  echo "work already running carries on; \`yoyo release\` lets it choose work again, as does /release in a conversation" >&2
 }
 announce_intake_hold
 
