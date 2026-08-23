@@ -19,6 +19,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 // MaxFileBytes bounds one invariant file. It is a constraint stated tightly
@@ -183,7 +184,7 @@ func (s Store) Create(role domain.AgentRole, draft Draft, now time.Time) (Invari
 		return Invariant{}, fmt.Errorf("inspect invariant %q: %w", created.ID, err)
 	}
 	created.Path = relative
-	if err := s.write(path, created); err != nil {
+	if err := s.write(relative, created); err != nil {
 		return Invariant{}, err
 	}
 	return created, nil
@@ -198,7 +199,7 @@ func (s Store) Amend(role domain.AgentRole, id string, amendment Amendment, now 
 	if err := Authorize(role); err != nil {
 		return Invariant{}, err
 	}
-	existing, path, err := s.loadOne(id)
+	existing, err := s.loadOne(id)
 	if err != nil {
 		return Invariant{}, err
 	}
@@ -236,7 +237,7 @@ func (s Store) Amend(role domain.AgentRole, id string, amendment Amendment, now 
 	if err := amended.Validate(); err != nil {
 		return Invariant{}, err
 	}
-	if err := s.write(path, amended); err != nil {
+	if err := s.write(amended.Path, amended); err != nil {
 		return Invariant{}, err
 	}
 	return amended, nil
@@ -256,7 +257,7 @@ func (s Store) Retire(role domain.AgentRole, id, reason string, now time.Time) (
 	if err := Authorize(role); err != nil {
 		return Invariant{}, err
 	}
-	existing, path, err := s.loadOne(id)
+	existing, err := s.loadOne(id)
 	if err != nil {
 		return Invariant{}, err
 	}
@@ -274,31 +275,32 @@ func (s Store) Retire(role domain.AgentRole, id, reason string, now time.Time) (
 	if err := existing.Validate(); err != nil {
 		return Invariant{}, err
 	}
-	if err := s.write(path, existing); err != nil {
+	if err := s.write(existing.Path, existing); err != nil {
 		return Invariant{}, err
 	}
 	return existing, nil
 }
 
-// loadOne reads the single invariant an amendment or a retirement names, and
-// returns the file it came from so the mutation replaces exactly what it read.
-func (s Store) loadOne(id string) (Invariant, string, error) {
+// loadOne reads the single invariant an amendment or a retirement names. What it
+// returns carries the file it came from in its Path, so the mutation replaces
+// exactly what it read.
+func (s Store) loadOne(id string) (Invariant, error) {
 	path, relative, err := s.path(id)
 	if err != nil {
-		return Invariant{}, "", err
+		return Invariant{}, err
 	}
 	loaded, err := s.read(path, relative)
 	if err != nil {
 		var unreadable unreadableError
 		if errors.As(err, &unreadable) {
-			return Invariant{}, "", fmt.Errorf("invariant %q at %s cannot be read: %s", id, relative, unreadable.reason)
+			return Invariant{}, fmt.Errorf("invariant %q at %s cannot be read: %s", id, relative, unreadable.reason)
 		}
 		if errors.Is(err, os.ErrNotExist) {
-			return Invariant{}, "", fmt.Errorf("no invariant %q is recorded at %s", id, relative)
+			return Invariant{}, fmt.Errorf("no invariant %q is recorded at %s", id, relative)
 		}
-		return Invariant{}, "", err
+		return Invariant{}, err
 	}
-	return loaded, path, nil
+	return loaded, nil
 }
 
 // unreadableError is a file that is not a usable invariant, as opposed to a
@@ -347,14 +349,17 @@ func (s Store) read(path, relative string) (Invariant, error) {
 	return parsed, nil
 }
 
-// write replaces one invariant file. These are repository documents reviewed
-// with the code rather than runtime state, so they are written with ordinary
-// file permissions, and through a temporary file and a rename so an interrupted
-// write cannot leave a half-written constraint where a whole one was.
-func (s Store) write(path string, recorded Invariant) error {
-	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o755); err != nil {
-		return fmt.Errorf("create invariants directory: %w", err)
+// write replaces one invariant file, named by where it lives in the repository
+// rather than by an absolute path. Going through repowrite is what keeps the
+// write inside the repository: the directory it lands in comes from
+// configuration, and the lexical check that configuration passed says nothing
+// about what the filesystem has put along the path by the time anything writes
+// there. A constraint written outside the repository is one no developer is ever
+// delivered and no reviewer ever sees.
+func (s Store) write(relative string, recorded Invariant) error {
+	root, err := repowrite.NewRoot(s.RepositoryRoot)
+	if err != nil {
+		return err
 	}
 	rendered, err := render(recorded)
 	if err != nil {
@@ -363,25 +368,8 @@ func (s Store) write(path string, recorded Invariant) error {
 	if len(rendered) > MaxFileBytes {
 		return fmt.Errorf("invariant %q renders to %d bytes, limit is %d", recorded.ID, len(rendered), MaxFileBytes)
 	}
-	temporary, err := os.CreateTemp(directory, ".invariant-*.tmp")
-	if err != nil {
-		return fmt.Errorf("create temporary invariant: %w", err)
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o644); err != nil {
-		temporary.Close()
-		return fmt.Errorf("set invariant permissions: %w", err)
-	}
-	if _, err := temporary.WriteString(rendered); err != nil {
-		temporary.Close()
+	if _, err := root.WriteFile(relative, []byte(rendered)); err != nil {
 		return fmt.Errorf("write invariant %q: %w", recorded.ID, err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close temporary invariant: %w", err)
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return fmt.Errorf("replace invariant %q: %w", recorded.ID, err)
 	}
 	return nil
 }
@@ -517,14 +505,14 @@ func render(recorded Invariant) (string, error) {
 // because this package is what actually reads and writes the filesystem and a
 // confinement that holds only when a caller remembered to check is not one.
 func (s Store) resolve() (root, directory string, err error) {
-	root, err = filepath.Abs(s.RepositoryRoot)
+	// The same root the writes are confined to rather than a second reading of it,
+	// so a path this package reads from and the path it would write to cannot
+	// disagree about where the repository is.
+	resolved, err := repowrite.NewRoot(s.RepositoryRoot)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve repository root: %w", err)
+		return "", "", err
 	}
-	root, err = filepath.EvalSymlinks(root)
-	if err != nil {
-		return "", "", fmt.Errorf("resolve repository root symlinks: %w", err)
-	}
+	root = resolved.Path()
 	directory, err = validateDirectory(s.Directory)
 	if err != nil {
 		return "", "", err
