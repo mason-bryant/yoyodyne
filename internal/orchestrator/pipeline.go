@@ -1236,6 +1236,24 @@ func (a *activeRun) blockOnDivergedTarget(catchup gitworktree.Catchup) error {
 	return diverged
 }
 
+// blockOnPromotedDivergence ends a run whose remote target diverged in the
+// window after the local promotion, which is the same divergence as
+// blockOnDivergedTarget's with one thing already done that cannot be undone: the
+// change is on the local target branch. So the blocker says so rather than
+// pretending otherwise — what a person settles here is the two branches and the
+// publication, not the work — and the run ends without closing the item, because
+// an item closed as integrated is exactly the receipt that made this outcome
+// invisible.
+func (a *activeRun) blockOnPromotedDivergence(integration gitworktree.Integration, catchup gitworktree.Catchup, cause error) error {
+	remote := a.pipeline.Config.Execution.Remote
+	diverged := fmt.Errorf("%w; %s cannot be brought onto %s afterwards: %s",
+		cause, integration.TargetBranch, remote, catchup.Held)
+	if err := a.block(renderPromotedDivergenceNotes(a.outcome, integration, catchup, remote, diverged.Error())); err != nil {
+		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
+	}
+	return diverged
+}
+
 // repairLoop returns each failure to the same developer until an attempt both
 // passes the deterministic gates and is approved, or the configured repair
 // budget is spent. A refused path, a failing check, and a reviewer's findings
@@ -2769,9 +2787,15 @@ func (a *activeRun) integrate(ctx context.Context) error {
 		PreviousTargetCommit: integration.PreviousTargetCommit,
 	}
 	// The approving verdict authorized this promotion, so it also authorized the
-	// merge of the pull request that carried it. Publishing cannot fail the run:
-	// the local target branch has already moved and it is the authoritative one.
-	a.publishIntegration(ctx)
+	// merge of the pull request that carried it. Publishing does not fail the run
+	// over an unfinished publication — the local target branch has already moved
+	// and it is the authoritative one — but it does fail it over a remote target
+	// that diverged in the window this check-then-act leaves open, because the
+	// alternative is closing the item as integrated against a divergence no
+	// fast-forward reconciles. The promotion stands either way; the blocker says so.
+	if err := a.publishIntegration(ctx); err != nil {
+		return err
+	}
 	a.state.Phase = runstate.PhaseCompleting
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
@@ -4037,6 +4061,32 @@ func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, rem
 		fmt.Sprintf("Local %s: %s", catchup.TargetBranch, nonEmpty(catchup.LocalCommit, "an unresolved commit")),
 		fmt.Sprintf("%s %s: %s", remote, catchup.TargetBranch, nonEmpty(catchup.RemoteCommit, "no such branch")),
 		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and reconciling the two target branches is what this needs before the change can be promoted.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderPromotedDivergenceNotes describes the same divergence found one step too
+// late: the local target branch already carries the promotion. It says that
+// plainly and first, because a reader who assumed the change was lost would go
+// looking for work that is already on their branch — and it says the item is
+// deliberately not closed, because the promotion alone would ordinarily have
+// closed it and what stops that here is the divergence rather than any doubt
+// about the change.
+func renderPromotedDivergenceNotes(outcome Outcome, integration gitworktree.Integration, catchup gitworktree.Catchup, remote, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: the change was promoted onto the local target branch, and the one on the remote then turned out to have diverged from it.",
+		"The change itself is not at risk — it is on the local target branch, which is the authoritative one — but the publication did not happen and the two branches cannot be brought together by a fast-forward.",
+		"The item is deliberately left open rather than closed as integrated: closing it would record this work as landed against a state nothing reconciles.",
+		"Nothing was force-merged, reset, or auto-resolved; which history is right is a decision for a person.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		fmt.Sprintf("Promoted commit: %s, onto local %s at %s", integration.SourceCommit, integration.TargetBranch, integration.TargetCommit),
+		fmt.Sprintf("%s %s: %s", remote, integration.TargetBranch, nonEmpty(catchup.RemoteCommit, "could not be resolved")),
+	}
+	if outcome.PullRequest != nil {
+		lines = append(lines, fmt.Sprintf("Pull request left unmerged: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL))
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }

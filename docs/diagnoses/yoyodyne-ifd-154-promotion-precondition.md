@@ -21,16 +21,30 @@ titled "What a refusal actually does: it does not replay" and the fourth row of
 the verdict table describe the tree as it was on 2026-08-23 and no longer
 describe the promotion path.**
 
-What changed: `activeRun.integrate` now settles where the remote target stands
-*before* the local promotion (`activeRun.settleRemoteTarget`,
-`internal/orchestrator/publish.go`). A remote the local target can be
-fast-forwarded onto is taken on, which makes the promotion refuse its own
-recorded base as `ErrTargetDrift` and sends the run through the replay the
-claim under test described — checks re-run, fresh independent review. A remote
-the local target cannot be brought onto blocks the run with both branch
-positions named, before the item is closed. The everything-else of this document
-— where the precondition is enforced, what containment and content each prove,
-and the queued-merge gap — is unchanged and still holds.
+What changed, in two halves:
+
+- **Before the promotion.** `activeRun.integrate` now settles where the remote
+  target stands before it promotes (`activeRun.settleRemoteTarget`,
+  `internal/orchestrator/publish.go`). A remote the local target can be
+  fast-forwarded onto is taken on, which makes the promotion refuse its own
+  recorded base as `ErrTargetDrift` and sends the run through the replay the
+  claim under test described — checks re-run, fresh independent review. A remote
+  the local target cannot be brought onto blocks the run with both branch
+  positions named.
+- **After it.** The check-then-act window this document identifies is *not*
+  closed, and cannot be by a check: the remote can still move between the settle
+  and the merge request, and against a second machine nothing covers that. What
+  changed is only what such a movement now produces.
+  `publishIntegration`'s drift is no longer an outstanding publication the run
+  finishes on. It is settled — a remote that swept the promotion in is caught up
+  onto and leaves an ordinary unfinished publication, and a remote that diverged
+  blocks the run, which happens before `finish` closes anything.
+
+So the window remains and the wedge does not: no run closes an item as
+integrated against a divergence nothing reconciles, on either side of the
+promotion. The rest of this document — where the precondition is enforced, what
+containment and content each prove, and the queued-merge gap — is unchanged and
+still holds.
 
 ## The claim under test
 
@@ -231,7 +245,11 @@ was waiting on rather than a position on it.
   Nothing covers this today.
 - ~~No recovery path exists for the outcome above: a local target diverged from
   the remote with a closed work item behind it is reported by reconciliation and
-  resolved by nobody.~~ Admitted as `yoyodyne-ifd.177` and fixed: a run can no
-  longer produce that outcome, because the divergence is settled or refused
-  before the promotion. A repository already wedged by a run that predates the
-  fix is still wedged, and still needs a person.
+  resolved by nobody.~~ Admitted as `yoyodyne-ifd.177` and fixed at the source:
+  no run produces *a closed work item behind* that divergence any more, on either
+  side of the promotion — it is settled or replayed before, and blocked without
+  closing the item after. Two things this did **not** do, and both still stand:
+  the check-then-act window against a second machine is not closed and cannot be
+  by a check, so the divergence itself remains reachable; and no recovery path was
+  added, so a repository already wedged by a run that predates the fix, and one
+  wedged by the queued-merge path below, still need a person.
