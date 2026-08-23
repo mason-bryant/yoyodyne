@@ -125,3 +125,51 @@ bd prime                # Refresh Beads context
 
 **Architecture in one line:** issues live in a local Dolt DB; sync uses `refs/dolt/data` on your git remote; `.beads/issues.jsonl` is a passive export. See https://github.com/gastownhall/beads/blob/main/docs/SYNC_CONCEPTS.md for details and anti-patterns.
 <!-- END BEADS CODEX SETUP -->
+
+## Never replace a work item's notes
+
+`bd update <id> --notes=` **replaces** the notes field wholesale. Use
+`bd update <id> --append-notes=` to add to it.
+
+This matters more here than it looks. A work item's goal attribution is one line
+in its notes — `Goal served: <statement>`, written and read back by
+`internal/goal/goal.go` — so the notes are the record, and a writer that
+replaces them takes the attribution with it. Twelve attributions were destroyed
+exactly that way, every one of them from an interactive session; each loss is
+matched to the command that caused it in
+[the diagnosis](docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md).
+
+[`scripts/bd-notes-guard.sh`](scripts/bd-notes-guard.sh) enforces this as a
+`PreToolUse` hook: it refuses a `bd update --notes=` against an item whose notes
+name a goal, unless the replacement carries that same `Goal served:` line
+across. It allows everything else, silently.
+
+<!-- BEGIN NOTES GUARD HOOK -->
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/bd-notes-guard.sh\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ]
+  }
+}
+```
+<!-- END NOTES GUARD HOOK -->
+
+Merge that `PreToolUse` entry into `.claude/settings.json` alongside the
+`SessionStart` hook already there. It has to be landed by hand: Claude Code
+refuses an agent's write to a settings file, so no harness run can wire its own
+session's hooks. `internal/cli` checks the block above stays valid and keeps
+naming a script that exists, but nothing can check that you pasted it — until
+you do, an interactive `bd update --notes=` is unguarded.
+
+Codex reads its hooks from `.codex/hooks.json` rather than from this block; that
+surface is not yet covered.
