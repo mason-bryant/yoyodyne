@@ -218,6 +218,62 @@ func TestSeverityIsEmphasizedWithoutCarryingTheMeaning(t *testing.T) {
 	}
 }
 
+// A listing is read by finding its entries and then reading what each one says
+// about itself, so the entry is weighted and the lines under it are slanted.
+// Both are decoration in the same way every colour here is: the indent and the
+// label are what say which line is which, and a listing captured to a file or
+// read where nothing may be dressed says exactly what it said on the terminal.
+func TestAListingsEntriesAreWeightedAndItsDetailsSlanted(t *testing.T) {
+	t.Parallel()
+
+	const (
+		entry  = "Maintain a traceable chain from the brief through to verification.\n"
+		detail = "  stated by: v1-goals (docs/product/goals/v1-goals.md)\n"
+	)
+	for _, test := range []struct {
+		name    string
+		env     map[string]string
+		dressed bool
+	}{
+		// Neither is a colour, so a terminal that can only say sixteen of them
+		// shows the same distinction a deeper one does.
+		{name: "a colour terminal", env: map[string]string{"TERM": "xterm-256color"}, dressed: true},
+		{name: "a sixteen-colour terminal", env: map[string]string{"TERM": "xterm"}, dressed: true},
+		{name: "NO_COLOR", env: map[string]string{"TERM": "xterm-256color", "NO_COLOR": "1"}},
+		{name: "a dumb terminal", env: map[string]string{"TERM": "dumb"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			theme := NewTheme(environment(test.env), func() int { return 40 })
+			weighted, slanted := theme.Entry(entry), theme.Detail(detail)
+			if !test.dressed {
+				if weighted != entry || slanted != detail {
+					t.Fatalf("a listing was dressed anyway: %q, %q", weighted, slanted)
+				}
+				return
+			}
+			if !strings.HasPrefix(weighted, emphasisOn) || !strings.HasSuffix(strings.TrimSuffix(weighted, "\n"), resetColour) {
+				t.Fatalf("entry = %q, want it weighted and closed", weighted)
+			}
+			if !strings.HasPrefix(slanted, detailOn) || !strings.HasSuffix(strings.TrimSuffix(slanted, "\n"), resetColour) {
+				t.Fatalf("detail = %q, want it slanted and closed", slanted)
+			}
+			// The two are told apart from each other, not only from undressed text:
+			// dressing a detail the way an entry is dressed would make every line of
+			// the listing look like the start of a new one.
+			if theme.Entry(detail) == slanted {
+				t.Fatal("an entry and a detail are dressed the same way")
+			}
+			for _, dressed := range []struct{ was, is string }{{entry, weighted}, {detail, slanted}} {
+				if stripped := escapes.ReplaceAllString(dressed.is, ""); stripped != dressed.was {
+					t.Fatalf("stripping the escapes changed the line: %q", stripped)
+				}
+			}
+		})
+	}
+}
+
 // A card is a frame around something the operator has to act on. Like the rule
 // it is decoration: it makes the boundary between two of them findable, and
 // everything that carries meaning is in the heading and the body, which is what

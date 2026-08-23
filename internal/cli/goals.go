@@ -20,11 +20,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -108,10 +110,30 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 			WrapProblems: goals.WrapProblems,
 		})
 	}
+	printGoals(stdout, console.ThemeFor(stdout, os.Getenv), goals)
+	printGoalsProblems(stderr, goals)
+	return 0
+}
+
+// printGoals is the listing itself, laid out to be read rather than parsed: one
+// goal to an entry, with a blank line between entries, its statement weighted
+// and the lines about it slanted and indented under it.
+//
+// The dressing is an addition and never the meaning, which is the discipline the
+// whole theme holds to. What separates one goal from the next is the blank line,
+// what says a line is about the goal above it is the indent and its label, and
+// what says a goal is no longer something work may name is the marker in words —
+// so this listing piped to a file, read where NO_COLOR is set, or shown on a
+// terminal that says it is dumb says everything it says on a terminal that can
+// be dressed. `--json` carries none of it.
+func printGoals(stdout io.Writer, theme console.Theme, goals goal.Set) {
 	if reason, uncheckable := goals.Uncheckable(); uncheckable {
 		fmt.Fprintf(stdout, "no goal is in force: %s\n", reason)
 	}
-	for _, recorded := range goals.Goals {
+	for index, recorded := range goals.Goals {
+		if index > 0 {
+			fmt.Fprintln(stdout)
+		}
 		state := ""
 		if !recorded.InForce {
 			// A goal in a document no longer in force is listed and marked, because
@@ -119,14 +141,33 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 			// somebody could still name would be wrong.
 			state = " [no longer in force]"
 		}
-		fmt.Fprintf(stdout, "%s%s\n", recorded.Statement, state)
-		fmt.Fprintf(stdout, "  stated by: %s (%s)\n", recorded.ArtifactID, recorded.Path)
+		fmt.Fprint(stdout, theme.Entry(fmt.Sprintf("%s%s\n", recorded.Statement, state)))
+		fmt.Fprint(stdout, theme.Detail(fmt.Sprintf("  stated by: %s (%s)\n", recorded.ArtifactID, recorded.Path)))
 		if recorded.Supports != "" {
-			fmt.Fprintf(stdout, "  supports: %s\n", recorded.Supports)
+			fmt.Fprint(stdout, theme.Detail(fmt.Sprintf("  supports: %s\n", recorded.Supports)))
 		}
 	}
-	printGoalsProblems(stderr, goals)
-	return 0
+	printGoalsUpstream(stdout, theme, goals)
+}
+
+// printGoalsUpstream closes the listing by saying where the chain goes above it:
+// these goals are not the top of it, and the brief they support is a file the
+// reader can open. It is what a reader who took this listing for the whole of
+// the product's intent was missing, and it is printed whether or not any goal
+// was listed — somebody shown no goals at all is the reader most in need of
+// being sent upstream.
+//
+// The brief is named from the artifacts rather than assumed, because where a
+// product keeps its brief is that product's to decide. A repository recording
+// none is told what these goals support without being sent to a file that is not
+// there; what is wrong there is reported on stderr with the other broken links.
+func printGoalsUpstream(stdout io.Writer, theme console.Theme, goals goal.Set) {
+	line := "upstream: these goals support the goals the product brief states"
+	if goals.BriefPath != "" {
+		line += ", in " + goals.BriefPath
+	}
+	fmt.Fprintln(stdout)
+	fmt.Fprint(stdout, theme.Detail(line+"\n"))
 }
 
 // reportAttribution says what the admitted work is for: which items name a goal
@@ -485,6 +526,14 @@ what the harness owns is resolving what an item names and saying what it found.
   attribution   what each admitted work item says it is for
   witness       record, where a careless writer cannot reach it, the goal each
                 admitted item's notes already state
+
+"list" is laid out to be read: one goal to an entry, a blank line between
+entries, and where the goal is stated indented under it, closing with a line
+naming what these goals sit underneath — the goals the product brief states, and
+the file to open for them. On a terminal the statement is bold and the lines
+about it italic; the emphasis is an addition and nothing else, so a listing piped
+to a file, read where `+"`NO_COLOR`"+` is set, or shown on a terminal that says it is
+dumb says exactly what it says dressed. `+"`--json`"+` carries none of it.
 
 An item admitted before goals were checked names none. That is reported and is
 not a failure: it is somebody's to attribute, and nothing refuses to run it.
