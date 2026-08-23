@@ -104,3 +104,92 @@ func TestReviewFailsUnlessTheAccumulatedChangeWasApproved(t *testing.T) {
 		t.Fatalf("decoded review = %#v", decoded.Review)
 	}
 }
+
+// A shadow review is asked to measure the reviewer, not to judge the branch, so
+// it exits on whether a verdict was obtained. A repair verdict is the ordinary
+// result of one, and failing on it would make measuring a reviewer look like
+// finding the branch wanting.
+func TestAShadowReviewExitsOnWhetherItGotAVerdictRatherThanOnApproval(t *testing.T) {
+	t.Parallel()
+
+	shadowed := orchestrator.BranchReviewOutcome{
+		ReviewID: "review-abcdef0123456789abcdef0123456789", Branch: "milestone", BaseRef: "main",
+		BaseCommit: "1111111111111111111111111111111111111111",
+		HeadCommit: "2222222222222222222222222222222222222222",
+		Commits:    3, Decision: review.DecisionRepair, Summary: "the two halves disagree",
+		Findings: []review.Finding{{
+			Severity: review.SeverityMajor,
+			Message:  "store.go writes under key and reader.go reads under other",
+			Location: &review.Location{File: "reader.go", Line: 3},
+		}},
+		SessionID: "branch-review-session", Model: "sonnet", Shadow: true,
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := reportBranchReview(&stdout, &stderr, false, shadowed, nil); code != 0 {
+		t.Fatalf("reportBranchReview() of a shadow repair verdict code = %d, want 0 (stderr %q)", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "shadow-reviewed milestone") {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+	// It says what it decided nothing about, and never that the branch needs
+	// work: a shadow verdict is not the branch's answer to anything.
+	if !strings.Contains(stdout.String(), "approves nothing") {
+		t.Errorf("stdout = %q", stdout.String())
+	}
+	if strings.Contains(stderr.String(), "is not approved as an accumulated change") {
+		t.Errorf("a shadow review reported on the branch: %q", stderr.String())
+	}
+
+	// A shadow review that never answered measured nothing, and says so through
+	// the exit code the same way any other failed review does.
+	stdout.Reset()
+	stderr.Reset()
+	unanswered := shadowed
+	unanswered.Decision = ""
+	unanswered.Findings = nil
+	if code := reportBranchReview(&stdout, &stderr, false, unanswered, errors.New("the reviewer never answered")); code != 1 {
+		t.Fatalf("reportBranchReview() of an unanswered shadow review code = %d, want 1", code)
+	}
+
+	// And an approving shadow verdict still approves nothing.
+	approving := shadowed
+	approving.Decision = review.DecisionApprove
+	approving.Findings = nil
+	if approving.Approved() {
+		t.Error("a shadow verdict read as an approval of the branch")
+	}
+}
+
+// Choosing the reviewer's model at the terminal is a measurement and only a
+// measurement. A review the configuration did not choose the reviewer for must
+// not be able to leave an approval of a branch behind it, and the refusal is
+// where that is enforced rather than in whoever remembers to pass --shadow.
+func TestReviewRefusesAModelChosenForAGatingReview(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"review", "--base", "main", "--model", "sonnet"}, &stdout, &stderr, "test"); code != 2 {
+		t.Fatalf("Run() code = %d, want 2", code)
+	}
+	if !strings.Contains(stderr.String(), "--model only makes sense with --shadow") {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+
+	// Comparing makes no review, so anything that describes one to make is
+	// refused rather than ignored.
+	for _, arguments := range [][]string{
+		{"review", "--compare", "--base", "main"},
+		{"review", "--compare", "--shadow"},
+		{"review", "--compare", "--model", "sonnet"},
+	} {
+		stdout.Reset()
+		stderr.Reset()
+		if code := Run(arguments, &stdout, &stderr, "test"); code != 2 {
+			t.Fatalf("Run(%v) code = %d, want 2", arguments, code)
+		}
+		if !strings.Contains(stderr.String(), "reads the recorded reviews and makes none") {
+			t.Fatalf("Run(%v) stderr = %q", arguments, stderr.String())
+		}
+	}
+}

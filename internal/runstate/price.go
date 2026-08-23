@@ -186,7 +186,7 @@ func (s *Store) priceRun(state State) RunPrice {
 func scanEventCost(path string) (float64, int, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return 0, 0, errors.New("the run's event log is no longer recorded, so what it cost cannot be read")
+		return 0, 0, errors.New("the event log is no longer recorded, so what it cost cannot be read")
 	}
 	if err != nil {
 		return 0, 0, fmt.Errorf("open event log to price the run: %w", err)
