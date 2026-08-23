@@ -3,6 +3,7 @@ package domain
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 type ProductID string
@@ -97,6 +98,58 @@ func (c WorkItemClass) Valid() bool {
 		}
 	}
 	return false
+}
+
+// WorkItemExecutor names what actually carries a work item's execution. It
+// exists because nothing in the queue said, and the harness's own selection is
+// what paid for that: an item whose execution is a conversation with the
+// architect was chosen for a developer run, which spent the run and two review
+// rounds producing a correctly refused empty diff. The subtler cost is the one
+// that made a marker worth having — those rounds count against the item's cap,
+// so an item mis-selected twice reaches its cap having done nothing and forces
+// an escalation about work nobody ever started.
+//
+// The absent executor is a developer run. That is what almost all admitted work
+// is, and it is what every item admitted before this existed is, so this says
+// which work is not that rather than restating what the ordinary case already
+// is. An item naming no executor is ordinary work.
+type WorkItemExecutor string
+
+// WorkItemExecutorConversation is work a persona conversation carries out: a
+// promotion the architect makes to a document it owns, a decomposition the
+// development manager settles, a decision the product manager records. No
+// developer run can do any of it — the documents are default-deny for a
+// developer's diff and the decision is not a change to a file at all — so
+// selecting one for a run buys a refusal at best.
+const WorkItemExecutorConversation WorkItemExecutor = "conversation"
+
+// WorkItemExecutors lists every executor an item may name, in the order a
+// refusal names them.
+var WorkItemExecutors = []WorkItemExecutor{WorkItemExecutorConversation}
+
+// Valid reports an executor the harness recognizes. The empty executor is not
+// one: work that names no executor is a developer run, and asking whether that
+// is valid is asking the wrong question.
+func (e WorkItemExecutor) Valid() bool {
+	for _, known := range WorkItemExecutors {
+		if e == known {
+			return true
+		}
+	}
+	return false
+}
+
+// DeveloperRun reports work a developer run carries out, which is work that
+// names no executor at all.
+//
+// Anything else answers false, including a marker the harness does not
+// recognize. That is the safe direction and the only one worth defaulting: a
+// marker nobody can read was still put there by somebody who meant the work was
+// not a developer run, and reading it as ordinary work would spend exactly the
+// run this marker exists to save. A marker that is refused where it is written
+// is what keeps the unrecognized case rare.
+func (e WorkItemExecutor) DeveloperRun() bool {
+	return strings.TrimSpace(string(e)) == ""
 }
 
 var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)

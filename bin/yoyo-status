@@ -114,19 +114,37 @@ if [ -z "$product" ] || [ ! -d "$products/$product" ]; then
   fi
 fi
 
-# Whether the operator has held what the harness starts on its own. It is the
-# quieter of the two switches and it is announced after the product is resolved
-# rather than with the pause, because unlike the pause it belongs to one backlog.
-# A machine with runs finishing and nothing new beginning looks like a machine
-# that ran out of work, and only this says otherwise.
+# Whether what the harness starts on its own has been held. It is the quieter of
+# the two switches and it is announced after the product is resolved rather than
+# with the pause, because unlike the pause it belongs to one backlog. A machine
+# with runs finishing and nothing new beginning looks like a machine that ran out
+# of work, and only this says otherwise.
+#
+# The hold records who placed it, because the operator and the harness's own
+# failure-storm brake place the same switch and they are different things to do
+# something about. The sentence below is the one the harness itself composes, in
+# IntakeHold.Says: this tool reads the state files rather than asking the binary,
+# so the wording is mirrored here and the two are meant to stay the same
+# sentence. A record from before the holder was written down says so rather than
+# picking the likelier of the two.
 announce_intake_hold() {
-  local hold="$products/$product/intake-hold.json" since reason
+  local hold="$products/$product/intake-hold.json" since holder reason placed
   [ -f "$hold" ] || return 0
   since="$(sed -n 's/^[[:space:]]*"held_at":[[:space:]]*"\([^"]*\)".*/\1/p' "$hold" | head -1 | sed 's/\.[0-9]*Z$/Z/')"
+  holder="$(sed -n 's/^[[:space:]]*"held_by":[[:space:]]*"\([^"]*\)".*/\1/p' "$hold" | head -1)"
   reason="$(sed -n 's/^[[:space:]]*"reason":[[:space:]]*"\(.*\)".*/\1/p' "$hold" | head -1)"
-  echo "INTAKE HELD: the harness starts nothing more on its own${since:+ since $since}" >&2
-  [ -n "$reason" ] && echo "$reason" >&2
-  echo "work already running carries on; /release in a conversation lets it choose work again" >&2
+  case "$holder" in
+    brake)
+      placed="the harness's own brake placed it after ${reason:-runs kept blocking}" ;;
+    operator)
+      placed="the operator placed it${reason:+ — $reason}"
+      [ -n "$reason" ] || placed="the operator placed it and gave no reason" ;;
+    *)
+      placed="the record does not say who placed it${reason:+ — $reason}"
+      [ -n "$reason" ] || placed="the record does not say who placed it or why" ;;
+  esac
+  echo "INTAKE HELD${since:+ since $since}: $placed" >&2
+  echo "the harness starts nothing more on its own; work already running carries on, and /release in a conversation lets it choose work again" >&2
 }
 announce_intake_hold
 

@@ -1379,6 +1379,57 @@ func TestRunReportHeadlineDistinguishesAnOverloadFromAnExhaustedLimit(t *testing
 	}
 }
 
+// Work the harness declined to choose says who stopped it being chosen. The
+// operator is the likelier holder and was once the only one this named, which
+// was wrong every time the failure-storm brake placed the hold: an operator told
+// they held intake goes looking for a decision of their own that was never made.
+func TestRunReportHeadlineNamesWhoIsHoldingIntake(t *testing.T) {
+	t.Parallel()
+
+	heldAt := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	for _, testCase := range []struct {
+		name       string
+		hold       runstate.IntakeHold
+		want       string
+		wantAbsent string
+	}{
+		{
+			name:       "the brake, after a storm of blocked runs",
+			hold:       runstate.IntakeHold{HeldAt: heldAt, HeldBy: runstate.IntakeHolderBrake, Reason: "3 run(s) blocked in a row with nothing landing between them, which is the configured brake at 3"},
+			want:       "the harness's own brake placed it after 3 run(s) blocked in a row",
+			wantAbsent: "the operator placed it",
+		},
+		{
+			name:       "the operator, saying what looked wrong",
+			hold:       runstate.IntakeHold{HeldAt: heldAt, HeldBy: runstate.IntakeHolderOperator, Reason: "the queue needs reordering first"},
+			want:       "the operator placed it — the queue needs reordering first",
+			wantAbsent: "brake",
+		},
+		{
+			name:       "a hold recorded before the holder was",
+			hold:       runstate.IntakeHold{HeldAt: heldAt, Reason: "the queue needs reordering first"},
+			want:       "the record does not say who placed it",
+			wantAbsent: "the operator placed it",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			hold := testCase.hold
+			headline := RunReport{WorkItemID: "yoyodyne-9", Paused: true, IntakeHold: &hold}.Headline()
+			if !strings.Contains(headline, testCase.want) {
+				t.Fatalf("Headline() = %q, want it to say %q", headline, testCase.want)
+			}
+			if strings.Contains(headline, testCase.wantAbsent) {
+				t.Fatalf("Headline() = %q, want it not to say %q", headline, testCase.wantAbsent)
+			}
+			if !strings.Contains(headline, "nothing is running it and nothing was claimed") {
+				t.Fatalf("Headline() = %q, want a hold reported as work that was never picked up", headline)
+			}
+		})
+	}
+}
+
 // A pause with no deadline recorded at all still reads as a sentence. It is the
 // one thing the headline cannot state, so it says so rather than rendering an
 // empty time.

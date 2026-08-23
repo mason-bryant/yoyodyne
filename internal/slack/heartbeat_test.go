@@ -215,7 +215,7 @@ func (h *testHarness) ready(count int) {
 
 func (h *testHarness) hold(t *testing.T, reason string, at time.Time) {
 	t.Helper()
-	if _, err := h.intake.Hold(reason, at); err != nil {
+	if _, err := h.intake.Hold(runstate.IntakeHolderOperator, reason, at); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 }

@@ -106,6 +106,45 @@ func TestARunAddressesItsTopicByWhatTheRecordCallsTheItem(t *testing.T) {
 	}
 }
 
+// A run's opening message says what it is running as, in every voice that can
+// open one: which account it is spending and which configuration set it up. It
+// is said where the thread opens rather than on every crossing after it, because
+// neither changes for the life of a run — and it is said at all because the day
+// there are two accounts, this is the message an operator will read to find out
+// which one a thread is burning.
+func TestARunStartingSaysWhichAccountAndConfigurationItRunsUnder(t *testing.T) {
+	for _, selected := range []string{
+		runstate.SelectedByDevelopmentManager,
+		runstate.SelectedByOperator,
+		runstate.SelectedByScheduler,
+	} {
+		state := running()
+		state.Selection = &runstate.Selection{By: selected, Reason: "named on the command line", At: moment}
+		state.AccountAlias = "default"
+		state.ConfigRevision = "cfg-0123456789ab"
+		_, notifications := crossed(t, runstate.State{}, state)
+		started := only(t, notifications, KindRunStarted)
+		message, err := Render(started.Topic, started.Speaker, started.Event)
+		if err != nil {
+			t.Fatalf("render a run selected by the %s: %v", selected, err)
+		}
+		if !strings.Contains(message.Body, "account default") || !strings.Contains(message.Body, "configuration cfg-0123456789ab") {
+			t.Fatalf("the %s's opening message does not say what the run runs as: %q", started.Speaker.Key(), message.Body)
+		}
+	}
+	// A run recorded before either was carried says so rather than leaving a hole
+	// in the sentence.
+	_, notifications := crossed(t, runstate.State{}, running())
+	started := only(t, notifications, KindRunStarted)
+	message, err := Render(started.Topic, started.Speaker, started.Event)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if !strings.Contains(message.Body, "an account the record does not name") {
+		t.Fatalf("body %q does not state the absence", message.Body)
+	}
+}
+
 func TestARunStartingIsSpokenByTheSelectorTheRecordNames(t *testing.T) {
 	// The development manager speaks only for the work its own triage chose. The
 	// operator is not a persona and the scheduler is not a role, so a run either

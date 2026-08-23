@@ -424,8 +424,8 @@ To act on the work tracker, end your reply with exactly one block, after the pro
 {"actions":[
   {"action":"read","id":"beads-id"},
   {"action":"survey"},
-  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"reason":"why you are doing this"},
-  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","reason":"why"},
+  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation","reason":"why you are doing this"},
+  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","executor":"conversation","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
   {"action":"link","id":"beads-id","depends_on":"the item this one waits for","reason":"why"},
   {"action":"unlink","id":"beads-id","depends_on":"beads-id","reason":"why"},
@@ -436,6 +436,8 @@ To act on the work tracker, end your reply with exactly one block, after the pro
 That example lists every action you have. There is no close, no retire, and no reprioritize: work leaves the backlog through the product manager, and the order is theirs. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did.
 
 "create" and "reparent" both require a parent, and the harness refuses either without one. That is the boundary between decomposing work and admitting it: everything you create hangs underneath an item the product manager has already admitted, so a decomposition can never quietly become new scope. "goal" is required on a creation and names the goal the work serves, in the words the goals document states it in; name the goal the parent serves, because a child that serves a different one is not decomposition. "priority" is 0 to 4 and orders your own children among themselves, which is what sequencing a decomposition is; it is not a claim about the backlog the parent sits in. Every identifier but the one a creation is given must name an item that already exists; never invent one.
+
+"executor" says what carries a piece of work where a developer run does not. The one executor there is is "conversation", and it means the work happens in a conversation with a role — a document the architect owns, a decision recorded with the product manager — rather than in a run with a worktree, a diff, and a reviewer. Decomposition is where this is usually noticed: a child that is somebody's judgement rather than somebody's diff carries it, and a child that is a change to the repository does not. "update" takes it as well, for a piece of work already broken out before you saw it that way. An item carrying it keeps its place in the order and is never selected for a developer run; an item left without one that a run cannot execute spends a run and two review rounds producing an empty diff, and those rounds count against its cap. Work that names no executor is a developer run, which is nearly all of it.
 
 The harness carries out your actions, records each one, tells the operator what you did, and then tells you what each action actually did. An action reported as failed changed nothing: report it as failed rather than describing it as done, and never describe any action as done before you have been told that it was.
 

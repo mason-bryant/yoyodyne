@@ -503,11 +503,32 @@ runs.
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports
-`<tag>`. That target is the whole of what a release is: the release workflow
-runs it for a pushed tag and publishes what it produced, and CI runs the same
-target on every change with a placeholder version, so a tag push reruns a path
-that is already exercised rather than executing it for the first time when a
-failure would mean a botched or missing release.
+`<tag>`. That target is the whole of what a release consists of: the release
+workflow runs it for a pushed tag and publishes what it produced, and CI runs
+the same target on every change with a placeholder version, so a tag push
+reruns a path that is already exercised rather than executing it for the first
+time when a failure would mean a botched or missing release.
+
+`make release VERSION=<tag>` is that build with its gate in front, so a daily
+cadence costs two commands rather than a procedure:
+
+```sh
+make release VERSION=v0.3.0
+git push origin v0.3.0
+```
+
+It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+`check`, builds and verifies the archives for `<tag>`, then tags the commit
+they were built from — in that order, so a red gate refuses the cut, names what
+was red, and leaves nothing to undo. It also refuses a tag that is not
+`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
+that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
+origin is unreachable it says that last one went unchecked rather than passing
+over it. It stops at the tag: publishing is the `git push`, which is the
+irreversible half and what the release workflow acts on, so it stays something
+you do deliberately.
+[`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
+of those refusals against fabricated repositories.
 
 ## The conversation
 
@@ -940,8 +961,10 @@ is what you reach for when the queue looks wrong but nothing is on fire. It hold
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
 and `/release` lets the harness choose again. A held intake leads `/status` with
-its own banner saying when it was placed and why, beneath the PAUSED banner if
-both are in force. It is recorded per product, unlike
+its own banner saying when it was placed, who placed it, and why, beneath the
+PAUSED banner if both are in force. Who placed it is on the record rather than
+assumed: the failure-storm brake below places the same hold, and a banner that
+called that one yours would send you looking for a decision you never made. It is recorded per product, unlike
 [`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
 manager may pull is a fact about one backlog.
 
@@ -1818,7 +1841,8 @@ cannot get past is not retried every minute forever, and a blocker you release i
 picked up because releasing it changed the item. Runs blocking one after another
 with nothing landing between them hold intake at
 `execution.blocked_runs_before_intake_hold`, so a broken machine cannot put the
-whole backlog through a failed run overnight. And the session records what it is
+whole backlog through a failed run overnight — and what reports that hold names
+the brake rather than you, because the hold records which of the two placed it. And the session records what it is
 doing — watching, idle, braked, resumed, stopped — where `yoyo status` and the
 Slack sink read it, because an idle session and a dead one are otherwise the same
 silence.
@@ -1957,8 +1981,8 @@ A project owns its configuration outright. `yoyo init` writes it:
 ```
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
-backend, model selector, instance count, and persona reference, plus the
-execution, approval, and product settings — and copies the five personas into
+backend, model selector, provider account, instance count, and persona
+reference, plus the execution, approval, and product settings — and copies the five personas into
 `.yoyodyne/personas/`, where they are ordinary Markdown files in your
 repository. Nothing is inherited when the file loads, so
 `yoyo config show --origins` names the project file for every configured value —
@@ -1985,11 +2009,15 @@ checks:
   - go test ./...
   - go vet ./...
 
+accounts:
+  default: {}                       # the provider account the agents run under
+
 agents:
   developer:
     role: developer
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -2685,9 +2713,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -2698,6 +2728,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -2883,6 +2924,15 @@ how the sink records whose secrets it was launched with, so
 [`yoyo doctor`](#checking-the-installation) can tell a sink that is merely
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
+
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
 
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,

@@ -305,7 +305,7 @@ func (r Rerunner) Rerun(ctx context.Context, request RerunRequest) (RerunResult,
 	// one re-run rather than spending it on a run that would decline to start.
 	hold, held, err := r.Intake.Held()
 	if err != nil {
-		return result, fmt.Errorf("read whether the operator has held intake: %w", err)
+		return result, fmt.Errorf("read whether intake is held: %w", err)
 	}
 	if held {
 		result.IntakeHeld = &hold
@@ -745,12 +745,13 @@ func (r Rerunner) now() time.Time {
 func (result RerunResult) Render() string {
 	var rendered strings.Builder
 	if result.IntakeHeld != nil {
-		fmt.Fprintf(&rendered, "INTAKE HELD: nothing was started for %s, since %s\n",
-			result.WorkItemID, result.IntakeHeld.HeldAt.UTC().Format(time.RFC3339))
-		if reason := strings.TrimSpace(result.IntakeHeld.Reason); reason != "" {
-			fmt.Fprintln(&rendered, reason)
-		}
-		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; release the hold and ask again\n", result.PriorRunID)
+		// Who is holding it comes off the record rather than out of this sentence:
+		// the same switch is placed by the operator and by the harness's own
+		// failure-storm brake, and they are different things to do something about.
+		fmt.Fprintf(&rendered, "INTAKE HELD since %s: %s\n",
+			result.IntakeHeld.HeldAt.UTC().Format(time.RFC3339), result.IntakeHeld.Says())
+		fmt.Fprintf(&rendered, "nothing was started for %s, and the stoppage of run %s keeps its one re-run; release the hold and ask again\n",
+			result.WorkItemID, result.PriorRunID)
 		return rendered.String()
 	}
 	if result.CapacityFull != nil {

@@ -108,6 +108,59 @@ func TestARunThatWasOverBeforeTheSinkStartedIsReadPastSilently(t *testing.T) {
 	}
 }
 
+// A status is a reading rather than a crossing, and it is the reading of the
+// item's latest run: a second attempt is what is happening to the item now, and
+// what the first one did is in the thread rather than on it.
+func TestAnItemsStatusIsReadFromItsLatestRun(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	failed := harness.run(t, runstate.StatusFailed)
+	failed.Failure = "the repair budget was spent"
+	harness.record(t, failed)
+
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if got := batch.Statuses["work-item:yoyodyne-ifd.68.3"]; got != notify.StatusBlocked {
+		t.Fatalf("status = %q, want a run that stopped and stayed stopped read as blocked", got)
+	}
+
+	retried := harness.run(t, runstate.StatusRunning)
+	retried.Phase = runstate.PhaseReviewing
+	retried.StartedAt = moment.Add(time.Hour)
+	retried.UpdatedAt = moment.Add(time.Hour)
+	harness.record(t, retried)
+
+	batch, err = harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("second Poll() error = %v", err)
+	}
+	if got := batch.Statuses["work-item:yoyodyne-ifd.68.3"]; got != notify.StatusInReview {
+		t.Fatalf("status = %q, want the latest attempt rather than the one before it", got)
+	}
+}
+
+// A run that was over before the sink was ever pointed at this product is
+// history the channel was never told about, so it marks nothing: a thread opened
+// today by something else must not acquire a status from a run nobody here has
+// said a word about.
+func TestARunThatWasOverBeforeTheSinkStartedMarksNothing(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, moment.Add(time.Hour))
+	harness.record(t, harness.run(t, runstate.StatusSucceeded))
+
+	batch, err := harness.feed.Poll(context.Background(), harness.start())
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(batch.Statuses) != 0 {
+		t.Fatalf("statuses = %#v, want history to mark nothing", batch.Statuses)
+	}
+}
+
 // A run that is over and owes nothing has nothing left to cross, so the reading
 // it was compared against is dropped. Keeping it would make the sink's own
 // record grow with the product's whole history.
@@ -274,7 +327,7 @@ func TestWhatAWatchSessionIsDoingIsSaidOnceEach(t *testing.T) {
 	// reads.
 	cursors = harness.poll(t, cursors)
 
-	harness.watched(t, runstate.WatchBraked, "the operator is holding intake", moment.Add(2*time.Minute))
+	harness.watched(t, runstate.WatchBraked, "the operator placed it — the queue is being reordered", moment.Add(2*time.Minute))
 	harness.poll(t, cursors, notify.KindWatchBraked)
 }
 
@@ -353,7 +406,7 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	t.Parallel()
 
 	harness := newTestHarness(t, time.Time{})
-	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
+	if _, err := harness.intake.Hold(runstate.IntakeHolderOperator, "reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
 	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)

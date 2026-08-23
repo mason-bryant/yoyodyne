@@ -684,21 +684,23 @@ func reportOperatorHold(stdout, stderr io.Writer, outcome orchestrator.Outcome, 
 	}
 }
 
-// reportIntakeHold names work the harness declined to choose because the
-// operator is holding intake. Nothing was claimed and nothing developed, so it
-// names no run, no branch, and no worktree: sending an operator to look for
-// artifacts nothing made is the failure every pause report here avoids.
+// reportIntakeHold names work the harness declined to choose because intake is
+// held. Nothing was claimed and nothing developed, so it names no run, no
+// branch, and no worktree: sending an operator to look for artifacts nothing
+// made is the failure every pause report here avoids.
+//
+// Who is holding it is read off the record and never assumed to be the operator.
+// The harness's own failure-storm brake places the same hold, and an operator
+// told they placed one they did not goes looking for a decision of their own
+// that was never made.
 //
 // It always says the two ways out, because they are genuinely different
 // decisions: lift the hold and let the harness choose again, or leave it in force
 // and name this item yourself, which the hold was never over.
 func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
-	fmt.Fprintf(stdout, "INTAKE HELD: the harness starts nothing on its own, since %s\n",
-		outcome.PausedByIntake.HeldAt.Format(time.RFC3339))
-	if reason := strings.TrimSpace(outcome.PausedByIntake.Reason); reason != "" {
-		fmt.Fprintln(stdout, reason)
-	}
-	fmt.Fprintf(stdout, "nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "INTAKE HELD since %s: %s\n",
+		outcome.PausedByIntake.HeldAt.Format(time.RFC3339), outcome.PausedByIntake.Says())
+	fmt.Fprintf(stdout, "the harness starts nothing on its own; nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
 	fmt.Fprintf(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
 }
 

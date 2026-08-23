@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -74,6 +75,81 @@ func TestSyncRemoteConformance(t *testing.T) {
 	}
 	if len(remotes) != 1 || remotes[0].Name != "origin" || !strings.Contains(remotes[0].URL, second) {
 		t.Fatalf("SyncRemotes() = %#v, want one origin at %s", remotes, second)
+	}
+}
+
+// TestExecutorMetadataConformance checks the assumption both executor writes
+// rest on and a scripted runner can only restate: that bd stores the marker and
+// gives it back, in each of the two spellings it takes — the whole metadata
+// object a creation carries, and the single key an update sets.
+//
+// It is here rather than only in the fake because both write paths now refuse a
+// marker bd did not store, and a refusal is only correct if bd's answer actually
+// carries what it stored. If bd stopped echoing metadata on creation, every
+// conversation-executed admission would fail rather than silently go unmarked —
+// a loud failure rather than the quiet one, but a failure the fakes could never
+// show. The third assertion is the other half: a creation given no metadata
+// omits the key, which is what makes a missing executor unambiguously one that
+// was not stored rather than one that was never asked for.
+//
+// It is skipped where bd is not installed, which is a statement about the
+// machine running the tests rather than about the check being optional.
+func TestExecutorMetadataConformance(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skipf("bd is not installed: %v", err)
+	}
+
+	project := filepath.Join(t.TempDir(), "tracker")
+	runCommand(t, t.TempDir(), "git", "init", "-q", "-b", "main", project)
+	runCommand(t, project, "git", "config", "user.email", "yoyodyne@example.invalid")
+	runCommand(t, project, "git", "config", "user.name", "Yoyodyne Test")
+	runCommand(t, project, "bd", "init")
+
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	// A creation carrying the marker gets it back, which is what lets admission
+	// refuse a marker that was not stored.
+	created, err := client.Create(ctx, NewWorkItem{
+		Title:       "Promote the brief",
+		Description: "The architect promotes it in conversation.",
+		Type:        "task",
+		Executor:    domain.WorkItemExecutorConversation,
+	})
+	if err != nil {
+		t.Fatalf("Create() with an executor error = %v", err)
+	}
+	if created.Executor != domain.WorkItemExecutorConversation {
+		t.Fatalf("Create() executor = %q, want bd to echo the marker it stored", created.Executor)
+	}
+	// And it survives being read back separately, which is what selection does.
+	shown, err := client.Show(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("Show() error = %v", err)
+	}
+	if shown.Executor != domain.WorkItemExecutorConversation {
+		t.Fatalf("Show() executor = %q, want the stored marker", shown.Executor)
+	}
+
+	// The other spelling: one key set on an item that already exists, which is how
+	// work admitted before the marker existed acquires one.
+	ordinary, err := client.Create(ctx, NewWorkItem{Title: "Ordinary work", Description: "A run carries it.", Type: "task"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// A creation given no metadata carries no key at all, so an absent executor is
+	// unambiguous rather than a default that might have been applied.
+	if !ordinary.Executor.DeveloperRun() {
+		t.Fatalf("Create() executor = %q, want ordinary work to carry none", ordinary.Executor)
+	}
+	marked, err := client.Update(ctx, ordinary.ID, WorkItemChange{Executor: domain.WorkItemExecutorConversation})
+	if err != nil {
+		t.Fatalf("Update() with an executor error = %v", err)
+	}
+	if marked.Executor != domain.WorkItemExecutorConversation {
+		t.Fatalf("Update() executor = %q, want bd to echo the marker it set", marked.Executor)
 	}
 }
 

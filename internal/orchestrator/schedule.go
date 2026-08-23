@@ -18,16 +18,28 @@ package orchestrator
 // adds is the choosing: which items, in what order, how many at a time, and, for
 // every one of them, the recorded reason it was chosen.
 //
-// Two things it does decide about an item itself, and both are choosing rather
-// than enforcing, which is why they are here. The first is whether the item is
-// work at all: a container whose unfinished children carry its execution is a
-// heading over the queue rather than an entry in it, and nothing downstream can
-// tell — the tracker reports it as pullable, the reservation sees a different
+// Three things it does decide about an item itself, and all three are choosing
+// rather than enforcing, which is why they are here. The first is whether the
+// item is work at all: a container whose unfinished children carry its execution
+// is a heading over the queue rather than an entry in it, and nothing downstream
+// can tell — the tracker reports it as pullable, the reservation sees a different
 // item from its child, and both runs then make the same change twice. The second
 // is whether it is work to start now: two items over the same epic or the same
 // files still integrate correctly when they are raced, and what that costs is a
 // replay, a fresh set of checks, and a fresh review on whichever loses. So they
 // are sequenced instead. See conflict.go.
+//
+// The third is whether a developer run is what carries the work at all. An item
+// admitted as conversation-executed — a promotion the architect makes to a
+// document it owns, a decomposition settled in conversation — is passed over
+// rather than started, and the backlog is where that is decided rather than
+// here: an item nothing can run has to look the same to everything that reads
+// the order. What is here is saying so against the item, because the alternative
+// is silence. The cost of not doing it was measured: an architect's item was
+// selected as ordinary developer work and spent a whole run and two review
+// rounds producing a correctly refused empty diff — and those rounds count
+// against the item's cap, so a second mis-selection would have escalated work
+// nobody had ever started.
 //
 // # A pull re-reads the configuration
 //
@@ -80,6 +92,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
 )
@@ -113,9 +126,12 @@ const (
 	// ScheduleDrained reports a scheduler that ran out of work to pull: nothing
 	// the tracker reports as ready is left that this pass has not already tried.
 	ScheduleDrained = "nothing more is ready to pull"
-	// ScheduleIntakeHeld reports the operator holding intake. Nothing further was
-	// chosen; whatever was already running carried on to its own end.
-	ScheduleIntakeHeld = "the operator is holding intake, so nothing more was chosen"
+	// ScheduleIntakeHeld reports intake being held. Nothing further was chosen;
+	// whatever was already running carried on to its own end. Who is holding it
+	// is on the hold this schedule carries rather than in this sentence: a
+	// constant cannot know whether the operator or the harness's own brake
+	// placed it, and one that named either would be wrong half the time.
+	ScheduleIntakeHeld = "intake is held, so nothing more was chosen"
 	// ScheduleLimitReached reports the requested number of runs having been
 	// started, which is the operator bounding one pass rather than the harness
 	// running out of anything.
@@ -182,7 +198,7 @@ type ScheduleStaleness interface {
 // exactly as long as it took the next run to fail, and what a held queue needs
 // is a person, which is the whole reason for tripping it.
 type ScheduleBrake interface {
-	Hold(reason string, at time.Time) (runstate.IntakeHold, error)
+	Hold(holder runstate.IntakeHolder, reason string, at time.Time) (runstate.IntakeHold, error)
 }
 
 // ScheduleSpend prices what a session has spent, from the same recorded run
@@ -343,15 +359,18 @@ type Started struct {
 
 // Deferred is one pullable item this pass declined to start, and why.
 //
-// Three things land here: an unresolved directive, an item whose unfinished
-// children already carry its execution, and an item that would have raced work
-// already in flight over the same epic or the same files. Each is named against
-// the item rather than counted, because each is a fact about that item that
-// nothing else in the harness would report — the first needs a person, and the
-// other two are the scheduler passing over something the tracker called ready.
-// The last of them is a wait rather than a refusal: the item is pulled at the
+// Four things land here: an unresolved directive, an item whose unfinished
+// children already carry its execution, an item that would have raced work
+// already in flight over the same epic or the same files, and an item whose
+// executor is a persona conversation rather than a developer run. Each is named
+// against the item rather than counted, because each is a fact about that item
+// that nothing else in the harness would report — the first needs a person, and
+// the rest are the scheduler passing over something the tracker called ready.
+// The third is a wait rather than a refusal: the item is pulled at the
 // first pull where what it would have raced has ended, and the run that pulls it
-// records having waited. The other reasons an
+// records having waited. The last is the opposite of a wait, and says so: no
+// pull will ever take it, and what moves it is somebody opening the conversation
+// the item names. The other reasons an
 // item is not started — the tracker not calling it ready, a run for it already
 // being in flight, no free developer slot — are facts about the pass rather than
 // about any one item, and the counts on the schedule report them at that grain.
@@ -607,7 +626,7 @@ pulling:
 		// reading would keep choosing work for as long as it lasted.
 		hold, held, err := pull.Intake.Held()
 		if err != nil {
-			failure = fmt.Errorf("read whether the operator has held intake: %w", err)
+			failure = fmt.Errorf("read whether intake is held: %w", err)
 			schedule.Stopped = ScheduleUnreadable
 			break
 		}
@@ -621,7 +640,7 @@ pulling:
 			// polling and chooses nothing, and resumes in place when it is
 			// released. That is what makes holding intake something an operator
 			// can do to a session they are not sitting at.
-			if !wait(pull, runstate.WatchBraked, brakedReason(schedule.Braked != nil, hold)) {
+			if !wait(pull, runstate.WatchBraked, brakedReason(hold)) {
 				schedule.Stopped = ScheduleCancelled
 				break
 			}
@@ -696,7 +715,22 @@ pulling:
 			if s.Limit > 0 && len(schedule.Started) >= s.Limit {
 				break
 			}
-			if !entry.Ready || s.cooling(tried, read.items[entry.ID]) {
+			if !entry.Ready {
+				// Unready entries are counted rather than listed, with one exception:
+				// an item no developer run can carry is not waiting for anything, so
+				// the count it would otherwise disappear into is the count of work that
+				// will become pullable, and it never will. It is named once, like every
+				// other deferral, and what it names is what somebody does about it.
+				if !entry.Executor.DeveloperRun() && !deferred[entry.ID] {
+					deferred[entry.ID] = true
+					schedule.Deferred = append(schedule.Deferred, Deferred{
+						WorkItemID: entry.ID,
+						Reason:     conversationExecutedReason(entry.Executor),
+					})
+				}
+				continue
+			}
+			if s.cooling(tried, read.items[entry.ID]) {
 				continue
 			}
 			if _, busy := occupied[entry.ID]; busy {
@@ -898,17 +932,30 @@ func fingerprint(item beads.WorkItem) string {
 // operator arriving at a stopped line finds one thing to understand and one
 // thing to lift, rather than a second mechanism that stops work in a way only
 // this package knows how to undo.
+// What it records is the cause alone — who placed it is the holder beside it —
+// because every surface that prints a hold composes those two itself, and a
+// reason that also named the holder is what stacked three accounts of one hold
+// into a line nobody could read.
 func (s Scheduler) brake(schedule *Schedule, pull Pull, blocked int) {
-	reason := fmt.Sprintf(
-		"the harness held intake: %d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d. Nothing further is chosen until this is released; runs already going carry on.",
+	reason := fmt.Sprintf("%d run(s) blocked in a row with nothing landing between them, which is the configured brake at %d",
 		blocked, pull.BlockedRunsBeforeIntakeHold)
 	if pull.Brake == nil {
-		schedule.BrakeProblem = "runs kept blocking and nothing was wired to hold intake, so the line was left choosing work: " + reason
+		schedule.BrakeProblem = fmt.Sprintf(
+			"runs kept blocking and nothing was wired to hold intake, so the line was left choosing work: %s", reason)
 		return
 	}
-	held, err := pull.Brake.Hold(reason, s.now())
+	at := s.now().UTC()
+	held, err := pull.Brake.Hold(runstate.IntakeHolderBrake, reason, at)
 	if err != nil {
 		schedule.BrakeProblem = fmt.Sprintf("intake could not be held after %d run(s) blocked in a row, so the line is still choosing work: %v", blocked, err)
+		return
+	}
+	// Holding what is already held leaves the hold that was there, so this is
+	// this session's brake only when this call is what placed it. A pass that
+	// took an operator's standing hold for its own would report the line as
+	// braked to a reader whose queue was stopped for an entirely different
+	// reason.
+	if !held.HeldAt.Equal(at) || held.HeldBy != runstate.IntakeHolderBrake {
 		return
 	}
 	schedule.Braked = &held
@@ -985,17 +1032,27 @@ func coveredReason(children []string) string {
 	return reason + ". The children are the work; pulling this beside them would make the same change twice"
 }
 
+// conversationExecutedReason says that the work was admitted for something other
+// than a developer run, and that this is not a wait. Every other deferral here
+// ends when something clears — a directive resolved, a child closed, a run
+// finished — and this one ends when somebody opens the conversation the item
+// names, which is why it says so rather than reading like a queue that will move
+// on its own.
+func conversationExecutedReason(executor domain.WorkItemExecutor) string {
+	return fmt.Sprintf("its executor is %q rather than a developer run, so nothing a run can do would carry it out; the item is done in the conversation it names, and it is passed over here rather than waiting for anything", executor)
+}
+
 // brakedReason says which brake stopped the line, because what an operator does
-// about it depends entirely on which one it was.
-func brakedReason(ownBrake bool, hold runstate.IntakeHold) string {
-	if ownBrake {
-		return "the harness held intake after runs kept blocking; the session polls and chooses nothing until it is released"
-	}
-	reason := strings.TrimSpace(hold.Reason)
-	if reason == "" {
-		return "the operator is holding intake; the session polls and chooses nothing until it is released"
-	}
-	return "the operator is holding intake: " + reason
+// about it depends entirely on which one it was. It reads that off the hold
+// rather than off whether this session happens to have braked: a session that
+// answered from its own state named the operator for a hold its own brake had
+// placed, and named its brake for a hold the operator had placed before it
+// tripped.
+func brakedReason(hold runstate.IntakeHold) string {
+	// What the surfaces reading this already say is that the session is choosing
+	// nothing, so this adds the one thing they do not: the hold does not clear
+	// itself, whichever of the two placed it.
+	return hold.Says() + ", and it stays held until somebody releases it"
 }
 
 // opening says what the session was started to do, which is the first thing its
@@ -1293,11 +1350,8 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "%s was not pulled: %s\n", deferred.WorkItemID, deferred.Reason)
 	}
 	if s.IntakeHeld != nil {
-		fmt.Fprintf(&rendered, "intake has been held since %s", s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"))
-		if reason := strings.TrimSpace(s.IntakeHeld.Reason); reason != "" {
-			fmt.Fprintf(&rendered, ": %s", reason)
-		}
-		rendered.WriteString("\n")
+		fmt.Fprintf(&rendered, "intake has been held since %s: %s\n",
+			s.IntakeHeld.HeldAt.UTC().Format("2006-01-02 15:04:05Z"), s.IntakeHeld.Says())
 	}
 	// A session that waited says how long it was alive for, because the whole
 	// point of watching is that nothing happening is not the same as nothing
@@ -1306,7 +1360,7 @@ func (s Schedule) Render() string {
 		fmt.Fprintf(&rendered, "waited out %d poll interval(s) with nothing to start\n", s.Polls)
 	}
 	if s.Braked != nil {
-		fmt.Fprintf(&rendered, "the harness held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
+		fmt.Fprintf(&rendered, "this session's own brake held intake after %d run(s) blocked in a row; release it to carry on\n", s.BlockedInARow)
 	}
 	if s.BrakeProblem != "" {
 		fmt.Fprintf(&rendered, "%s\n", s.BrakeProblem)

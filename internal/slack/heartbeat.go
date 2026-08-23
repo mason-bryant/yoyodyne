@@ -44,10 +44,11 @@ import (
 // somebody reads.
 const DefaultHeartbeat = time.Hour
 
-// maxStoppedReasonBytes bounds the part of a heartbeat that came from an
-// operator's own words. The reason a hold carries is bounded generously, because
-// it is written once and read carefully; this is said again every hour and has to
-// stay a line.
+// maxStoppedReasonBytes bounds the part of a heartbeat that came from what
+// somebody wrote when they stopped the line. The reason a hold carries is bounded
+// generously, because it is written once and read carefully; this is said again
+// every hour and has to stay a line. Who placed the hold leads the clause, so a
+// cut takes the cause rather than the attribution.
 const maxStoppedReasonBytes = 200
 
 // Backlog is how much admitted work the tracker itself reports as ready. It is a
@@ -166,12 +167,11 @@ func waitingLine(held switches, sessions []runstate.WatchTransition, inFlight in
 		}, true
 	}
 	if held.intakeHeld {
-		stopped := "intake is held"
-		if reason := singleLine(held.intake.Reason, maxStoppedReasonBytes); reason != "" {
-			stopped += " — " + reason
-		}
+		// Who placed it is part of the standing state rather than a detail below
+		// it: an hourly line about a stopped queue that named the wrong holder
+		// would be wrong hourly.
 		return waiting{
-			stopped: stopped,
+			stopped: "intake is held, and " + singleLine(held.intake.Says(), maxStoppedReasonBytes),
 			since:   held.intake.HeldAt,
 			mark:    "intake:" + stamp(held.intake.HeldAt),
 		}, true

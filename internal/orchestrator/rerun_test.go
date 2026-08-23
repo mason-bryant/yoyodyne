@@ -208,7 +208,7 @@ func TestAHeldIntakeStartsNoRerunAndSpendsNothing(t *testing.T) {
 	t.Parallel()
 
 	harness := newRerunHarness(t, stoppedState())
-	held, err := harness.intake.Hold("the queue is heading somewhere odd", docketedNow)
+	held, err := harness.intake.Hold(runstate.IntakeHolderOperator, "the queue is heading somewhere odd", docketedNow)
 	if err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
@@ -844,7 +844,7 @@ func TestAHoldArrivingAfterTheClaimStillStopsTheFreshRun(t *testing.T) {
 	pipelined = newPipelinedRerun(t, func() {
 		// The operator holds intake while the claim is being taken, which is the
 		// window the action itself cannot cover.
-		if _, err := pipelined.intake.Hold("stop choosing while I reorder the queue", docketedNow); err != nil {
+		if _, err := pipelined.intake.Hold(runstate.IntakeHolderOperator, "stop choosing while I reorder the queue", docketedNow); err != nil {
 			t.Fatalf("Hold() error = %v", err)
 		}
 	})
