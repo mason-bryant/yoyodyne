@@ -141,14 +141,24 @@ the window short, make losing it cheap, and make it unable to corrupt code.
 
 ## Wiring: making the remote exist
 
-Nothing configures the Dolt remote today. `yoyo init` already does the tracker
-half — it reads the Git remote `origin` and points the tracker at it, leaving an
-existing remote alone — and the shared record store needs the same one-time
-setup beside it, from the same remote, in the same command.
+The operator's recorded sketch, from 2026-08-18, says nothing configures the Dolt
+remote and every `bd` call warns about it. **That is no longer true**, and the
+correction matters because it decides how much of this gap is left to build.
 
-A collaborator joining an existing project runs the same setup and gets both.
-That is the whole of what a second machine needs: the readme, repository access,
-and one command.
+`yoyo init` configures the tracker's sync remote today. It reads the Git remote
+`origin`, points the tracker's remote of the same name at it, reads back what was
+actually stored, and reports one of four outcomes — configured, unchanged,
+skipped, or failed. A tracker already holding an `origin` is left exactly as it
+is, even when it points elsewhere; `--tracker-remote` names a URL instead, for a
+tracker kept in a repository of its own; and a project with no Git remote, or
+whose `bd` is not initialized, is told what to run rather than failed.
+
+So the tracker half of the wiring is **built, not pending**. What remains is the
+shared record store's half: the same one-time setup, off the same remote, in the
+same command, so a machine acquires both or neither and there is no state in
+which the backlog syncs and the harness's own records do not. A collaborator
+joining an existing project runs that one command; with the readme and repository
+access, it is the whole of what a second machine needs.
 
 A project with no Git remote gets no shared store and is told so rather than
 failed, exactly as `init` already treats the tracker. A harness with no shared
@@ -286,6 +296,14 @@ buys — but it is a cost and not a hazard.
   machines: write a turn, push, pull, and promote only when this machine's turn
   is the earliest unfinished one for that branch; mark it finished and push. It
   is ordered by the same *(time, machine)* pair claims are, for the same reason.
+  It is written, advanced, and finished by **the promoting run's own harness, in
+  that process, and by nothing else** — no agent writes a turn, clears one, or
+  reads one to decide anything, exactly as no agent touches the local lease and
+  no agent performs a promotion. That is the invariant's second half, and it binds
+  the cross-machine artifact as much as the file lock it sits beside: an
+  implementer must not site the turn record anywhere an agent's worktree can reach
+  it, because the roles that authorize a promotion must not be able to take a turn
+  at one.
 - The **forge precondition is the guarantee.** The turn record is advisory and
   has the same sync-window race everything else here has. It is worth having
   because it converts almost every contention into a wait instead of a wasted
@@ -444,14 +462,43 @@ reply cannot reach them. The shared intake hold is the one thing in that
 neighborhood that travels, and it is a product fact rather than a machine
 control.
 
-**Two sinks must not act twice on one reply.** Today a sink remembers what it has
-acted on in process memory, which is right for Slack redelivering to one process
-and useless across two. The shared directive store already records exclusively —
-recording a directive that exists is refused, not overwritten — so keying the
-directive on the Slack message identifier makes the first sink to record it the
-one that acted, and the second finds it recorded and answers with the same
-directive rather than creating a second one. The once-ness comes from the store
-that already had it, and no new mechanism is introduced.
+**Two sinks must not act twice on one reply — and this is a race like the others,
+not an exception to them.** Today a sink remembers what it has acted on in process
+memory. That is right for Slack redelivering to one process and it does nothing
+across two, so the cross-machine case needs the same treatment claims get, and for
+the same reason: inside the sync window neither sink can see the other.
+
+The directive store's exclusive create does not supply this. It is a guarantee
+within one machine's filesystem — two sinks each pull, each find no directive for
+that message, each create one, and each push, so the exclusive create succeeds on
+both replicas and neither ever "finds it recorded". Keying the record on the Slack
+message id would be worse than useless: both machines would write the same record
+path with different contents, because every shared write carries the machine
+identifier, and a same-path conflict is exactly what the union-merged shape of
+this store exists to avoid.
+
+So the resolution is the one the rest of the document uses:
+
+- Each sink writes a record with an **identifier of its own**, carrying the Slack
+  message id as a field. Two sinks produce two distinct records that union-merge
+  cleanly, with nothing to resolve at the filesystem level.
+- After pushing, the sink **pulls back** and looks for every record bearing that
+  message id. The *(time, machine)* order picks one: the earliest record is the
+  directive that binds, and any later record for the same message is superseded
+  and binds nothing. Both machines compute that from the same merged records and
+  reach the same answer without talking, which is the property that matters.
+- The sink **acknowledges in the thread after the confirming pull rather than
+  before it**, naming the directive that binds. That is step 5 of the claim
+  protocol applied to a different write, and it is what keeps the operator from
+  being told two different things about one reply.
+
+**The residual cost, stated rather than argued away.** Two sinks whose
+confirming pulls race can each acknowledge before either sees the other, so an
+operator can see two acknowledgements for one reply. What they cannot see is two
+directives in force: the superseded record binds nothing, and the run pipeline
+reads the one that won. A duplicated acknowledgement is a cosmetic cost inside
+the same sync window every other race here has; it is not exactly-once delivery,
+and this design does not claim it.
 
 ## What no longer holds, and what is being asked
 
