@@ -28,11 +28,17 @@ const (
 	harnessDeep   = "\x1b[38;5;44m"
 	harnessBasic  = "\x1b[36m"
 	resetColour   = "\x1b[0m"
-	// emphasis is what Markdown structure is shown with. It is not a colour: a
-	// heading and a bold run are the author's own emphasis rather than a kind of
-	// thing the harness is telling apart, so they are weighted rather than
-	// recoloured, and they leave the colours above to mean what they mean.
+	// emphasis is what Markdown structure and a listing's entries are shown
+	// with. It is not a colour: a heading, a bold run, and the line one entry of
+	// a listing is are the text's own emphasis rather than a kind of thing the
+	// harness is telling apart, so they are weighted rather than recoloured, and
+	// they leave the colours above to mean what they mean.
 	emphasisOn = "\x1b[1m"
+	// detail is what a line about the entry above it is shown with. It is the
+	// counterpart to the weight rather than another colour: an entry is weighted
+	// and what is said about it is slanted, so the two are told apart at a glance
+	// without either of them being coloured as though it were a kind of thing.
+	detailOn = "\x1b[3m"
 )
 
 // The states work is reported in, coloured the same way wherever they are
@@ -124,9 +130,11 @@ type Theme struct {
 	question string
 	proposal string
 	harness  string
-	// emphasis is what Markdown structure is shown with, and is empty with the
-	// rest when nothing may be dressed.
+	// emphasis is what Markdown structure and a listing's entries are shown
+	// with, and detail is what the lines about one entry are shown with. Both
+	// are empty with the rest when nothing may be dressed.
 	emphasis string
+	detail   string
 	// states is what each state of work looks like. It is nil when nothing may
 	// be coloured, so a state is named in words and dressed in nothing.
 	states map[State]string
@@ -159,6 +167,7 @@ func NewTheme(env func(string) string, width func() int) Theme {
 		proposal: proposalBasic,
 		harness:  harnessBasic,
 		emphasis: emphasisOn,
+		detail:   detailOn,
 		states: map[State]string{
 			StateRunning: runningBasic,
 			StateBlocked: blockedBasic,
@@ -373,6 +382,19 @@ func (t Theme) State(state State, text string) string {
 func (t Theme) Severity(severity Severity, text string) string {
 	return dress(t.severities[severity], text)
 }
+
+// Entry weights one entry of a listing, so a reader finds the entries in it
+// without reading everything written under them. It carries no meaning of its
+// own: what makes a line an entry is where it sits and what it says, and a
+// listing with the escapes stripped is the listing it was before.
+func (t Theme) Entry(text string) string { return dress(t.emphasis, text) }
+
+// Detail slants a line that says something about the entry above it rather than
+// being an entry itself. It is the counterpart to Entry and holds to the same
+// rule: the indent and the label are what say the line is about the goal, the
+// report, or the item above it, and this only makes the two easy to tell apart
+// at a glance.
+func (t Theme) Detail(text string) string { return dress(t.detail, text) }
 
 // asksSomething reports a line that puts a question to the operator.
 func asksSomething(line string) bool {

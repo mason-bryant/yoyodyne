@@ -245,6 +245,12 @@ type Set struct {
 	// BriefGoals are the goals the product brief states, which is what the goals
 	// above link upward to.
 	BriefGoals []BriefGoal `json:"brief_goals,omitempty"`
+	// BriefPath is the repository-relative file the product brief is written in,
+	// carried whether or not that brief is in force or states any goal. It is
+	// where a reader sent upstream from the goals has to open, and the cases
+	// where nothing links upward are exactly the cases where BriefGoals cannot
+	// answer for it.
+	BriefPath string `json:"brief_path,omitempty"`
 	// Sources are the goals artifacts read, in the order the artifact set holds
 	// them, so what is reported can say where it looked.
 	Sources  []string  `json:"sources,omitempty"`
@@ -412,6 +418,10 @@ func Collect(repositoryRoot string, artifacts artifact.Set) Set {
 		// is still what a reader has to be sent to.
 		if brief == "" || recorded.InForce() {
 			brief = recorded.ID
+			// The path is taken with the id and by the same rule, so what a reader
+			// is sent to open is the brief that was named rather than whichever one
+			// the artifact set happened to hold last.
+			set.BriefPath = recorded.Path
 		}
 		// A superseded or retired brief states intent that was replaced, and its
 		// goals are not link targets. Both ends of the link are held to the same
