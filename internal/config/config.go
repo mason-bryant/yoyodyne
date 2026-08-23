@@ -63,6 +63,14 @@ type Config struct {
 	Approvals Approvals              `yaml:"approvals" json:"approvals"`
 	Checks    []string               `yaml:"checks" json:"checks"`
 	Agents    map[string]AgentConfig `yaml:"agents" json:"agents"`
+	// Accounts are the provider accounts this project runs agents under, keyed by
+	// the alias each one is named by. It is top level rather than under `agents`
+	// because an account is a thing several agents share: which roles run on which
+	// account is stated on the agents, and what accounts exist is stated once
+	// here. A project that names none runs under the default alias, which is what
+	// makes a single-account project write nothing and still record what it ran
+	// under.
+	Accounts map[string]Account `yaml:"accounts,omitempty" json:"accounts,omitempty"`
 	// Operators are the humans the project recognizes, keyed by a short name for
 	// each one. It is top level rather than under any one surface because a human
 	// is known by several, and the authority is the human's: an act is authorized
@@ -422,7 +430,13 @@ type AgentConfig struct {
 	// agent. There is no implicit harness default: a family alias such as
 	// "opus" intentionally floats to the backend's current default for that
 	// family, while an exact provider identifier pins a version.
-	Model     string `yaml:"model" json:"model"`
+	Model string `yaml:"model" json:"model"`
+	// Account is the alias of the provider account this agent runs under, from
+	// the top-level accounts mapping. The assignment is the operator's and it is
+	// fixed: an agent runs where the configuration says it runs, and nothing
+	// chooses at run time. A project that states nothing has every agent assigned
+	// to its single account, which is the only arrangement v1 executes.
+	Account   string `yaml:"account,omitempty" json:"account,omitempty"`
 	Instances int    `yaml:"instances,omitempty" json:"instances"`
 	// Persona is the resolved role guidance handed to this agent's prompt. It
 	// may specialize how an agent works; it can never remove a harness
@@ -672,6 +686,7 @@ func (c Config) Validate() error {
 		}
 	}
 
+	problems = append(problems, c.accountProblems()...)
 	problems = append(problems, c.operatorProblems()...)
 	problems = append(problems, c.Slack.problems()...)
 

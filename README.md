@@ -73,28 +73,31 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume`
+`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, `yoyo resume`, and
+`yoyo release`
 sit beside that conversation as administrative and recovery entry points — one
 named item, one branch judged as a whole, what became of the runs already made
 and why one of them failed, settling what a killed process left behind, stopping
-everything the harness would spend until you say otherwise, and releasing a run
-waiting on a refusal the provider no longer makes — rather than as the way
+everything the harness would spend until you say otherwise, releasing a run
+waiting on a refusal the provider no longer makes, and letting the harness choose
+work again after intake was held — rather than as the way
 work normally happens.
 
-**Quick start.** With [Beads](https://github.com/gastownhall/beads) and
-[Claude Code](https://code.claude.com/docs) installed, and Go 1.24 or newer:
+**Quick start.** One script installs `yoyo`, tells you where it put it, and
+checks the two things it needs — [Beads](https://github.com/gastownhall/beads)
+(`bd`) and [Claude Code](https://code.claude.com/docs):
 
 ```sh
-go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
-yoyo version           # not found? see Install for the one PATH line
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
+yoyo version           # not found? the script printed the one PATH line
 cd path/to/your/project
 bd init && yoyo init   # then review the checks it proposed in .yoyodyne/config.yaml
 yoyo chat
 ```
 
 [Getting started](#getting-started) is the same three steps with what each one
-is for and what it needs; [Install](#install) has the release download and the
-from-source routes, for anyone who would rather not have Go.
+is for and what it needs; [Install](#install) has what that script does and the
+`go install`, release-download, and from-source routes it does it by.
 
 What exists today is bounded, and the bounds are worth knowing before you start
 rather than after:
@@ -121,10 +124,44 @@ rather than after:
 
 ## Install
 
-`yoyo` is one binary. Two of the three ways to get it need no checkout of this
+`yoyo` is one binary. Three of the four ways to get it need no checkout of this
 repository.
 
-**With Go 1.24 or newer**, which is the shortest path:
+**With one script**, which picks between the two routes below that need no
+checkout, and carries out the one it picked:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
+```
+
+[`scripts/install.sh`](scripts/install.sh) detects your platform, downloads the
+release binary for it and checks it against the release's own `checksums.txt`
+— or builds with `go install` where no release binary is published for your
+platform — installs it into `/usr/local/bin` if you can write there and
+`~/.local/bin` otherwise, runs it so the version you got is printed rather than
+assumed, and prints the `PATH` line for your shell if that directory is not
+already on it. Then it checks `bd` and `claude` and names whichever one is
+missing, so what you still have to install is on the screen rather than waiting
+to surface as a failed run.
+
+It edits no shell profile, uses no `sudo`, and touches nothing in a project:
+left to itself it writes one file, the binary, and every other change to your
+machine — including installing a missing prerequisite — is printed as a line
+for you to run. `--dir <path>` installs somewhere else, `--version <tag>` pins a
+release rather than taking the newest, and `--from-source` builds with Go
+instead of downloading. `--install-prereqs` is the one flag that lets it change
+anything else: it installs a missing `claude` with `npm install -g
+@anthropic-ai/claude-code`, or with the installer at `claude.ai/install.sh`
+where there is no `npm`. Pass any of them through the pipe with `bash -s --`:
+
+```sh
+curl -fsSL .../install.sh | bash -s -- --dir ~/bin --version v0.3.0
+```
+
+The routes themselves are worth knowing, since the script is a convenience over
+them rather than a fourth thing to maintain.
+
+**With Go 1.24 or newer**, which is the shortest path by hand:
 
 ```sh
 go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
@@ -237,9 +274,13 @@ that step, to a walk somebody is watching.
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
 reads and writes; and [Claude Code](https://code.claude.com/docs), installed and
-authenticated, which executes every agent role. Go 1.24 or newer is needed only
-if you install with `go install` or build from source; a release download needs
-neither Go nor a checkout. Two more are needed **only if you want pull
+authenticated, which executes every agent role. Those last two are what the
+install script checks and names, so a missing one is something you find out in
+the first minute rather than at the first run; `--install-prereqs` has it
+install `claude` for you.
+Go 1.24 or newer is needed only if you install with `go install` or build from
+source — including when the script falls back to it, on a platform no release
+binary covers; a release download needs neither Go nor a checkout. Two more are needed **only if you want pull
 requests**: a Git remote, and [`gh`](https://cli.github.com) authenticated with
 `gh auth login`. Without them everything stays on your machine and nothing is
 pushed.
@@ -255,15 +296,25 @@ passing over it.
 ### 1. Install `yoyo`
 
 ```sh
-go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest
+curl -fsSL https://raw.githubusercontent.com/mason-bryant/yoyodyne/main/scripts/install.sh | bash
 yoyo version
 ```
 
 If `yoyo version` prints a tag you have it; if the command is not found, the
-install directory is not on your `PATH`, and [Install](#install) above has the
-one line that fixes that, along with the release download and the from-source
-paths and which platforms are tested. Then change into your own project, since
-everything after this runs there:
+install directory is not on your `PATH`, and the script printed the one line
+that fixes that. [Install](#install) above has what the script does, the
+`go install` and from-source routes it chooses between, and which platforms are
+tested.
+
+The script closes by printing the two steps below — `bd init && yoyo init`, then
+`yoyo chat` — and, where the binary it installed carries them, `yoyo setup`,
+which is [step 2 walked for you](#getting-started), and
+[`yoyo doctor`](#checking-the-installation), which is what decides whether the
+installation actually works. It asks that binary which commands it has rather
+than assuming: installed from a release that predates one of them, it leaves
+that line out instead of naming a command you do not have.
+
+Then change into your own project, since everything after this runs there:
 
 ```sh
 cd path/to/your/project
@@ -503,11 +554,32 @@ runs.
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports
-`<tag>`. That target is the whole of what a release is: the release workflow
-runs it for a pushed tag and publishes what it produced, and CI runs the same
-target on every change with a placeholder version, so a tag push reruns a path
-that is already exercised rather than executing it for the first time when a
-failure would mean a botched or missing release.
+`<tag>`. That target is the whole of what a release consists of: the release
+workflow runs it for a pushed tag and publishes what it produced, and CI runs
+the same target on every change with a placeholder version, so a tag push
+reruns a path that is already exercised rather than executing it for the first
+time when a failure would mean a botched or missing release.
+
+`make release VERSION=<tag>` is that build with its gate in front, so a daily
+cadence costs two commands rather than a procedure:
+
+```sh
+make release VERSION=v0.3.0
+git push origin v0.3.0
+```
+
+It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+`check`, builds and verifies the archives for `<tag>`, then tags the commit
+they were built from — in that order, so a red gate refuses the cut, names what
+was red, and leaves nothing to undo. It also refuses a tag that is not
+`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
+that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
+origin is unreachable it says that last one went unchecked rather than passing
+over it. It stops at the tag: publishing is the `git push`, which is the
+irreversible half and what the release workflow acts on, so it stays something
+you do deliberately.
+[`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
+of those refusals against fabricated repositories.
 
 ## The conversation
 
@@ -596,7 +668,9 @@ It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](docs/reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -939,7 +1013,10 @@ the harness *choosing* new work, and lets everything already running finish. It
 is what you reach for when the queue looks wrong but nothing is on fire. It holds
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
-and `/release` lets the harness choose again. A held intake leads `/status` with
+and `/release` lets the harness choose again — as does `yoyo release` at a
+terminal, which lifts the same record, for when the hold is the one the
+failure-storm brake placed overnight and no conversation is open. A held intake
+leads `/status` with
 its own banner saying when it was placed and why, beneath the PAUSED banner if
 both are in force. It is recorded per product, unlike
 [`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
@@ -1957,8 +2034,8 @@ A project owns its configuration outright. `yoyo init` writes it:
 ```
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
-backend, model selector, instance count, and persona reference, plus the
-execution, approval, and product settings — and copies the five personas into
+backend, model selector, provider account, instance count, and persona
+reference, plus the execution, approval, and product settings — and copies the five personas into
 `.yoyodyne/personas/`, where they are ordinary Markdown files in your
 repository. Nothing is inherited when the file loads, so
 `yoyo config show --origins` names the project file for every configured value —
@@ -1985,11 +2062,15 @@ checks:
   - go test ./...
   - go vet ./...
 
+accounts:
+  default: {}                       # the provider account the agents run under
+
 agents:
   developer:
     role: developer
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -2413,6 +2494,22 @@ stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
 
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
+
 ### Waiting out a provider usage limit
 
 When the provider reports that a usage limit is exhausted, the run pauses
@@ -2685,9 +2782,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -2698,6 +2797,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -2790,7 +2900,8 @@ copy the single file out of it, if you want it:
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind
 ./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
+./bin/yoyo-status -c 30    # report that many days instead of 7
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -2815,10 +2926,26 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run, per conversation, and
-per branch review, and a mixed total says how much of it was each — a
+reporting requires it. What it prices is every run, every conversation, and
+every branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
+
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `-c 30` — and naming a run,
+a conversation, or a review prices that one whatever day it ran on, because an
+id has already chosen what to show; an id prefix that is all digits has to carry
+its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
+count of days. A window with nothing in it says so and says since when, rather
+than reading like a machine that spent nothing.
+
 [`yoyo cost`](#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the
@@ -2883,6 +3010,15 @@ how the sink records whose secrets it was launched with, so
 [`yoyo doctor`](#checking-the-installation) can tell a sink that is merely
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
+
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
 
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,

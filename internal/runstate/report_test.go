@@ -130,3 +130,91 @@ func testReport(id string, severity report.Severity, message string) report.Repo
 		RecordedAt:    time.Date(2026, 8, 17, 9, 30, 0, 0, time.UTC),
 	}
 }
+
+// What became of a report is durable in the same way and for the same reason the
+// report is: the conversation that decided is long over before anybody asks what
+// happened about this.
+func TestWhatBecameOfAReportSurvivesTheProcessThatDecidedIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := newTestReportStore(t, root)
+	reported := testReport("report-0123456789abcdef0123456789abcdef", report.SeverityWarning, "the declared bundle version is inert")
+	if err := store.Append(reported); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	if err := store.Handle(testHandling(reported.ID, "admitted as yoyodyne-ifd.150")); err != nil {
+		t.Fatalf("Handle() error = %v", err)
+	}
+
+	reloaded := newTestReportStore(t, root)
+	handlings, err := reloaded.Handlings()
+	if err != nil {
+		t.Fatalf("Handlings() error = %v", err)
+	}
+	if len(handlings) != 1 || handlings[0].ReportID != reported.ID || handlings[0].Reason != "admitted as yoyodyne-ifd.150" {
+		t.Fatalf("Handlings() = %#v", handlings)
+	}
+	// The pile itself is untouched. A disposition is a second record about a
+	// report, never an edit to it.
+	pile, err := reloaded.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(pile) != 1 || pile[0].Message != reported.Message {
+		t.Fatalf("the pile changed when a report was handled: %#v", pile)
+	}
+	if reloaded.HandlingPath() == reloaded.Path() {
+		t.Fatal("the dispositions are written into the pile itself")
+	}
+
+	// Deciding again is history rather than a write to refuse, and the later
+	// decision is the one that is read.
+	second := testHandling(reported.ID, "and the work landed")
+	second.RecordedAt = second.RecordedAt.Add(time.Hour)
+	if err := reloaded.Handle(second); err != nil {
+		t.Fatalf("Handle() a second time error = %v", err)
+	}
+	handlings, err = newTestReportStore(t, root).Handlings()
+	if err != nil {
+		t.Fatalf("Handlings() error = %v", err)
+	}
+	if current := report.Handled(handlings)[reported.ID]; current.Reason != "and the work landed" {
+		t.Fatalf("the current disposition = %#v", current)
+	}
+}
+
+// A store addresses one product's pile, and a disposition from another product's
+// is refused for the reason a report from one is: two products' records must
+// never be readable as one.
+func TestAHandlingFromAnotherProductIsRefused(t *testing.T) {
+	t.Parallel()
+
+	store := newTestReportStore(t, t.TempDir())
+	elsewhere := testHandling("report-0123456789abcdef0123456789abcdef", "dealt with")
+	elsewhere.ProductID = "somebody-else"
+	err := store.Handle(elsewhere)
+	if err == nil || !strings.Contains(err.Error(), "does not match store product") {
+		t.Fatalf("Handle() error = %v", err)
+	}
+	// A handling with nothing said about it takes a report out of everybody's
+	// view and says nothing about why, which is worse than leaving it in.
+	silent := testHandling("report-0123456789abcdef0123456789abcdef", "")
+	if err := store.Handle(silent); err == nil || !strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("Handle() with no reason error = %v", err)
+	}
+}
+
+func testHandling(reportID, reason string) report.Handling {
+	return report.Handling{
+		SchemaVersion: report.HandlingSchemaVersion,
+		ReportID:      reportID,
+		Role:          "product-manager",
+		Agent:         "product-manager",
+		RunID:         "chat-0123456789abcdef0123456789abcdef",
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		Reason:        reason,
+		RecordedAt:    time.Date(2026, 8, 22, 11, 0, 0, 0, time.UTC),
+	}
+}

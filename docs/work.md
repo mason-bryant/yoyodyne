@@ -95,8 +95,8 @@ getting one each. A run that loses the race for the last free slot is reported a
 declined and the pass exits zero: that is two schedulers doing exactly what they
 should, not a failure.
 
-Six things keep an item out of a pass, and the pass accounts for them at two
-different grains. Three are named against the item, because nothing else would
+Seven things keep an item out of a pass, and the pass accounts for them at two
+different grains. Four are named against the item, because nothing else would
 report that this particular item was passed over. An **unresolved directive** is
 named with the directive's own words, because it needs a person. An item
 whose **unfinished children already carry its execution** is skipped with those
@@ -105,10 +105,12 @@ reported as ready to pull, so a scheduler that did not know the difference would
 buy the same change twice — two developers rewriting one file, the second of them
 guaranteed a conflict at integration. A child covers whether it is queued,
 blocked, or already claimed by a run in flight, and the container becomes
-ordinary work again once its last unfinished child leaves the backlog. And an
+ordinary work again once its last unfinished child leaves the backlog. An
 item that **would race work already in flight** is sequenced behind it rather
 than started beside it, with the run it would have raced and what the two share
-both named. The other
+both named. And an item whose **executor is a persona conversation** rather than
+a developer run is passed over with what carries it named, which the paragraph
+after next is about. The other
 three — the tracker not reporting an item as ready, a run for it already being in
 flight anywhere, and no free slot — are facts about the pass rather than about any
 one item, so that is how they are reported: the stop reason says which of them
@@ -121,7 +123,7 @@ stopped before reading the queue at all, because you were holding intake or the
 machine was already full, says nothing about the backlog rather than reporting
 zeroes it never looked up.
 
-Sequencing is the one of those three that is a wait rather than a refusal. Two
+Sequencing is the one of those four that is a wait rather than a refusal. Two
 items race when they are siblings of one epic, when one is the epic the other was
 broken out of, or when the files they will change overlap. An item says which
 files those are by naming them after `conflict-surface:` on a line of its own, in
@@ -142,8 +144,40 @@ races nothing, and both runs record what the sequencing did — the one that wai
 says what it waited for, and the one pulled past it says which items it was pulled
 ahead of.
 
-A seventh thing deliberately keeps nothing out: an item whose goal was amended after
-it was admitted is pulled exactly as it would have been, because
+Not everything in the backlog is a developer run. Promoting a document the
+architect owns, settling a decomposition, recording a decision: those happen in a
+conversation with a role, and the harness's own gates already say so — the
+artifact homes are default-deny for a developer's diff, so a run pointed at one
+of them produces a correctly refused empty change. What it also produces is a
+spent run, two review rounds, and two rounds counted against that item's cap, so
+an item mis-selected twice reaches its cap having done nothing and escalates work
+nobody ever started.
+
+So an item says what carries it, and whose conversation that is. The product
+manager sets `executor` on the item as it is admitted — `conversation:` followed
+by the role, as in `conversation:architect` — and `update` takes it too, for work
+already in the queue. The bare word `conversation` is refused: from the handoff
+until whoever holds the item starts on it, the role named here is the only thing
+that says who has it, and a marker that named none left exactly that stretch
+unattributed. An item carrying it keeps its place in the order, is reported in
+the queue with what carries it, and is never selected for a developer run. It is
+not a wait, and the pass says so rather than counting it among the items that are
+about to become pullable: nothing clears, and what moves it is somebody opening
+the conversation the item names. Work that says nothing is a developer run, which
+is nearly all of it.
+
+Naming the item yourself is unaffected. `yoyo run <id>` is you deciding, and the
+marker steers what the harness chooses rather than what you may ask for.
+
+The marker is not retroactive, which is the part worth knowing before you rely
+on it: it covers exactly the items that carry it, so work admitted before you
+started marking carries none and is chosen as ordinary developer work. Nothing
+infers it — no reading of an item tells a conversation from a diff — so bringing
+an existing queue under the guard means marking its conversation-executed items,
+one `update` each, in the product manager's conversation.
+
+An eighth thing deliberately keeps nothing out: an item whose goal was amended
+after it was admitted is pulled exactly as it would have been, because
 [staleness reports rather than decides](artifacts.md#what-a-change-upstream-leaves-stale),
 and what changed goes into the run's recorded reason instead.
 
