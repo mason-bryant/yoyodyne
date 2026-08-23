@@ -312,8 +312,14 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
+	// Named once and used both to write the block and to check what comes back,
+	// so the assertion cannot drift into agreeing with its own copy of the text.
+	const (
+		change = "say which ordering holds"
+		why    = "the item cannot satisfy both"
+	)
 	provider.developerFinalText = "implemented the work item\n\n" +
-		amendmentBlock(`{"artifact":"v1-design","change":"say which ordering holds","why":"the item cannot satisfy both"}`)
+		amendmentBlock(`{"artifact":"v1-design","change":"`+change+`","why":"`+why+`"}`)
 	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"exit 0"})
 	pipeline.Reports = &fakeReports{}
 
@@ -361,6 +367,14 @@ func TestAProposedChangeIsOnDiskForALaterProcessToList(t *testing.T) {
 	}
 	if proposed.Role != domain.RoleDeveloper || proposed.RunID != outcome.RunID || proposed.WorkItemID != tracker.item.ID {
 		t.Fatalf("proposal is not attributed to the run that made it: %#v", proposed)
+	}
+	// Identity and attribution say which proposal this is and who made it, but
+	// the argument itself is the whole of what the architect decides. A defect
+	// that wrote those two fields away would leave everything above this passing
+	// while the operator reads an empty proposal — the same silent drop, one
+	// layer in.
+	if proposed.Change != change || proposed.Why != why {
+		t.Fatalf("the proposal's argument did not survive the disk round trip: change = %q, why = %q", proposed.Change, proposed.Why)
 	}
 	// The proposal the operator will decide is the one the run said it made, so
 	// an outcome that reports a proposal the log does not hold cannot pass.
