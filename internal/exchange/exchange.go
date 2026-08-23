@@ -288,10 +288,17 @@ func (e Exchange) Validate() error {
 
 // Ask is one question a role puts to another, as the fenced block carries it.
 type Ask struct {
-	// Role is who is being asked. It is required and it is a role rather than an
-	// agent: which configured agent fills it is the harness's to resolve, exactly
-	// as it is when an operator addresses one.
-	Role domain.AgentRole `json:"role"`
+	// Role is who is being asked, and it is a role rather than an agent: which
+	// configured agent fills it is the harness's to resolve, exactly as it is when
+	// an operator addresses one.
+	//
+	// It is required to open an exchange and optional to continue or close one,
+	// because a thread already says who is in it: the exchange was opened naming
+	// the answering role and that is fixed for its whole life, so a follow-up that
+	// restated it could only ever agree or contradict. One that states it anyway
+	// is held to matching, which is the contradiction being refused rather than
+	// silently redirecting the thread.
+	Role domain.AgentRole `json:"role,omitempty"`
 	// Question is what is being asked. It is required and it has to ask
 	// something: a statement put through this channel is an opinion posted at
 	// another role, and nobody answers one.
@@ -315,12 +322,19 @@ func (a Ask) Closing() bool { return strings.TrimSpace(a.Settled) != "" }
 // Validate reports every contract violation in the ask at once.
 func (a Ask) Validate() error {
 	var problems []error
-	if !a.Role.Valid() {
-		problems = append(problems, fmt.Errorf("role %q is not one of the harness's roles; ask %s",
-			a.Role, strings.Join(roleNames(), ", ")))
+	continuing := strings.TrimSpace(a.Exchange) != ""
+	switch {
+	case a.Role != "":
+		if !a.Role.Valid() {
+			problems = append(problems, fmt.Errorf("role %q is not one of the harness's roles; ask %s",
+				a.Role, strings.Join(roleNames(), ", ")))
+		}
+	case !continuing:
+		problems = append(problems, fmt.Errorf("role is required to open an exchange; ask %s",
+			strings.Join(roleNames(), ", ")))
 	}
-	if reference := strings.TrimSpace(a.Exchange); reference != "" && !ValidID(reference) {
-		problems = append(problems, fmt.Errorf("exchange %q is not an exchange identifier", reference))
+	if continuing && !ValidID(strings.TrimSpace(a.Exchange)) {
+		problems = append(problems, fmt.Errorf("exchange %q is not an exchange identifier", strings.TrimSpace(a.Exchange)))
 	}
 	problems = append(problems, boundedText("context", a.Context, MaxContextBytes, false))
 	problems = append(problems, boundedText("settled", a.Settled, MaxSettledBytes, false))

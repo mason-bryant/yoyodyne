@@ -564,7 +564,13 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// may set off, which is a different question from how long one thread may run.
 	var chargeTo string
 	asksTaken := 0
-	for round := 1; ; round++ {
+	// trackerRounds counts only the rounds that actually went to the tracker. The
+	// loop is shared with asking now, and a budget that counted both would mean a
+	// message that asked twice had fewer rounds of actions than one that asked
+	// none — which is the tracker budget changing size for a reason nothing about
+	// the tracker explains.
+	trackerRounds := 0
+	for {
 		answer, err := s.takeTurn(ctx, prompt)
 		// The invocation is charged to the exchange whose answer it was carrying,
 		// before anything is decided about what it said: it was paid for either way.
@@ -629,6 +635,11 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// tracker and ask another role, so both are carried out and both are handed
 		// back; a message with neither is finished.
 		var continuation string
+		// undelivered is what the tracker returned that this round put into the
+		// continuation rather than into the durable record. It is owed to the role
+		// either way, so a round that ends up sending nothing writes it down
+		// instead of dropping it.
+		var undelivered []TrackerOutcome
 		if len(parsed.Actions) > 0 {
 			// The harness now goes to the tracker on the product manager's behalf,
 			// which emits no provider events, so the display is told directly rather
@@ -639,7 +650,8 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 			if err != nil {
 				return reply, err
 			}
-			if round >= maxTrackerRounds {
+			trackerRounds++
+			if trackerRounds >= maxTrackerRounds {
 				// The rounds are spent. The results are still owed to the product
 				// manager, so they are written down to wait for its next turn rather
 				// than being answered with another one now.
@@ -649,6 +661,7 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 				}
 			} else {
 				continuation = renderTrackerResults(outcomes) + continueAfterResults
+				undelivered = outcomes
 			}
 		}
 		if parsed.Ask != nil {
@@ -661,6 +674,17 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 					Question: oneLineAsk(*parsed.Ask),
 					Problem:  fmt.Sprintf("one message asks at most %d round(s), and this one has", s.options.askRounds()),
 				})
+				// This round is the last one, so whatever the tracker returned was
+				// about to be handed back and now never will be. It is written down
+				// for the next turn, because results the role never sees are the exact
+				// loss the carry-over exists to prevent — and a bound on asking must
+				// not quietly cost it what its actions did.
+				if len(undelivered) > 0 {
+					reply.ResultsCarriedOver = true
+					if err := s.carryResults(undelivered); err != nil {
+						return reply, err
+					}
+				}
 				break
 			}
 			asksTaken++

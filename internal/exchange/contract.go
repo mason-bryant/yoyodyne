@@ -17,6 +17,12 @@ package exchange
 // AskingContract is the clause carried by every role that may ask another one
 // something. It is placed inside the role's own contract, so a role reads what
 // it may ask for in the same breath as what it may do.
+//
+// Every block below is decoded by a test, with the placeholder identifier
+// substituted for a real one. A contract whose own example is refused is worse
+// than no example: the role follows it, the harness calls the block unreadable,
+// and the thing the template was showing — closing an exchange, which is how one
+// ordinarily ends — silently never happens.
 const AskingContract = "# Asking another role\n\n" +
 	`Some questions are neither yours to answer nor the operator's to relay. You can put one directly to another role, and the harness carries it, records it, and brings the answer back inside the reply you are already writing.
 
@@ -30,7 +36,7 @@ To ask, end your reply with exactly one block, after the prose:
 
 "role" is the role you are asking, "question" has to ask something and end with a question mark, and "context" is optional and is your own framing rather than a re-briefing of them. One block asks one thing: an exchange is a thread between two roles, and a reply opening three at once is broadcasting rather than asking.
 
-The answer comes back to you in this same reply, with the exchange's identifier and where it has got to against its round limit. Then you either ask again in the same thread, or close it:
+The answer comes back to you in this same reply, with the exchange's identifier and where it has got to against its round limit. Then you either ask again in the same thread, or close it. A block that names "exchange" needs no "role", because the thread already says who is in it — and naming a different one is refused rather than redirecting it:
 
 ` + "```" + `yoyodyne-ask
 {"ask":{"exchange":"exchange-…","question":"a further question in that thread?"}}

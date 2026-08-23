@@ -163,7 +163,10 @@ func (c Conductor) Put(ctx context.Context, ask Ask, asker Party) (Exchange, err
 	if ask.Closing() {
 		return c.settle(ask.Exchange, ask.Settled, asker)
 	}
-	if ask.Role == asker.Role {
+	// A follow-up names no role, and the one that does is held to the thread it is
+	// continuing rather than allowed to redirect it. Only an ask that opens an
+	// exchange decides who is being asked, so only that one can pick itself.
+	if ask.Role != "" && ask.Role == asker.Role {
 		return Exchange{}, fmt.Errorf("the %s cannot ask itself; ask the role that holds the judgement you are missing", asker.Role.Title())
 	}
 
@@ -287,7 +290,12 @@ func (c Conductor) begin(ask Ask, asker Party) (Exchange, error) {
 		return Exchange{}, fmt.Errorf("%s is the %s's exchange, so the %s cannot continue it",
 			recorded.ID, recorded.Asker.Role.Title(), asker.Role.Title())
 	}
-	if recorded.Answerer.Role != ask.Role {
+	// A follow-up that named no role takes the one the exchange was opened with,
+	// which is the whole reason it need not restate it. One that named a different
+	// role is refused rather than redirected: the answering side has a provider
+	// session holding this thread, and half a thread answered by somebody else is
+	// a record that no longer says who said what.
+	if ask.Role != "" && recorded.Answerer.Role != ask.Role {
 		return Exchange{}, fmt.Errorf("%s is asking the %s, so it cannot be continued to the %s",
 			recorded.ID, recorded.Answerer.Role.Title(), ask.Role.Title())
 	}

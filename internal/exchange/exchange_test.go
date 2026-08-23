@@ -217,3 +217,75 @@ func TestAnExchangeReportsItsCostBesideItsRounds(t *testing.T) {
 		}
 	}
 }
+
+// Every block the asking contract shows has to be one the harness accepts. A
+// template that is refused is worse than none: the role follows it, the block is
+// called unreadable, and what it was showing never happens — which is exactly
+// how the documented way to close an exchange would have left every thread
+// dangling open.
+func TestEveryExampleTheAskingContractShowsIsAccepted(t *testing.T) {
+	t.Parallel()
+
+	examples := blocksIn(AskingContract)
+	if len(examples) != 3 {
+		t.Fatalf("found %d example blocks in the asking contract, want the open, the continue, and the close", len(examples))
+	}
+	for _, example := range examples {
+		// The contract writes the identifier as a placeholder, because thirty-two
+		// hex digits in a contract teach nothing. Everything else is decoded as
+		// written.
+		payload := strings.ReplaceAll(example, "exchange-…", "exchange-"+strings.Repeat("a", 32))
+		ask, err := Decode(payload)
+		if err != nil {
+			t.Fatalf("the contract shows a block the harness refuses:\n%s\n%v", payload, err)
+		}
+		if err := ask.Validate(); err != nil {
+			t.Fatalf("the contract shows a block that does not validate:\n%s\n%v", payload, err)
+		}
+	}
+}
+
+// blocksIn returns the payload of every ask block in a contract, in order.
+func blocksIn(contract string) []string {
+	var payloads []string
+	rest := contract
+	for {
+		at := strings.Index(rest, Fence+"\n")
+		if at < 0 {
+			return payloads
+		}
+		rest = rest[at+len(Fence)+1:]
+		closesAt := strings.Index(rest, "\n```")
+		if closesAt < 0 {
+			return payloads
+		}
+		payloads = append(payloads, rest[:closesAt])
+		rest = rest[closesAt:]
+	}
+}
+
+// A follow-up in a thread names no role, because the thread already says who is
+// in it. That is what the contract's continue and close templates show, and it
+// is the ordinary way an exchange ends.
+func TestAFollowUpNeedNotRestateWhoIsBeingAsked(t *testing.T) {
+	t.Parallel()
+
+	thread := "exchange-" + strings.Repeat("a", 32)
+	for name, payload := range map[string]string{
+		"a further question": `{"ask":{"exchange":"` + thread + `","question":"a further question in that thread?"}}`,
+		"a close":            `{"ask":{"exchange":"` + thread + `","settled":"what you took from it"}}`,
+	} {
+		ask, err := Decode(payload)
+		if err != nil {
+			t.Fatalf("%s: Decode() error = %v", name, err)
+		}
+		if ask.Role != "" || ask.Exchange != thread {
+			t.Fatalf("%s: ask = %+v", name, ask)
+		}
+	}
+	// Opening one still has to say who is being asked: there is no thread to take
+	// it from.
+	if _, err := Decode(`{"ask":{"question":"what would this cost?"}}`); err == nil {
+		t.Fatal("an exchange was opened without naming who is asked")
+	}
+}

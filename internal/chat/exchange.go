@@ -285,6 +285,12 @@ func refuseUnauthorizedAsk(authority Authority, parsed parsedReply) error {
 			Reason:  "the ask channel is between the roles that hold judgement about the product, and this role says what it needs in prose instead",
 		}
 	}
+	// A follow-up in a thread names no role, and there is nothing here to check
+	// against: who is being asked was decided when the exchange opened and passed
+	// this check then, and the conductor holds the thread to it.
+	if parsed.Ask.Role == "" {
+		return nil
+	}
 	if parsed.Ask.Role == authority.Role {
 		return &AuthorityError{
 			Role:    authority.Role,

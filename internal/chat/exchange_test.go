@@ -7,8 +7,10 @@ import (
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The refusal this retires: a question the product manager has for the architect
@@ -337,5 +339,110 @@ func TestTheAskerIsToldWhenItsExchangeRanOutOfRounds(t *testing.T) {
 	// happened.
 	if session.options.Exchanges.(*fakeExchanges).charged != 0 {
 		t.Fatal("the refused round was charged to the exchange")
+	}
+}
+
+// The bound on asking must not cost the role what its own actions did. When the
+// last permitted ask is refused, whatever the tracker returned in that same
+// round was about to be handed back and now never will be, so it is written down
+// for the next turn rather than dropped — the exact loss the carry-over exists to
+// prevent.
+func TestTheAskBoundCarriesTheTrackerResultsItStopsDelivering(t *testing.T) {
+	// Not parallel: the recorded conversation is loaded back from a second store
+	// over the same root.
+	root := t.TempDir()
+	acting := "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"read\",\"id\":\"yoyodyne-ifd.22\"}]}\n```\n"
+	ask := askBlock(`{"ask":{"role":"architect","question":"and what else am I missing?"}}`)
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: "Looking and asking.\n\n" + acting + "\n" + ask},
+		{SessionID: "session-1", FinalText: "Looking and asking again.\n\n" + acting + "\n" + ask},
+	}}
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Description: "Say who is speaking.", Status: "open"},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	options.Exchanges = &fakeExchanges{answers: []string{"More than you think.", "Still more."}}
+	// One ask per message, so the second round's ask is the one the bound refuses
+	// while its tracker action has already run.
+	options.AskRoundsPerMessage = 1
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tell me about ifd.22.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 2 {
+		t.Fatalf("actions = %d, want the two reads that ran", len(reply.Actions))
+	}
+	if !reply.ResultsCarriedOver {
+		t.Fatal("the results the bound stopped delivering were not reported as carried over")
+	}
+	recorded, err := newTestStore(t, root).Load(runstate.ConversationIdentity{
+		Agent: string(domain.RoleProductManager), Role: domain.RoleProductManager,
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(recorded.PendingTrackerResults, "Say who is speaking.") {
+		t.Fatalf("recorded pending results = %q", recorded.PendingTrackerResults)
+	}
+}
+
+// Asking does not spend the tracker's round budget. The two share the loop and
+// nothing else: a message that asks twice has exactly as many rounds of actions
+// as one that asks none, because a budget that shrank for a reason nothing about
+// the tracker explains is not a budget anybody could reason about.
+func TestAskingDoesNotSpendTheTrackerRoundBudget(t *testing.T) {
+	t.Parallel()
+
+	acting := "```yoyodyne-tracker\n{\"actions\":[{\"action\":\"read\",\"id\":\"yoyodyne-ifd.22\"}]}\n```\n"
+	ask := askBlock(`{"ask":{"role":"architect","question":"and what else am I missing?"}}`)
+	// Every round both looks and asks, so a shared counter would run the tracker
+	// out in half the rounds.
+	results := make([]backendapi.RunResult, 0, maxTrackerRounds)
+	for range maxTrackerRounds {
+		results = append(results, backendapi.RunResult{
+			SessionID: "session-1",
+			FinalText: "Looking and asking.\n\n" + acting + "\n" + ask,
+		})
+	}
+	// The tracker budget runs out on the last of those, and the answer to that
+	// round's ask still has to reach the role, so one further turn closes the
+	// message.
+	results = append(results, backendapi.RunResult{SessionID: "session-1", FinalText: "That is all of it."})
+	provider := &fakeBackend{results: results}
+	options := testOptions(t, provider)
+	options.Tracker = &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.22": {ID: "yoyodyne-ifd.22", Title: "Readable conversations", Description: "Say who is speaking.", Status: "open"},
+	}}
+	options.Exchanges = &fakeExchanges{answers: []string{"a", "b", "c", "d"}, maxRounds: 1}
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Tell me about ifd.22.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != maxTrackerRounds {
+		t.Fatalf("tracker rounds = %d, want the full budget of %d", len(reply.Actions), maxTrackerRounds)
+	}
+	if len(reply.Exchanges) != maxTrackerRounds {
+		t.Fatalf("ask rounds = %d, want one per round", len(reply.Exchanges))
+	}
+	// What the budget actually decides is whether a round's results are handed
+	// back or written down for later, so that is what is checked: every round but
+	// the last delivered them, which is what a full budget of four looks like.
+	for turn := 1; turn < maxTrackerRounds; turn++ {
+		if !strings.Contains(provider.requests[turn].Prompt, "Say who is speaking.") {
+			t.Fatalf("turn %d was not handed the previous round's tracker results, so asking spent the budget: %q",
+				turn, provider.requests[turn].Prompt)
+		}
+	}
+	if !reply.ResultsCarriedOver {
+		t.Fatal("the last round's results were neither delivered nor carried")
+	}
+	if strings.Contains(provider.requests[maxTrackerRounds].Prompt, "Say who is speaking.") {
+		t.Fatal("the round past the budget delivered its results as well as carrying them")
 	}
 }

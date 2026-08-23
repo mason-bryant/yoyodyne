@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -108,4 +112,154 @@ func seedExchange(t *testing.T, stateRoot string) exchange.Exchange {
 		t.Fatalf("the exchange directory was not created: %v", err)
 	}
 	return recorded
+}
+
+// The input half of judgment-only: what the harness actually dispatches when one
+// role asks another. The output half is enforced by ReadAnswer refusing any
+// harness block; this is the other side of it, and it is the side a widened
+// tool list or a swapped system prompt would quietly break — the answer would
+// still be prose, and the role would have had a filesystem while writing it.
+func TestTheAnsweringRoundIsDispatchedWithNoToolsAndNoAuthority(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingBackend{result: backend.RunResult{
+		SessionID: "session-2",
+		FinalText: "More than the ordering assumes.",
+		CostUSD:   0.25,
+	}}
+	voice := exchangeVoice{
+		config:     answeringConfig(),
+		provider:   provider,
+		repository: t.TempDir(),
+		productID:  "yoyodyne",
+	}
+	question := exchange.Question{
+		ExchangeID: "exchange-" + strings.Repeat("a", 32),
+		Role:       domain.RoleArchitect,
+		Asker:      domain.RoleProductManager,
+		Round:      1,
+		MaxRounds:  10,
+		Question:   "what does this goal cost, and what am I missing?",
+		Context:    "I am about to order the backlog with it.",
+	}
+
+	spoken, err := voice.Answer(context.Background(), question)
+	if err != nil {
+		t.Fatalf("Answer() error = %v", err)
+	}
+	if spoken.Answer != "More than the ordering assumes." || spoken.Agent != "architect" || spoken.SessionID != "session-2" || spoken.CostUSD != 0.25 {
+		t.Fatalf("spoken = %+v", spoken)
+	}
+
+	request := provider.request
+	// No tools at all, and a read-only permission mode. An answering round has
+	// less than a conversation does, not more.
+	if request.AllowedTools == nil || len(request.AllowedTools) != 0 {
+		t.Fatalf("allowed tools = %#v, want an empty non-nil list", request.AllowedTools)
+	}
+	if request.PermissionMode != "plan" {
+		t.Fatalf("permission mode = %q, want plan", request.PermissionMode)
+	}
+	// The answering prompt rather than the role's ordinary conversation contract:
+	// there is no operator here, no block to act through, and no authority.
+	if request.SystemPrompt != chat.AnsweringPrompt(domain.RoleArchitect, "house architect persona") {
+		t.Fatalf("system prompt = %q", request.SystemPrompt)
+	}
+	if strings.Contains(request.SystemPrompt, "yoyodyne-tracker") {
+		t.Fatal("the answering prompt describes a block the role may not use")
+	}
+	// The exchange is the record this invocation belongs to; it has no run and no
+	// conversation of its own.
+	if request.RunID != question.ExchangeID || request.Role != domain.RoleArchitect {
+		t.Fatalf("request identity = %q/%q", request.RunID, request.Role)
+	}
+	// It answers under the agent configured for the role, with that agent's model.
+	if request.Model != "opus-architect" {
+		t.Fatalf("model = %q, want the configured architect's", request.Model)
+	}
+	if request.Timeout != exchangeAnswerTimeout {
+		t.Fatalf("timeout = %s, want the answering bound", request.Timeout)
+	}
+	for _, wanted := range []string{
+		"The product manager is asking you something",
+		"round 1 of the 10",
+		"what does this goal cost, and what am I missing?",
+		"which is what they think rather than evidence",
+	} {
+		if !strings.Contains(request.Prompt, wanted) {
+			t.Fatalf("prompt is missing %q: %q", wanted, request.Prompt)
+		}
+	}
+}
+
+// There is nobody to ask where the project configured nobody, and nothing here
+// answers on a backend a conversation cannot be held over. Both are refused
+// rather than producing an empty answer the asker would reason from.
+func TestAnAnsweringRoundIsRefusedWhereThereIsNobodyToAsk(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingBackend{}
+	unconfigured := exchangeVoice{config: answeringConfig(), provider: provider, productID: "yoyodyne"}
+	if _, err := unconfigured.Answer(context.Background(), exchange.Question{
+		ExchangeID: "exchange-" + strings.Repeat("a", 32),
+		Role:       domain.RoleDevelopmentManager,
+		Asker:      domain.RoleProductManager,
+		Question:   "what does this cost?",
+	}); err == nil {
+		t.Fatal("a role nobody is configured for answered")
+	}
+
+	elsewhere := answeringConfig()
+	elsewhere.Agents["architect"] = config.AgentConfig{
+		Role: domain.RoleArchitect, Backend: domain.Backend("codex"), Model: "o1",
+	}
+	other := exchangeVoice{config: elsewhere, provider: provider, productID: "yoyodyne"}
+	if _, err := other.Answer(context.Background(), exchange.Question{
+		ExchangeID: "exchange-" + strings.Repeat("a", 32),
+		Role:       domain.RoleArchitect,
+		Asker:      domain.RoleProductManager,
+		Question:   "what does this cost?",
+	}); err == nil {
+		t.Fatal("an agent on another backend answered")
+	}
+	if provider.calls != 0 {
+		t.Fatalf("a refused round still asked a provider %d time(s)", provider.calls)
+	}
+}
+
+// answeringConfig is a project with one architect to ask, which is the whole of
+// what the voice reads from the configuration.
+func answeringConfig() config.Config {
+	return config.Config{
+		Product: config.Product{ID: "yoyodyne", RepositoryID: "yoyodyne"},
+		Agents: map[string]config.AgentConfig{
+			"architect": {
+				Role:    domain.RoleArchitect,
+				Backend: domain.BackendClaudeCode,
+				Model:   "opus-architect",
+				Persona: config.Persona{Text: "house architect persona"},
+			},
+			"product-manager": {
+				Role:    domain.RoleProductManager,
+				Backend: domain.BackendClaudeCode,
+				Model:   "opus",
+			},
+		},
+	}
+}
+
+// capturingBackend records exactly what the harness asked a provider to run,
+// which is what makes the answering round's boundary an assertion rather than a
+// claim.
+type capturingBackend struct {
+	request backend.RunRequest
+	result  backend.RunResult
+	err     error
+	calls   int
+}
+
+func (c *capturingBackend) Run(_ context.Context, request backend.RunRequest) (backend.RunResult, error) {
+	c.request = request
+	c.calls++
+	return c.result, c.err
 }

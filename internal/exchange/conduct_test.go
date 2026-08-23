@@ -346,3 +346,66 @@ func (m *memoryReports) Append(reported report.Report) error {
 	m.filed = append(m.filed, reported)
 	return nil
 }
+
+// The whole thread conducted exactly as the contract's templates write it: the
+// opening names the role, and the follow-up and the close name only the
+// exchange. The conductor takes the answering role from the thread, and a
+// follow-up that names a different one is refused rather than redirecting it.
+func TestAThreadIsConductedAsTheContractWritesIt(t *testing.T) {
+	t.Parallel()
+
+	store := &memoryExchanges{}
+	voice := &scriptedVoice{answers: []string{"More than the ordering assumes.", "Twice."}}
+	conductor := newTestConductor(store, voice, &memoryReports{}, 10)
+	asker := Party{Role: domain.RoleProductManager, Agent: "product-manager"}
+
+	opened, err := conductor.Put(context.Background(), decodeAsk(t,
+		`{"ask":{"role":"architect","question":"what would this cost, and what am I missing?"}}`), asker)
+	if err != nil {
+		t.Fatalf("Put() opening error = %v", err)
+	}
+
+	thread := opened.ID
+	continued, err := conductor.Put(context.Background(), decodeAsk(t,
+		`{"ask":{"exchange":"`+thread+`","question":"a further question in that thread?"}}`), asker)
+	if err != nil {
+		t.Fatalf("Put() continuing error = %v", err)
+	}
+	if continued.Answerer.Role != domain.RoleArchitect || continued.Spent() != 2 {
+		t.Fatalf("continued = %+v", continued)
+	}
+
+	closed, err := conductor.Put(context.Background(), decodeAsk(t,
+		`{"ask":{"exchange":"`+thread+`","settled":"what you took from it"}}`), asker)
+	if err != nil {
+		t.Fatalf("Put() closing error = %v", err)
+	}
+	if closed.Outcome != OutcomeResolved || closed.Settled != "what you took from it" {
+		t.Fatalf("closed = %+v", closed)
+	}
+
+	// A follow-up that names a different role is refused, because the answering
+	// side holds a provider session for this thread and half a thread answered by
+	// somebody else is a record that no longer says who said what.
+	reopened := &memoryExchanges{}
+	fresh := newTestConductor(reopened, &scriptedVoice{answers: []string{"a"}}, &memoryReports{}, 10)
+	one, err := fresh.Put(context.Background(), Ask{Role: domain.RoleArchitect, Question: "what would this cost?"}, asker)
+	if err != nil {
+		t.Fatalf("Put() error = %v", err)
+	}
+	if _, err := fresh.Put(context.Background(), Ask{
+		Role: domain.RoleDevelopmentManager, Exchange: one.ID, Question: "you instead?",
+	}, asker); err == nil {
+		t.Fatal("a follow-up redirected the thread to a third role")
+	}
+}
+
+func decodeAsk(t *testing.T, payload string) Ask {
+	t.Helper()
+
+	ask, err := Decode(payload)
+	if err != nil {
+		t.Fatalf("Decode(%s) error = %v", payload, err)
+	}
+	return ask
+}
