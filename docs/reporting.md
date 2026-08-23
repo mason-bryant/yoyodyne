@@ -330,7 +330,12 @@ The work that most needed it is the work no run ever touches. An item
 selected, so no run reports anything about it, and its thread used to show the run
 that could not carry it and then nothing for the rest of the item's life. Three
 messages carry that journey now: the item being handed to a role's conversation,
-that role's first act on it, and the close that finishes it. The close is reported
+that role's first act on it, and the close that finishes it. The handoff names
+which role's conversation, taken from the marker on the item, so the wait between
+being handed over and being taken up belongs to somebody by name rather than to
+the anonymous role that carries it. Work marked before the marker named a role
+still says only that a conversation carries it, because that is all its record
+holds and a thread that guessed would name the wrong person. The close is reported
 here and nowhere else, because everywhere else the run that landed the work
 already says it, and this is the work with no run to say anything.
 

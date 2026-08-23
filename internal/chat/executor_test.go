@@ -26,7 +26,7 @@ func TestAdmissionCarriesTheExecutorToTheTracker(t *testing.T) {
 	tracker := &fakeTracker{}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Admitting the promotion.",
-			`{"action":"create","title":"Promote the brief","description":"The architect promotes it.","goal":"`+recordedGoal+`","executor":"conversation","reason":"the architect carries it in conversation"}`)},
+			`{"action":"create","title":"Promote the brief","description":"The architect promotes it.","goal":"`+recordedGoal+`","executor":"conversation:architect","reason":"the architect carries it in conversation"}`)},
 		{SessionID: "session-1", FinalText: "It is in the queue."},
 	}})
 	options.Tracker = tracker
@@ -41,7 +41,7 @@ func TestAdmissionCarriesTheExecutorToTheTracker(t *testing.T) {
 	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v, want the creation carried out", reply.Actions)
 	}
-	if len(tracker.created) != 1 || tracker.created[0].Executor != domain.WorkItemExecutorConversation {
+	if len(tracker.created) != 1 || tracker.created[0].Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("created = %#v, want the executor carried to the tracker", tracker.created)
 	}
 }
@@ -54,7 +54,7 @@ func TestAnItemAlreadyInTheQueueCanAcquireAnExecutor(t *testing.T) {
 	tracker := &fakeTracker{}
 	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
 		{SessionID: "session-1", FinalText: trackerReply("Marking the promotion item.",
-			`{"action":"update","id":"yoyodyne-ifd.138","executor":"conversation","reason":"no developer run can promote a document the architect owns"}`)},
+			`{"action":"update","id":"yoyodyne-ifd.138","executor":"conversation:architect","reason":"no developer run can promote a document the architect owns"}`)},
 		{SessionID: "session-1", FinalText: "It is marked."},
 	}})
 	options.Tracker = tracker
@@ -67,7 +67,7 @@ func TestAnItemAlreadyInTheQueueCanAcquireAnExecutor(t *testing.T) {
 	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
 		t.Fatalf("actions = %#v, want the update carried out: %#v", reply.Actions, reply.Actions[0].Failure)
 	}
-	if len(tracker.updates) != 1 || tracker.updates[0].change.Executor != domain.WorkItemExecutorConversation {
+	if len(tracker.updates) != 1 || tracker.updates[0].change.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("updates = %#v, want the executor applied to the existing item", tracker.updates)
 	}
 	// The operator reads what changed, and an update that only marked the item
@@ -114,13 +114,69 @@ func TestAnExecutorTheHarnessDoesNotRecognizeIsRefused(t *testing.T) {
 	}
 }
 
+// A marker that says only that a conversation carries the work is refused where
+// it is written, because it is the whole stretch between the handoff and
+// somebody picking the item up that has nothing else to name: the pickup names
+// the role, and until there is one this marker is all a thread has.
+func TestAnExecutorThatDoesNotSayWhoseConversationIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, action := range []TrackerAction{
+		{
+			Action:      actionCreate,
+			Title:       "Promote the brief",
+			Description: "The architect promotes it.",
+			Goal:        recordedGoal,
+			Executor:    domain.WorkItemExecutorConversation,
+			Reason:      "a conversation carries it",
+		},
+		{
+			Action:   actionUpdate,
+			ID:       "yoyodyne-ifd.138",
+			Executor: domain.WorkItemExecutorConversation,
+			Reason:   "it is not developer work",
+		},
+	} {
+		err := action.Validate()
+		if err == nil {
+			t.Fatalf("%s with an unattributed executor = nil error, want it refused", action.Action)
+		}
+		// The refusal names what was missing and what to write instead, because the
+		// role that reads it is one turn away from writing the marker again.
+		if !strings.Contains(err.Error(), "whose conversation") || !strings.Contains(err.Error(), "conversation:architect") {
+			t.Fatalf("%s refusal = %v, want the missing role named along with the executors that carry one", action.Action, err)
+		}
+	}
+}
+
+// The contracts are what a role writes the marker from, so an executor the
+// harness accepts and no contract names is one nothing will ever write. They are
+// prose rather than a generated list, which is exactly why this is checked.
+func TestTheContractsNameEveryExecutorAnItemMayCarry(t *testing.T) {
+	t.Parallel()
+
+	for _, contract := range []struct {
+		who  string
+		text string
+	}{
+		{who: "product manager", text: productManagerContract},
+		{who: "development manager", text: developmentManagerContract},
+	} {
+		for _, executor := range domain.WorkItemExecutors {
+			if !strings.Contains(contract.text, string(executor)) {
+				t.Fatalf("the %s contract never names the executor %q", contract.who, executor)
+			}
+		}
+	}
+}
+
 // A read says what carries the item, because an operator or a role deciding
 // whether work is stuck needs to see that nothing was ever going to pull it.
 func TestReadingAnItemSaysWhatCarriesIt(t *testing.T) {
 	t.Parallel()
 
-	rendered := renderWorkItemEvidence(workItemWithExecutor(domain.WorkItemExecutorConversation), recordedGoals(recordedGoal))
-	if !strings.Contains(rendered, "executor: conversation") {
+	rendered := renderWorkItemEvidence(workItemWithExecutor(domain.ConversationWith(domain.RoleArchitect)), recordedGoals(recordedGoal))
+	if !strings.Contains(rendered, "executor: conversation:architect") {
 		t.Fatalf("rendered = %q, want the executor stated", rendered)
 	}
 	// Ordinary work says nothing, because a line on every item is a line nobody

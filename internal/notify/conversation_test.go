@@ -372,7 +372,7 @@ func TestMarkingWorkForAConversationIsSaidAsAHandoff(t *testing.T) {
 	events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
 		"action":   "update",
 		"id":       "yoyodyne-ifd.138",
-		"executor": "conversation",
+		"executor": string(domain.ConversationWith(domain.RoleArchitect)),
 		"reason":   "no developer run can promote a document the architect owns",
 	})}
 	notification, message := said(t, conversation, events, 0)
@@ -392,6 +392,64 @@ func TestMarkingWorkForAConversationIsSaidAsAHandoff(t *testing.T) {
 	// and nothing else in the record would ever tell the reader that.
 	if !strings.Contains(message.Body, "no run will ever be started for this") {
 		t.Fatalf("body %q does not say whose move follows the handoff", message.Body)
+	}
+	// And it says which person, which is the whole of the difference between a
+	// thread an operator can read and one they have to reconstruct: the pickup
+	// names the role, so without this the wait before it belongs to nobody.
+	if !strings.Contains(message.Body, "the architect's conversation") {
+		t.Fatalf("body %q does not say whose conversation carries the item", message.Body)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+"the architect's, in conversation — no run will ever be started for this.") {
+		t.Fatalf("body %q leaves the wait for the pickup unattributed", message.Body)
+	}
+}
+
+// Every role can be handed work, and the handoff names whichever one it was.
+// Which roles carry work in conversation is a product judgement rather than a
+// fact about the harness, so a handoff that could only name some of them would
+// be back to the silence for the rest.
+func TestAHandoffNamesWhicheverRoleCarriesTheWork(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	for _, role := range domain.Roles() {
+		t.Run(string(role), func(t *testing.T) {
+			events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+				"action":   "update",
+				"id":       "yoyodyne-ifd.138",
+				"executor": string(domain.ConversationWith(role)),
+				"reason":   "no run carries this one",
+			})}
+			_, message := said(t, conversation, events, 0)
+			if !strings.Contains(message.Body, "the "+role.Title()+"'s conversation") {
+				t.Fatalf("body %q does not name the %s", message.Body, role)
+			}
+			if !strings.HasSuffix(message.Body, nextMoveLead+"the "+role.Title()+"'s, in conversation — no run will ever be started for this.") {
+				t.Fatalf("body %q does not leave the move with the %s", message.Body, role)
+			}
+		})
+	}
+}
+
+// Work marked before the marker named a role is still narrated, and is still
+// narrated as unattributed. The record does not say whose conversation it went
+// to, and a thread that picked a role would send the operator to somebody who
+// was never handed the item — which is worse than the silence it replaced.
+func TestAHandoffWhoseMarkerNamesNoRoleSaysOnlyWhatTheRecordHolds(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "", map[string]any{
+		"action":   "update",
+		"id":       "yoyodyne-ifd.138",
+		"executor": string(domain.WorkItemExecutorConversation),
+		"reason":   "marked before the marker carried a role",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Event.Kind != KindWorkHandedOff {
+		t.Fatalf("an unattributed marker is %s, want it still read as a handoff", notification.Event.Kind)
+	}
+	if !strings.Contains(message.Body, "a role's conversation") {
+		t.Fatalf("body %q does not say a conversation carries it", message.Body)
+	}
+	if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
+		t.Fatalf("body %q names a role the record never did", message.Body)
 	}
 }
 

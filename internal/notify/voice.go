@@ -161,7 +161,7 @@ var harnessVoice = voice{
 		KindItemReprioritized:   "{item} was set to {priority}.",
 		KindWorkApproved:        "The operator approved proposed work, and it was admitted as {item}: {title}. It serves: {goal}",
 		KindWorkDeclined:        "The operator declined proposed work — {title} — because: {why}",
-		KindWorkHandedOff:       "{item} was handed to a role's conversation and is carried by {executor} rather than by a developer run: {why}",
+		KindWorkHandedOff:       "{item} was handed to {executor} rather than to a developer run: {why}",
 		KindWorkPickedUp:        "{item} was taken up in conversation: {title}",
 		KindWorkCarriedOut:      "{item} was closed by the conversation carrying it: {why}",
 		KindRunStarted:          "{item} claimed and started as {run}, on account {account} at configuration {config}. Selected by {by}: {reason}",
@@ -253,7 +253,7 @@ var reviewerVoice = voice{
 		KindItemReprioritized:   "{item} moved to {priority}. The order work arrives in changes nothing about the standard it meets.",
 		KindWorkApproved:        "Approved and admitted as {item}: {title}, serving {goal}. I'll see it when a change comes back from it.",
 		KindWorkDeclined:        "{title} was declined, so there is no change coming and nothing for me to judge: {why}",
-		KindWorkHandedOff:       "{item} left the run queue for a conversation carried by {executor}, so no change on it will come to me: {why}",
+		KindWorkHandedOff:       "{item} left the run queue for {executor}, so no change on it will come to me: {why}",
 		KindWorkPickedUp:        "{item} is under way in conversation: {title}. Nothing is coming to me for a verdict on it.",
 		KindWorkCarriedOut:      "{item} is done and was never judged, because there was no change to judge: {why}",
 		KindRunStarted:          "{item} is under way as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. I'll judge what comes back rather than how it got here.",
@@ -344,7 +344,7 @@ var productManagerVoice = voice{
 		KindItemReprioritized:   "I've put {item} at {priority}: {why}",
 		KindWorkApproved:        "The operator approved the work I proposed, and it is admitted as {item}: {title}, serving {goal}.",
 		KindWorkDeclined:        "The operator turned down work I proposed — {title}, which would have served {goal} — because: {why}. Nothing was created.",
-		KindWorkHandedOff:       "{item} is work a conversation carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
+		KindWorkHandedOff:       "{item} is work {executor} carries rather than a run, and it is marked as such so nothing spends a run on it: {why}",
 		KindWorkPickedUp:        "Somebody has taken {item} up: {title}. What the work serves is unchanged by who carries it.",
 		KindWorkCarriedOut:      "{item} is delivered, in a conversation rather than in a change: {why}",
 		KindRunStarted:          "Work started on {item} as {run}, on account {account} at configuration {config}, chosen by {by}: {reason}. That reason is the operator's to disagree with.",
@@ -470,6 +470,11 @@ var nextMoves = map[Kind]string{
 	// Work a conversation carries. The handoff is the one state where the thread
 	// waits on a person opening a conversation rather than on anything the harness
 	// will do by itself, which is exactly the silence this exists to name.
+	// The clause here is the one an item's marker does not name a role for, which
+	// is work marked before it could. Where the marker names one, handedOffMove
+	// says whose it is instead: the wait between the handoff and the pickup is the
+	// longest silence in any thread, and the role holding the item is the whole of
+	// what a reader wants from it.
 	KindWorkHandedOff:  "the role that carries it, in conversation — no run will ever be started for this.",
 	KindWorkPickedUp:   "the role carrying it, until the work is done and the item closed.",
 	KindWorkCarriedOut: "nobody's — the item is done.",
@@ -530,12 +535,28 @@ func nextMove(event Event) (string, bool) {
 	// arrived with the admission or afterwards.
 	if strings.TrimSpace(event.Detail.Executor) != "" {
 		switch event.Kind {
-		case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized:
-			return nextMoves[KindWorkHandedOff], true
+		case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized, KindWorkHandedOff:
+			return handedOffMove(event.Detail.Executor), true
 		}
 	}
 	move, ok := nextMoves[event.Kind]
 	return move, ok
+}
+
+// handedOffMove is whose move follows work only a conversation will carry. It
+// names the role the marker names, because nothing else in that stretch of the
+// thread does: the handoff is followed by however long it takes somebody to open
+// the conversation, and until the pickup says who started, this clause is the
+// only thing standing between a reader and an unattributed silence.
+//
+// A marker that names no role falls back to the clause that says a role carries
+// it without saying which. That is what the record holds, and a thread that
+// named a role the marker did not would send the operator to the wrong one.
+func handedOffMove(executor string) string {
+	if role := domain.WorkItemExecutor(strings.TrimSpace(executor)).Role(); role != "" {
+		return "the " + role.Title() + "'s, in conversation — no run will ever be started for this."
+	}
+	return nextMoves[KindWorkHandedOff]
 }
 
 // The words each severity is said in, and the decoration that is added to them.
@@ -657,7 +678,7 @@ func (e Event) fields(topic Topic) map[string]string {
 		"goal":     stated(detail.Goal, "no goal the record names"),
 		"parent":   stated(detail.Parent, "an item the record does not name"),
 		"priority": priorityOf(detail),
-		"executor": stated(detail.Executor, "something the record does not name"),
+		"executor": stated(carrierOf(detail.Executor), "something the record does not name"),
 		"stopped":  stated(detail.Stopped, "nothing the record names has stopped it"),
 		"age":      ageOf(detail.Since, e.At),
 		"ready":    countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
@@ -689,6 +710,28 @@ func substitute(line string, fields map[string]string) (string, error) {
 		built.WriteString(value)
 		rest = remainder
 	}
+}
+
+// carrierOf is what a message calls the thing carrying an item, from the marker
+// the record holds. A marker that names the role is said as that role's
+// conversation, which is the whole of what the handoff was missing: a thread
+// that names who holds the work is one an operator can read without waiting for
+// the pickup to tell them.
+//
+// The bare marker is said as a role's conversation and no more, because that is
+// all it says. Work marked before the marker carried a role is not attributed by
+// this, and inventing a role for it would attribute it to the wrong one. A marker
+// that is neither is given exactly as it was written, for the reason reading one
+// is permissive at all: somebody meant it to be something other than a run.
+func carrierOf(executor string) string {
+	marker := domain.WorkItemExecutor(strings.TrimSpace(executor))
+	if role := marker.Role(); role != "" {
+		return "the " + role.Title() + "'s conversation"
+	}
+	if marker == domain.WorkItemExecutorConversation {
+		return "a role's conversation"
+	}
+	return string(marker)
 }
 
 func stated(value, absence string) string {

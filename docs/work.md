@@ -153,14 +153,18 @@ spent run, two review rounds, and two rounds counted against that item's cap, so
 an item mis-selected twice reaches its cap having done nothing and escalates work
 nobody ever started.
 
-So an item says what carries it. The product manager sets `executor` on the item
-as it is admitted — `conversation` is the only value there is — and `update`
-takes it too, for work already in the queue. An item carrying it keeps its place
-in the order, is reported in the queue with what carries it, and is never
-selected for a developer run. It is not a wait, and the pass says so rather than
-counting it among the items that are about to become pullable: nothing clears,
-and what moves it is somebody opening the conversation the item names. Work that
-says nothing is a developer run, which is nearly all of it.
+So an item says what carries it, and whose conversation that is. The product
+manager sets `executor` on the item as it is admitted — `conversation:` followed
+by the role, as in `conversation:architect` — and `update` takes it too, for work
+already in the queue. The bare word `conversation` is refused: from the handoff
+until whoever holds the item starts on it, the role named here is the only thing
+that says who has it, and a marker that named none left exactly that stretch
+unattributed. An item carrying it keeps its place in the order, is reported in
+the queue with what carries it, and is never selected for a developer run. It is
+not a wait, and the pass says so rather than counting it among the items that are
+about to become pullable: nothing clears, and what moves it is somebody opening
+the conversation the item names. Work that says nothing is a developer run, which
+is nearly all of it.
 
 Naming the item yourself is unaffected. `yoyo run <id>` is you deciding, and the
 marker steers what the harness chooses rather than what you may ask for.
