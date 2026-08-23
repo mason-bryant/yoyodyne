@@ -42,6 +42,10 @@ revisions:
       by: architect
       at: 2026-08-23T16:34:32Z
       reason: approved amendments aab3b51c and 9fafa81a from yoyodyne-ifd.138 and yoyodyne-ifd.130.1, transcribed once the management-and-supervision brief reached the architect - the Agent Model absorbs the ratified contract's binding rules and the residency summary, and cross-references the management-and-supervision design as the owner of the machinery and the V1 boundary; the boundary is deliberately not duplicated here
+    - action: amended
+      by: architect
+      at: 2026-08-23T18:42:25Z
+      reason: the Codex backend subsection now records the operator's 2026-08-22 parking decision via the claude-only-v1-execution record, and the artifact model points at the artifact-contract specification as the normative home of the identity and shape rules, per approved amendment c84e23a5
 approvals:
     - revision: 0
       by: operator
@@ -111,7 +115,7 @@ flowchart LR
     U -. constrain .-> C
 ```
 
-Each canonical Markdown artifact has a stable ID and machine-readable metadata. The exact schema may evolve, but it must identify:
+Each canonical Markdown artifact has a stable ID and machine-readable metadata; [the artifact contract](artifact-contract.md) is the normative statement of the schema and shape. The exact schema may evolve, but it must identify:
 
 - artifact ID and type;
 - owning role;
@@ -310,7 +314,7 @@ Claude Code is the default backend for every v1 role. The adapter uses its non-i
 
 ### Codex
 
-Codex is a thin optional v1 backend for developer and reviewer roles. Its adapter uses `codex exec`, JSONL events, resumable sessions when available, structured final output where useful, and explicit sandbox settings. Codex is not required to match every Claude Code feature. Unsupported role/backend or policy combinations fail validation before work is assigned.
+Codex remains designed and parked at priority 4 off the V1 critical path, per [claude-only-v1-execution](../decisions/claude-only-v1-execution.md); the adapter description below is the design it re-enters through. Codex is a thin optional v1 backend for developer and reviewer roles. Its adapter uses `codex exec`, JSONL events, resumable sessions when available, structured final output where useful, and explicit sandbox settings. Codex is not required to match every Claude Code feature. Unsupported role/backend or policy combinations fail validation before work is assigned.
 
 Codex authentication is delegated to the locally installed CLI. It may use ChatGPT subscription authentication or an API key; the harness reports the active/missing state but never manages account credentials.
 
