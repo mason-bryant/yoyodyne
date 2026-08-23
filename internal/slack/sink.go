@@ -59,7 +59,13 @@ type Options struct {
 	// It is optional, and a sink given none posts every persona under the avatar
 	// the harness ships.
 	Avatars notify.Avatars
-	// Store holds the thread map and the cursors.
+	// Store holds the thread map and the cursors, and says which product they are
+	// for. That product is what every speaker's name is qualified by, so a
+	// workspace reading two harnesses can tell which one is talking without
+	// opening a thread. It is taken from the store rather than named again here:
+	// a sink holding one product's state and another's name is a channel of
+	// misattributed messages, and a name that cannot be given separately cannot
+	// disagree with the state it is posted beside.
 	Store *Store
 	// API posts.
 	API *API
@@ -96,11 +102,13 @@ type Options struct {
 // Sink is the long-running reporting process for one product.
 type Sink struct {
 	channel string
-	avatars notify.Avatars
-	store   *Store
-	api     *API
-	feed    Feed
-	poll    time.Duration
+	// appearance is how this product's speakers appear here: its own id after
+	// every name, and the pictures the project chose.
+	appearance notify.Appearance
+	store      *Store
+	api        *API
+	feed       Feed
+	poll       time.Duration
 	// identity is what this sink records about itself while it runs.
 	identity Presence
 	// refusal is how long to wait after a refusal only a person can clear. It is
@@ -131,8 +139,11 @@ func New(options Options) (*Sink, error) {
 	if strings.TrimSpace(options.Channel) == "" {
 		problems = append(problems, errors.New("a channel is required"))
 	}
+	// The store is what says which product this sink reports on, so a sink
+	// without one has no name to post under as well as nowhere to keep its
+	// cursors.
 	if options.Store == nil {
-		problems = append(problems, errors.New("the sink's own state store is required"))
+		problems = append(problems, errors.New("the sink's own state store is required; it is where the product every speaker is named for comes from"))
 	}
 	if options.API == nil {
 		problems = append(problems, errors.New("a Slack client is required"))
@@ -152,8 +163,11 @@ func New(options Options) (*Sink, error) {
 		poll = DefaultPollInterval
 	}
 	return &Sink{
-		channel:  strings.TrimSpace(options.Channel),
-		avatars:  options.Avatars,
+		channel: strings.TrimSpace(options.Channel),
+		appearance: notify.Appearance{
+			Product: options.Store.Product(),
+			Avatars: options.Avatars,
+		},
 		store:    options.Store,
 		api:      options.API,
 		feed:     options.Feed,
@@ -331,7 +345,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
 	into := &poster{sink: s, threads: &threads}
-	notifier := notify.New(into, s.avatars)
+	notifier := notify.New(into, s.appearance)
 
 	// How deep the backlog is has to be decided over the whole batch before any of
 	// it is posted, because a digest says how many events it stands for. An
@@ -475,7 +489,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // happened to speak first, because opening a thread is not anybody's account of
 // anything.
 func (s *Sink) openThread(ctx context.Context, topic notify.Topic) (Thread, error) {
-	identity := s.avatars.Identity(notify.Harness())
+	identity := s.appearance.Identity(notify.Harness())
 	emoji, url := icon(identity.Avatar)
 	ts, err := s.post(ctx, Message{
 		Channel:   s.channel,
