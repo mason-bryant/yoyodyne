@@ -11,6 +11,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 func Run(args []string, stdout, stderr io.Writer, version string) int {
@@ -36,7 +37,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		// bound to the process's own input the way a conversation is.
 		return runSetup(ctx, args[1:], os.Stdin, stdout, stderr, version)
 	case "config":
-		return runConfig(args[1:], stdout, stderr)
+		return runConfig(ctx, args[1:], stdout, stderr)
 	case "chat":
 		// A conversation is the one command that reads from the operator, so
 		// this is where the process's own input is bound to it.
@@ -57,6 +58,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return runInvariant(args[1:], stdout, stderr)
 	case "directive":
 		return runDirective(args[1:], stdout, stderr)
+	case "exchange":
+		return runExchange(ctx, args[1:], stdout, stderr)
 	case "reports":
 		return readReports(args[1:], stdout, stderr)
 	case "run":
@@ -71,6 +74,8 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 		return pauseHarness(args[1:], stdout, stderr)
 	case "resume":
 		return resumeWorkItem(args[1:], stdout, stderr)
+	case "release":
+		return releaseIntake(args[1:], stdout, stderr)
 	case "review":
 		return reviewBranch(ctx, args[1:], stdout, stderr)
 	case "cost":
@@ -107,14 +112,14 @@ func runVersion(args []string, stdout, stderr io.Writer, version string) int {
 	return 0
 }
 
-func runConfig(args []string, stdout, stderr io.Writer) int {
+func runConfig(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printConfigUsage(stdout)
 		return 0
 	}
 	switch args[0] {
 	case "validate":
-		return runConfigValidate(args[1:], stdout, stderr)
+		return runConfigValidate(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runConfigShow(args[1:], stdout, stderr)
 	default:
@@ -124,7 +129,7 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
-func runConfigValidate(args []string, stdout, stderr io.Writer) int {
+func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("config validate", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	path := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
@@ -154,6 +159,12 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	// A configuration can be entirely valid and reach no other machine, so the
+	// one command an operator runs to be told whether it is right says so. It is
+	// not a validity failure and does not become one: the exit code is what it
+	// would have been, and the warning is on the stream a warning belongs on.
+	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, resolved.Path)
+
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
 			"status":     "valid",
@@ -161,9 +172,14 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 			"sources":    resolved.Sources,
 			"product_id": resolved.Config.Product.ID,
 			"agents":     len(resolved.Config.Agents),
+			"revision":   resolved.Config.Revision(),
+			"ignored":    ignored,
 		})
 	}
-	fmt.Fprintf(stdout, "configuration valid: %s\n", resolved.Path)
+	fmt.Fprintf(stdout, "configuration valid: %s (revision %s)\n", resolved.Path, resolved.Config.Revision())
+	if ignored.Ignored {
+		fmt.Fprintln(stderr, describeIgnoredConfiguration(ignored))
+	}
 	return 0
 }
 
@@ -206,6 +222,10 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 		payload := map[string]any{
 			"config":  resolved.Path,
 			"sources": resolved.Sources,
+			// The revision names these values as one thing, so a run record and the
+			// configuration it was made under can be held up against each other
+			// without diffing two files.
+			"revision": resolved.Config.Revision(),
 		}
 		if showEffective {
 			payload["effective"] = resolved.Config
@@ -220,6 +240,7 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	for _, source := range resolved.Sources {
 		fmt.Fprintf(stdout, "# layer: %s\n", source)
 	}
+	fmt.Fprintf(stdout, "# revision: %s\n", resolved.Config.Revision())
 	if showEffective {
 		encoded, err := yaml.Marshal(resolved.Config)
 		if err != nil {
@@ -235,6 +256,43 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+// parseArguments reads a command's flags and its positional arguments in
+// whatever order they were typed, and returns the positional ones. Go's flag
+// package stops parsing at the first word that is not a flag, so
+// `amendment approve <id> --reason ...` would otherwise arrive as three
+// positional arguments and be refused for naming three proposals — and an id
+// before the flags that describe what is being done to it is how anybody types
+// it, and what the usage text and the documentation say to type.
+//
+// Every command that takes an id parses through here rather than calling Parse
+// itself, because an ordering that works for one command and not the next is
+// worse than one that never worked: the operator learns the rule from the
+// command they happened to type first.
+func parseArguments(set *flag.FlagSet, args []string) ([]string, error) {
+	var positional []string
+	remaining := args
+	for {
+		if err := set.Parse(remaining); err != nil {
+			return nil, err
+		}
+		if set.NArg() == 0 {
+			return positional, nil
+		}
+		positional = append(positional, set.Arg(0))
+		remaining = set.Args()[1:]
+	}
+}
+
+// argumentAt is the positional argument a command was given at one place, for
+// the commands whose argument is optional. It is empty when nothing was typed
+// there rather than a bounds failure.
+func argumentAt(positional []string, index int) string {
+	if index >= len(positional) {
+		return ""
+	}
+	return positional[index]
 }
 
 // loadConfiguration resolves an explicit path when one is given and otherwise
@@ -294,6 +352,7 @@ Commands:
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives
+  exchange          read what the roles have asked each other, and what it cost
   reports           read what agents reported without it stopping their work
   run               run one Beads work item in an isolated worktree
   work              schedule the ready work the harness chooses for itself
@@ -301,6 +360,7 @@ Commands:
   status            read what became of recent runs, and why one of them failed
   pause             pause everything the harness would spend on a provider
   resume            lift that pause, or release one run's wait on the provider
+  release           lift a hold on intake, so the harness chooses work again
   review            review what a branch accumulated over a base, as one change
   cost              price work items from the runs made for them, and record it
   reconcile         settle interrupted runs, then converge local state on the forge

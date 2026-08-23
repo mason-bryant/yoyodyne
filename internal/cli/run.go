@@ -36,10 +36,11 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "", "configuration file path (default: the nearest project configuration)")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
-	if err := flags.Parse(args); err != nil {
+	positional, err := parseArguments(flags, args)
+	if err != nil {
 		return 2
 	}
-	if flags.NArg() != 1 {
+	if len(positional) != 1 {
 		fmt.Fprintln(stderr, "run requires exactly one Beads work item id")
 		printRunUsage(stderr)
 		return 2
@@ -55,7 +56,7 @@ func runWorkItem(ctx context.Context, args []string, stdout, stderr io.Writer) i
 	// it was chosen is indistinguishable from one the harness chose unaccountably.
 	pipeline.Selection = runstate.OperatorSelection(
 		"the operator ran this item by name from the command line", time.Now())
-	outcome, err := pipeline.Run(ctx, flags.Arg(0))
+	outcome, err := pipeline.Run(ctx, positional[0])
 	return reportRunResult(stdout, stderr, *jsonOutput, outcome, err)
 }
 
@@ -699,7 +700,7 @@ func reportIntakeHold(stdout io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintln(stdout, reason)
 	}
 	fmt.Fprintf(stdout, "nothing was started for %s and nothing was claimed; work already running carries on\n", outcome.WorkItemID)
-	fmt.Fprintf(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "`yoyo release` lets the harness choose work again, as does /release in a conversation, and `yoyo run %s` runs this item now regardless\n", outcome.WorkItemID)
 }
 
 // reportCollectedReports names what this run's agents reported without it

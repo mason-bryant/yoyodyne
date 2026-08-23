@@ -596,6 +596,22 @@ func (m *Manager) UnifiedChanges(ctx context.Context, worktree Worktree, limits 
 	return changes, nil
 }
 
+// VerifyOwnedHead proves one run's worktree is still exactly as the harness left
+// it, and reports what stopped it where it is not. It adds nothing to the gate
+// below: it is the same proof every read of a worktree's change already makes,
+// reached by a caller that has to ask before it spends anything rather than as a
+// side effect of asking for a diff.
+//
+// Re-entering a stopped run's repair loop is that caller. The change a developer
+// is handed back is whatever is in that worktree now, so a worktree somebody has
+// been operating on by hand — an operator mid-surgery, an agent that committed —
+// is one where continuing would hand a developer work nothing recorded and then
+// promote it. Refusing here is what makes that a person's decision.
+func (m *Manager) VerifyOwnedHead(ctx context.Context, worktree Worktree) error {
+	_, _, err := m.verifyOwnedHead(ctx, worktree)
+	return err
+}
+
 // verifyOwnedHead confirms the worktree is the one the harness created and that
 // its HEAD is exactly where the harness left it: the recorded base commit, or
 // the one commit the harness itself made and recorded. It reports the path and

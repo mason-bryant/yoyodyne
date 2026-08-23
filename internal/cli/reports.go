@@ -11,9 +11,12 @@ package cli
 // a channel meant to be triaged eventually needs.
 //
 // So this reads the same durable store the conversation reads and nothing else.
-// It is read-only in the strongest sense the design allows: a report is written
-// once and never revised, and nothing here retires one, marks one read, or
-// decides anything about the pile.
+// It is read-only: a report is written once and never revised, and nothing here
+// retires one, handles one, or decides anything about the pile. What it does
+// show is what somebody else decided — the product manager records what became
+// of a report beside the pile, and a listing that could not tell a report
+// somebody dealt with from one nobody has read would send an operator looking
+// for work that is already done.
 
 import (
 	"flag"
@@ -27,7 +30,12 @@ import (
 
 type reportsOutput struct {
 	Reports []report.Report `json:"reports"`
-	Error   string          `json:"error,omitempty"`
+	// Handlings are what became of the reports somebody has decided about, in
+	// the order they were recorded. They are a separate list rather than a field
+	// on each report because that is what they are on disk: the pile is never
+	// rewritten, and a disposition is a second record about it.
+	Handlings []report.Handling `json:"handlings"`
+	Error     string            `json:"error,omitempty"`
 }
 
 func readReports(args []string, stdout, stderr io.Writer) int {
@@ -52,14 +60,26 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportReportsError(stdout, stderr, *jsonOutput, err)
 	}
+	// What became of them is read after the pile and fails the whole command with
+	// it. Unlike the conversation listing, which is one line beside an answer that
+	// has already been given, this is the answer: an operator or a script told
+	// "nothing is handled" by a log that could not be read is being told something
+	// false, and there is nothing else here for that to be a footnote to.
+	handlings, err := store.Handlings()
+	if err != nil {
+		return reportReportsError(stdout, stderr, *jsonOutput, err)
+	}
 	if *jsonOutput {
-		// The list is always encoded, so a caller reading JSON tells "nobody has
+		// Both lists are always encoded, so a caller reading JSON tells "nobody has
 		// reported anything" from a failure by the field being empty rather than
 		// absent.
 		if collected == nil {
 			collected = []report.Report{}
 		}
-		return writeJSON(stdout, stderr, reportsOutput{Reports: collected})
+		if handlings == nil {
+			handlings = []report.Handling{}
+		}
+		return writeJSON(stdout, stderr, reportsOutput{Reports: collected, Handlings: handlings})
 	}
 	if len(collected) == 0 {
 		// "Nothing has been reported" is an answer, and where the pile would be is
@@ -71,9 +91,13 @@ func readReports(args []string, stdout, stderr io.Writer) int {
 	// The whole pile, oldest first, unlike `/reports` in a conversation: that is a
 	// listing beside an ongoing conversation and lists the twenty most recent,
 	// and this is a command whose output can be paged, filtered, or piped.
-	fmt.Fprintf(stdout, "reports (%d collected):\n", len(collected))
+	handled := report.Handled(handlings)
+	fmt.Fprintf(stdout, "reports (%d collected, %d unhandled):\n", len(collected), len(collected)-len(handled))
 	for _, reported := range collected {
 		fmt.Fprint(stdout, reported.Render())
+		if handling, done := handled[reported.ID]; done {
+			fmt.Fprint(stdout, handling.Render())
+		}
 	}
 	return 0
 }
@@ -124,14 +148,18 @@ it was given, something in its environment that stopped it verifying what it
 wanted to. Every role files them the same way and they land in one pile per
 product, which is what this reads.
 
-Each report names the role and the configured agent that made it, the run or
-conversation it came from, the work item where there was one, a severity —
-critical, warning, or note — and the text. The whole pile is printed, oldest
-first; `+"`/reports`"+` in `+"`yoyo chat`"+` shows the same reports beside the
-conversation, listing the twenty most recent.
+Each report names itself, the role and the configured agent that made it, the run
+or conversation it came from, the work item where there was one, a severity —
+critical, warning, or note — and the text. A report the product manager has
+decided about carries what it decided, under it; everything else is still
+waiting on somebody. The whole pile is printed, oldest first; `+"`/reports`"+` in
+`+"`yoyo chat`"+` shows the same reports beside the conversation, listing the
+twenty most recent.
 
 A report decides nothing and nothing waits on it, so this is read-only: it
-retires nothing, marks nothing read, and changes no work.
+retires nothing, handles nothing, and changes no work. Deciding what becomes of
+a report is the product manager's, in a conversation, and the unhandled ones are
+carried into that conversation without anybody having to fetch them.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

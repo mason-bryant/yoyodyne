@@ -52,6 +52,11 @@ type chatOutput struct {
 	// Unlike proposals they already happened, so they are reported rather than
 	// offered.
 	Actions []chat.TrackerOutcome `json:"actions,omitempty"`
+	// Exchanges are the rounds of asking another role the reply conducted. They
+	// are reported for the reason the actions are, and for one more: a
+	// conversation that went and asked another agent something is exactly what an
+	// operator must never have to discover afterwards.
+	Exchanges []chat.ExchangeRound `json:"exchanges,omitempty"`
 	// ResultsCarriedOver reports that the reply stopped where it did because the
 	// product manager ran out of rounds of tracker actions, with results it has
 	// not seen. They are recorded with the conversation and reach it when the
@@ -213,6 +218,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
+			Exchanges:          reply.Exchanges,
 			ResultsCarriedOver: reply.ResultsCarriedOver,
 			Reports:            reply.Reports,
 			ReportProblem:      reply.ReportProblem,
@@ -220,6 +226,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	}
 	fmt.Fprintln(stdout, reply.Text)
 	printChatActions(stdout, role, reply.Actions, reply.ResultsCarriedOver)
+	printChatExchanges(stdout, role, reply.Exchanges)
 	printChatAdmitted(stdout, reply.Admitted)
 	printChatReports(stdout, role, reply.Reports, reply.ReportProblem)
 	printChatConcerns(stdout, role, reply.Concerns)
@@ -421,6 +428,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.
 		Intake: parts.intake,
+		// The inter-role ask channel, wired for the roles that are on it. A
+		// question one role cannot answer itself reaches the role that can through
+		// here, rather than through the operator or through a work item.
+		Exchanges:           conversationExchanges(parts, role, provider),
+		AskRoundsPerMessage: cfg.Exchange.MaxRounds,
 		// The durable budget the development manager's triage decisions spend.
 		// It is wired for that role alone, like the docket those decisions are
 		// about, so a repair grant or a re-run is bounded by what the operator
@@ -536,6 +548,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		fmt.Fprintln(stdout, output.Reply)
 	}
 	printChatActions(stdout, role, output.Actions, output.ResultsCarriedOver)
+	printChatExchanges(stdout, role, output.Exchanges)
 	printChatAdmitted(stdout, output.Admitted)
 	printChatReports(stdout, role, output.Reports, output.ReportProblem)
 	printChatConcerns(stdout, role, output.Concerns)
@@ -644,6 +657,32 @@ func printChatActions(writer io.Writer, role domain.AgentRole, actions []chat.Tr
 		fmt.Fprintln(writer, "It ran out of rounds of actions; what the last ones returned is recorded with")
 		fmt.Fprintln(writer, "the conversation and reaches it the next time you say something to it.")
 	}
+}
+
+// printChatExchanges reports what one role asked another while it answered. It
+// is printed wherever the actions are, and for the same reason with one added:
+// the exchange already happened and was already paid for, and a question put to
+// another agent that the operator is not told about is the side conversation
+// this channel exists not to be. The whole thread is durable; this is the line
+// that says to go and read it.
+func printChatExchanges(writer io.Writer, role domain.AgentRole, exchanges []chat.ExchangeRound) {
+	if len(exchanges) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\nThe %s asked another role (%d round(s)):\n", chat.RoleTitle(role), len(exchanges))
+	for _, round := range exchanges {
+		fmt.Fprintf(writer, "  asked the %s: %s\n", chat.RoleTitle(round.Asked), round.Question)
+		if round.ID != "" {
+			fmt.Fprintf(writer, "    %s, %s, round %d of %d, $%.4f\n", round.ID, round.State, round.Round, round.Rounds, round.CostUSD)
+		}
+		if round.Settled != "" {
+			fmt.Fprintf(writer, "    settled: %s\n", round.Settled)
+		}
+		if round.Problem != "" {
+			fmt.Fprintf(writer, "    unanswered: %s\n", round.Problem)
+		}
+	}
+	fmt.Fprintln(writer, "  `yoyo exchange show <id>` is the whole of what was said.")
 }
 
 // printChatReports names what the product manager reported for the operator

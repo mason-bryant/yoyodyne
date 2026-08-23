@@ -50,6 +50,17 @@ type terminal struct {
 	line       []rune
 	cursor     int
 
+	// choosing says the region is carrying a list of answers to pick from,
+	// choices is what is on offer, and chosen is the one under the marker.
+	// entering says they picked their own words and are typing them, which is a
+	// line being composed like any other: it is remembered because a prompt
+	// interrupted so the harness could write something has to resume as the
+	// prompt it was rather than putting the list again.
+	choosing bool
+	choices  []string
+	chosen   int
+	entering bool
+
 	// status is the account of work in progress and resting is what is left on
 	// that line between turns. They share one row of the region, and work in
 	// progress covers what is merely true for as long as it lasts: what the
@@ -59,16 +70,18 @@ type terminal struct {
 	resting string
 
 	// drawn says whether a region is on screen, drawnStatus is the status line
-	// it was drawn with, and drawnCursor is where the cursor was left in the
-	// composing line, counted in columns from the start of that line. Both the
-	// rows the status occupies and the row the cursor is on are worked out from
-	// the width at the time rather than remembered, so a window the operator
-	// resized between the drawing and the erasing is erased at the size the
-	// terminal has rewrapped it to.
-	drawn       bool
-	drawnStatus string
-	drawnCursor int
-	closed      bool
+	// it was drawn with, drawnChoices is the list of answers it was drawn with,
+	// and drawnCursor is where the cursor was left in the composing line,
+	// counted in columns from the start of that line. The rows the status and
+	// the list occupy and the row the cursor is on are all worked out from the
+	// width at the time rather than remembered, so a window the operator resized
+	// between the drawing and the erasing is erased at the size the terminal has
+	// rewrapped it to.
+	drawn        bool
+	drawnStatus  string
+	drawnChoices []string
+	drawnCursor  int
+	closed       bool
 }
 
 // chunk is one read from the operator's terminal.
@@ -182,12 +195,13 @@ func (t *terminal) eraseRegion() string {
 		return ""
 	}
 	var out strings.Builder
-	if rows := t.statusRows() + t.drawnCursor/t.columns(); rows > 0 {
+	if rows := t.statusRows() + t.choiceRows() + t.drawnCursor/t.columns(); rows > 0 {
 		fmt.Fprintf(&out, "\x1b[%dA", rows)
 	}
 	out.WriteString("\r\x1b[J")
 	t.drawn = false
 	t.drawnStatus = ""
+	t.drawnChoices = nil
 	t.drawnCursor = 0
 	return out.String()
 }
@@ -201,6 +215,18 @@ func (t *terminal) statusRows() int {
 		return 0
 	}
 	return (visibleWidth(t.drawnStatus)-1)/t.columns() + 1
+}
+
+// choiceRows is how many rows the list of answers took at the width the
+// terminal has now, counted the same way the status is: every row of it is
+// above the cursor, so an erase that climbs one too few leaves half a list on
+// screen and one too many takes a line of the conversation with it.
+func (t *terminal) choiceRows() int {
+	rows := 0
+	for _, line := range t.drawnChoices {
+		rows += (visibleWidth(line)-1)/t.columns() + 1
+	}
+	return rows
 }
 
 // columns is how wide the terminal is now. It divides the arithmetic that
@@ -218,7 +244,7 @@ func (t *terminal) columns() int {
 // cursor where the operator left it.
 func (t *terminal) drawRegion() string {
 	status := t.statusLine()
-	if !t.prompting && status == "" {
+	if !t.prompting && !t.choosing && status == "" {
 		return ""
 	}
 	width := t.columns()
@@ -230,9 +256,20 @@ func (t *terminal) drawRegion() string {
 		out.WriteString("\n")
 	}
 	t.drawnStatus = status
+	// The answers on offer sit under the status, and are redrawn under whatever
+	// the harness writes exactly as the composing line is: the operator is
+	// picking from a list rather than typing into one, so the list has to stay
+	// under their cursor keys while the conversation carries on above it.
+	choices := t.choiceRegion()
+	for _, line := range choices {
+		out.WriteString(line)
+		out.WriteString("\n")
+	}
+	t.drawnChoices = choices
 	if !t.prompting {
 		// Nothing is being composed, so the cursor rests at the start of the row
-		// below the status, which is where the next thing written will go.
+		// below whatever the region drew — the status, the answers on offer, or
+		// both — which is where the next thing written will go.
 		t.drawn = true
 		t.drawnCursor = 0
 		return out.String()
@@ -366,6 +403,7 @@ func (t *terminal) endPrompt(cause error) error {
 	// is the only place it exists.
 	composed := t.promptText + string(t.line)
 	t.prompting = false
+	t.entering = false
 	t.line = nil
 	t.cursor = 0
 	t.render([]string{composed})
@@ -400,6 +438,9 @@ func (t *terminal) feed(data []byte) (string, bool, error) {
 		t.line = nil
 		t.cursor = 0
 		t.prompting = false
+		// Whatever the line was answering is answered. A choice the operator
+		// left to say it in their own words has been said.
+		t.entering = false
 		// The finished line joins the transcript above, so who said what is
 		// still legible after it scrolls: the terminal echoed nothing, because
 		// the region is drawn rather than typed into.
@@ -459,6 +500,183 @@ func (t *terminal) apply(pressed key) {
 	}
 }
 
+// The marker that says which answer would be taken, and the line that says how
+// to move it. Both are drawn rather than coloured: the marker is what carries
+// the selection, so a terminal that may not be dressed shows it exactly as one
+// that may.
+const (
+	chosenMarker   = "❯ "
+	unchosenMarker = "  "
+	choiceKeys     = "  ↑ ↓ to move, enter to choose"
+)
+
+// Choose puts a list of answers in the region and moves a marker through it.
+// The list is redrawn under whatever the harness writes, exactly as a composing
+// line is, so a run that finishes while the operator is deciding is reported
+// above the question rather than into it.
+func (t *terminal) Choose(ctx context.Context, prompt string, options []string, interrupt <-chan struct{}) (string, error) {
+	// An operator part way through their own words is typing a line, not
+	// choosing: what was interrupted was the prompt, so it is put again and the
+	// list is not.
+	if t.entered() {
+		return t.Prompt(ctx, prompt, interrupt)
+	}
+	index, chosen, err := t.beginChoice(prompt, offered(options))
+	for {
+		switch {
+		case err != nil:
+			return "", err
+		case chosen:
+			if index < len(options) {
+				return options[index], nil
+			}
+			// They chose to say it themselves, so the answer is a line like any
+			// other and is read as one.
+			return t.Prompt(ctx, prompt, interrupt)
+		}
+		select {
+		case piece, open := <-t.input:
+			if !open {
+				return "", t.endChoice(io.EOF)
+			}
+			if piece.err != nil {
+				return "", t.endChoice(fmt.Errorf("read what the operator chose: %w", piece.err))
+			}
+			index, chosen, err = t.feedChoice(piece.data)
+		case <-interrupt:
+			// Something else needs the screen. The marker stays where they left
+			// it, and the next Choose puts the same list back under it.
+			return "", ErrInterrupted
+		case <-ctx.Done():
+			return "", t.endChoice(ctx.Err())
+		}
+	}
+}
+
+// entered reports that the operator has already left the list to say it in
+// their own words.
+func (t *terminal) entered() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.entering
+}
+
+// beginChoice puts the list on screen and applies anything typed ahead. A
+// question the operator was already part way through keeps the answer they had
+// moved to; a different question starts at the top.
+func (t *terminal) beginChoice(prompt string, choices []string) (int, bool, error) {
+	t.mu.Lock()
+	if !sameQuestion(t.choices, choices) {
+		t.chosen = 0
+	}
+	t.choices = choices
+	t.choosing = true
+	t.promptText = prompt
+	t.mu.Unlock()
+	return t.feedChoice(nil)
+}
+
+// endChoice takes the list down because there will be no answer: the input
+// ended, or the conversation was cancelled. What was asked is written into the
+// scrollback rather than erased with the region, so a question nobody answered
+// is still on the screen that was left behind.
+func (t *terminal) endChoice(cause error) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	asked := strings.TrimRight(t.promptText, " ")
+	t.choosing = false
+	t.choices = nil
+	t.chosen = 0
+	t.render([]string{asked})
+	return cause
+}
+
+// feedChoice applies input to the list and returns an answer once the operator
+// presses enter. Anything typed after that stays buffered, exactly as it does
+// for a line: what follows an answer belongs to whatever is asked next.
+func (t *terminal) feedChoice(data []byte) (int, bool, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.keys = append(t.keys, data...)
+	for len(t.keys) > 0 {
+		pressed, size, complete := decodeKey(t.keys)
+		if !complete {
+			break
+		}
+		t.keys = t.keys[size:]
+		if pressed.code != keyEnter {
+			t.move(pressed)
+			continue
+		}
+		chosen := t.chosen
+		answer := t.choices[chosen]
+		t.choosing = false
+		// The last answer is their own words, and the prompt that reads them is
+		// the same prompt any other line is read under.
+		t.entering = chosen == len(t.choices)-1
+		// What was asked and what was picked join the transcript above, so the
+		// answer is still legible once the list it came from is gone.
+		if err := t.render([]string{t.promptText + answer}); err != nil {
+			return 0, false, err
+		}
+		return chosen, true, nil
+	}
+	if err := t.redraw(); err != nil {
+		return 0, false, err
+	}
+	return 0, false, nil
+}
+
+// move is one keystroke's effect on which answer the marker is against.
+// Anything the list has no use for is ignored rather than applied, for the
+// reason a composing line ignores what it has no use for: a stray escape that
+// moved the marker would answer a question the operator was still reading.
+func (t *terminal) move(pressed key) {
+	switch pressed.code {
+	case keyUp:
+		if t.chosen > 0 {
+			t.chosen--
+		}
+	case keyDown:
+		if t.chosen < len(t.choices)-1 {
+			t.chosen++
+		}
+	case keyHome:
+		t.chosen = 0
+	case keyEnd:
+		t.chosen = len(t.choices) - 1
+	case keyRune:
+		// The numbers are on screen beside the answers, so typing one moves to
+		// it. It moves rather than answers: enter is what commits, wherever the
+		// operator got to, so a mistyped digit is corrected rather than sent.
+		if index := int(pressed.value - '1'); pressed.value >= '1' && index < len(t.choices) {
+			t.chosen = index
+		}
+	}
+}
+
+// choiceRegion is the rows the list occupies: what is being answered, the
+// answers with the marker against one of them, and how to move it. It is empty
+// when nothing is being chosen, which is every other prompt there is.
+func (t *terminal) choiceRegion() []string {
+	if !t.choosing {
+		return nil
+	}
+	lines := make([]string, 0, len(t.choices)+2)
+	lines = append(lines, strings.TrimRight(t.promptText, " "))
+	for index, choice := range t.choices {
+		marker := unchosenMarker
+		if index == t.chosen {
+			marker = chosenMarker
+		}
+		// The number is written beside every answer whether or not it can be
+		// typed, because it is what the same question looks like on a stream:
+		// one list, read the same way, wherever the conversation is held.
+		lines = append(lines, fmt.Sprintf("%s%d. %s", marker, index+1, choice))
+	}
+	return append(lines, choiceKeys)
+}
+
 func (t *terminal) Close() error {
 	t.mu.Lock()
 	if t.closed {
@@ -467,6 +685,7 @@ func (t *terminal) Close() error {
 	}
 	t.closed = true
 	t.prompting = false
+	t.choosing = false
 	t.status = ""
 	t.resting = ""
 	var out strings.Builder

@@ -24,6 +24,13 @@ package orchestrator
 // in full — answers it with no, and `yoyo review` fails on all of them. What the
 // findings then become is work, and admitting work to the backlog belongs to the
 // product manager rather than to a reviewer.
+//
+// A shadow review is that same review with one thing withheld. It is asked for
+// in order to measure the reviewer — the same branch state, judged again by a
+// differently configured one, so the two verdicts can be held up against each
+// other — and its verdict approves nothing whatever it decided. That is what
+// makes measuring a cheaper reviewer risk nothing: a shadow verdict is incapable
+// of becoming this branch's answer to "has an independent reviewer approved it".
 
 import (
 	"context"
@@ -93,6 +100,13 @@ type BranchReviewer struct {
 type BranchReviewRequest struct {
 	Branch  string
 	BaseRef string
+	// Shadow asks for a review made to measure the reviewer rather than to judge
+	// the branch. It changes nothing about how the review is made — the same
+	// contract, the same evidence, the same recorded verdict — and everything
+	// about what the verdict is then allowed to mean: a shadow verdict approves
+	// nothing, so a cheaper reviewer pointed at a branch for measurement cannot
+	// leave an approval of it behind.
+	Shadow bool
 }
 
 // BranchReviewOutcome is what one branch review produced, including its
@@ -116,6 +130,10 @@ type BranchReviewOutcome struct {
 	Invariants     []string         `json:"invariants,omitempty"`
 	Reports        []report.Report  `json:"reports,omitempty"`
 	ReportProblem  string           `json:"report_problem,omitempty"`
+	// Shadow says this review was made to measure the reviewer, and gates
+	// nothing. It is carried on the outcome as well as the record so that a
+	// caller reading the verdict cannot read it as an approval either.
+	Shadow bool `json:"shadow,omitempty"`
 	// RecordFailure names a verdict that could not be written down. The review
 	// still happened and is still reported here; what is missing is the durable
 	// half, which is exactly what an operator has to know to record it by hand.
@@ -124,10 +142,17 @@ type BranchReviewOutcome struct {
 
 // Approved is the single question the outcome answers, and the only one
 // anything downstream should ask. A repair verdict, a review that never
-// answered, and an approval of a change that was truncated are all not an
-// approval of this branch.
+// answered, an approval of a change that was truncated, and a shadow review
+// that was never asked to judge the branch are all not an approval of it.
 func (o BranchReviewOutcome) Approved() bool {
-	return o.Decision == review.DecisionApprove
+	return !o.Shadow && o.Decision == review.DecisionApprove
+}
+
+// Decided reports a review that reached a verdict, which is the question a
+// shadow review answers instead: it was asked for a measurement rather than an
+// approval, so what it produced is a verdict or nothing.
+func (o BranchReviewOutcome) Decided() bool {
+	return o.Decision == review.DecisionApprove || o.Decision == review.DecisionRepair
 }
 
 // Review obtains one independent verdict on an accumulated change and records
@@ -161,6 +186,7 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		Commits:        len(change.Commits),
 		CommitsOmitted: change.CommitsOmitted,
 		Truncated:      change.Changes.Truncated,
+		Shadow:         request.Shadow,
 	}
 	invariants, invariantErr := b.deliveredInvariants(change)
 	if invariantErr != nil {
@@ -340,6 +366,7 @@ func (b BranchReviewer) record(outcome *BranchReviewOutcome, change gitworktree.
 		Summary:        outcome.Summary,
 		Findings:       durableFindings(outcome.Findings),
 		Failure:        failure,
+		Shadow:         outcome.Shadow,
 	}
 	// A review that reached no verdict must still say what stopped it, and a
 	// review whose verdict the harness rejected has both a summary and a reason.

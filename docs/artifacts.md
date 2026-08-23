@@ -149,6 +149,15 @@ below it. Nothing is refused over a broken link: the goal is still what the
 document states and work naming it still resolves, because what is wrong is the
 chain above it rather than the goal.
 
+A goal hard-wrapped across physical lines is reported on stderr the same way,
+and is likewise not refused. The statement is rejoined and work naming it still
+resolves — recording only the first line was a silent truncation that corrupted
+every wrapped goal at once, and rejoining is what closed it. What the report says
+is that the rejoining is a reading of the file rather than something the file
+states: an indent, or a wrapped line that reads as the `Supports:` trailer,
+changes the recorded goal without changing a word of it, and a goal written on
+one line cannot be changed that way.
+
 ## What a change upstream leaves stale
 
 Amend a goal and the documents that serve it, and the work admitted under its

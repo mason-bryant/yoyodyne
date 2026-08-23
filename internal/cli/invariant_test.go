@@ -126,6 +126,72 @@ func TestInvariantRefusesWhatCannotBeHeldTo(t *testing.T) {
 	}
 }
 
+// The id read out of a listing is typed first and the options after it, which
+// is how anybody addresses one invariant. Every flag here has to be read as the
+// flag it is rather than as a second thing being named: what proves it is that
+// the values arrive in the recorded invariant.
+func TestInvariantOptionsAreReadAfterTheId(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+
+	if _, stderr, code := runCLI(t, "invariant", "create", "one-writer-per-item",
+		"--config", configPath,
+		"--title", "One process at a time acts on an in-flight work item",
+		"--statement", "Every entry into an in-flight run takes the run's exclusive lease first.",
+		"--rationale", "The lease is the only thing keeping two developers off one item.",
+		"--established-by", "yoyodyne-ifd.2.7",
+		"--scope", "internal/runstate",
+		"--reason", "extracted from the decision that added the reservation"); code != 0 {
+		t.Fatalf("create code = %d, stderr = %q", code, stderr)
+	}
+
+	if _, stderr, code := runCLI(t, "invariant", "amend", "one-writer-per-item",
+		"--config", configPath,
+		"--scope", "internal/runstate, internal/orchestrator",
+		"--reason", "the orchestrator half came back"); code != 0 {
+		t.Fatalf("amend code = %d, stderr = %q", code, stderr)
+	}
+
+	if _, stderr, code := runCLI(t, "invariant", "retire", "one-writer-per-item",
+		"--config", configPath,
+		"--reason", "the reservation moved into the store and cannot be bypassed"); code != 0 {
+		t.Fatalf("retire code = %d, stderr = %q", code, stderr)
+	}
+
+	stdout, stderr, code := runCLI(t, "invariant", "show", "one-writer-per-item", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	var shown struct {
+		Invariants []struct {
+			ID        string   `json:"id"`
+			Status    string   `json:"status"`
+			Scope     []string `json:"scope"`
+			Revisions []struct {
+				Action string `json:"action"`
+				Reason string `json:"reason"`
+			} `json:"revisions"`
+		} `json:"invariants"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &shown); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if len(shown.Invariants) != 1 {
+		t.Fatalf("shown = %#v, want the one invariant the flags after the id recorded", shown.Invariants)
+	}
+	recorded := shown.Invariants[0]
+	if recorded.ID != "one-writer-per-item" || recorded.Status != "retired" {
+		t.Fatalf("recorded = %#v", recorded)
+	}
+	if len(recorded.Scope) != 2 || recorded.Scope[1] != "internal/orchestrator" {
+		t.Fatalf("scope = %#v, want what the amendment after the id said", recorded.Scope)
+	}
+	if len(recorded.Revisions) != 3 || !strings.Contains(recorded.Revisions[2].Reason, "cannot be bypassed") {
+		t.Fatalf("revisions = %#v", recorded.Revisions)
+	}
+}
+
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	var out, errs bytes.Buffer

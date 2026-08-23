@@ -214,6 +214,32 @@ func TestShowingAProposalNobodyRaisedSaysSo(t *testing.T) {
 	}
 }
 
+// The proposal id read out of a listing is typed first and the options after
+// it, which is the order the usage text and the documentation state. What
+// proves the reason after the id was read as the reason is that it is what the
+// decision records.
+func TestAmendmentOptionsAreReadAfterTheProposalId(t *testing.T) {
+	configPath, _ := amendmentProject(t)
+	proposal := recordProposal(t, "amendment-0123456789abcdef0123456789abcdef")
+
+	stdout, stderr, code := runCLI(t, "amendment", "show", proposal.ID, "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("show code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, proposal.ID) {
+		t.Fatalf("show stdout = %q, want the proposal named before the flags", stdout)
+	}
+
+	stdout, stderr, code = runCLI(t, "amendment", "decline", proposal.ID,
+		"--config", configPath, "--reason", "the design is right and the item is wrong")
+	if code != 0 {
+		t.Fatalf("decline code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "the design is right and the item is wrong") {
+		t.Fatalf("decline stdout = %q, want the reason typed after the id kept with the decision", stdout)
+	}
+}
+
 // amendmentProject writes a project with one governed document and points the
 // durable state at a temporary root, so the log these commands read is this
 // test's own.

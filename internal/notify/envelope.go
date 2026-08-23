@@ -38,6 +38,21 @@ const (
 	// every persona says them differently.
 	KindWorkApproved Kind = "proposed-work.approved"
 	KindWorkDeclined Kind = "proposed-work.declined"
+	// Work leaving the run queue for a role's conversation, that role starting
+	// it, and that role finishing it. They are the transitions of the one class
+	// of work no run ever touches, and before they existed a thread said nothing
+	// at all about it: an item rerouted to the architect and worked to completion
+	// there showed a run that failed, and then silence for the rest of its life.
+	//
+	// Three kinds rather than one with a field, for the reason the verdict is
+	// two: handed to somebody, taken up by them, and done by them are different
+	// news, and the middle one is the only thing that says the routing was acted
+	// on rather than merely recorded. The completion is here and nowhere else
+	// because closing an item is otherwise said by the run that finished it, and
+	// this is the work that has no run to say it.
+	KindWorkHandedOff  Kind = "work.handed-off"
+	KindWorkPickedUp   Kind = "work.picked-up"
+	KindWorkCarriedOut Kind = "work.carried-out"
 	// KindRunStarted carries the recorded selection reason with it, so the fact
 	// the selected-work-passes-intake-and-records-why invariant makes durable is
 	// the fact an operator actually reads.
@@ -79,6 +94,17 @@ const (
 	KindProposalRaised Kind = "proposal.raised"
 	KindExchangeTurn   Kind = "exchange.turn"
 	KindExchangeClosed Kind = "exchange.closed"
+	// What a reply in a topic's thread did. They are the acknowledgment the
+	// inbound half owes every message it reads: the directive as recorded with
+	// its identifier, the resolution that lifted one, or the refusal with its
+	// reason. Three kinds rather than one, because they are the three different
+	// things an operator has to know — the work is now steered, the work is
+	// moving again, or nothing was recorded at all — and a reader who could not
+	// tell them apart at a glance would have to open the record to find out
+	// whether they had been heard.
+	KindDirectiveRecorded Kind = "directive.recorded"
+	KindDirectiveResolved Kind = "directive.resolved"
+	KindDirectiveRefused  Kind = "directive.refused"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -125,6 +151,9 @@ func Kinds() []Kind {
 		KindItemReprioritized,
 		KindWorkApproved,
 		KindWorkDeclined,
+		KindWorkHandedOff,
+		KindWorkPickedUp,
+		KindWorkCarriedOut,
 		KindRunStarted,
 		KindChecksPassed,
 		KindChecksFailed,
@@ -142,6 +171,9 @@ func Kinds() []Kind {
 		KindProposalRaised,
 		KindExchangeTurn,
 		KindExchangeClosed,
+		KindDirectiveRecorded,
+		KindDirectiveResolved,
+		KindDirectiveRefused,
 		KindIntakeHeld,
 		KindIntakeReleased,
 		KindHoldPlaced,
@@ -163,11 +195,13 @@ func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
 		KindWorkApproved, KindWorkDeclined,
+		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
+		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindLineWaiting, KindCatchUpDigest:
@@ -425,6 +459,13 @@ type Detail struct {
 	// exactly what carrying the reason exists to make visible.
 	SelectedBy      string `json:"selected_by,omitempty"`
 	SelectionReason string `json:"selection_reason,omitempty"`
+	// Account and Configuration are which provider account a run is spending and
+	// which configuration set it up, read by KindRunStarted. They are said where
+	// the thread opens because they hold for the whole of a run, and they are said
+	// at all because there is one account today and the message that names it is
+	// the one an operator will read on the day there are two.
+	Account       string `json:"account,omitempty"`
+	Configuration string `json:"configuration,omitempty"`
 	// Command and ExitCode are the failing deterministic check, read by
 	// KindChecksFailed. They are the check's own words rather than a summary of
 	// them.
@@ -457,9 +498,22 @@ type Detail struct {
 	// Unresolved is what an exchange closed without settling, read by
 	// KindExchangeClosed. Empty means it closed resolved, which is the ordinary
 	// way for one to end.
+	//
+	// It is read a second time by KindDirectiveRecorded, where it is what the
+	// recorded directive left for somebody to settle — and therefore the whole of
+	// what says whether the work it affects is paused. Empty there is the
+	// operational directive, which is in force already and stops nothing.
 	Unresolved string `json:"unresolved,omitempty"`
-	// Artifact is the document a proposal is about, read by KindProposalRaised.
+	// Artifact is the document a proposal is about, read by KindProposalRaised,
+	// and the governed document an artifact-changing directive rewrites, read by
+	// KindDirectiveRecorded.
 	Artifact string `json:"artifact,omitempty"`
+	// ReceivedBy is the role a directive was addressed to, read by
+	// KindDirectiveRecorded. It is attribution rather than routing — the record
+	// reaches every role whichever one is named — and it is said because an
+	// operator who addressed the reviewer wants to see that the reviewer is who
+	// the record says they told.
+	ReceivedBy string `json:"received_by,omitempty"`
 	// Title is what an item is called, read by the kinds that report one arriving
 	// in the backlog. An identifier says which item; the title is what makes a
 	// thread readable by somebody who has not read the tracker.
@@ -476,6 +530,13 @@ type Detail struct {
 	// KindItemReprioritized. It is negative where the record did not say, because
 	// zero is the highest priority rather than an unstated one.
 	Priority int `json:"priority,omitempty"`
+	// Executor is what carries an item where a developer run does not, read by
+	// the three handoff kinds and by the admission kinds. It is also what decides
+	// whose move follows an admission: work marked for a conversation is not
+	// waiting for a run and never will be, so a thread that said it was waiting
+	// for one would be telling the reader to expect something that cannot come.
+	// Empty is the ordinary case, which is work a developer run carries.
+	Executor string `json:"executor,omitempty"`
 	// Stopped, Since, and Ready are read by KindLineWaiting: what has stopped the
 	// harness choosing work, when it became that way, and how much admitted work
 	// the tracker calls ready behind it. The age is rendered from Since against
@@ -495,8 +556,9 @@ type Detail struct {
 	// the durable record rather than in the channel.
 	Accumulated int `json:"accumulated,omitempty"`
 	// Reason is why: why the operator held something, read by KindIntakeHeld; why
-	// a role changed the backlog, read by the tracker kinds; and why proposed work
-	// was turned down, read by KindWorkDeclined. An operator who holds in a hurry
+	// a role changed the backlog, read by the tracker kinds; why proposed work
+	// was turned down, read by KindWorkDeclined; and why a thread reply recorded
+	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
 	// owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
 }
