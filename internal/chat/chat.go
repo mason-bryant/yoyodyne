@@ -158,6 +158,14 @@ type Options struct {
 	// that spends nothing and is refused the three that do — a budget that cannot
 	// be read is never spent through as though it were empty.
 	Triage TriageBudgets
+	// Stoppages is what the harness recorded about the runs triage decides
+	// about, read for one thing: whether the run a decision names is the item's
+	// own stopped work. It is here because a decision names both and nothing else
+	// makes them agree — two docket entries transposed put each decision's
+	// reasoning on the other item. It is optional like the rest, and a
+	// conversation without one records a decision unchecked rather than appearing
+	// to have checked it.
+	Stoppages Stoppages
 	// Exchanges is the inter-role ask channel: how a question this role cannot
 	// answer itself reaches the role that can, without the operator relaying it
 	// and without a whole work item. It is optional like the rest, and a

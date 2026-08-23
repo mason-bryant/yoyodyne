@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -14,8 +15,13 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
-// The run a docket entry names, in the shape the harness mints them.
-const stoppedRun = "run-0123456789abcdef0123456789abcdef"
+// The run a docket entry names, in the shape the harness mints them, and a
+// second one for the entry beside it: two entries is what a decision can be
+// transposed between.
+const (
+	stoppedRun      = "run-0123456789abcdef0123456789abcdef"
+	otherStoppedRun = "run-fedcba9876543210fedcba9876543210"
+)
 
 // A triage decision lands on the work item, and it says which stoppage it
 // settled. That is the whole point of recording it: the next reader of a run
@@ -384,6 +390,80 @@ func TestATriageDecisionIsRefusedWhenItNamesNoDecisionOrNoStoppage(t *testing.T)
 	}
 }
 
+// A decision names two things that have to agree: the item it lands on, and the
+// run whose stoppage it settles. A docket of several entries is where they come
+// apart — two entries transposed put each decision's reasoning onto the other
+// item, and both then read as decided about a change neither is. The run record
+// is what settles it, and a decision whose run was made for somebody else's work
+// is refused before anything is spent or written.
+func TestATriageDecisionIsRefusedWhenItsRunIsAnotherItemsStoppedWork(t *testing.T) {
+	t.Parallel()
+
+	runs := fakeStoppedRuns{items: map[string]string{
+		stoppedRun:      "yoyodyne-ifd.90",
+		otherStoppedRun: "yoyodyne-ifd.70",
+	}}
+	for _, testCase := range []struct {
+		name    string
+		run     string
+		applied bool
+		want    string
+	}{
+		{
+			name:    "the item's own stopped work",
+			run:     stoppedRun,
+			applied: true,
+		},
+		{
+			name: "another item's stopped work",
+			run:  otherStoppedRun,
+			want: "was made for yoyodyne-ifd.70 rather than for yoyodyne-ifd.90",
+		},
+		{
+			name: "a run nothing recorded",
+			run:  "run-00000000000000000000000000000000",
+			want: "could not be read, so nothing says it is yoyodyne-ifd.90's stopped work",
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			budgets := newTriageBudgetGate(t, runstate.TriageCaps{ReviewRounds: 4, RepairGrants: 1, Reruns: 1, MergeRearms: 1}, 2)
+			tracker := &fakeTracker{items: map[string]beads.WorkItem{
+				"yoyodyne-ifd.90": {ID: "yoyodyne-ifd.90", Title: "the item that stopped", Status: "open"},
+			}}
+			reply := triageReplyAbout(t, tracker, budgets, runs, trackerReply("Decided.",
+				`{"action":"triage","id":"yoyodyne-ifd.90","run":"`+testCase.run+`","decision":"repair","reason":"every finding names a file and a line"}`))
+			if len(reply.Actions) != 1 || reply.Actions[0].Applied != testCase.applied {
+				t.Fatalf("actions = %#v, want applied = %v", reply.Actions, testCase.applied)
+			}
+			counters, err := budgets.store.Counters("yoyodyne-ifd.90")
+			if err != nil {
+				t.Fatalf("Counters() error = %v", err)
+			}
+			if testCase.applied {
+				if len(tracker.updates) != 1 || counters.RepairGrants != 1 {
+					t.Fatalf("a decision about the item's own run was not carried out: updates %#v, counters %#v",
+						tracker.updates, counters)
+				}
+				return
+			}
+			if !strings.Contains(reply.Actions[0].Failure, testCase.want) {
+				t.Fatalf("the refusal reads = %q", reply.Actions[0].Failure)
+			}
+			// The check is asked before anything is spent, so a refused decision
+			// leaves the item exactly as much budget as it had — and writes no
+			// reasoning about somebody else's change onto it.
+			if len(tracker.updates) != 0 || len(tracker.blocked) != 0 {
+				t.Fatalf("a refused decision changed the tracker: updates %#v, blocked %#v", tracker.updates, tracker.blocked)
+			}
+			if counters.RepairGrants != 0 {
+				t.Fatalf("a refused decision spent the item's budget: %#v", counters)
+			}
+		})
+	}
+}
+
 // Triage belongs to the role the docket is delivered to. Every other role is
 // refused it, so no persona and no conversation can move where stopped work is
 // decided.
@@ -464,11 +544,43 @@ func triageReplyWithReports(t *testing.T, tracker Tracker, budgets TriageBudgets
 
 	options := triageOptions(t, tracker, budgets, answer)
 	options.Reports = reports
+	return triageSend(t, options)
+}
+
+// triageReplyAbout is the same conversation with the run records wired, which is
+// how the command line wires a development manager's: the decision is checked
+// against what the harness recorded about the run it names.
+func triageReplyAbout(t *testing.T, tracker Tracker, budgets TriageBudgets, stoppages Stoppages, answer string) Reply {
+	t.Helper()
+
+	options := triageOptions(t, tracker, budgets, answer)
+	options.Reports = &fakeReports{}
+	options.Stoppages = stoppages
+	return triageSend(t, options)
+}
+
+func triageSend(t *testing.T, options Options) Reply {
+	t.Helper()
+
 	reply, err := openTestSession(t, options).Send(context.Background(), "Work the docket.")
 	if err != nil {
 		t.Fatalf("Send() error = %v", err)
 	}
 	return reply
+}
+
+// fakeStoppedRuns is the harness's record of which run was made for which work
+// item, which is the only thing a decision is checked against.
+type fakeStoppedRuns struct {
+	items map[string]string
+}
+
+func (f fakeStoppedRuns) WorkItemOf(_ context.Context, runID string) (string, error) {
+	workItemID, recorded := f.items[runID]
+	if !recorded {
+		return "", fmt.Errorf("no run %s is recorded", runID)
+	}
+	return workItemID, nil
 }
 
 // testTriageBudgets is the real durable budget over a temporary state root,

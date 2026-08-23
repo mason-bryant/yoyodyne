@@ -130,6 +130,34 @@ func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workIte
 	return b.store.RecordMergeRearm(ctx, workItemID, b.clock.Now(), b.caps)
 }
 
+// conversationStoppages wires the durable run records a triage decision is
+// checked against, for the role that records one and for no other. It is the
+// same store the docket was built from, so what a decision says it is about and
+// what the entry it came from said can never be two different accounts of one
+// run.
+func conversationStoppages(parts components, role domain.AgentRole) chat.Stoppages {
+	if role != domain.RoleDevelopmentManager {
+		return nil
+	}
+	return conversationStoppedRuns{store: parts.store}
+}
+
+// conversationStoppedRuns answers one question about a run: which work item it
+// was made for. The run record is the harness's own, written when the run was
+// reserved, so it is evidence about the stoppage rather than anything the
+// conversation asserted about it.
+type conversationStoppedRuns struct {
+	store *runstate.Store
+}
+
+func (r conversationStoppedRuns) WorkItemOf(_ context.Context, runID string) (string, error) {
+	state, err := r.store.Load(runID)
+	if err != nil {
+		return "", err
+	}
+	return state.WorkItemID, nil
+}
+
 // roleDocumentSets names the documents a role reads beyond the specifications.
 //
 // The product manager reads none of them, and that is a decision rather than an
