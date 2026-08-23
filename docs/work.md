@@ -43,7 +43,12 @@ manager who decides the change is worth another go can hand the item a grant of
 further attempts, and [`yoyo triage
 repair`](conversation.md#deciding-what-becomes-of-stopped-work) re-enters that
 run's repair loop on the change it already has rather than starting the item
-over.
+over. Its opposite is `yoyo triage rerun`, which starts the item over for a
+change whose ground moved. **The two are different acts with different
+accounting** — one spends the item's repair grant and the review rounds that
+grant buys, the other spends its re-run budget — and neither of them is `yoyo
+run <beads-id>`, which is you naming an item rather than carrying out a decision
+somebody recorded about a run that stopped.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

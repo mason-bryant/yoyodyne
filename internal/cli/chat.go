@@ -459,6 +459,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// about, so a repair grant or a re-run is bounded by what the operator
 		// configured wherever it is decided from.
 		Triage: conversationTriage(parts, role),
+		// The run records those decisions are checked against, so a decision lands
+		// on the item whose work actually stopped: the run a docket entry names is
+		// the run the decision has to be about.
+		Stoppages: conversationStoppages(parts, role),
 		// The changes other roles have proposed to the documents this one owns.
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.

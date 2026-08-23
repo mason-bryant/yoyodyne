@@ -1498,6 +1498,18 @@ what was refused as out of scope, `rearm` repeats a merge the forge dropped,
 lands in the item's notes, so the next reader of a run that stopped finds the
 reasoning beside the evidence rather than deciding it a second time.
 
+**The run a decision names has to be that item's own stopped work.** The harness
+reads the run's record and refuses a decision whose run was made for a different
+item, before any budget is spent and before anything is written down. That is
+weaker than asking whether the run is on the docket — an entry may have been cut
+from a bounded listing, and refusing a decision for that would refuse exactly the
+oldest stoppages nobody has got to yet — and it catches what a docket of several
+entries actually produces: two of them read across each other, putting each
+decision's reasoning onto the other item, where it reads as a settled judgement
+about a change that item never made. A run the harness has no record of is
+refused the same way, since nothing then says the decision is about that item's
+stoppage at all.
+
 Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
@@ -1984,7 +1996,17 @@ treated as evidence rather than instruction, so an instruction the developer
 left in the diff is data to analyze rather than something to follow. A verdict
 of `repair` returns the findings to the same developer, up to
 `execution.repair_attempts_before_replan` attempts, before the run gives up and
-records a blocker.
+records a blocker. That budget is not always the last word: a development
+manager who decides the change is worth another go can hand the item a grant of
+further attempts, and [`yoyo triage
+repair`](docs/conversation.md#deciding-what-becomes-of-stopped-work) re-enters
+that run's repair loop on the change it already has rather than starting the
+item over. Its opposite is `yoyo triage rerun`, which starts the item over for a
+change whose ground moved. **The two are different acts with different
+accounting** — one spends the item's repair grant and the review rounds that
+grant buys, the other spends its re-run budget — and neither of them is `yoyo
+run <beads-id>`, which is you naming an item rather than carrying out a decision
+somebody recorded about a run that stopped.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

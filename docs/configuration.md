@@ -2115,8 +2115,10 @@ bounds the [per-item counters](#what-one-work-item-has-been-given) below, which
 every run writes to and `yoyo status <id>` reports. The development manager's
 triage decisions spend them: a decision of `repair` takes a grant of
 `repair_grant_attempts` rounds truncated to what the cap has room for, and
-`rerun` and `rearm` each spend a budget of their own. Every one of the three is
-refused once the budget it spends is gone, and the three do not share one — the
+`rerun` and `rearm` each spend a budget of their own. Every one of the three has
+a budget nothing else spends, and is refused once that budget is gone; the two
+that buy review rounds — a repair grant and a re-run — are bounded again by the
+round cap, which they share with each other and with every run of the item. The
 [table below](#what-one-work-item-has-been-given) says which bound refuses
 which.
 

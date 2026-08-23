@@ -811,6 +811,18 @@ what was refused as out of scope, `rearm` repeats a merge the forge dropped,
 lands in the item's notes, so the next reader of a run that stopped finds the
 reasoning beside the evidence rather than deciding it a second time.
 
+**The run a decision names has to be that item's own stopped work.** The harness
+reads the run's record and refuses a decision whose run was made for a different
+item, before any budget is spent and before anything is written down. That is
+weaker than asking whether the run is on the docket — an entry may have been cut
+from a bounded listing, and refusing a decision for that would refuse exactly the
+oldest stoppages nobody has got to yet — and it catches what a docket of several
+entries actually produces: two of them read across each other, putting each
+decision's reasoning onto the other item, where it reads as a settled judgement
+about a change that item never made. A run the harness has no record of is
+refused the same way, since nothing then says the decision is about that item's
+stoppage at all.
+
 Four of the six the harness holds to more than a note. **A repair, a re-run, and
 a re-arm each spend the item's durable budget as they are recorded**, and are
 refused once it is gone — the refusal names the budget, which is the evidence for
