@@ -121,10 +121,14 @@ Nothing about that widens what a role may do. The write goes through the same
 ownership boundary every other change to these documents goes through, so the
 architect cannot write the goals and the product manager cannot write a design —
 each proposes to the other instead. A document filed outside your artifact homes,
-a kind the role does not own, and a block the harness cannot read are all refused
-before anything touches the filesystem, and you are never asked to approve one.
-A role that owns no document at all — the development manager, the developer, the
-reviewer — cannot write one under any circumstances.
+a kind the role does not own, a revision of a document that belongs to another
+role, a revision of one that was superseded or retired, and a block the harness
+cannot read are all refused before anything is written, and you are never asked
+to approve one. A revision naming a document nothing records is refused the same
+way, saying that a document which does not exist yet is created rather than
+revised — and a creation over an id something already answers to is refused for
+the mirror of that reason. A role that owns no document at all — the development manager, the
+developer, the reviewer — cannot write one under any circumstances.
 
 A revision is the same action, carrying the document whole:
 
@@ -140,11 +144,16 @@ approval sent as a message has to name the document — a bare "yes" decides
 nothing, because a message is not an answer to a question you were just asked.
 What is left undecided when a conversation ends is named on the way out.
 
-What this does not do is commit or publish. The document lands in your working
-tree with the rest of your changes, and the commit and the pull request are still
-yours. Commit it before you start a run: a run refuses to begin while the primary
-checkout has uncommitted changes, and a document you approved and left uncommitted
-is one of them.
+**What this does not do is commit or publish, and it says so every time it
+writes one.** The document lands in your working tree with the rest of your
+changes; committing it and opening a pull request for it are still yours. Commit
+it before you start a run: a run refuses to begin while the primary checkout has
+uncommitted changes, and a document you approved and left uncommitted is one of
+them. The harness stops at the working tree deliberately for now — a conversation
+that committed would sweep whatever else you had in progress into the commit, and
+one that opened a pull request would be a second path into your target branch
+that no reviewer sees. Which of those is right is a decision for whoever owns the
+design rather than one this mechanism should make quietly.
 
 ## Goals, and what work serves them
 

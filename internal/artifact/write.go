@@ -14,11 +14,10 @@ package artifact
 // So a document is emitted the way a proposed work item and a proposed
 // amendment already are: as a typed action in a fenced block, carrying what the
 // role decided and nothing about how it is stored. The harness does the rest —
-// it refuses what the role may not write before anything touches the
-// filesystem, puts the document to the operator, performs the write under the
-// role's own authority through Authorize, generates the frontmatter the
-// contract requires, and records the operator's approval against the revision
-// the write produced.
+// it refuses what the role may not write before anything is written, puts the
+// document to the operator, performs the write under the role's own authority
+// through Authorize, generates the frontmatter the contract requires, and
+// records the operator's approval against the revision the write produced.
 //
 // What this is not is a way past ownership. Every write goes through the same
 // Authorize the rest of this package's mutations go through, so the action layer
@@ -34,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/fenced"
@@ -193,16 +193,14 @@ func (w Write) perActionProblems() []error {
 	return problems
 }
 
-// Authorize refuses a write the role may not make, as early as it can be
-// refused: before the operator is asked about it, and long before anything
-// touches the filesystem.
+// Authorize refuses a write the role may not make, from the action alone.
 //
 // A creation names its kind, so the boundary is the same Authorize every other
 // mutation goes through. A revision does not — the kind is the document's, and
 // what the action names is an id — so what is judged here is that the role owns
-// some document at all, and the store judges the rest when it reads the one
-// being revised. That order is what keeps one ownership table rather than two:
-// this refuses earlier, never differently.
+// some document at all, and which document it named is judged by CheckWrite,
+// which can read the set the id resolves against. Both refuse before anything is
+// written, and both consult the one ownership table rather than a second one.
 func (w Write) Authorize(role domain.AgentRole) error {
 	if w.Action == WriteCreate {
 		return Authorize(role, w.Kind)
@@ -342,16 +340,27 @@ func (w Write) Amendment() Amendment {
 	return amendment
 }
 
-// CheckWrite refuses everything about a write that can be refused before it is
-// carried out: its shape, the role's authority over it, and whether the
-// directory a new document names is one this project files documents in.
+// CheckWrite refuses everything about a write that a refusal now would spare
+// somebody later: its shape, the role's authority over the document it names,
+// whether the directory a new document lands in is one this project files
+// documents in, and whether the document a revision names is one that can be
+// revised at all.
 //
-// It touches nothing. That is the point of it existing beside the store's own
+// It writes nothing, which is the point of it existing beside the store's own
 // mutations rather than only inside them: the refusal happens before the
 // operator is asked, so nobody is ever asked to approve a document the harness
 // was always going to refuse, and no half-written state has to be undone. The
 // store repeats each of these when it writes, because a check that holds only
 // where a caller remembered to make it is not one.
+//
+// It reads the set, because the id is the only thing a revision names and the
+// kind that decides its owner lives in the document. Refusing these here rather
+// than at the write is what keeps a permanent refusal from being asked about: a
+// role cannot revise a document it does not own, an id one document already
+// answers to is not a second document's, and nothing an operator does at a
+// prompt would ever change either answer. What that leaves for the write to
+// refuse is a race — the document changing under the decision — which is the
+// only refusal there that is worth telling somebody to try again after.
 func (s Store) CheckWrite(role domain.AgentRole, write Write) error {
 	if err := write.Validate(); err != nil {
 		return err
@@ -359,11 +368,41 @@ func (s Store) CheckWrite(role domain.AgentRole, write Write) error {
 	if err := write.Authorize(role); err != nil {
 		return err
 	}
-	if write.Action != WriteCreate {
+	id := strings.TrimSpace(write.ID)
+	if write.Action == WriteCreate {
+		if _, err := s.resolveDirectory(write.Directory); err != nil {
+			return err
+		}
+	}
+	set, err := s.Load()
+	if err != nil {
+		return err
+	}
+	found, exists := set.Find(id)
+	if write.Action == WriteCreate {
+		// One id names one artifact, so a creation over a document that already
+		// answers to the id is refused — here rather than at the write, because it
+		// is another answer that will not change however often it is asked.
+		if exists {
+			return fmt.Errorf("artifact %q already exists at %s; revise it instead", id, found.Path)
+		}
 		return nil
 	}
-	_, err := s.resolveDirectory(write.Directory)
-	return err
+	if !exists {
+		return fmt.Errorf("no artifact %q is recorded in %s; a document that does not exist yet is created rather than revised",
+			id, strings.Join(set.Homes, ", "))
+	}
+	if err := Authorize(role, found.Kind); err != nil {
+		return err
+	}
+	// Reviving replaced intent by editing it is not a decision anybody made, and
+	// the store refuses it too. It is refused here for the same reason the
+	// ownership is: the answer will be the same whenever it is asked.
+	if ended, hasEnding := found.Ended(); hasEnding {
+		return fmt.Errorf("artifact %q was %s on %s and is not revised back into force: %s",
+			id, ended.Action, ended.At.UTC().Format(time.RFC3339), ended.Reason)
+	}
+	return nil
 }
 
 // Directories reports the artifact homes this store reads and writes, which is

@@ -112,6 +112,9 @@ type WriteOutcome struct {
 }
 
 // Render describes one decision for an operator reading what their message did.
+// The four approved outcomes are said apart because they are four different
+// things to do next: nothing, try again later, take it up with whoever owns the
+// document, or commit what is now in the working tree.
 func (o WriteOutcome) Render() string {
 	switch {
 	case !o.Approved:
@@ -119,12 +122,23 @@ func (o WriteOutcome) Render() string {
 	case o.Undecided:
 		return fmt.Sprintf("[%s] not written: %s\n", o.WriteID, o.Artifact) +
 			indent(o.Problem) +
-			indent("it is still awaiting a decision; approve it again once whatever refused it answers")
+			indent("it is still awaiting a decision; approve it again once whatever refused it answers, or decline it")
+	case o.Path == "":
+		// A refusal rather than a failure: the store answered about the document,
+		// and the answer will not change. Saying it is still waiting would send the
+		// operator back to a prompt that can only refuse them again.
+		return fmt.Sprintf("[%s] refused: %s\n", o.WriteID, o.Artifact) +
+			indent(o.Problem) +
+			indent("nothing was written and it is not waiting on you; the role has to write a document it owns")
 	case o.Problem != "":
 		return fmt.Sprintf("[%s] wrote %s to %s\n", o.WriteID, o.Artifact, o.Path) +
 			indent("the record is incomplete: "+o.Problem)
 	default:
-		return fmt.Sprintf("[%s] wrote %s to %s, with your approval recorded in it\n", o.WriteID, o.Artifact, o.Path)
+		return fmt.Sprintf("[%s] wrote %s to %s, with your approval recorded in it\n", o.WriteID, o.Artifact, o.Path) +
+			// Said every time, because the one thing an operator could reasonably
+			// assume from here is that the document is on its way somewhere. It is
+			// in the working tree, and nothing about publishing it is the harness's.
+			indent("it is in your working tree; committing and publishing it are still yours")
 	}
 }
 
@@ -264,10 +278,24 @@ func (s *Session) ApproveWrite(writeID string) (WriteOutcome, error) {
 		written, err = s.options.Documents.Amend(s.state.Role, strings.TrimSpace(write.ID), write.Amendment(), now)
 	}
 	if err != nil {
-		// Nothing was written, so the document is still awaiting a decision:
-		// approving it again asks for the same document rather than losing it to a
-		// store that refused this once.
 		outcome.Problem = err.Error()
+		// An ownership refusal is the store answering about the document rather
+		// than failing at it, and the answer will be the same however often it is
+		// asked. So it decides the write rather than parking it: a document left
+		// waiting on an approval that can never succeed would hold a pending slot
+		// the role needs for a document it may actually write, and it would tell
+		// the operator to try again at something that will never work. The action
+		// layer refuses this before the operator is ever asked; this is what
+		// happens if the document changed hands between the two.
+		if errors.Is(err, artifact.ErrUnauthorized) {
+			record.decided = true
+			s.notice("the operator approved document %s, and the harness refused it: %v", record.pending.ID, err)
+			return outcome, fmt.Errorf("write document %s: %w", strings.TrimSpace(write.ID), err)
+		}
+		// Anything else is the store failing rather than answering, so nothing was
+		// written and the document is still awaiting a decision: approving it again
+		// asks for the same document rather than losing it to a store that refused
+		// this once.
 		outcome.Undecided = true
 		return outcome, fmt.Errorf("write document %s: %w", strings.TrimSpace(write.ID), err)
 	}
@@ -461,7 +489,12 @@ func (s *Session) decideWrites(ctx context.Context, writes []PendingWrite, scree
 		}
 		outcome, err := s.decideWrite(made)
 		saved := s.record()
-		if err != nil && !outcome.Undecided {
+		// A store that would not write the document is reported and the
+		// conversation carries on, whether it refused permanently or failed once.
+		// What ends a conversation is the other kind of error — a decision the
+		// harness could not record at all — because after that nothing it says
+		// about what is decided can be trusted.
+		if err != nil && outcome.Problem == "" {
 			return errors.Join(err, saved)
 		}
 		if saved != nil {

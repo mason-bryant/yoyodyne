@@ -10,11 +10,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
@@ -193,6 +195,78 @@ func TestAnApprovalSentAsASingleMessageCreatesTheProposedWorkItem(t *testing.T) 
 	}
 	if len(tracker.creations) != 1 {
 		t.Fatalf("%d item(s) were created, want the approval to have been spent once", len(tracker.creations))
+	}
+}
+
+// A document approved as a single message is the path both the README and
+// `docs/artifacts.md` tell an operator to use, and it runs through a dispatch
+// where the proposal decider is asked first and the two grammars share their
+// verbs. What keeps them apart is the `document-` prefix, so this exercises the
+// dispatch itself with a proposal pending at the same time: an approval that
+// names a document must not be consumed by the proposal decider, refused by it,
+// or said to the product manager as speech.
+func TestADocumentApprovedAsASingleMessageIsWrittenAndLeavesTheProposalAlone(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	repository := t.TempDir()
+	tracker := &recordingChatTracker{created: beads.WorkItem{ID: "yoyodyne-ifd.200", Title: "Pause on a usage limit"}}
+	writing := &recordingChatBackend{result: backendapi.RunResult{SessionID: "session-1", FinalText: proposalAndDocumentReply}}
+
+	var stdout, stderr bytes.Buffer
+	wrote := openTestDocumentSession(t, root, repository, writing, tracker)
+	if code := runChatMessage(context.Background(), wrote, domain.RoleProductManager, "write the goals up and say what else is needed", false, &stdout, &stderr); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, stderr.String())
+	}
+	if len(wrote.Proposals()) != 1 || len(wrote.Writes()) != 1 {
+		t.Fatalf("%d proposal(s) and %d document(s) are waiting, want one of each", len(wrote.Proposals()), len(wrote.Writes()))
+	}
+	if !strings.Contains(stdout.String(), "approve document-1.1") {
+		t.Fatalf("stdout = %q, want it to say how the document is decided", stdout.String())
+	}
+	document := filepath.Join(repository, "docs", "product", "v2-goals.md")
+	if _, err := os.Stat(document); !os.IsNotExist(err) {
+		t.Fatalf("the document was written before anybody approved it: %v", err)
+	}
+
+	// A second process, holding nothing but the record — which is the situation
+	// the operator actually approves in.
+	deciding := &recordingChatBackend{}
+	resumed := openTestDocumentSession(t, root, repository, deciding, tracker)
+	var decided, aside bytes.Buffer
+	if code := runChatMessage(context.Background(), resumed, domain.RoleProductManager, "approve document-1.1", false, &decided, &aside); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
+	}
+	if deciding.turns != 0 {
+		t.Fatalf("the approval was said to the product manager %d time(s)", deciding.turns)
+	}
+	if _, err := os.Stat(document); err != nil {
+		t.Fatalf("the approved document is not in the repository: %v", err)
+	}
+	if !strings.Contains(decided.String(), "wrote v2-goals") {
+		t.Fatalf("stdout = %q, want what the approval wrote", decided.String())
+	}
+	// The proposal beside it was never the operator's subject, and the proposal
+	// decider — which runs first — neither took the answer nor failed on it.
+	if len(tracker.creations) != 0 {
+		t.Fatalf("approving a document created %d work item(s)", len(tracker.creations))
+	}
+	if len(resumed.Proposals()) != 1 {
+		t.Fatalf("%d proposal(s) pending, want the undecided one left where it was", len(resumed.Proposals()))
+	}
+	if len(resumed.Writes()) != 0 {
+		t.Fatalf("%d document(s) still waiting after being written", len(resumed.Writes()))
+	}
+
+	// And the same dispatch the other way round: with a document decided and the
+	// proposal still open, a proposal approval still reaches the proposal decider.
+	third := openTestDocumentSession(t, root, repository, &recordingChatBackend{}, tracker)
+	var created, unused bytes.Buffer
+	if code := runChatMessage(context.Background(), third, domain.RoleProductManager, "approve 1.1", false, &created, &unused); code != 0 {
+		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, unused.String())
+	}
+	if len(tracker.creations) != 1 {
+		t.Fatalf("%d item(s) were created, want the proposal the operator approved", len(tracker.creations))
 	}
 }
 
@@ -552,6 +626,49 @@ const proposalReply = `We could wait out the limit rather than failing the run.
 {"items":[{"title":"Pause on a usage limit","description":"Wait for the window and resume.","rationale":"Capacity is not failure.","goal":"Run development nearly autonomously."}]}
 ` + "```" + `
 `
+
+// proposalAndDocumentReply is one answer that both proposes work and writes a
+// document, which is what puts the two decision grammars on the table at once.
+const proposalAndDocumentReply = proposalReply + `
+Here is the goals document as we agreed it.
+
+` + "```yoyodyne-artifact" + `
+{"documents":[{"action":"create","id":"v2-goals","kind":"goals","title":"What v2 is for","directory":"docs/product","body":"# Goals\n\nRun development nearly autonomously.","reason":"drafted with the operator"}]}
+` + "```" + `
+`
+
+// openTestDocumentSession is openTestChatSession with an artifact store behind
+// it, over a repository the caller owns so a test can look at what was written.
+func openTestDocumentSession(t *testing.T, root, repository string, provider chat.Backend, tracker chat.Tracker) *chat.Session {
+	t.Helper()
+
+	store, err := runstate.NewConversationStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	session, err := chat.Open(chat.Options{
+		Role:    domain.RoleProductManager,
+		Agent:   "product-manager",
+		Backend: provider,
+		Store:   store,
+		Tracker: tracker,
+		Documents: artifact.Store{
+			RepositoryRoot: repository,
+			Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
+			Excluded:       []string{"docs/decisions/invariants"},
+		},
+		Model:        "opus",
+		Provider:     domain.BackendClaudeCode,
+		Repository:   repository,
+		ProductID:    "yoyodyne",
+		RepositoryID: "yoyodyne",
+		Briefing:     chat.Briefing{Text: "the product is a harness", GatheredAt: time.Now().UTC()},
+	})
+	if err != nil {
+		t.Fatalf("chat.Open() error = %v", err)
+	}
+	return session
+}
 
 // openTestChatSession builds a conversation over a state root the caller owns,
 // so two of them are two processes talking to one recorded conversation — which

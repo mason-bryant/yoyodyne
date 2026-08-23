@@ -171,6 +171,63 @@ func TestCheckWriteRefusesTheWrongHomeWithoutTouchingTheRepository(t *testing.T)
 	}
 }
 
+// The defect this exists for: a revision names an id rather than a kind, so the
+// shape-only check passed a product manager revising a design. It was recorded,
+// put to the operator, and could only ever fail at the write — a permanent
+// refusal dressed as something worth approving.
+func TestCheckWriteResolvesARevisionsOwnerBeforeAnybodyIsAskedAboutIt(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store := Store{RepositoryRoot: root, Homes: []string{"docs/product", "docs/designs"}}
+	design := Write{
+		Action: WriteCreate, ID: "v1-design", Kind: KindDesign, Title: "How it is built",
+		Directory: "docs/designs", Body: "# Design", Reason: "recorded with the operator",
+	}
+	if _, err := store.Create(domain.RoleArchitect, design.Draft(), moment()); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	revision := Write{Action: WriteRevise, ID: "v1-design", Body: "# Design\n\nRevised.", Reason: "the operator narrowed it"}
+	if err := store.CheckWrite(domain.RoleArchitect, revision); err != nil {
+		t.Fatalf("CheckWrite() refused the architect its own design: %v", err)
+	}
+	if err := store.CheckWrite(domain.RoleProductManager, revision); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("CheckWrite() admitted the product manager revising a design: %v", err)
+	}
+
+	// A creation over an id something already answers to is refused here as well,
+	// and for the same reason: one id names one artifact, so the write would be
+	// refused whenever it was approved.
+	second := design
+	second.Body = "# Design\n\nA different one."
+	if err := store.CheckWrite(domain.RoleArchitect, second); err == nil ||
+		!strings.Contains(err.Error(), "revise it instead") {
+		t.Fatalf("CheckWrite() on a claimed id = %v", err)
+	}
+
+	// A revision of a document nobody records is refused here too, and says what
+	// the role should have written instead. It would fail at the write whenever it
+	// was approved, so asking the operator about it is asking them to authorize a
+	// refusal.
+	missing := Write{Action: WriteRevise, ID: "v9-goals", Body: "# Goals", Reason: "r"}
+	if err := store.CheckWrite(domain.RoleProductManager, missing); err == nil ||
+		!strings.Contains(err.Error(), "created rather than revised") {
+		t.Fatalf("CheckWrite() on an unrecorded document = %v", err)
+	}
+
+	// So is a revision of intent that was replaced: reviving it by editing it is
+	// not a decision anybody made, and the store refuses it however often it is
+	// asked.
+	if _, err := store.Retire(domain.RoleArchitect, "v1-design", "the design moved on", moment()); err != nil {
+		t.Fatalf("Retire() error = %v", err)
+	}
+	if err := store.CheckWrite(domain.RoleArchitect, revision); err == nil ||
+		!strings.Contains(err.Error(), "not revised back into force") {
+		t.Fatalf("CheckWrite() on a retired document = %v", err)
+	}
+}
+
 func TestAnApprovedWriteBecomesADocumentWithFrontmatterAndAnApproval(t *testing.T) {
 	t.Parallel()
 

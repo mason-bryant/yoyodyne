@@ -200,6 +200,84 @@ func TestADocumentFiledOutsideTheArtifactHomesIsRefusedAtTheActionLayer(t *testi
 	}
 }
 
+// A revision names an id rather than a kind, so the role's authority over it can
+// only be settled by reading the document. It is settled before the operator is
+// asked: an ownership refusal is permanent, and a document parked on one would
+// hold a pending slot until somebody declined it.
+func TestARevisionOfAnotherRolesDocumentIsRefusedBeforeTheOperatorIsAsked(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1", ResolvedModel: "claude-opus-5",
+		FinalText: documentReply("revise", "v1-design", "", "", "# Design\\n\\nRevised."),
+	}}}
+	options, repository := documentOptions(t, provider)
+	store := options.Documents.(artifact.Store)
+	design := artifact.Write{
+		Action: artifact.WriteCreate, ID: "v1-design", Kind: artifact.KindDesign, Title: "How it is built",
+		Directory: "docs/designs", Body: "# Design", Reason: "recorded with the operator",
+	}
+	if _, err := store.Create(domain.RoleArchitect, design.Draft(), fixedClock{}.Now()); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	before, err := os.ReadFile(filepath.Join(repository, "docs", "designs", "v1-design.md"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	// The product manager owns the goals, not the designs.
+	session := openTestSession(t, options)
+	reply, err := session.Send(context.Background(), "Narrow the second design decision.")
+	var refusal *DocumentError
+	if err == nil || !errors.As(err, &refusal) {
+		t.Fatalf("Send() error = %v, want a refused document", err)
+	}
+	if len(reply.Writes) != 0 || len(session.Writes()) != 0 {
+		t.Fatalf("a revision of another role's document was recorded: %#v", session.Writes())
+	}
+	after, err := os.ReadFile(filepath.Join(repository, "docs", "designs", "v1-design.md"))
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("the design changed under a refused revision: %v", err)
+	}
+}
+
+// The same refusal reached at the write rather than at the action layer — which
+// is what a document that changed hands between the two would produce — decides
+// the document rather than leaving it waiting on an approval that can never
+// succeed.
+func TestAWriteTheStoreRefusesOnOwnershipIsDecidedRatherThanLeftWaiting(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1", ResolvedModel: "claude-opus-5",
+		FinalText: documentReply("create", "v2-goals", "goals", "docs/product", "# Goals"),
+	}}}
+	options, _ := documentOptions(t, provider)
+	session := openTestSession(t, options)
+	reply, err := session.Send(context.Background(), "Write the goals up.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	// The document was recorded under a role that owns it, and the store is then
+	// asked under one that does not.
+	session.state.Role = domain.RoleArchitect
+
+	outcome, err := session.ApproveWrite(reply.Writes[0].ID)
+	if err == nil {
+		t.Fatal("ApproveWrite() wrote a document the store had no authority for")
+	}
+	if outcome.Undecided {
+		t.Fatalf("a permanent refusal left the document waiting: %#v", outcome)
+	}
+	if waiting := session.Writes(); len(waiting) != 0 {
+		t.Fatalf("a refused document still holds a pending slot: %#v", waiting)
+	}
+	if rendered := outcome.Render(); !strings.Contains(rendered, "refused") ||
+		!strings.Contains(rendered, "not waiting on you") {
+		t.Fatalf("the operator is told to try again: %q", rendered)
+	}
+}
+
 func TestAConversationWithNoArtifactStoreOffersNoWriteAndRefusesOne(t *testing.T) {
 	t.Parallel()
 
