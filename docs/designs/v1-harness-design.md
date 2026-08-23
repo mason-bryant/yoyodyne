@@ -38,6 +38,10 @@ revisions:
       by: architect
       at: 2026-08-23T16:29:31Z
       reason: the deferred list's unqualified "rich graphical interfaces" is contradicted by the operator's amended non-goals and the reduced-dashboard promotion; the bullet now bounds what stays deferred and points at the observability-and-dashboard design. Recorded during the 2026-08-22 scope-reconciliation promotions
+    - action: amended
+      by: architect
+      at: 2026-08-23T16:34:32Z
+      reason: approved amendments aab3b51c and 9fafa81a from yoyodyne-ifd.138 and yoyodyne-ifd.130.1, transcribed once the management-and-supervision brief reached the architect - the Agent Model absorbs the ratified contract's binding rules and the residency summary, and cross-references the management-and-supervision design as the owner of the machinery and the V1 boundary; the boundary is deliberately not duplicated here
 approvals:
     - revision: 0
       by: operator
@@ -197,6 +201,12 @@ The local Claude Code or Codex process is not the agent's durable identity. Each
 - Does not integrate the change directly.
 
 The set of roles is fixed in the harness. What a project configures is which agents fill those roles, how many, and each one's backend, model selector, and persona. Role authority and per-role tool posture — including the reviewer running with no tools — are derived from the role in code and are not configurable: authority a project could declare is authority a project could widen, and the ownership model rests on it. Adding or redefining a role is a change to the harness, not to a configuration file. Role and backend combinations are validated against the effective configuration before work is claimed, and an unknown role name must be refused at load. The `Capabilities` negotiation in the backend boundary is untouched by this: what a backend can do is a genuinely varying fact.
+
+### Management and supervision
+
+The management roles coordinate through the contract [management-and-supervision](management-and-supervision.md) records: persisted, typed requests the harness delivers by invoking the target role itself, under lease, bounded by cycle, cost, deadline, and deduplication. Its binding rules, stated here because they govern the agent model whole: the harness is the only component that invokes a role or execution agent; requests and responses are persisted and attributable, and a request is complete only when durable state records its outcome; product, architecture, and delivery authority remain distinct even when roles share a conversation; no user interface, Slack process, or model-provider session owns private workflow truth; and every mutation validates against current durable state, committing atomically or rejecting as stale.
+
+Process residency belongs to the same contract. What runs today: run processes, conversation-holding chat processes, the Slack sink under the product manager's supervision, and the dashboard command. The conversation lease — per agent, single holder — is the reattachment primitive, and its single-holder rule is load-bearing wherever two clients could reach one agent. The full residency rules, the interim chat-spawned shape, and the headless service it is on the way to are the management-and-supervision design's to state.
 
 ## User Interaction, Directives, and Approval
 
