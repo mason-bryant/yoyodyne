@@ -688,14 +688,44 @@ func TestAssembleProductCarriesEveryShippedDocument(t *testing.T) {
 // is a file somebody wrote, so the list and the tree are checked against each
 // other here -- which is what makes the prose about what the product manager
 // reads true of yoyodyne itself rather than only of a temporary directory.
+//
+// The budget is measured here rather than in the test above, and against these
+// documents rather than fabricated ones. Whether eight one-line files fit says
+// nothing about whether yoyodyne's own do: what widening the set was for is that
+// the shipped-surface picture survives the README shrinking, and the only way
+// that claim can be checked is against the documents the operator actually gets.
+// The measured total is logged so a run that is approaching the bound says so
+// while there is still headroom, rather than only failing once there is none.
 func TestShippedDocumentationNamesFilesThisRepositoryHas(t *testing.T) {
 	t.Parallel()
 
 	root := repositoryRoot(t)
+	total := 0
 	for _, documentPath := range shippedDocumentation {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(documentPath))); err != nil {
+		info, err := os.Stat(filepath.Join(root, filepath.FromSlash(documentPath)))
+		if err != nil {
 			t.Fatalf("shippedDocumentation names %s, which this repository does not have: %v", documentPath, err)
 		}
+		total += int(info.Size())
+	}
+	t.Logf("the %d shipped documents are %d bytes against a %d-byte product budget (%d spare)",
+		len(shippedDocumentation), total, defaultMaxProductBytes, defaultMaxProductBytes-total)
+
+	// Assembled against this repository, not a temporary directory: the
+	// specifications, the tracker evidence, and the documentation are competing
+	// for one budget, and intent is spent first, so the documentation is what a
+	// shortfall drops.
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for _, documentPath := range shippedDocumentation {
+		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Fatalf("this repository's own product context does not carry %s", documentPath)
+		}
+	}
+	if strings.Contains(bundle.Text, "This documentation did not fit and is not included above") {
+		t.Fatalf("this repository's own documents no longer fit the product budget; the bundle says:\n%s", bundle.Text)
 	}
 }
 
