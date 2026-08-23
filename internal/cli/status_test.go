@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -695,6 +697,97 @@ func TestStatusReportsWhatTriageHasSpentOnANamedItem(t *testing.T) {
 	}
 	if *reported.TriageCaps != caps {
 		t.Fatalf("reported caps = %+v, want the configured %+v", *reported.TriageCaps, caps)
+	}
+}
+
+// An unreadable triage record costs this answer a line rather than the runs it
+// found. The three halves of that contract are pinned together because each one
+// alone reads as a bug in one of the others: the runs are still listed, the exit
+// status is the one a readable record gets, and the failure is carried in a key
+// of its own so `error` goes on meaning the command failed.
+//
+// The never-spend-an-unreadable-budget rule is about spending, and this is a
+// read-only answer; the store's own refusal is what keeps the budget safe.
+func TestStatusReportsAnUnreadableTriageRecordBesideTheRunsItFound(t *testing.T) {
+	// Not parallel: the state root the command addresses is set here.
+	stateRoot := t.TempDir()
+	t.Setenv("YOYODYNE_STATE_HOME", stateRoot)
+	configPath := writeConfig(t, validConfig)
+
+	store, err := runstate.NewStore(stateRoot, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	started := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	failed := recordedRun(t, store, runstate.StatusFailed, "yoyodyne-ifd.2.7", started)
+	failed.Phase = runstate.PhaseReviewing
+	saveRun(t, store, failed)
+
+	// A round recorded is what puts a counter file there to corrupt; the file is
+	// found by listing rather than by name, because what names it is the store's
+	// own business.
+	triage := store.Triage()
+	if _, err := triage.RecordReviewRound(context.Background(), "yoyodyne-ifd.2.7", "run-a#0", started); err != nil {
+		t.Fatalf("RecordReviewRound() error = %v", err)
+	}
+	entries, err := os.ReadDir(triage.Root())
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	corrupted := false
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(triage.Root(), entry.Name()), []byte("{not json"), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		corrupted = true
+	}
+	if !corrupted {
+		t.Fatal("no recorded counter file was found to corrupt")
+	}
+
+	stdout, stderr, code := runCLI(t, "status", "--config", configPath, "yoyodyne-ifd.2.7")
+	if code != 0 {
+		t.Fatalf("status code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, failed.RunID) {
+		t.Fatalf("stdout = %q, want the run listed beside the unreadable record", stdout)
+	}
+	if strings.Contains(stdout, "triage of") {
+		t.Fatalf("stdout = %q, want no counters claimed from a record that could not be read", stdout)
+	}
+	if !strings.Contains(stderr, "the item's triage record could not be read") {
+		t.Fatalf("stderr = %q, want the failure reported beside the listing", stderr)
+	}
+
+	stdout, stderr, code = runCLI(t, "status", "--config", configPath, "--json", "yoyodyne-ifd.2.7")
+	if code != 0 {
+		t.Fatalf("status --json code = %d, stderr = %q", code, stderr)
+	}
+	var reported statusOutput
+	if err := json.Unmarshal([]byte(stdout), &reported); err != nil {
+		t.Fatalf("Unmarshal() error = %v, stdout = %q", err, stdout)
+	}
+	if len(reported.Runs) != 1 || reported.Runs[0].RunID != failed.RunID {
+		t.Fatalf("status --json = %q, want the run it found still listed", stdout)
+	}
+	if reported.TriageError == "" {
+		t.Fatalf("status --json = %q, want the unreadable record reported in triage_error", stdout)
+	}
+	// error is the key that says the command failed, and it did not: a script
+	// reading it must not start treating an unreadable counter file as one.
+	if reported.Error != "" {
+		t.Fatalf("status --json error = %q, want it left to mean the command failed", reported.Error)
+	}
+	if reported.Triage != nil || reported.TriageCaps != nil {
+		t.Fatalf("status --json = %q, want no counters and no caps beside the failure", stdout)
+	}
+	// The key itself is the commitment, independent of the Go type the payload
+	// decodes into.
+	if !strings.Contains(stdout, `"triage_error":`) {
+		t.Fatalf("status --json = %q, want the failure under triage_error", stdout)
 	}
 }
 

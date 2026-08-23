@@ -108,6 +108,20 @@ type TriageCounters struct {
 	RepairGrants    int `json:"repair_grants,omitempty"`
 	GrantedRounds   int `json:"granted_rounds,omitempty"`
 	TruncatedGrants int `json:"truncated_grants,omitempty"`
+	// CommittedRounds is the round count this item's grants have committed it to:
+	// what it had already cost when the most recent grant was recorded, plus what
+	// that grant gave. It is what a further action that buys rounds is truncated
+	// and refused against, and neither figure above can stand in for it. The
+	// rounds counted cannot see a grant no attempt has spent yet, so two grants
+	// taken before either produced a verdict would each be cut against the same
+	// room and together promise more than the cap has; and the rounds granted
+	// cannot say what the item had already cost before them.
+	//
+	// A record written before this was counted carries zero, which is the
+	// accounting that was in force when it was written rather than a record that
+	// is wrong: it reads as an item nothing is outstanding on, which is what the
+	// grant that wrote it was treated as at the time.
+	CommittedRounds int `json:"committed_rounds,omitempty"`
 	// Reruns is how many times triage has caused this item to be run again from
 	// the start, and MergeRearms how many times it has re-armed a merge the forge
 	// accepted and then dropped.
@@ -162,6 +176,7 @@ func (c TriageCounters) Validate() error {
 		{"repair_grants", c.RepairGrants},
 		{"granted_rounds", c.GrantedRounds},
 		{"truncated_grants", c.TruncatedGrants},
+		{"committed_rounds", c.CommittedRounds},
 		{"reruns", c.Reruns},
 		{"merge_rearms", c.MergeRearms},
 		{"review_rounds", c.ReviewRounds},
@@ -178,6 +193,14 @@ func (c TriageCounters) Validate() error {
 	}
 	if c.GrantedRounds > 0 && c.RepairGrants == 0 {
 		problems = append(problems, errors.New("granted rounds require the grant that gave them"))
+	}
+	// Committed rounds are written by a grant and by nothing else, so a record
+	// carrying them without one could not have been written by the only thing
+	// that writes it. The other way round is ordinary rather than a violation: a
+	// record written before committed rounds were counted carries a grant and no
+	// commitment.
+	if c.CommittedRounds > 0 && c.RepairGrants == 0 {
+		problems = append(problems, errors.New("committed rounds require the grant that committed them"))
 	}
 	if c.LastRound != "" && c.ReviewRounds == 0 {
 		problems = append(problems, errors.New("a counted round requires the round count that includes it"))
@@ -206,14 +229,46 @@ func (c TriageCounters) Passes() int {
 // second says the first look did not settle it.
 func (c TriageCounters) TriagedAgain() bool { return c.Passes() > 1 }
 
-// RoundsRemaining is how many further review rounds this item may still be
-// given under a cap. It is never negative: an item already past its cap has
-// nothing remaining rather than a debt.
+// RoundsRemaining is how many further review rounds this item may still cost
+// under a cap. It is never negative: an item already past its cap has nothing
+// remaining rather than a debt.
+//
+// It is what the item has cost measured against the cap, and it is the figure a
+// reader is shown. What may still be granted is RoundsUncommitted, which is the
+// same question asked of a budget part of which may already be promised.
 func (c TriageCounters) RoundsRemaining(limit int) int {
 	if remaining := limit - c.ReviewRounds; remaining > 0 {
 		return remaining
 	}
 	return 0
+}
+
+// RoundsUncommitted is how many further rounds a triage action may still buy
+// under a cap: the room left beyond both what this item has cost and what a
+// grant already recorded has promised it. It is what the actions that buy rounds
+// are truncated and refused against, because a grant's rounds are spendable from
+// the moment the grant is recorded, and the rounds counted cannot see them until
+// an attempt the grant bought is judged.
+//
+// On an item with nothing outstanding it is the rounds remaining, so the two
+// differ only while a grant is waiting to be carried out.
+func (c TriageCounters) RoundsUncommitted(limit int) int {
+	if remaining := limit - c.committed(); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+// committed is what this item has cost or what it stands committed to,
+// whichever is greater. The two are not added: a grant's rounds turn into
+// counted rounds as the attempts it bought are judged, so a sum would charge a
+// carried-out grant twice and shrink the budget of an item that spent exactly
+// what it was given.
+func (c TriageCounters) committed() int {
+	if c.CommittedRounds > c.ReviewRounds {
+		return c.CommittedRounds
+	}
+	return c.ReviewRounds
 }
 
 // TriageCaps bounds each triage action for one work item. They are per item and
@@ -399,6 +454,12 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 // The truncation is recorded rather than applied silently — a grant that was cut
 // is what says this item is at the end of what it will be given.
 //
+// The room it is truncated to counts a grant already recorded against the item,
+// not only the rounds the item has produced. A grant is spendable from the
+// moment it is written, so two taken before either is carried out would
+// otherwise be cut against the same room and promise between them more than the
+// cap has, with neither one overshooting it.
+//
 // rounds is what `triage.repair_grant_attempts` states, which is a count of
 // repair attempts and is therefore also a count of rounds: every repair attempt
 // is judged, so each one an item is granted is one more verdict it will produce.
@@ -428,14 +489,22 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 				Cap:        caps.RepairGrants,
 			}
 		}
-		remaining := counters.RoundsRemaining(caps.ReviewRounds)
+		// The room is what the cap has beyond what the item stands committed to,
+		// rather than beyond what it has cost. A grant recorded and not yet carried
+		// out has already promised its rounds, and a second one truncated against
+		// the same room is how the rounds granted overshoot the cap without any
+		// single grant doing so.
+		remaining := counters.RoundsUncommitted(caps.ReviewRounds)
 		if remaining == 0 {
 			return TriageCapError{
 				Action:     TriageRepairGrant,
 				Budget:     TriageReviewRoundBudget,
 				WorkItemID: counters.WorkItemID,
-				Spent:      counters.ReviewRounds,
-				Cap:        caps.ReviewRounds,
+				// What refused it is what it is committed to, so that is the figure
+				// reported: naming the rounds counted would leave a reader looking for
+				// room the cap does not have.
+				Spent: counters.committed(),
+				Cap:   caps.ReviewRounds,
 			}
 		}
 		granted.Rounds = rounds
@@ -446,6 +515,7 @@ func (s *TriageStore) GrantRepair(ctx context.Context, workItemID string, rounds
 		}
 		counters.RepairGrants++
 		counters.GrantedRounds += granted.Rounds
+		counters.CommittedRounds = counters.committed() + granted.Rounds
 		return nil
 	})
 	if err != nil {
@@ -489,12 +559,15 @@ func (s *TriageStore) RecordRerun(ctx context.Context, workItemID string, at tim
 				Cap:        caps.Reruns,
 			}
 		}
-		if counters.RoundsRemaining(caps.ReviewRounds) == 0 {
+		// Against what the item is committed to, for the reason a grant is: a re-run
+		// whose only remaining round is one an outstanding grant has already
+		// promised overshoots the cap exactly as a second grant would.
+		if counters.RoundsUncommitted(caps.ReviewRounds) == 0 {
 			return TriageCapError{
 				Action:     TriageRerun,
 				Budget:     TriageReviewRoundBudget,
 				WorkItemID: counters.WorkItemID,
-				Spent:      counters.ReviewRounds,
+				Spent:      counters.committed(),
 				Cap:        caps.ReviewRounds,
 			}
 		}
