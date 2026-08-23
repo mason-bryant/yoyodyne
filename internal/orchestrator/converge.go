@@ -42,10 +42,15 @@ import (
 // registration is a path an agent's sandbox profile denies on every command it
 // spawns, so a repository that keeps them all eventually cannot spawn a command
 // at all — the failure this bound exists for, reached at 180 registrations on
-// the harness's own machine. Nothing is lost by going past it: the retirement
-// keeps a checkout holding uncommitted work, and every commit the rest carried
-// is on a branch the sweep beside this one only deletes once the target
-// provably carries it.
+// the harness's own machine. Nothing is lost by going past it: every commit a
+// retired checkout carried is on a branch the sweep beside this one only deletes
+// once the target provably carries it.
+//
+// The bound is a bound on what this can take rather than on the machine's whole
+// count, and the difference is one category: a checkout holding uncommitted work
+// is kept however old it is, because that work is the one thing nothing else
+// records. Those accumulate, so each one is printed on every sweep with the
+// reason — visible while it is a handful of directories, rather than at the wall.
 const settledWorktreeTail = 8
 
 // Convergence is what one sweep did to bring local state onto the forge's and
@@ -65,9 +70,10 @@ type Convergence struct {
 }
 
 // WorktreeSweep is one settled run's leftover checkout and what became of it.
-// It reads like the branch sweep beside it and for the same reason: the run is
-// named because that is how an operator finds what the checkout was for, and a
-// kept one is a fact somebody may still have to act on.
+// The run is named because that is how an operator finds what the checkout was
+// for, and a kept one is a fact somebody has to act on: unlike a kept branch, it
+// is a registration that goes on costing every command spawned on this machine
+// until somebody deals with the work in it.
 type WorktreeSweep struct {
 	RunID      string `json:"run_id"`
 	WorkItemID string `json:"work_item_id"`
@@ -75,6 +81,13 @@ type WorktreeSweep struct {
 	Removed    bool   `json:"removed"`
 	Kept       string `json:"kept,omitempty"`
 	Failure    string `json:"failure,omitempty"`
+	// RecordProblem is a checkout that was retired and whose run's record could
+	// not be told so. It is deliberately not a Failure: the directory is gone
+	// either way, and the thing to act on is the opposite of a retirement that
+	// did not happen — every reader of that run will now name a directory that is
+	// not there. Reporting it as a failed retirement would send somebody to
+	// remove what is already removed.
+	RecordProblem string `json:"record_problem,omitempty"`
 }
 
 // RegistrationSweep is what the repository-wide prune removed, and what stopped
@@ -161,9 +174,10 @@ func (r Reconciler) Converge(ctx context.Context) (Convergence, error) {
 // was integrated and cleaned up.
 //
 // The tail is held back from the newest end, and it is a tail of checkouts that
-// are actually there rather than of records: a run this sweep already retired
-// records that, so it drops out of the candidates instead of occupying a slot
-// that was meant to keep somebody's evidence on disk.
+// are actually there rather than of records: a run whose checkout this sweep
+// found gone has that written onto it whether the sweep is what removed it or
+// something else was, so it drops out of the candidates instead of occupying a
+// slot that was meant to keep somebody's evidence on disk.
 func sweepableWorktrees(recorded []runstate.State) []runstate.State {
 	candidates := make([]runstate.State, 0, len(recorded))
 	for _, state := range recorded {
@@ -197,14 +211,21 @@ func settledAt(state runstate.State) time.Time {
 	return state.UpdatedAt
 }
 
-// sweepWorktree retires one settled run's checkout, and reports whether there
-// was anything there to ask about at all.
+// sweepWorktree retires one settled run's checkout, and reports whether an
+// operator has anything to read about it.
 //
-// A registration that is already gone is the ordinary outcome — cleanup removed
-// it when the run integrated, or an earlier sweep did — and reporting it would
-// bury the ones that are actually still there. Nothing here decides anything:
-// the retirement keeps a checkout holding uncommitted work, keeps a directory
-// Git is not managing, and never touches the branch.
+// Those are two decisions and they are deliberately made apart. Whether the
+// record is written turns on whether the checkout is gone; whether a line is
+// printed turns on whether this sweep is what changed something. A checkout that
+// was already gone — cleanup took it when the run integrated, an operator
+// removed it by hand, an external `git worktree prune` unregistered it — is
+// exactly the case where those two answers differ: nobody needs to read about
+// it, and its record is the one most in need of correcting, because until it is
+// written every reader of that run is sent to a directory that is not there.
+//
+// Nothing here decides anything: the retirement keeps a checkout holding
+// uncommitted work, keeps a directory Git is not managing, and never touches the
+// branch.
 //
 // It is done under the run's own lease, which is what makes the removal and the
 // record of it one act. `yoyo status`, the triage docket, and a re-run all read
@@ -240,15 +261,20 @@ func (r Reconciler) sweepWorktree(ctx context.Context, recorded runstate.State) 
 	removal, err := r.Worktrees.RemovePreservedWorktree(ctx, worktreeOf(state))
 	if err != nil {
 		sweep.Failure = fmt.Errorf("retire the checkout of run %s: %w", state.RunID, err).Error()
-		return sweep, true
 	}
-	if !removal.Registered && removal.Kept == "" {
-		return WorktreeSweep{}, false
-	}
-	sweep.Removed = removal.Removed
 	sweep.Kept = removal.Kept
+	// Removed covers both "this retired it" and "it was already gone", which is
+	// what the record has to say either way. Only the first is something this
+	// sweep did, and only the first is reported as a retirement.
 	if removal.Removed {
-		sweep.Failure = r.recordSweptWorktree(state)
+		sweep.Removed = removal.Registered
+		sweep.RecordProblem = r.recordSweptWorktree(state)
+	}
+	if !sweep.Removed && sweep.Kept == "" && sweep.Failure == "" && sweep.RecordProblem == "" {
+		// The checkout was gone before this sweep reached it and its record now
+		// says so. There is nothing left for anybody to read, and nothing left to
+		// probe: the run drops out of the candidates on every later pass.
+		return WorktreeSweep{}, false
 	}
 	return sweep, true
 }

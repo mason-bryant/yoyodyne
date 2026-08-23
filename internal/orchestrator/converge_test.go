@@ -330,7 +330,7 @@ func TestSweepingAWorktreeKeepsUncommittedWorkAndRetiresTheRest(t *testing.T) {
 		t.Fatalf("Remove() error = %v", err)
 	}
 	retired, swept := reconciler.sweepWorktree(context.Background(), settled)
-	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" {
+	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" || retired.RecordProblem != "" {
 		t.Fatalf("sweep = %#v, swept = %t, want the empty checkout retired", retired, swept)
 	}
 	if _, err := os.Stat(settled.WorktreePath); !os.IsNotExist(err) {
@@ -361,6 +361,72 @@ func TestSweepingAWorktreeKeepsUncommittedWorkAndRetiresTheRest(t *testing.T) {
 	// pass does not report the same long-gone checkout forever.
 	if again, swept := reconciler.sweepWorktree(context.Background(), recorded); swept {
 		t.Fatalf("sweep = %#v, want a checkout that is already gone reported as nothing to do", again)
+	}
+}
+
+// The case the by-hand cleanup produces across many records at once: the
+// checkout is gone and this sweep is not what removed it. Nothing needs printing
+// — nobody has to read about a directory that was already not there — but the
+// record does need writing, or every reader of that run keeps being sent to it
+// and the run keeps occupying a slot in the tail it has no checkout to fill.
+func TestSweepingRecordsACheckoutSomethingElseAlreadyRemoved(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	halting := &haltingStore{StateStore: store, at: runstate.PhaseChecking}
+	pipeline := automatic(newSharedPipeline(t, repository, worktreeRoot, halting, tracker, provider, []string{"exit 0"}), provider)
+	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !halting.halted {
+		t.Fatalf("interrupted Run() error = %v, halted = %t", err, halting.halted)
+	}
+	if results := reconcileSweep(t, repository, worktreeRoot, store, tracker); len(results) != 1 || results[0].Action != ActionBlocked {
+		t.Fatalf("reconciliation = %#v, want the interrupted run blocked with its artifacts preserved", results)
+	}
+	settled, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// An operator clears the machine by hand: the checkout is removed and its
+	// registration with it, exactly as `git worktree remove` does. The second
+	// --force is what Git wants for a working tree the developer left unclean,
+	// which is every preserved checkout worth removing by hand.
+	runPipelineGit(t, repository, "worktree", "remove", "--force", "--force", settled.WorktreePath)
+	if _, err := os.Stat(settled.WorktreePath); !os.IsNotExist(err) {
+		t.Fatalf("the checkout is still on disk: %v", err)
+	}
+
+	reconciler := Reconciler{Tracker: tracker, Worktrees: newObserver(t, repository, worktreeRoot), Store: store}
+	sweep, swept := reconciler.sweepWorktree(context.Background(), settled)
+	if swept {
+		t.Fatalf("sweep = %#v, want nothing reported for a checkout that was already gone", sweep)
+	}
+	recorded, err := store.Load(settled.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.WorktreeRemoved || recorded.WorktreeSweptAt == nil {
+		t.Fatalf("record = %#v, want the run told its checkout is gone even though this sweep did not remove it", recorded)
+	}
+	// Which is what takes it out of the candidates, so it stops holding a slot in
+	// the tail that was meant for a checkout somebody can still open. A full tail
+	// of newer runs stands beside it: without the record this one is the oldest
+	// candidate and would be probed again on every pass forever.
+	beside := make([]runstate.State, 0, settledWorktreeTail+1)
+	for index := 0; index < settledWorktreeTail; index++ {
+		later := recorded.CompletedAt.Add(time.Duration(index+1) * time.Minute)
+		beside = append(beside, runstate.State{
+			RunID:        fmt.Sprintf("run-later-%02d", index),
+			Status:       runstate.StatusFailed,
+			CompletedAt:  &later,
+			WorktreePath: fmt.Sprintf("/worktrees/later-%02d", index),
+		})
+	}
+	if candidates := sweepableWorktrees(append(beside, recorded)); len(candidates) != 0 {
+		t.Fatalf("candidates = %#v, want the run dropped once its record says the checkout is gone", candidates)
 	}
 }
 

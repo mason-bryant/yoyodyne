@@ -86,7 +86,10 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 	}
 	for _, worktree := range convergence.Worktrees {
-		if worktree.Failure != "" {
+		// A record that could not be told its checkout is gone fails the command
+		// as squarely as a retirement that could not run: it is the state that
+		// sends every later reader to a directory that is not there.
+		if worktree.Failure != "" || worktree.RecordProblem != "" {
 			failed = true
 		}
 	}
@@ -163,12 +166,20 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 	return 0
 }
 
-// printConvergence reports only what the sweep changed and what it could not
-// do. A repository already level with the forge says nothing here, and neither
-// does a branch or a checkout kept for a good reason: all of them are the
-// status quo, and a line per target and per preserved artifact on every sweep
-// would bury the ones that actually need reading. `--json` carries the whole
-// sweep either way.
+// printConvergence reports what the sweep changed, what it could not do, and
+// the one thing it deliberately left that goes on costing something. A
+// repository already level with the forge says nothing here, and neither does a
+// branch kept for a good reason: both are the status quo, and a line per target
+// and per preserved branch on every sweep would bury the ones that actually need
+// reading. `--json` carries the whole sweep either way.
+//
+// A kept checkout is the exception, and it is not the same kind of fact as a
+// kept branch. A branch costs nothing to leave; a checkout is a registration
+// that every command spawned on this machine pays for, and one holding
+// uncommitted work is kept however old it gets, so it is the one category the
+// sweep cannot bound on its own. Saying so on every pass is what lets an
+// operator deal with a handful of directories rather than meet them as the day
+// commands stop spawning.
 func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Convergence) {
 	for _, target := range convergence.Targets {
 		switch {
@@ -183,10 +194,22 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 	}
 	for _, worktree := range convergence.Worktrees {
 		switch {
+		// A checkout that is gone whose run was not told so is read first, because
+		// it is the only one of these where doing nothing leaves somebody being
+		// sent after a directory that does not exist.
+		case worktree.RecordProblem != "":
+			fmt.Fprintf(stderr, "%s retired but not recorded: %s\n", worktree.Path, worktree.RecordProblem)
+		// "not swept cleanly" rather than "not retired", because this covers both
+		// a retirement that was refused and one that happened and could not be
+		// confirmed. The message says which.
 		case worktree.Failure != "":
-			fmt.Fprintf(stderr, "%s not retired: %s\n", worktree.Path, worktree.Failure)
+			fmt.Fprintf(stderr, "%s not swept cleanly: %s\n", worktree.Path, worktree.Failure)
 		case worktree.Removed:
 			fmt.Fprintf(stdout, "%s retired: run %s is settled and the checkout held nothing\n", worktree.Path, worktree.RunID)
+		// The run rather than the path, because the reason already names the
+		// checkout and the run is how an operator finds what it was for.
+		case worktree.Kept != "":
+			fmt.Fprintf(stdout, "%s kept: %s\n", worktree.RunID, worktree.Kept)
 		}
 	}
 	// The prune says something only when it removed registrations or could not
@@ -217,11 +240,16 @@ and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
 
 It also retires the leftover checkouts, so the worktree registrations a machine
-carries stay bounded rather than growing with the harness's history until a
-command in the next worktree cannot spawn. Settled runs past the most recent few
-have their checkout unregistered — one holding uncommitted work is always kept —
-and registrations whose checkout is no longer on disk are pruned, whichever run
-or person left them behind. No branch is touched by either.
+carries stop growing with the harness's history until a command in the next
+worktree cannot spawn. Settled runs past the most recent few have their checkout
+unregistered, and registrations whose checkout is no longer on disk are pruned,
+whichever run or person left them behind. No branch is touched by either.
+
+One category is left: a checkout holding uncommitted work is always kept, at any
+age, because that work is the one thing nothing else records. Those are the
+registrations this cannot bound, so each is printed with its reason on every
+sweep. Commit what is worth keeping onto the run's branch or delete it, and the
+next sweep takes the directory.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development
