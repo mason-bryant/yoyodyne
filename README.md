@@ -210,7 +210,8 @@ and personas.
 
 **Or have step 2 walked for you.** `yoyo setup` is that step and everything
 around it as questions — the tracker, the configuration, the checks read from
-what your repository already declares, the tracker's sync remote, and then the
+what your repository already declares, the tracker's sync remote, the index at
+the door of each artifact home, and then the
 optional offer of [reporting into Slack](#reporting-into-slack) — ending with
 `yoyo doctor`, which is what decides whether the installation actually works:
 
@@ -298,6 +299,19 @@ unless you pass `--product`. Nothing already there is overwritten without
 `--force`, and the refusal happens before any file is written, so a project is
 never left half-configured. See [Configuring a project](#configuring-a-project)
 for what is in the file.
+
+**It also puts a `README.md` at the door of every artifact home** — the
+specifications directory and the goals under it, the designs, the decision
+records, and the invariants — saying three things about that directory: what is
+filed there, which agent owns it, and whether you may edit one of those documents
+by hand. The answers are the ones the harness already enforces rather than a
+policy the file invents: a role that is not the owner proposes an amendment, your
+own edit is reported rather than refused, and what a change leaves stale
+downstream is what `yoyo stale` reports. An index that is already there is left
+exactly as it is, `--force` included, because it is your prose rather than
+something `init` generated. [`yoyo doctor`](#checking-the-installation) reports
+one that is missing or has stopped answering, and `yoyo setup` offers to write
+it, which is how a project configured before these existed gets them.
 
 **It also points the tracker at your Git remote**, so the backlog is shared
 rather than one per machine. Beads moves its data over an ordinary Git remote
@@ -632,7 +646,11 @@ introduction before them, or an empty goals section is named on stderr when the
 conversation opens and listed for the product manager alongside the
 specifications themselves — and still read, because refusing to load it would
 silently lose intent somebody wrote down. A directory with nothing in it is
-reported the same way rather than treated as a product with no intent.
+reported the same way rather than treated as a product with no intent. A
+`README.md` is the one file the shape is not asked of: a directory index says
+what is filed beside it and states no intent of its own, which is the same reason
+artifact identity skips it, so there is no introduction for goals to serve and no
+goals to state.
 
 The context also says outright what those specifications record of the two
 documents intent is written in — the brief saying what the product is and who it
@@ -2388,7 +2406,9 @@ repository id follow from it. Editing a field is the whole of what changes the
 harness's behavior. `init` also points the tracker at a remote so the backlog is
 shared rather than per-machine — this project's Git remote by default, or the
 URL `--tracker-remote` names; see
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs) — and
+writes the `README.md` each artifact home gets, which says what is filed there,
+who owns it, and whether you may edit one by hand.
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated
@@ -2805,7 +2825,8 @@ yoyo doctor --json     # the same findings, for something automating the repair
 It looks at the `yoyo` on your `PATH` and whether it is the build you think it
 is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
-checks and whether this machine can run the programs they name, each provider
+checks and whether this machine can run the programs they name, whether each
+artifact home still says what is filed there and who owns it, each provider
 your agents name — installed always, and authenticated where the harness has an
 adapter that can ask, which today is Claude Code — forge access when the project
 publishes, and, when reporting is on, this project's own Slack secrets and the

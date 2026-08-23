@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
@@ -284,6 +285,21 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		bundle.Bytes += len(section)
 		bundle.References = append(bundle.References, reference)
 		intent.add(reference)
+		// A directory index is not held to the shape a specification is held to.
+		// The artifact contract says so normatively — an index is ungoverned by
+		// design, and index documents are not malformed for lacking goals — and
+		// it follows from what an index is: it describes what is filed beside it
+		// and states no intent, which is the same reason artifact identity skips
+		// it and the same reason intentKind reads it as neither the brief nor the
+		// goals. Checking one produces a report that is always true and never
+		// actionable: `docs/product/goals/README.md` was reported for opening
+		// with its goals because its title reads "Goals directory", and an index
+		// rewritten to say what is filed there instead would be reported for
+		// stating none. Either way the report is about a file the contract was
+		// never written for.
+		if directoryIndex(reference.Path) {
+			continue
+		}
 		if reason := specificationStructureProblem(reference.Content); reason != "" {
 			bundle.SpecificationProblems = append(bundle.SpecificationProblems, SpecificationProblem{Path: reference.Path, Reason: reason})
 		}
@@ -578,6 +594,14 @@ func intentKind(documentPath, content string) string {
 	}
 }
 
+// directoryIndex reports whether a path is a directory's index rather than a
+// document stating anything. It is the same name artifact identity exempts, and
+// it is exempt here for the same reason: an index describes what is filed beside
+// it and is navigation rather than authority.
+func directoryIndex(documentPath string) bool {
+	return strings.EqualFold(path.Base(documentPath), artifacthome.FileName)
+}
+
 // namedIntentKind reads a document's kind from where it is filed. Only the
 // document's own name and the directory holding it are read: a goals document
 // is called goals or lives in a directory of them, and both are conventions a
@@ -586,7 +610,7 @@ func namedIntentKind(documentPath string) string {
 	base := strings.ToLower(strings.TrimSuffix(path.Base(documentPath), path.Ext(documentPath)))
 	directory := strings.ToLower(path.Base(path.Dir(documentPath)))
 	switch {
-	case base == "readme":
+	case directoryIndex(documentPath):
 		// A directory index describes what is filed beside it and states no intent
 		// of its own, which is how artifact identity treats one too.
 		return ""

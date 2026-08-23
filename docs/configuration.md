@@ -374,8 +374,12 @@ review is not a change anybody can trust.
 ```
 
 The directory is walked to any depth, and every `.md` file inside it is a
-specification. Its prose is checked for the introduction-then-goals shape above,
-and its identity — the frontmatter naming its id, kind, status, and what it
+specification, with one exception: a `README.md` is a directory index rather than
+a document stating anything, so neither the shape above nor
+[artifact identity](#artifact-identity-and-metadata) is asked of it. It is still
+read into the context, because what is filed in a directory is worth knowing.
+Everything else has its prose checked for the introduction-then-goals shape
+above, and its identity — the frontmatter naming its id, kind, status, and what it
 supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
 The two are read by different things and reported differently, so a
 specification with a malformed id is still read as intent, and one with no goals
@@ -481,6 +485,23 @@ which sits inside the decisions home by default and carries
 [its own identity scheme](#architectural-invariants). A home that does not exist
 is not an error — a project that has not written its designs down yet records no
 design artifacts.
+
+That exemption is what makes the `README.md` the place these directories explain
+themselves in, and `yoyo init` writes one for every home above — the
+specifications directory, the `goals` directory under it, the designs, the
+decision records, and the invariants. Each states three things and nothing else:
+what is filed there, which agent owns it, and whether you may edit one of those
+documents by hand. None of that is policy the file invents. A role that is not
+the owner proposes an amendment and waits, per the ownership table above; your
+own edit is never refused, and what it is is reported — a revision recorded under
+a role that does not own the document is an unauthorized revision every load
+names, and what a change leaves stale downstream is
+[`yoyo stale`](#traceability-references-and-orphans)'s to report. An index that is
+already there is left alone, `--force` included, because it is the project's own
+prose rather than something `init` generated; `yoyo doctor` reports one that is
+missing or has stopped stating the three things, and `yoyo setup` offers to write
+it — asking separately, and defaulting to no, before it replaces one somebody
+wrote.
 
 The metadata is the model the invariants already use, deliberately rather than a
 second scheme beside it: **the file name is the id**, a frontmatter id that

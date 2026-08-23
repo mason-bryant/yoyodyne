@@ -198,6 +198,35 @@ func TestAssembleProductSurfacesSpecificationsThatIgnoreTheStructure(t *testing.
 	}
 }
 
+// A directory index is not a specification and is not held to a specification's
+// shape. Both readings of one would be reported forever and neither would be
+// actionable: `docs/product/goals/README.md` was reported for opening with its
+// goals because its title read "Goals directory", and the same file rewritten to
+// say what is filed there would be reported for stating none. The index is still
+// carried into the context, because it says what is filed beside it.
+func TestADirectoryIndexIsNotHeldToTheSpecificationShape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/good.md", wellFormed)
+	writeProductFile(t, root, "docs/product/goals/README.md", "# Goals directory\n\nWhat is filed here, and whose it is.\n")
+	writeProductFile(t, root, "docs/product/README.md", "# docs/product\n\n**Purpose.** The brief and the goals that serve it.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if len(bundle.SpecificationProblems) != 0 {
+		t.Fatalf("problems = %v, want an index held to no shape at all", bundle.SpecificationProblems)
+	}
+	if strings.Contains(bundle.Text, "## Specifications that do not follow the required structure") {
+		t.Fatalf("an index was reported as a specification that ignores the structure:\n%s", bundle.Text)
+	}
+	if !strings.Contains(bundle.Text, "## Specification: docs/product/goals/README.md") {
+		t.Fatalf("the index was dropped rather than merely left unchecked:\n%s", bundle.Text)
+	}
+}
+
 func TestSpecificationStructureProblem(t *testing.T) {
 	t.Parallel()
 

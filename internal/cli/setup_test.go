@@ -299,6 +299,86 @@ func TestSetupTurnsReportingOnByEditingTheConfigurationRatherThanRewritingIt(t *
 	}
 }
 
+// `yoyo init` writes the artifact-home indexes, so the installation that needs
+// them written is the one that was configured before they existed -- which is
+// every project already running. Setup is the repair half of what doctor reports.
+func TestSetupWritesTheIndexesAProjectConfiguredEarlierNeverGot(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.answers = "\n\n"
+	world.walk()
+
+	// The state a project configured before this existed is actually in.
+	designs := filepath.Join(world.project, "docs", "designs", "README.md")
+	if err := os.RemoveAll(filepath.Join(world.project, "docs")); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	world.answers = "y\nn\n" // write the indexes, and leave reporting off
+	report := world.walk()
+
+	step := world.step(report, stepArtifactReadmes)
+	if step.Status != setupDone {
+		t.Fatalf("artifact-readmes step = %s (%s), want the indexes written", step.Status, step.Summary)
+	}
+	content, err := os.ReadFile(designs)
+	if err != nil {
+		t.Fatalf("setup wrote no index for the designs home: %v", err)
+	}
+	for _, answer := range []string{"**Purpose.**", "**Owner.**", "**Editing by hand.**"} {
+		if !strings.Contains(string(content), answer) {
+			t.Errorf("the index setup wrote does not state %s:\n%s", answer, content)
+		}
+	}
+	if !report.Diagnosis.Healthy() {
+		t.Fatalf("the walk left the installation unable to run work:%s", renderSetupReport(report))
+	}
+
+	// And converged means converged: the next walk finds them and asks nothing.
+	world.answers = "n\n"
+	again := world.walk()
+	if step := world.step(again, stepArtifactReadmes); step.Status != setupAlready {
+		t.Fatalf("artifact-readmes step = %s (%s) on a second walk, want it left alone", step.Status, step.Summary)
+	}
+}
+
+// An index somebody rewrote is their prose. Setup asks about replacing it
+// separately from writing one that is not there, the question defaults to no,
+// and a no leaves the file byte for byte -- setup does not overwrite what is
+// already there, and an index somebody customized is exactly that rule's case.
+func TestSetupDoesNotReplaceAnIndexSomebodyWroteWithoutBeingTold(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.answers = "\n\n"
+	world.walk()
+
+	decisions := filepath.Join(world.project, "docs", "decisions", "README.md")
+	theirs := "# docs/decisions\n\nOurs, and it says nothing the template says.\n"
+	if err := os.WriteFile(decisions, []byte(theirs), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	world.answers = "\nn\n" // take the proposed answer on the index, then decline reporting
+	report := world.walk()
+
+	step := world.step(report, stepArtifactReadmes)
+	if step.Status != setupSkipped {
+		t.Fatalf("artifact-readmes step = %s (%s), want the operator's own file left alone", step.Status, step.Summary)
+	}
+	if step.Remedy == "" {
+		t.Error("the index that was left says nothing about what would finish it")
+	}
+	content, err := os.ReadFile(decisions)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(content) != theirs {
+		t.Errorf("setup replaced an index somebody wrote:\n%s", content)
+	}
+}
+
 // The tokens are namespaced by product and the keychain does the asking. Both
 // halves are load-bearing: one person running several harnesses is the ordinary
 // case, and a token that reached this program would be a token in an argument
