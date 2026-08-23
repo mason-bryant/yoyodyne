@@ -12,6 +12,8 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -290,11 +292,13 @@ func TestSweepableWorktreesHoldsBackTheMostRecentSettledRuns(t *testing.T) {
 	}
 }
 
-// What the sweep may and may not take. A checkout holding uncommitted work is
-// the one thing nothing else records, so it is kept with the reason; one holding
-// nothing is debris, and every commit it carried is still on the branch this
-// deliberately does not touch.
-func TestSweepingAWorktreeKeepsUncommittedWorkAndRetiresTheRest(t *testing.T) {
+// The case that decides whether this bounds anything: a stopped run's checkout
+// with the developer's half-finished change still in it. That is the ordinary
+// shape of the population the sweep exists for, so keeping those would leave
+// most of the registrations exactly where they were. It is retired — and the
+// work is moved somewhere durable first, which is what makes retiring it lose
+// nothing.
+func TestSweepingRetiresACheckoutAndPreservesTheWorkInIt(t *testing.T) {
 	t.Parallel()
 
 	repository, worktreeRoot, store := restartableFixture(t)
@@ -316,42 +320,50 @@ func TestSweepingAWorktreeKeepsUncommittedWorkAndRetiresTheRest(t *testing.T) {
 	}
 	reconciler := Reconciler{Tracker: tracker, Worktrees: newObserver(t, repository, worktreeRoot), Store: store}
 
-	kept, swept := reconciler.sweepWorktree(context.Background(), settled)
-	if !swept || kept.Removed || !strings.Contains(kept.Kept, "uncommitted work") {
-		t.Fatalf("sweep = %#v, swept = %t, want the developer's unsaved work kept", kept, swept)
-	}
+	// The developer's change is uncommitted, which is the state a stopped run's
+	// checkout is normally in.
 	if _, err := os.Stat(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
-		t.Fatalf("the uncommitted work was removed: %v", err)
-	}
-
-	// Somebody took what they wanted out of it, so the checkout now holds
-	// nothing and the sweep may have it.
-	if err := os.Remove(filepath.Join(settled.WorktreePath, "feature.txt")); err != nil {
-		t.Fatalf("Remove() error = %v", err)
+		t.Fatalf("the fixture left no uncommitted work to preserve: %v", err)
 	}
 	retired, swept := reconciler.sweepWorktree(context.Background(), settled)
 	if !swept || !retired.Removed || retired.Kept != "" || retired.Failure != "" || retired.RecordProblem != "" {
-		t.Fatalf("sweep = %#v, swept = %t, want the empty checkout retired", retired, swept)
+		t.Fatalf("sweep = %#v, swept = %t, want the checkout retired", retired, swept)
 	}
 	if _, err := os.Stat(settled.WorktreePath); !os.IsNotExist(err) {
 		t.Errorf("the checkout is still on disk: %v", err)
 	}
-	// The branch is deliberately untouched: whether it may go is the branch
-	// sweep's question and it needs the target to answer it.
+
+	// Nothing was lost: the change is readable from the ref the sweep named.
+	if retired.PreservedWork != gitworktree.PreservedWorkRef(settled.RunID) {
+		t.Fatalf("preserved work = %q, want %q", retired.PreservedWork, gitworktree.PreservedWorkRef(settled.RunID))
+	}
+	if preserved := gitOutput(t, repository, "show", retired.PreservedWork+":feature.txt"); preserved != "implemented\n" {
+		t.Errorf("preserved feature.txt = %q, want the developer's change", preserved)
+	}
+	// The branch is deliberately untouched, and the capture did not move it:
+	// whether it may go is the branch sweep's question and it needs the target to
+	// answer it.
 	if branches := strings.TrimSpace(gitOutput(t, repository, "for-each-ref", "--format=%(refname)", "refs/heads/"+settled.Branch)); branches == "" {
 		t.Error("the branch was deleted with the checkout")
 	}
+	if commit := strings.TrimSpace(gitOutput(t, repository, "rev-parse", "refs/heads/"+settled.Branch)); commit != settled.BaseCommit {
+		t.Errorf("branch = %q, want it left at the base commit %q rather than carrying the capture", commit, settled.BaseCommit)
+	}
 
-	// The removal is written onto the run it belongs to. `yoyo status`, the
-	// docket, and a re-run all read that record as the answer to whether the
-	// directory is there, so one that still said "preserved" would send every one
-	// of them after a checkout that is gone.
+	// The removal is written onto the run it belongs to, and so is where the work
+	// went. `yoyo status`, the docket, and a re-run all read that record as the
+	// answer to whether the directory is there, so one that still said "preserved"
+	// would send every one of them after a checkout that is gone — and the ref is
+	// the only thing connecting the captured work back to the item.
 	recorded, err := store.Load(settled.RunID)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if !recorded.WorktreeRemoved || recorded.WorktreeSweptAt == nil {
 		t.Fatalf("record = %#v, want the retirement written down", recorded)
+	}
+	if recorded.PreservedWorkRef != retired.PreservedWork {
+		t.Errorf("recorded preserved work = %q, want %q", recorded.PreservedWorkRef, retired.PreservedWork)
 	}
 	if recorded.BranchRemoved {
 		t.Error("the record claims the branch was removed, which the sweep never touches")
@@ -427,6 +439,180 @@ func TestSweepingRecordsACheckoutSomethingElseAlreadyRemoved(t *testing.T) {
 	}
 	if candidates := sweepableWorktrees(append(beside, recorded)); len(candidates) != 0 {
 		t.Fatalf("candidates = %#v, want the run dropped once its record says the checkout is gone", candidates)
+	}
+}
+
+// The whole of it through the front door: more settled runs than the tail holds,
+// swept by Converge itself. This is what proves the loop, the tail bound, and
+// the ordering — the checkout goes before the branch sweep asks about the branch,
+// because a branch a checkout still holds is one the branch sweep keeps.
+func TestConvergeRetiresSettledCheckoutsPastTheTail(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	worktrees := newSweepManager(t, repository, worktreeRoot)
+
+	// One more settled run than the tail keeps, oldest first, each with a real
+	// checkout and a real branch. The oldest holds a half-finished change, which
+	// is what a stopped run's checkout normally holds.
+	settled := make([]runstate.State, 0, settledWorktreeTail+1)
+	for index := 0; index <= settledWorktreeTail; index++ {
+		state := settledRunWithCheckout(t, worktrees, store, index)
+		if index == 0 {
+			writeSweepFile(t, filepath.Join(state.WorktreePath, "half-done.txt"), "the developer got this far\n")
+		}
+		settled = append(settled, state)
+	}
+	registeredBefore := len(linkedWorktrees(t, repository))
+	if registeredBefore != settledWorktreeTail+1 {
+		t.Fatalf("registered worktrees = %d, want %d before the sweep", registeredBefore, settledWorktreeTail+1)
+	}
+
+	convergence, err := (Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}).Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge() error = %v", err)
+	}
+
+	// Exactly the one run past the tail is retired, and the tail is left standing.
+	if len(convergence.Worktrees) != 1 {
+		t.Fatalf("worktree sweeps = %#v, want only the run past the tail", convergence.Worktrees)
+	}
+	swept := convergence.Worktrees[0]
+	oldest := settled[0]
+	if swept.RunID != oldest.RunID || !swept.Removed || swept.Kept != "" || swept.Failure != "" || swept.RecordProblem != "" {
+		t.Fatalf("sweep = %#v, want run %s retired", swept, oldest.RunID)
+	}
+	if registered := len(linkedWorktrees(t, repository)); registered != settledWorktreeTail {
+		t.Errorf("registered worktrees = %d, want the tail of %d left", registered, settledWorktreeTail)
+	}
+	// Its half-finished change survived the retirement, which is the only reason
+	// retiring a dirty checkout is allowed at all.
+	if swept.PreservedWork == "" {
+		t.Fatal("the retired checkout held uncommitted work and nothing says where it went")
+	}
+	if preserved := gitOutput(t, repository, "show", swept.PreservedWork+":half-done.txt"); preserved != "the developer got this far\n" {
+		t.Errorf("preserved half-done.txt = %q, want the developer's work", preserved)
+	}
+
+	// The ordering: the branch sweep ran after the checkout was unregistered, so
+	// the branch it was holding could go in the same pass. A branch still checked
+	// out is one RemoveMergedBranch keeps, which is what this would show instead.
+	var branch BranchSweep
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID == oldest.RunID {
+			branch = candidate
+		}
+	}
+	if !branch.Removed || branch.Kept != "" {
+		t.Fatalf("branch sweep = %#v, want the retired run's branch removed in the same pass", branch)
+	}
+	// Every branch still held by a tail checkout is kept, which is the other half
+	// of that ordering being real rather than incidental.
+	for _, candidate := range convergence.Branches {
+		if candidate.RunID != oldest.RunID && candidate.Removed {
+			t.Errorf("branch sweep = %#v, want a branch its checkout still holds left alone", candidate)
+		}
+	}
+
+	// Sweeping again takes nothing: the retired run records that its checkout is
+	// gone, and the rest are still inside the tail.
+	repeated, err := (Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}).Converge(context.Background())
+	if err != nil {
+		t.Fatalf("second Converge() error = %v", err)
+	}
+	if len(repeated.Worktrees) != 0 {
+		t.Fatalf("second sweep = %#v, want nothing left to retire", repeated.Worktrees)
+	}
+	if registered := len(linkedWorktrees(t, repository)); registered != settledWorktreeTail {
+		t.Errorf("registered worktrees = %d after a second sweep, want the tail of %d", registered, settledWorktreeTail)
+	}
+}
+
+// settledRunWithCheckout creates a real worktree and records a settled run for
+// it, so a sweep over the store meets artifacts that are exactly what the
+// pipeline would have left. The index orders them: run 0 is the oldest.
+func settledRunWithCheckout(t *testing.T, worktrees *gitworktree.Manager, store *runstate.Store, index int) runstate.State {
+	t.Helper()
+	runID := fmt.Sprintf("run-%032x", index)
+	workItemID := fmt.Sprintf("yoyodyne-swept.%d", index)
+	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() worktree %d error = %v", index, err)
+	}
+	settledAt := baseTime.Add(time.Duration(index) * time.Minute)
+	state := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "repository",
+		WorkItemID:    workItemID,
+		Status:        runstate.StatusFailed,
+		Phase:         runstate.PhaseDeveloping,
+		StartedAt:     settledAt,
+		UpdatedAt:     settledAt,
+		CompletedAt:   &settledAt,
+		WorktreePath:  worktree.Path,
+		Branch:        worktree.Branch,
+		BaseCommit:    worktree.BaseCommit,
+		TargetBranch:  worktree.TargetBranch,
+	}
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() run %d error = %v", index, err)
+	}
+	return state
+}
+
+// newSweepManager is the real worktree manager, which the sweep needs as a
+// concrete type here because these tests create the checkouts it retires.
+func newSweepManager(t *testing.T, repository, worktreeRoot string) *gitworktree.Manager {
+	t.Helper()
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:                execution.OSProcessRunner{},
+		RepositoryRoot:        repository,
+		WorktreeRoot:          worktreeRoot,
+		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+	})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	return worktrees
+}
+
+// linkedWorktrees names every worktree registered against the repository apart
+// from the primary checkout — the count this whole item exists to bound.
+func linkedWorktrees(t *testing.T, repository string) []string {
+	t.Helper()
+	var paths []string
+	for _, line := range strings.Split(gitOutput(t, repository, "worktree", "list", "--porcelain"), "\n") {
+		path, found := strings.CutPrefix(strings.TrimSpace(line), "worktree ")
+		if !found || samePath(t, path, repository) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func samePath(t *testing.T, left, right string) bool {
+	t.Helper()
+	resolvedLeft, leftErr := filepath.EvalSymlinks(left)
+	resolvedRight, rightErr := filepath.EvalSymlinks(right)
+	if leftErr != nil || rightErr != nil {
+		return left == right
+	}
+	return resolvedLeft == resolvedRight
+}
+
+func writeSweepFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile(%s) error = %v", path, err)
 	}
 }
 

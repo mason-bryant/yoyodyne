@@ -904,10 +904,11 @@ The worktree alone has one other way of going, on a stoppage nobody re-ran: once
 enough later runs have settled past it, the [convergence
 sweep](operations.md#recovering-interrupted-runs) unregisters the checkout so a
 machine's worktree registrations stay bounded. It records that removal the same
-way, and it takes nothing — a checkout holding uncommitted work is kept, and the
-branch, which is where everything else the run wrote lives, is untouched. What
-it costs is `/continue` on that run, which needs the checkout; `/rerun` and the
-branch are still there.
+way, and it takes nothing — the branch is untouched, and whatever the developer
+left uncommitted is recorded on `refs/yoyodyne/preserved-work/<run-id>`, named on
+the run's record, before the directory goes. What it costs is `/continue` on that
+run, which needs the checkout itself; `/rerun`, the branch, and the preserved
+work are all still there.
 
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
@@ -949,7 +950,8 @@ committed — refuses to a person, leaves the item blocked, and says so. A check
 the [convergence sweep](operations.md#recovering-interrupted-runs) retired
 refuses here too, and for the same reason: there is nothing left to hand back.
 That is what the sweep's tail is for — a recent stoppage still has its checkout,
-and an old one is replanned or re-run from its branch instead.
+and an old one is replanned or re-run instead, from its branch and from the
+preserved-work ref the sweep recorded before it took the directory.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

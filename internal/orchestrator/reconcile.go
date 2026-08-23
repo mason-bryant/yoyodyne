@@ -39,9 +39,10 @@ type ReconcileWorktrees interface {
 	// The two removals that keep the worktree registrations from accumulating
 	// without bound, which is what eventually stops a command spawning at all in
 	// a machine's next worktree. Neither can lose anything: retiring a preserved
-	// checkout keeps one holding uncommitted work and never touches its branch,
-	// and pruning only unregisters checkouts that are no longer on disk.
-	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.WorktreeRemoval, error)
+	// checkout records whatever uncommitted work it holds on a run-scoped ref
+	// before removing the directory and never touches its branch, and pruning
+	// only unregisters checkouts that are no longer on disk.
+	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree, uncommitted gitworktree.UncommittedWork) (gitworktree.WorktreeRemoval, error)
 	PruneRegistrations(ctx context.Context) (gitworktree.Prune, error)
 }
 

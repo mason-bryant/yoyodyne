@@ -387,43 +387,49 @@ branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
 
-The same sweep retires the leftover checkouts, which is what stops the worktree
-registrations a machine carries growing with the harness's history. That growth
-is not cosmetic: an agent's sandbox profile denies every registered worktree
-path on every command it spawns, so a machine that keeps them all eventually
-cannot spawn a command in its next worktree at all — no `make check`, no `go
-test`, nothing. Settled runs past the most recent few have their checkout
-unregistered, and registrations whose checkout is no longer on disk are pruned,
-whichever run or person left them behind. Neither can lose anything: a directory
-Git is not managing is never touched, no branch is touched by either, and
-pruning only unregisters checkouts that are not there any more. A run still in
-flight is never a candidate — that is a live developer's checkout. Each
-retirement is taken under the run's own lease and written onto its record, and
-so is a checkout the sweep finds already gone — removed by you, or by an
-external `git worktree prune` — so `yoyo status` and the triage docket stop
-advertising a directory that is not there rather than sending you after it. The
-one thing it costs is `/continue` on a stoppage past the tail, which needs the
-checkout it was going to hand back; the branch is still there, so replanning or
-re-running the item is not affected. Because the sweep is part of `yoyo
-reconcile`, this is owned and recurring rather than something anybody has to
-remember.
+The same sweep retires the leftover checkouts, which is what makes the worktree
+registrations a machine carries live runs plus a bounded tail rather than
+something that grows with the harness's history. That growth is not cosmetic: an
+agent's sandbox profile denies every registered worktree path on every command it
+spawns, so a machine that keeps them all eventually cannot spawn a command in its
+next worktree at all — no `make check`, no `go test`, nothing. Settled runs past
+the most recent few have their checkout unregistered, and registrations whose
+checkout is no longer on disk are pruned, whichever run or person left them
+behind. A run still in flight is never a candidate — that is a live developer's
+checkout. Each retirement is taken under the run's own lease and written onto its
+record, and so is a checkout the sweep finds already gone — removed by you, or by
+an external `git worktree prune` — so `yoyo status` and the triage docket stop
+advertising a directory that is not there rather than sending you after it.
+Because the sweep is part of `yoyo reconcile`, this is owned and recurring rather
+than something anybody has to remember.
 
-**One category is outside that bound, and it is yours.** A checkout holding
-uncommitted work is kept at any age, because that work is the one thing nothing
-else records — no branch, no commit, nothing. So registrations for those runs do
-go on accumulating, and no sweep will take them. What the sweep does instead is
-name each one, with its reason, on every pass:
+Nothing is lost by it, including the case that made this worth doing carefully.
+Most preserved checkouts belong to runs that stopped without promoting anything,
+which is the population most likely to have a half-finished change sitting in the
+working tree — and that change is the one thing no branch, commit, or record
+holds a copy of. So the sweep moves it rather than declining to act: the tree is
+recorded on `refs/yoyodyne/preserved-work/<run-id>` and proven to be there, and
+only then does the directory go.
 
 ```
-run-4f2a…9c1b kept: /…/worktrees/yoyodyne-ifd-140-a1b2c3d4 holds uncommitted
-work, which nothing else records
+/…/worktrees/yoyodyne-ifd-140-a1b2c3d4 retired: run run-4f2a…9c1b is settled
+  uncommitted work preserved at refs/yoyodyne/preserved-work/run-4f2a…9c1b
 ```
 
-Deal with them while they are a handful of lines. Commit what is worth keeping
-onto that run's branch — which the sweep never touches, so it survives — or
-delete what is not, and the next sweep retires the directory. A machine whose
-sweeps print nothing here is one whose registration count really is live runs
-plus the tail.
+That ref is on the run's own record too, which is where to look months later.
+Open it as a checkout again with `git worktree add --detach <path> <ref>`, or
+read it with `git show` and `git diff`. It is deliberately not a branch: a branch
+would be swept by the branch sweep above, listed by `git branch`, and answer the
+containment proofs the harness makes about run branches. A capture that cannot be
+written leaves the checkout exactly where it was, reported as kept with the
+reason — as are the other things the sweep will not touch, a directory Git is not
+managing and a registration on a branch its run never recorded. Those are
+anomalies rather than a category: a `yoyo reconcile` printing one is telling you
+about something that should not be there.
+
+The one thing the sweep costs is `/continue` on a stoppage past the tail, which
+needs the checkout it was going to hand back. The branch is still there and so is
+the preserved work, so replanning or re-running the item is not affected.
 
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
 branch already level with the remote has nothing to catch up to, and cleanup

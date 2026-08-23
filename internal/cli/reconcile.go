@@ -166,20 +166,18 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 	return 0
 }
 
-// printConvergence reports what the sweep changed, what it could not do, and
-// the one thing it deliberately left that goes on costing something. A
+// printConvergence reports what the sweep changed and what it could not do. A
 // repository already level with the forge says nothing here, and neither does a
 // branch kept for a good reason: both are the status quo, and a line per target
 // and per preserved branch on every sweep would bury the ones that actually need
 // reading. `--json` carries the whole sweep either way.
 //
-// A kept checkout is the exception, and it is not the same kind of fact as a
-// kept branch. A branch costs nothing to leave; a checkout is a registration
-// that every command spawned on this machine pays for, and one holding
-// uncommitted work is kept however old it gets, so it is the one category the
-// sweep cannot bound on its own. Saying so on every pass is what lets an
-// operator deal with a handful of directories rather than meet them as the day
-// commands stop spawning.
+// A kept checkout is said, unlike a kept branch, because it is no longer a
+// category the sweep declines to act on — the work in one is captured and the
+// directory retired — so anything still kept is an anomaly: a directory Git is
+// not managing, a registration on a branch the run never recorded, a capture
+// that could not be written. Each of those is one line that should not be
+// appearing at all, rather than a standing list somebody learns to scroll past.
 func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Convergence) {
 	for _, target := range convergence.Targets {
 		switch {
@@ -205,7 +203,12 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case worktree.Failure != "":
 			fmt.Fprintf(stderr, "%s not swept cleanly: %s\n", worktree.Path, worktree.Failure)
 		case worktree.Removed:
-			fmt.Fprintf(stdout, "%s retired: run %s is settled and the checkout held nothing\n", worktree.Path, worktree.RunID)
+			fmt.Fprintf(stdout, "%s retired: run %s is settled\n", worktree.Path, worktree.RunID)
+			// Where a half-finished change went is the one thing retiring it raises,
+			// so it is said next to the retirement rather than left in `--json`.
+			if worktree.PreservedWork != "" {
+				fmt.Fprintf(stdout, "  uncommitted work preserved at %s\n", worktree.PreservedWork)
+			}
 		// The run rather than the path, because the reason already names the
 		// checkout and the run is how an operator finds what it was for.
 		case worktree.Kept != "":
@@ -240,16 +243,17 @@ and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
 
 It also retires the leftover checkouts, so the worktree registrations a machine
-carries stop growing with the harness's history until a command in the next
-worktree cannot spawn. Settled runs past the most recent few have their checkout
-unregistered, and registrations whose checkout is no longer on disk are pruned,
-whichever run or person left them behind. No branch is touched by either.
+carries are live runs plus a bounded tail rather than growing with the harness's
+history until a command in the next worktree cannot spawn. Settled runs past the
+most recent few have their checkout unregistered, and registrations whose
+checkout is no longer on disk are pruned, whichever run or person left them
+behind. No branch is touched by either.
 
-One category is left: a checkout holding uncommitted work is always kept, at any
-age, because that work is the one thing nothing else records. Those are the
-registrations this cannot bound, so each is printed with its reason on every
-sweep. Commit what is worth keeping onto the run's branch or delete it, and the
-next sweep takes the directory.
+A checkout holding uncommitted work is retired too, and nothing is lost doing it:
+the tree is recorded first on refs/yoyodyne/preserved-work/<run-id>, which the
+retirement line names and the run's own record keeps. Recover it with
+"git worktree add --detach <path> <ref>". A capture that cannot be written
+leaves the checkout exactly where it was.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

@@ -19,8 +19,10 @@ package orchestrator
 // every worktree registration is a path an agent's sandbox profile denies on
 // every command it spawns, so registrations that accumulate with the harness's
 // history eventually stop commands spawning at all. Retiring them is as
-// judgement-free as the rest — a checkout holding uncommitted work is kept, and
-// what the others carried is on branches this does not touch.
+// judgement-free as the rest — what a checkout carried in commits is on a branch
+// this does not touch, and what it carried uncommitted is recorded on a
+// run-scoped ref before the directory goes, so retiring one moves work rather
+// than deciding anything about it.
 
 import (
 	"context"
@@ -42,15 +44,18 @@ import (
 // registration is a path an agent's sandbox profile denies on every command it
 // spawns, so a repository that keeps them all eventually cannot spawn a command
 // at all — the failure this bound exists for, reached at 180 registrations on
-// the harness's own machine. Nothing is lost by going past it: every commit a
-// retired checkout carried is on a branch the sweep beside this one only deletes
-// once the target provably carries it.
+// the harness's own machine, 168 of them left by runs that stopped without
+// promoting anything.
 //
-// The bound is a bound on what this can take rather than on the machine's whole
-// count, and the difference is one category: a checkout holding uncommitted work
-// is kept however old it is, because that work is the one thing nothing else
-// records. Those accumulate, so each one is printed on every sweep with the
-// reason — visible while it is a handful of directories, rather than at the wall.
+// That population is what makes the bound a real one rather than a bound on a
+// subset. A run that stopped is the run most likely to have left a change in its
+// checkout, so a sweep that declined to touch anything uncommitted would have
+// left most of those 168 exactly where they were. Instead the work is recorded
+// on a run-scoped ref and the directory goes: nothing is lost — the ref is
+// proven to carry the tree before the removal runs, and every commit the
+// checkout carried is on a branch this never touches — and what remains kept is
+// anomalies rather than a category, a directory Git is not managing or a
+// registration on a branch the run never recorded.
 const settledWorktreeTail = 8
 
 // Convergence is what one sweep did to bring local state onto the forge's and
@@ -81,6 +86,11 @@ type WorktreeSweep struct {
 	Removed    bool   `json:"removed"`
 	Kept       string `json:"kept,omitempty"`
 	Failure    string `json:"failure,omitempty"`
+	// PreservedWork is the ref the checkout's uncommitted work was recorded on
+	// before the directory went, empty when it held none. It is reported because
+	// it is the answer to the only question retiring a half-finished change
+	// raises: where did it go.
+	PreservedWork string `json:"preserved_work,omitempty"`
 	// RecordProblem is a checkout that was retired and whose run's record could
 	// not be told so. It is deliberately not a Failure: the directory is gone
 	// either way, and the thing to act on is the opposite of a retirement that
@@ -258,17 +268,22 @@ func (r Reconciler) sweepWorktree(ctx context.Context, recorded runstate.State) 
 	if state.Outstanding() || state.WorktreePath == "" || state.WorktreeRemoved {
 		return WorktreeSweep{}, false
 	}
-	removal, err := r.Worktrees.RemovePreservedWorktree(ctx, worktreeOf(state))
+	// The work in the checkout is captured rather than kept, because "keep
+	// anything dirty" is not a bound: a stopped run is the population most likely
+	// to have left a change behind, so declining to act on those would leave most
+	// of the registrations exactly where they were.
+	removal, err := r.Worktrees.RemovePreservedWorktree(ctx, worktreeOf(state), gitworktree.CaptureUncommittedWork)
 	if err != nil {
 		sweep.Failure = fmt.Errorf("retire the checkout of run %s: %w", state.RunID, err).Error()
 	}
 	sweep.Kept = removal.Kept
+	sweep.PreservedWork = removal.PreservedWork
 	// Removed covers both "this retired it" and "it was already gone", which is
 	// what the record has to say either way. Only the first is something this
 	// sweep did, and only the first is reported as a retirement.
 	if removal.Removed {
 		sweep.Removed = removal.Registered
-		sweep.RecordProblem = r.recordSweptWorktree(state)
+		sweep.RecordProblem = r.recordSweptWorktree(state, removal.PreservedWork)
 	}
 	if !sweep.Removed && sweep.Kept == "" && sweep.Failure == "" && sweep.RecordProblem == "" {
 		// The checkout was gone before this sweep reached it and its record now
@@ -283,10 +298,17 @@ func (r Reconciler) sweepWorktree(ctx context.Context, recorded runstate.State) 
 // what stopped it where it could not. A record left saying the checkout is still
 // there is worse than one that was never swept: the artifact is gone either way,
 // and only one of the two sends somebody looking for it.
-func (r Reconciler) recordSweptWorktree(state runstate.State) string {
+//
+// The ref the work was captured onto is recorded beside it, because the run's
+// own record is the only place anybody would think to look for where a stopped
+// run's half-finished change went.
+func (r Reconciler) recordSweptWorktree(state runstate.State, preservedWork string) string {
 	swept := r.clock().Now()
 	state.WorktreeRemoved = true
 	state.WorktreeSweptAt = &swept
+	if preservedWork != "" {
+		state.PreservedWorkRef = preservedWork
+	}
 	// When the run ended is what dates it; this dates the last thing the harness
 	// did to what it left behind, which is what UpdatedAt has always meant.
 	state.UpdatedAt = swept

@@ -646,6 +646,40 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "a recorded checkout sweep names a checkout that was removed",
 		},
 		{
+			// Where the retired checkout's uncommitted work went, which is the only
+			// record connecting that ref back to the item it belonged to.
+			name: "a checkout sweep that preserved the work in it",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + state.RunID
+			},
+		},
+		{
+			name: "preserved work with no sweep that recorded it",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + state.RunID
+			},
+			problem: "preserved_work_ref requires the checkout sweep that recorded it",
+		},
+		{
+			// A branch would be swept by the branch sweep and answer the containment
+			// proofs the harness makes about run branches, which is the whole reason
+			// the capture is kept out of refs/heads.
+			name: "preserved work recorded as a branch",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				state.PreservedWorkRef = "refs/heads/" + state.RunID
+			},
+			problem: "must be a ref outside refs/heads",
+		},
+		{
 			name: "a run recorded as superseding itself",
 			mutate: func(state *State) {
 				state.Integration = nil
