@@ -302,12 +302,28 @@ say "yoyo $version is at $install_dir/yoyo"
 if [ -n "$missing" ]; then
   say "Still needed before a run:$missing"
 fi
-say "claude must also be authenticated; \`yoyo doctor\` in your project says whether it is."
+# What the binary just installed can actually do, asked rather than assumed.
+# This script can be installed from a release older than the commands it would
+# otherwise recommend, and the last thing a first run says is the worst place
+# to name a command that does not exist. Where a verb is absent the line that
+# needed it is left out rather than softened.
+help_text="$("$install_dir/yoyo" help 2>&1 || true)"
+installed_yoyo_has() {
+  printf '%s\n' "$help_text" | grep -qE "^[[:space:]]+$1([[:space:]]|\$)"
+}
+
+if installed_yoyo_has doctor; then
+  say "claude must also be authenticated; \`yoyo doctor\` in your project says whether it is."
+else
+  say "claude must also be authenticated before a run can use it: $claude_url"
+fi
 # The three steps the README's own getting-started spine names, in its order and
-# its spelling. A machine that followed this script and then a machine that
-# followed the README have to end up in the same place, or one of the two is
-# a path nobody has walked.
+# its spelling. A machine that followed this script and a reader who followed
+# the README have to end up in the same place, or one of the two is a path
+# nobody has walked.
 say "Then, in your own project:"
 printf '\n      cd path/to/your/project\n      bd init && yoyo init\n      yoyo chat\n\n'
-say "\`yoyo setup\` walks the middle step and everything around it as questions,"
-say "ending in \`yoyo doctor\`, if you would rather be asked than type."
+if installed_yoyo_has setup; then
+  say "\`yoyo setup\` walks the middle step and everything around it as questions,"
+  say "if you would rather be asked than type."
+fi

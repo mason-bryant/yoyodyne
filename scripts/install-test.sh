@@ -28,6 +28,7 @@ repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 installer="$repository/scripts/install.sh"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/install-test.XXXXXX")"
 failures=0
+skips=0
 
 trap 'rm -rf "$scratch"' EXIT
 
@@ -40,6 +41,9 @@ system_path="/usr/bin:/bin:/usr/sbin:/sbin"
 step()   { printf '\n=== %s\n' "$*"; }
 pass()   { printf '  ok: %s\n' "$*"; }
 fail()   { printf '  FAIL: %s\n' "$*"; failures=$((failures + 1)); }
+# A claim this machine cannot produce is named rather than passed over, the way
+# the adoption walkthrough names its own. A silent skip reads as coverage.
+skip()   { printf '  SKIPPED: %s\n' "$*"; skips=$((skips + 1)); }
 
 contains() {
   case "$1" in (*"$2"*) pass "$3" ;; (*) fail "$3 -- got: $1" ;; esac
@@ -71,6 +75,9 @@ fabricate() {
   mkdir -p "$stub_dir" "$served" "$case_root/home"
   : > "$request_log"
   go_version=""
+  yoyo_verbs=""
+  env_version=""
+  env_install_dir=""
 
   # Stub curl: every URL it is asked for is logged, and answered from $served
   # by the last segment of its path. A URL with no file behind it fails the way
@@ -115,7 +122,7 @@ case "$1" in
   install)
     printf '%s\n' "go $*" >> "$STUB_REQUEST_LOG"
     mkdir -p "$GOBIN"
-    printf '#!/bin/sh\nif [ "$1" = version ]; then echo v9.9.9; fi\n' > "$GOBIN/yoyo"
+    printf '#!/bin/sh\nif [ "$1" = version ]; then echo v9.9.9; fi\nif [ "$1" = help ]; then echo "  setup   x"; echo "  doctor  x"; fi\n' > "$GOBIN/yoyo"
     chmod +x "$GOBIN/yoyo"
     ;;
 esac
@@ -133,12 +140,30 @@ stub_tool() {
 # (a goos_goarch stem) at tag $1, a checksums.txt covering it, and the API
 # answer naming that tag as the newest. $3 of "corrupt" publishes a checksum
 # that does not match what was actually built.
+# write_fake_yoyo writes the binary a release would contain: it reports a
+# version, and it lists commands the way the real one does, because the
+# installer's closing lines ask the binary it just installed which commands it
+# has. $yoyo_verbs is what this one admits to.
+yoyo_verbs=""
+write_fake_yoyo() {
+  local path="$1" verb
+  {
+    printf '#!/bin/sh\n'
+    printf 'if [ "$1" = version ]; then echo v9.9.9; fi\n'
+    printf 'if [ "$1" = help ]; then\n'
+    for verb in ${yoyo_verbs:-setup init chat doctor version}; do
+      printf '  echo "  %s            what this command does"\n' "$verb"
+    done
+    printf 'fi\n'
+  } > "$path"
+  chmod +x "$path"
+}
+
 publish() {
   local tag="$1" stem="$2" mode="${3:-good}" archive sum
   archive="yoyo_${tag}_${stem}.tar.gz"
   mkdir -p "$case_root/pkg"
-  printf '#!/bin/sh\nif [ "$1" = version ]; then echo v9.9.9; fi\n' > "$case_root/pkg/yoyo"
-  chmod +x "$case_root/pkg/yoyo"
+  write_fake_yoyo "$case_root/pkg/yoyo"
   tar -czf "$served/$archive" -C "$case_root/pkg" yoyo
   rm -rf "$case_root/pkg"
   if [ "$mode" = "corrupt" ]; then
@@ -171,6 +196,8 @@ install_run() {
     STUB_UNAME_S="${uname_s:-Darwin}" \
     STUB_UNAME_M="${uname_m:-arm64}" \
     STUB_GO_VERSION="${go_version:-1.24.0}" \
+    YOYO_VERSION="${env_version:-}" \
+    YOYO_INSTALL_DIR="${env_install_dir:-}" \
     bash "$installer" "$@" 2>&1
   )"
   status=$?
@@ -194,6 +221,8 @@ if [ -x "$install_dir/yoyo" ]; then pass "the binary is in the install directory
 # being sent to different places.
 contains "$output" "bd init && yoyo init" "the next step is the one the README's getting started names"
 contains "$output" "yoyo chat" "and the step after it"
+contains "$output" "yoyo doctor" "a binary that has doctor is told to run it"
+contains "$output" "yoyo setup" "a binary that has setup is offered it"
 
 step "a tag named on the command line"
 fabricate named-tag
@@ -289,6 +318,62 @@ chmod +x "$case_root/other/yoyo"
 install_run "$case_root/other:$install_dir" /bin/zsh --dir "$install_dir"
 contains "$output" "resolves to $case_root/other/yoyo first" "a shadowed install is named rather than reported as success"
 
+step "a binary that has neither setup nor doctor"
+fabricate older-binary
+uname_s=Darwin uname_m=arm64
+# What this script installing from a release older than those commands looks
+# like. The closing lines are the first-run path's last words, and naming a
+# command the binary does not have is the one thing they must not do.
+yoyo_verbs="init chat version"
+publish v9.9.9 darwin_arm64
+install_run "" /bin/zsh --dir "$install_dir"
+[ "$status" = "0" ] && pass "the install still succeeds" || fail "the install exited $status -- got: $output"
+missing "$output" "yoyo doctor" "a binary without doctor is not told to run it"
+missing "$output" "yoyo setup" "a binary without setup is not offered it"
+contains "$output" "bd init && yoyo init" "the documented steps are still what it ends on"
+contains "$output" "must also be authenticated" "claude's authentication is still named, without naming doctor"
+
+step "--from-source on a platform a release covers"
+fabricate from-source
+uname_s=Darwin uname_m=arm64
+publish v9.9.9 darwin_arm64
+stub_go 1.24.0
+install_run "" /bin/zsh --dir "$install_dir" --from-source
+[ "$status" = "0" ] && pass "the install succeeded" || fail "the install exited $status -- got: $output"
+contains "$(cat "$request_log")" "go install github.com/mason-bryant/yoyodyne/cmd/yoyo@latest" "--from-source builds even where a release binary exists"
+missing "$(cat "$request_log")" "releases/download" "and downloads nothing"
+
+step "the tag and the directory from the environment"
+fabricate environment
+uname_s=Darwin uname_m=arm64
+publish v1.2.3 darwin_arm64
+env_version=v1.2.3
+env_install_dir="$install_dir"
+install_run "" /bin/zsh
+contains "$output" "release: v1.2.3" "YOYO_VERSION is the same as --version"
+contains "$output" "install directory: $install_dir" "YOYO_INSTALL_DIR is the same as --dir"
+if [ -x "$install_dir/yoyo" ]; then pass "the binary went where the environment said"; else fail "no executable at $install_dir/yoyo"; fi
+
+step "the install directory nobody named"
+fabricate default-directory
+uname_s=Darwin uname_m=arm64
+publish v9.9.9 darwin_arm64
+# The documented default is /usr/local/bin where this user can write it and
+# ~/.local/bin otherwise. Only the second half can be exercised here: the first
+# would install a fabricated binary into the real /usr/local/bin, which is not
+# a thing a test does to the machine running it.
+if [ -w /usr/local/bin ]; then
+  skip "the /usr/local/bin default: it is writable here, and this test will not write a fake binary into it"
+else
+  install_run "" /bin/zsh
+  contains "$output" "install directory: $case_root/home/.local/bin" "with /usr/local/bin unwritable, the documented fallback is where it goes"
+  if [ -x "$case_root/home/.local/bin/yoyo" ]; then
+    pass "the fallback directory is created and written"
+  else
+    fail "nothing at $case_root/home/.local/bin/yoyo"
+  fi
+fi
+
 step "prerequisites that are not installed"
 fabricate prereqs-missing
 uname_s=Darwin uname_m=arm64
@@ -353,17 +438,52 @@ contains "$(cat "$request_log")" "https://claude.ai/install.sh" "with no npm, th
 contains "$output" "claude: $stub_dir/claude" "the recheck finds what that installer left"
 missing "$output" "Still needed before a run" "a prerequisite that was installed is not still listed as missing"
 
-step "the platforms a release covers"
-# The installer decides whether to download or build from its own list of
-# released platforms. That list is the Makefile's PLATFORMS, and nothing but
-# this check keeps them the same -- a platform dropped from the release would
-# otherwise be found by whoever runs the installer on it, as a 404.
+step "what the download route hard-codes about a release"
+# Everything the installer must spell the same way the `dist` target does. The
+# fixtures above are built from the installer's own spelling, so they would go
+# on passing after a rename in the Makefile while every real download 404'd;
+# these compare the two files directly, which is the only place that drift is
+# visible before somebody's install breaks.
 makefile_platforms="$(sed -n 's/^PLATFORMS ?= //p' "$repository/Makefile")"
 installer_platforms="$(sed -n 's/^released_platforms="\(.*\)"$/\1/p' "$installer")"
 if [ -n "$makefile_platforms" ] && [ "$makefile_platforms" = "$installer_platforms" ]; then
   pass "install.sh and the Makefile name the same platforms: $installer_platforms"
 else
   fail "the Makefile builds \"$makefile_platforms\" and install.sh downloads \"$installer_platforms\""
+fi
+
+# The archive name, with each file's own way of spelling the three variables
+# normalized away: the Makefile builds $stem.tar.gz from "yoyo_$(VERSION)_..."
+# and the installer downloads "yoyo_${tag}_...".
+makefile_stem="$(sed -n 's/^[[:space:]]*stem=\([^;]*\);.*/\1/p' "$repository/Makefile" | head -1 |
+  sed 's/\$(VERSION)/TAG/; s/\$\${goos}/GOOS/; s/\$\${goarch}/GOARCH/')"
+installer_stem="$(sed -n 's/^[[:space:]]*archive="\(.*\)\.tar\.gz"$/\1/p' "$installer" | head -1 |
+  sed 's/\${tag}/TAG/; s/\${goos}/GOOS/; s/\${goarch}/GOARCH/')"
+if [ -n "$makefile_stem" ] && [ "$makefile_stem" = "$installer_stem" ]; then
+  pass "install.sh downloads the archive name the Makefile builds: $makefile_stem.tar.gz"
+else
+  fail "the Makefile builds \"$makefile_stem\" and install.sh downloads \"$installer_stem\""
+fi
+
+if grep -q 'tar -czf \$(DIST)/\$\$stem\.tar\.gz' "$repository/Makefile"; then
+  pass "the Makefile packages that name as .tar.gz, which is what the installer unpacks"
+else
+  fail "the Makefile no longer tars \$stem.tar.gz, so the installer's archive name is guesswork"
+fi
+
+# The checksums file: its name, and that its lines are "<digest>  <file>" --
+# which is what `shasum -a 256` writes and what the installer's awk reads by
+# comparing field 2 to the archive name.
+if grep -q 'shasum -a 256 \*\.tar\.gz > checksums\.txt' "$repository/Makefile" &&
+   grep -q 'sha256sum \*\.tar\.gz > checksums\.txt' "$repository/Makefile"; then
+  pass "the Makefile writes checksums.txt with shasum's two-field lines, which is what the installer parses"
+else
+  fail "the Makefile no longer writes checksums.txt the way the installer reads it"
+fi
+if grep -q 'fetch_to_file "\$base/checksums.txt"' "$installer"; then
+  pass "the installer fetches it under that name"
+else
+  fail "the installer no longer fetches checksums.txt by name"
 fi
 
 step "--help"
@@ -376,6 +496,7 @@ contains "$output" "--install-prereqs" "including the one that lets it change an
 printf '\n'
 if [ "$failures" -eq 0 ]; then
   printf 'install.sh does what it says on a machine that has nothing.\n'
+  [ "$skips" -eq 0 ] || printf '%d claim(s) this machine could not exercise, named above\n' "$skips"
 else
   printf '%d check(s) failed.\n' "$failures"
   exit 1

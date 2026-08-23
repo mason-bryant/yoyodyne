@@ -304,8 +304,17 @@ If `yoyo version` prints a tag you have it; if the command is not found, the
 install directory is not on your `PATH`, and the script printed the one line
 that fixes that. [Install](#install) above has what the script does, the
 `go install` and from-source routes it chooses between, and which platforms are
-tested. Then change into your own project, since everything after this runs
-there:
+tested.
+
+The script closes by printing the two steps below — `bd init && yoyo init`, then
+`yoyo chat` — and, where the binary it installed carries them, `yoyo setup`,
+which is [step 2 walked for you](#getting-started), and
+[`yoyo doctor`](#checking-the-installation), which is what decides whether the
+installation actually works. It asks that binary which commands it has rather
+than assuming: installed from a release that predates one of them, it leaves
+that line out instead of naming a command you do not have.
+
+Then change into your own project, since everything after this runs there:
 
 ```sh
 cd path/to/your/project
