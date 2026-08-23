@@ -22,9 +22,10 @@
 # Who runs this, and who does not. There are two populations and one script, so
 # the refusal is the same in both rather than merely alike:
 #
-#   harness developer runs  wired, in `developerSandboxSettings`
+#   harness developer runs  wired, in `developerSettings`
 #                           (internal/backend/claudecode/backend.go), which
-#                           names this script and is held to naming it by
+#                           names this script by an absolute path into the run's
+#                           own worktree and is held to that by
 #                           TestDeveloperRunsPutBashThroughTheNotesGuard.
 #   interactive sessions    NOT wired until somebody merges the PreToolUse block
 #                           in CLAUDE.md and AGENTS.md into .claude/settings.json

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -40,8 +41,8 @@ const defaultIdleTimeout = 5 * time.Minute
 // destroyed all twelve recorded attributions.
 const NotesGuardScript = "scripts/bd-notes-guard.sh"
 
-// developerSandboxSettings confines a developer run's Bash to the worktree and
-// puts every Bash call through the notes-writer guard first.
+// developerSettings confines a developer run's Bash to the worktree and puts
+// every Bash call through the notes-writer guard first.
 //
 // The guard is here as well as in .claude/settings.json because the two cover
 // different writers. `beads.Client.Update` passing only `--append-notes` makes
@@ -50,15 +51,50 @@ const NotesGuardScript = "scripts/bd-notes-guard.sh"
 // command that destroyed twelve attributions from interactive sessions. Only
 // this hook covers that.
 //
-// $CLAUDE_PROJECT_DIR resolves to the worktree the run was given, so the script
-// found is the one from the change under test rather than one from elsewhere on
-// the machine. A hook naming a script that is not there is reported by Claude
-// Code as a non-blocking error and the call proceeds, so a rename fails open --
-// which is why TestDeveloperRunsPutBashThroughTheNotesGuard asserts the script
-// exists rather than trusting this string.
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},` +
-	`"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash \"$CLAUDE_PROJECT_DIR/` +
-	NotesGuardScript + `\""}]}]}}`
+// The script is named by an absolute path built from the worktree this run was
+// given, rather than through $CLAUDE_PROJECT_DIR. The variable would have been
+// shorter, but its failure is silent and one-directional: a hook command that
+// does not resolve is reported by Claude Code as a non-blocking error and the
+// call proceeds, so an unset or differently-rooted variable leaves the run
+// unguarded and looks like nothing happened. The harness already knows where it
+// put the worktree -- Run refuses a request without it -- so nothing is gained
+// by asking the provider to tell us again.
+//
+// Both the path and the surrounding JSON are encoded rather than concatenated,
+// because a worktree path is not a tame string: this repository's own worktrees
+// live under "Application Support", and a path with a space, a quote, or a
+// backslash in it would otherwise produce a command that parses as something
+// else or settings that do not parse at all.
+func developerSettings(worktree string) (string, error) {
+	settings := map[string]any{
+		"sandbox": map[string]any{
+			"enabled":                  true,
+			"failIfUnavailable":        true,
+			"allowUnsandboxedCommands": false,
+		},
+		"hooks": map[string]any{
+			"PreToolUse": []any{map[string]any{
+				"matcher": "Bash",
+				"hooks": []any{map[string]any{
+					"type":    "command",
+					"command": "bash " + shellQuoted(filepath.Join(worktree, NotesGuardScript)),
+				}},
+			}},
+		},
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return "", fmt.Errorf("encode developer settings: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// shellQuoted renders one argument so a shell reads it as exactly this string.
+// Single quotes protect everything a path can contain except a single quote,
+// which is closed, escaped, and reopened.
+func shellQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
@@ -224,7 +260,11 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		"--name", "yoyodyne-" + shortRunID(request.RunID),
 	}
 	if request.Role == domain.RoleDeveloper {
-		args = append(args, "--settings", developerSandboxSettings)
+		settings, err := developerSettings(request.WorkingDirectory)
+		if err != nil {
+			return backend.RunResult{}, err
+		}
+		args = append(args, "--settings", settings)
 	} else {
 		// Repository instruction files are evidence, not harness policy. Safe
 		// mode prevents a checked-in CLAUDE.md from entering the provider's
