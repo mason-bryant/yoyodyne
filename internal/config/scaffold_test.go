@@ -361,6 +361,13 @@ func TestScaffoldCarriesTheBriefingDiscipline(t *testing.T) {
 // displacement has to ship with the bundle, for the same reason the briefing
 // discipline does: it is how the product manager behaves in every project, not
 // something this one taught it.
+//
+// This covers the bundle and nothing else. A run in this repository reads the
+// project's own persona copy rather than the bundle's, and that copy is a
+// protected path yoyodyne-ifd.126 grants no exception for, so it is unchanged
+// and no check here or anywhere else asserts on it.
+// TestChatResolvesTheConfiguredProductManager in internal/cli records why,
+// beside the copy that would carry the assertion.
 func TestScaffoldCarriesTheDisplacementRule(t *testing.T) {
 	t.Parallel()
 
