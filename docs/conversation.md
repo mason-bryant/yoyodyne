@@ -486,9 +486,11 @@ what the item cost, broken down by the runs it took.
 A redirection is about one item. A directive is about the product: it is
 recorded for the product rather than for the agent you happened to say it to, so
 it reaches every run of every item, in this process and in any other. That is
-what `yoyo directive` and `/directive` write, and it is the same record every
-run reads before it starts, before it resumes, and before it puts a change
-through the gate that would integrate it.
+what `yoyo directive`, `/directive`, and a reply in a work item's
+[Slack thread](reporting.md#reporting-into-slack) write, and it is the same
+record every run reads before it starts, before it resumes, and before it puts a
+change through the gate that would integrate it. Which of the three it arrived
+through changes nothing about it downstream.
 
 Most directives are operational. They take effect from the moment they are
 recorded, and nothing waits for them:

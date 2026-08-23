@@ -405,6 +405,13 @@ returns. The moment its history starts from is written down the first time you
 ever run it and never taken again, so time the sink itself spent stopped is a gap
 it reads across rather than a gap in what it says. It is also the reason no run
 holds a Slack token — one separate process posts, so no agent's subprocess tree
-ever has a credential for your workspace in it. Replies are acknowledged and
-nothing acts on them yet; steering the harness from a thread is designed and not
-built.
+ever has a credential for your workspace in it.
+
+Replies go the other way. A reply in a work item's thread, from somebody this
+project granted `direct-work` with a bound Slack member id, is recorded as a
+[directive](conversation.md#directives-and-the-work-they-pause) against that item
+— the same record `yoyo directive record` writes, with the same pause semantics
+and the same resolution, so a run meets it whichever way it arrived. Every reply is answered in its own thread with
+what was recorded or why nothing was, and a project that has granted nobody is
+steered by nobody. What a reply may say is in
+[`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).

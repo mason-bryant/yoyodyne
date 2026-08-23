@@ -68,8 +68,8 @@ type API struct {
 }
 
 // NewAPI builds the client. Both tokens are required: a sink that cannot post is
-// not a sink, and one that cannot open its connection cannot receive the replies
-// the inbound half will read.
+// not a sink, and one that cannot open its connection never sees the replies
+// that steer the work.
 func NewAPI(botToken, appToken string) (*API, error) {
 	if strings.TrimSpace(botToken) == "" {
 		return nil, errors.New("SLACK_BOT_TOKEN is required")

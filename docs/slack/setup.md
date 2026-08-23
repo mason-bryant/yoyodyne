@@ -27,8 +27,8 @@ None of that costs a model call. Every milestone is rendered from the record by
 a fixed line per role, so the channel is deterministic and no model sits between
 a fact and its reporting.
 
-It reports and it does not act. A separate process you start reads the harness's
-own durable records and posts from them, so:
+Nothing it posts is an act of its own. A separate process you start reads the
+harness's own durable records and posts from them, so:
 
 - Nothing waits on Slack. A workspace that is down, slow, or misconfigured
   changes nothing about any run — no wait, no failure, no parked work.
@@ -44,9 +44,12 @@ own durable records and posts from them, so:
   process's environment and nowhere else — never in `.yoyodyne`, never in a
   prompt, never in a run.
 
-Replies are one-way for now. The sink acknowledges what arrives in its threads
-so Slack stops redelivering it, and does nothing else with it: steering the
-harness from a thread is designed and not built.
+Replies go the other way, and only for the people you say. A reply in a work
+item's thread, from somebody this project granted `direct-work`, is recorded as a
+directive against that item and reaches the work exactly as one typed at a
+terminal does; everybody else's is answered saying it was not acted on. A project
+that has named nobody is steered by nobody, which is what every workspace is
+until you add yourself. See *Steering the work from a thread* below.
 
 Setting this up takes about five minutes and needs a Slack workspace you can
 install an app into.
@@ -84,11 +87,11 @@ Socket Mode, so they cannot go in until it is actually on. Once it is, paste
 the original manifest back in under *App Manifest*.
 
 The manifest says what each scope is for. The two that read messages —
-`channels:history` and `groups:history` — are there so the thread replies the
-inbound half will read arrive on a connection that already exists rather than
-needing a reinstall later. Nothing reads them today, and an operator who would
-rather not grant them yet can delete those two scopes and the two
-`message.*` events beside them; everything in this document still works.
+`channels:history` and `groups:history` — are what carries a thread reply back to
+your machine, which is how the harness is steered from the channel. An operator
+who would rather not steer from Slack at all can delete those two scopes and the
+two `message.*` events beside them: everything else in this document still works,
+and replies simply never arrive.
 
 ## 2. Install it and take the two tokens
 
@@ -175,10 +178,10 @@ operators:
 ```
 
 The allow-list is then derived: the humans granted `direct-work` who have bound
-a member id, and nobody else. Nothing acts on a reply yet, so adding yourself
-changes nothing today — but it is the entry the inbound half will read, and the
-member id lives in the configuration rather than in the environment because it
-is identity rather than a secret.
+a member id, and nobody else. Until somebody is on it, every reply is answered
+saying it was not acted on, which is what a workspace gets by default. The member
+id lives in the configuration rather than in the environment because it is
+identity rather than a secret.
 [`docs/configuration.md`](../configuration.md#operators) has the rest of the
 mapping, including the other grant and the namespaces you can bind.
 
@@ -502,6 +505,80 @@ the marks need the `reactions:write` scope, which the checked-in manifest asks
 for. **An app installed from an older manifest keeps reporting and silently marks
 nothing** until you reinstall it from *OAuth & Permissions*.
 
+## Steering the work from a thread
+
+A reply in a work item's thread is a **directive** against that item: the same
+record [`yoyo directive record`](../conversation.md#directives-and-the-work-they-pause)
+writes, kept where every run of that item reads it before it starts, before it
+resumes, and before it puts a change through the gate. Nothing about the channel
+is a second kind of instruction — it is one more way into the record you already
+have, which is why steering from a phone is as enforceable as steering from the
+terminal the harness is running on.
+
+Reply with what you want, and it is recorded as an operational directive: in
+force from that moment, with nothing waiting on it.
+
+```text
+prefer the smaller change here — don't refactor the store as well
+```
+
+Two kinds pause the work instead, and **you say which**, because a classifier
+deciding that a sentence stops work is worse than one that never stops it. Open
+the reply with the word, and say what is unresolved — a pause nobody can name a
+reason for is a pause nobody can lift:
+
+```text
+ambiguous: which of the two publishing behaviours did you mean
+artifact: slack-reporting-design whether product threads may carry directives
+```
+
+`ambiguous:` is one nobody can act on without deciding something you did not.
+`artifact: <name> <what has to be decided>` is one that rewrites a governed
+document — the brief, a goal, a design — so work derived from it waits until the
+change is decided. Either one stops the item at its next gate without cancelling
+anything: the run keeps its claim, its branch, and its worktree.
+
+Lift it the same way you would anywhere else, by naming the directive and how it
+was settled. Any prefix of the identifier that names exactly one will do:
+
+```text
+resolve directive-3f2a the second one, and say so in the design
+```
+
+Open the reply with `@developer`, `@reviewer`, `@architect`,
+`@development-manager`, or `@product-manager` to record who you told. That is
+attribution rather than routing — the record reaches every run of the item
+whichever role it names — and a reply that mentions nobody is the product
+manager's.
+
+Every reply is answered in its own thread, with the directive as recorded and its
+identifier, or with why nothing was recorded. What that answer says is the whole
+of what happened: there is no other confirmation, and a reply that stopped work is
+shown at the top of the channel as well, because work stopping is what somebody
+who has opened no threads most needs to see.
+
+Three things are refused, visibly:
+
+- **a reply from somebody without `direct-work`**, or with the grant but no
+  `slack_member_id` bound. The list defaults to empty, so a workspace steers
+  nothing until you add yourself in step 4.
+- **a stated kind that says nothing unresolved** — `ambiguous:` on its own, or
+  `artifact:` without a document and what to decide about it.
+- **a reply in a thread that is not a work item's.** A directive from a thread is
+  scoped to the item the thread is about, and one recorded against no item would
+  pause the whole product. `yoyo directive record --scope` is how a wider one is
+  recorded.
+
+Everything else in a channel is left entirely alone: a message that is not in one
+of these threads, a thread this sink never opened, and anything the app itself
+posted. The last is not a nicety — the sink's own messages arrive back on the
+same connection, and reading one as an instruction would be the harness directing
+itself.
+
+`yoyo directive list` shows what is recorded whichever way it arrived, and
+`yoyo directive resolve` settles one from the terminal. The two surfaces are the
+same record.
+
 ## Coming back from a long gap
 
 A sink that was off overnight comes back to everything the harness recorded while
@@ -540,6 +617,13 @@ command line whenever the digest is not enough.
 - **Reporting is not an audit trail.** The durable records under the state root
   are; this is a view of them. `yoyo status`, `yoyo reports`, and `yoyo cost`
   read the same records from the command line.
+- **A reply is acted on by the sink that is running.** One killed between reading
+  a reply and recording it leaves nothing behind — Slack considers the message
+  delivered — so a directive you sent and saw no answer to was not recorded.
+  `yoyo directive list` is the check, and the reply can simply be sent again.
+- **Who may steer is read when the sink starts.** Granting somebody
+  `direct-work` reaches the channel when the sink is next restarted, not while it
+  is running.
 
 ## When it does not work
 
@@ -556,6 +640,9 @@ command line whenever the digest is not enough.
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
 | Slack says it is `not displaying some messages sent by this application` | Slack suppressed messages for volume, and suppressed ones are hidden rather than delayed. The sink paces itself below that threshold, so seeing this means something else is posting as the same app into the same channel — a second sink, or another integration sharing the app. What was suppressed is still in the durable records. |
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
+| `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
+| A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
+| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink

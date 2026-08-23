@@ -93,9 +93,20 @@ type Options struct {
 	// the channel, the workspace -- so a caller supplies the rest. It carries no
 	// credential; see Presence.
 	Identity Presence
-	// Inbound is what to do with a message that arrives on the connection.
-	// Nothing today: the inbound half maps a reply onto the existing directive
-	// record, and until it exists a reply is acknowledged and no more.
+	// Directives is where a thread reply is recorded, which is the existing
+	// directive record every run already consults. It is optional: a sink
+	// assembled without one reports and does not steer, and every reply on its
+	// connection is acknowledged to Slack and read no further.
+	Directives Directives
+	// Operators is the allow-list of Slack member ids whose replies are acted on,
+	// derived by the configuration from the humans it granted direct-work. It
+	// defaults to empty, which is a product nobody may steer from a thread — so a
+	// workspace changes nothing about how it behaves until an operator names
+	// themselves.
+	Operators []string
+	// Inbound is what to do with a message that arrives on the connection. It is
+	// how a test drives the connection without a workspace; a sink the harness
+	// builds leaves it unset and gets the steering above.
 	Inbound InboundHandler
 	// Dial opens the websocket transport. It is optional and exists so a test
 	// can exercise the connection without a network.
@@ -118,6 +129,25 @@ type Titles interface {
 }
 
 // Sink is the long-running reporting process for one product.
+//
+// Two goroutines run inside it and both of them post: the delivery loop, which
+// reads the durable records and says what has happened, and the connection,
+// which answers a reply in a thread. The division between them is a rule rather
+// than a lock, and it is worth stating because a lock would only be as good as
+// the next thing somebody adds to either side:
+//
+// Everything above `pace` is written once, by New, and only read afterwards.
+// Everything below it belongs to exactly one goroutine — `marking` to the
+// delivery pass, which is the only thing that reconciles a status mark, and
+// `steering`'s own memory to the connection, which guards it itself.
+//
+// What both touch is three things, and each one carries its own answer. The
+// pacer is shared on purpose, since a pace two callers each advanced from their
+// own reading of it is not a pace, and it holds a mutex for exactly that. The
+// API is an HTTP client, which is safe to use from several goroutines. And the
+// store is read from both and written from one: the delivery pass owns the thread
+// map, and the acknowledgment path is structurally unable to write it, because
+// the poster it is given cannot open a thread (see `poster.opens`).
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -148,8 +178,15 @@ type Sink struct {
 	// refuses one refuses it every fifteen seconds, and the first refusal is news
 	// while the tenth is noise — the same rule the delivery loop follows for the
 	// same reason.
-	marking    string
-	log        func(format string, args ...any)
+	//
+	// It is the delivery pass's alone, and nothing on the acknowledgment path
+	// reads or writes it: an acknowledgment is a message rather than a mark.
+	marking string
+	log     func(format string, args ...any)
+	// steering is the inbound half, nil on a sink that was given nowhere to record
+	// a directive. It is held as well as handed to the connection so the sink can
+	// say at startup whether replies steer anything and who may send them.
+	steering   *steering
 	connection *connection
 }
 
@@ -190,7 +227,7 @@ func New(options Options) (*Sink, error) {
 	if poll <= 0 {
 		poll = DefaultPollInterval
 	}
-	return &Sink{
+	sink := &Sink{
 		channel: strings.TrimSpace(options.Channel),
 		appearance: notify.Appearance{
 			Product: options.Store.Product(),
@@ -211,12 +248,22 @@ func New(options Options) (*Sink, error) {
 		},
 		log: log,
 		connection: &connection{
-			api:    options.API,
-			dial:   options.Dial,
-			handle: options.Inbound,
-			log:    log,
+			api:  options.API,
+			dial: options.Dial,
+			log:  log,
 		},
-	}, nil
+	}
+	// A sink with somewhere to record a directive steers; one without reports and
+	// no more. The handler a caller supplied wins, because the only caller that
+	// can name that type is a test driving the connection itself.
+	if options.Directives != nil {
+		sink.steering = newSteering(sink, options.Directives, options.Operators)
+		sink.connection.handle = sink.steering.handle
+	}
+	if options.Inbound != nil {
+		sink.connection.handle = options.Inbound
+	}
+	return sink, nil
 }
 
 // Run holds the connection open and posts until the context ends.
@@ -258,6 +305,12 @@ func (s *Sink) Run(ctx context.Context) error {
 		}
 	}()
 
+	// Whether a reply steers anything is the one thing about this process an
+	// operator cannot see from the channel until they try it, and the answer for
+	// a workspace that has named nobody is "no". Saying it at startup is how
+	// somebody following the setup document finds that out before they rely on it.
+	s.log("%s", s.steer())
+
 	connected := make(chan struct{})
 	go func() {
 		defer close(connected)
@@ -280,6 +333,21 @@ func (s *Sink) Once(ctx context.Context) error {
 	}
 	defer release()
 	return s.pass(ctx)
+}
+
+// steer says what a reply in one of this sink's threads will do, which is
+// nothing at all for a product that has granted nobody. The refusal an unlisted
+// reply gets is visible in the thread, but only to whoever sent it; this is the
+// same fact where an operator setting the sink up is looking.
+func (s *Sink) steer() string {
+	switch {
+	case s.steering == nil:
+		return "replies in these threads are read and not acted on: this sink was assembled without the directive record"
+	case len(s.steering.operators) == 0:
+		return "replies in these threads are acknowledged and not acted on: no human in this project holds direct-work with a bound Slack member id"
+	default:
+		return fmt.Sprintf("replies in these threads steer the work, from the %d Slack member(s) this project granted direct-work", len(s.steering.operators))
+	}
 }
 
 // hold makes this process the product's only sink and reports how to stop
@@ -373,7 +441,7 @@ func (s *Sink) pass(ctx context.Context) error {
 	// Rendering is the notifier's, posting is the sink's, and this is the seam
 	// between them: what a message says is decided once, by the package that
 	// knows the personas, whatever ends up carrying it.
-	into := &poster{sink: s, threads: &threads}
+	into := &poster{sink: s, threads: &threads, opens: true}
 	notifier := notify.New(into, s.appearance)
 
 	// How deep the backlog is has to be decided over the whole batch before any of
@@ -565,6 +633,16 @@ func (s *Sink) advance(cursors *Cursors, delivery Delivery) error {
 type poster struct {
 	sink    *Sink
 	threads *ThreadMap
+	// opens says this poster may open a thread for a topic nothing has been said
+	// about yet, and write the map that remembers it. Only the delivery pass may:
+	// it is the one thing that owns the thread map, and it runs while the
+	// connection is answering replies on its own goroutine. An acknowledgment was
+	// correlated through a thread that already exists, so a lookup that failed
+	// there would mean the map had moved underneath it — and opening a second
+	// thread from that stale copy, and writing it back over the map the pass owns,
+	// is the one way this path could damage anything. It cannot, because it is not
+	// given the capability rather than because it never takes it.
+	opens bool
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -592,6 +670,9 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	if topic.Kind != notify.TopicProduct {
 		thread, found := p.threads.Lookup(sink.channel, message.Topic)
 		if !found {
+			if !p.opens {
+				return fmt.Errorf("say %s about %s: its thread is not in the map this was given, and this poster does not open one", message.Kind, message.Topic)
+			}
 			opened, err := sink.openThread(ctx, topic)
 			if err != nil {
 				return err

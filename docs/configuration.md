@@ -2510,7 +2510,7 @@ person.
 | grant | what it is |
 | --- | --- |
 | `own-intent` | stating and approving what the product is for: the brief, the goals, and the non-goals. **At most one human may hold it** — several people amending goals concurrently is conflict machinery nobody has designed. |
-| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on once the inbound half exists. |
+| `direct-work` | steering work already in flight: the directives that reach a run, and the thread replies the Slack sink acts on. |
 
 The grants are checked where the act arrives rather than where it is recorded,
 which is what makes them worth stating: the point of attaching authority to a
@@ -2592,8 +2592,13 @@ derivation rather than a second list because a list maintained beside those
 grants is a list that disagrees with them — silently, and about authority. A
 human granted `direct-work` who has bound no member id simply is not on it: they
 hold the authority, and Slack is not a boundary they can reach it through.
-**Nothing reads a reply today** either way; the inbound half is designed and not
-built.
+
+A reply from somebody on that list is recorded as a directive against the item
+whose thread it was said in, and reaches the work exactly as one typed at a
+terminal does. A reply from anybody else is answered in the thread saying it was
+not acted on — visibly, because a channel that silently ignores some people looks
+broken rather than closed. What a reply may say is in
+[`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
 
 An earlier shape put this list under `slack` as `slack.operators`. It is gone,
 and a file that still carries it is refused when the configuration loads, with a
