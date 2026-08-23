@@ -750,7 +750,7 @@ func (result RerunResult) Render() string {
 		if reason := strings.TrimSpace(result.IntakeHeld.Reason); reason != "" {
 			fmt.Fprintln(&rendered, reason)
 		}
-		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; release the hold and ask again\n", result.PriorRunID)
+		fmt.Fprintf(&rendered, "the stoppage of run %s keeps its one re-run; `yoyo release` lifts the hold, and asking again carries out the same decision\n", result.PriorRunID)
 		return rendered.String()
 	}
 	if result.CapacityFull != nil {
