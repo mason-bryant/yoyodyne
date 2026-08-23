@@ -186,7 +186,14 @@ type Sink struct {
 	// steering is the inbound half, nil on a sink that was given nowhere to record
 	// a directive. It is held as well as handed to the connection so the sink can
 	// say at startup whether replies steer anything and who may send them.
-	steering   *steering
+	steering *steering
+	// operators is who is told when the whole system stops on a person, in a
+	// stable order. It is the same allow-list the inbound half acts on, because it
+	// is the same fact read twice: the humans this project granted direct-work who
+	// bound a member id are exactly the people whose answer would count, and
+	// interrupting somebody whose reply the sink would then refuse is worse than
+	// not interrupting them.
+	operators  []string
 	connection *connection
 }
 
@@ -233,14 +240,15 @@ func New(options Options) (*Sink, error) {
 			Product: options.Store.Product(),
 			Avatars: options.Avatars,
 		},
-		store:    options.Store,
-		api:      options.API,
-		feed:     options.Feed,
-		titles:   options.Titles,
-		poll:     poll,
-		identity: options.Identity,
-		refusal:  refusalBackoff,
-		now:      options.Now,
+		store:     options.Store,
+		api:       options.API,
+		feed:      options.Feed,
+		titles:    options.Titles,
+		operators: orderedOperators(options.Operators),
+		poll:      poll,
+		identity:  options.Identity,
+		refusal:   refusalBackoff,
+		now:       options.Now,
 		pace: &pacer{
 			every: DefaultPostInterval,
 			now:   time.Now,
@@ -339,14 +347,19 @@ func (s *Sink) Once(ctx context.Context) error {
 // nothing at all for a product that has granted nobody. The refusal an unlisted
 // reply gets is visible in the thread, but only to whoever sent it; this is the
 // same fact where an operator setting the sink up is looking.
+//
+// The same two answers decide whether anybody is told directly when the system
+// stops on a person, so this says that too: it is the same allow-list and the
+// same record, and an operator who reads that nothing steers has also read that
+// nothing will reach them at three in the morning.
 func (s *Sink) steer() string {
 	switch {
 	case s.steering == nil:
-		return "replies in these threads are read and not acted on: this sink was assembled without the directive record"
+		return "replies in these threads are read and not acted on, and nobody is messaged when the system stops on a person: this sink was assembled without the directive record"
 	case len(s.steering.operators) == 0:
-		return "replies in these threads are acknowledged and not acted on: no human in this project holds direct-work with a bound Slack member id"
+		return "replies in these threads are acknowledged and not acted on, and nobody is messaged when the system stops on a person: no human in this project holds direct-work with a bound Slack member id"
 	default:
-		return fmt.Sprintf("replies in these threads steer the work, from the %d Slack member(s) this project granted direct-work", len(s.steering.operators))
+		return fmt.Sprintf("replies in these threads steer the work, and the %d Slack member(s) this project granted direct-work are messaged directly when the system stops on a person", len(s.steering.operators))
 	}
 }
 
@@ -456,7 +469,15 @@ func (s *Sink) pass(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if notification, say := plan.say(index, delivery); say {
+		if delivery.Direct {
+			// The whole system has stopped on a person, so this one is carried to
+			// them rather than left in the channel to be found. It is never
+			// collapsed into a digest: there is one of it, and the reason it exists
+			// is that nobody is coming to look.
+			if err := s.escalate(ctx, delivery); err != nil {
+				return err
+			}
+		} else if notification, say := plan.say(index, delivery); say {
 			into.reached = false
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
@@ -489,6 +510,168 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// escalate carries one stopped state to every operator the project named, as a
+// direct message with the ask underneath it in its own thread.
+//
+// Every operator, rather than one: the system is stopped on whoever gets to it
+// first, and choosing which of them that is would be the harness deciding whose
+// evening this is. What stops it being a flood is upstream — three states reach
+// here at all, one at a time, said again only while it stands.
+//
+// It is idempotent per person rather than per pass. What has already been said to
+// somebody is written down before the next thing is said to them, so a sink
+// killed halfway through the operators comes back and tells the rest rather than
+// telling the first ones twice. A workspace that refuses is returned to the pass,
+// which leaves the cursor where it was and tries the whole thing again later —
+// that can repeat one message, and a repeated interruption is the right side of
+// that trade against an interruption that never arrived.
+func (s *Sink) escalate(ctx context.Context, delivery Delivery) error {
+	// Nobody to tell, or nowhere to record what they answer. The second is the
+	// one worth being strict about: the ask says the reply in the thread is the
+	// decision, and a sink that could not record one would be saying something
+	// untrue to somebody it had just woken up.
+	if s.steering == nil {
+		s.log("the system is stopped on a person and nobody was told: this sink was assembled without the directive record, so nothing could be done with what they answered")
+		return nil
+	}
+	if len(s.operators) == 0 {
+		s.log("the system is stopped on a person and nobody was told: no human in this project holds direct-work with a bound Slack member id")
+		return nil
+	}
+	directs, err := s.store.LoadDirects()
+	if err != nil {
+		return err
+	}
+	mark := delivery.Telling
+	for _, member := range s.operators {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sent, told := directs.Told(mark, member)
+		if told && sent.Asked {
+			continue
+		}
+		if !told {
+			channel, err := s.api.OpenDirect(ctx, member)
+			if err != nil {
+				return fmt.Errorf("open a direct message with %s: %w", member, err)
+			}
+			ts, reached, err := s.tell(ctx, channel, "", delivery.Notification)
+			if err != nil {
+				if reached {
+					return err
+				}
+				// Nothing could be said about this state at all, which is a record
+				// rather than a workspace. Repeating it every pass would hold up
+				// nothing and help nobody, so it is said here and read past.
+				s.log("a stopped system could not be said and nobody was told about it: %v", err)
+				return nil
+			}
+			sent = Direct{
+				Member:   member,
+				Channel:  channel,
+				ThreadTS: ts,
+				SentAt:   s.clock().UTC(),
+				Options:  delivery.InThread.Event.Detail.Options,
+				Topic:    delivery.Notification.Topic.Key(),
+			}
+			// Written before the ask goes under it, so a sink killed between the two
+			// answers into the thread it opened rather than interrupting somebody a
+			// second time with the same alarm.
+			directs.Record(mark, sent)
+			if err := s.store.SaveDirects(directs); err != nil {
+				return err
+			}
+		}
+		if _, reached, err := s.tell(ctx, sent.Channel, sent.ThreadTS, delivery.InThread); err != nil {
+			if reached {
+				return err
+			}
+			s.log("a stopped system was said but the options under it could not be: %v", err)
+			return nil
+		}
+		sent.Asked = true
+		directs.Record(mark, sent)
+		if err := s.store.SaveDirects(directs); err != nil {
+			return err
+		}
+		s.log("told %s that the system is stopped on them, and what they can decide", member)
+	}
+	return nil
+}
+
+// tell says one message in a direct-message conversation and reports the
+// timestamp Slack gave it, which is what the ask and any reply hang from.
+//
+// It reports whether the message reached the workspace at all, for the reason the
+// delivery pass keeps that apart: a record nothing can be said about is read past,
+// and a workspace that refused is tried again.
+func (s *Sink) tell(ctx context.Context, channel, threadTS string, notification notify.Notification) (string, bool, error) {
+	into := &directPoster{sink: s, channel: channel, threadTS: threadTS}
+	if err := notification.Notify(ctx, notify.New(into, s.appearance)); err != nil {
+		return "", into.reached, err
+	}
+	return into.ts, true, nil
+}
+
+// directPoster carries one rendered message into a direct-message conversation.
+//
+// It is a poster of its own rather than the channel's with a different channel on
+// it, and the difference is a capability: this one has no thread map and cannot
+// open a thread for a topic. A direct message is not addressed to a topic's
+// thread at all — it is addressed to a person — so a poster that could reach the
+// map would be one that could write a work item's thread from the wrong side.
+type directPoster struct {
+	sink     *Sink
+	channel  string
+	threadTS string
+	// ts is the timestamp Slack gave what was posted, which is the thread the ask
+	// and the operator's answer both hang from.
+	ts string
+	// reached records that the message got as far as the workspace, for the reason
+	// the channel's poster records it: a record nothing can be said about and a
+	// workspace that refused are two different things to do next.
+	reached bool
+}
+
+func (d *directPoster) Post(ctx context.Context, message notify.Message) error {
+	d.reached = true
+	emoji, url := icon(message.Identity.Avatar)
+	ts, err := d.sink.post(ctx, Message{
+		Channel:   d.channel,
+		Text:      renderText(message),
+		ThreadTS:  d.threadTS,
+		Username:  message.Identity.Name,
+		IconEmoji: emoji,
+		IconURL:   url,
+	})
+	if err != nil {
+		return err
+	}
+	d.ts = ts
+	return nil
+}
+
+// orderedOperators is the allow-list as the escalating half walks it: trimmed,
+// without repeats, and in one order. The order matters only in that there is one
+// — a sink that was interrupted halfway through telling people resumes where it
+// stopped, and it can only know where that was if the walk is the same every
+// time.
+func orderedOperators(operators []string) []string {
+	ordered := make([]string, 0, len(operators))
+	seen := make(map[string]bool, len(operators))
+	for _, member := range operators {
+		trimmed := strings.TrimSpace(member)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		ordered = append(ordered, trimmed)
+	}
+	sort.Strings(ordered)
+	return ordered
 }
 
 // mark puts each item's current status on the message its thread hangs from, so

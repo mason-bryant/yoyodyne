@@ -409,7 +409,9 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	// The hold is the brake, so it is also one of the three states the operators
+	// are told about directly rather than left to find.
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld, notify.KindEscalationRaised)
 	// Held twice is the same hold, and it is said once.
 	cursors = harness.poll(t, cursors)
 
@@ -435,7 +437,7 @@ func TestTheOperatorHoldIsSaidSeparatelyFromTheIntakeHold(t *testing.T) {
 	if _, err := harness.holds.Hold(moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, harness.start(), notify.KindHoldPlaced)
+	cursors := harness.poll(t, harness.start(), notify.KindHoldPlaced, notify.KindEscalationRaised)
 
 	if _, _, err := harness.holds.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)

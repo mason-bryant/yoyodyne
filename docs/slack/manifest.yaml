@@ -33,9 +33,26 @@
 #                          against that thread's work item, and anybody else's is
 #                          answered saying it was not acted on. An operator who
 #                          does not want the harness steered from Slack at all
-#                          can remove it and the two message events below, and
+#                          can remove it and the message events below, and
 #                          replies then never arrive.
 #   groups:history         the same, for a private channel.
+#   im:write               open a direct message with an operator. It is used for
+#                          one thing and nothing else: the states under which the
+#                          whole system is stopped and waiting on a person — the
+#                          brake tripped, capacity gone past the point of waiting
+#                          it out, a directive only they can settle. A channel
+#                          line is something you find when you look, and those are
+#                          the states under which nobody is going to look.
+#   im:history             read the reply to one of those. The answer in that
+#                          thread is the decision: it names one of the options the
+#                          message offered and is recorded as a directive against
+#                          the work, exactly as a reply in a channel thread is.
+#                          Without it the messages still arrive and there is
+#                          nowhere to answer them.
+#
+# The last two are why an app installed from an earlier manifest has to be
+# reinstalled once. They are asked for together, with `message.im` below, so that
+# is one approval rather than three.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness
 # runs on operators' machines behind NAT, and the Events API would demand a
@@ -57,6 +74,12 @@ display_information:
     somebody the project has authorized by name, is recorded as a directive
     against that item. Nobody else's reply changes anything, and a project that
     has authorized nobody is steered by nobody.
+
+    One thing does not wait to be read. When the whole system has stopped and is
+    waiting on a person — the brake tripped, capacity gone, a directive only they
+    can settle — everybody the project authorized is messaged directly, with what
+    stopped, why it is theirs, the options, and a recommendation. The reply in
+    that thread is the decision.
   background_color: "#1f2933"
 features:
   bot_user:
@@ -72,11 +95,14 @@ oauth_config:
       - reactions:write
       - channels:history
       - groups:history
+      - im:write
+      - im:history
 settings:
   event_subscriptions:
     bot_events:
       - message.channels
       - message.groups
+      - message.im
   interactivity:
     # Buttons and menus are a control surface, and this app is a reporting one.
     is_enabled: false

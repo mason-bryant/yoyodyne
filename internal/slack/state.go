@@ -156,6 +156,152 @@ func (m *ThreadMap) Record(topic string, thread Thread) {
 	m.Threads[topic] = thread
 }
 
+// DirectMapSchemaVersion versions the record of which operator was told about
+// which stopped state. It is separate from the thread map for the reason the
+// thread map is separate from run state: it describes a delivery rather than any
+// work, and one of them being upgraded must not require the other to move.
+const DirectMapSchemaVersion = 1
+
+// maxRememberedDirects bounds how many direct messages the sink remembers having
+// sent. It is a bound rather than a sweep because the two things this record is
+// for expire at different rates: not telling one operator the same thing twice
+// lasts as long as the state stands, and answering a reply to one lasts as long
+// as somebody might reply — which is hours, not the life of the product. A few
+// dozen is far more than either, and the durable account of what was decided is
+// the directive record rather than this.
+const maxRememberedDirects = 64
+
+// Direct is one operator's direct message about one stopped state: where it was
+// sent, what it offered them, and what it was about.
+//
+// It is the thread map's twin and exists for the same two reasons. A restart must
+// not tell somebody the same thing a second time, and a reply has to be
+// correlated back to what it is answering — which here is more than a topic,
+// because the answer is recorded against which option was chosen and the options
+// are what this message said they were.
+type Direct struct {
+	// Member is the Slack member id this was sent to, kept as well as being half
+	// the key so a reply can be checked against the person it was addressed to.
+	Member string `json:"member"`
+	// Channel is the direct-message conversation Slack opened, and ThreadTS is the
+	// alarm the options and any reply hang from.
+	Channel  string    `json:"channel"`
+	ThreadTS string    `json:"thread_ts"`
+	SentAt   time.Time `json:"sent_at"`
+	// Asked records that the options reached the thread under the alarm. The two
+	// are posted as two messages, so a sink killed between them comes back to a
+	// thread that has said what stopped and not what to do about it — and posting
+	// the alarm again would be shouting twice, while posting nothing would leave an
+	// ask nobody can answer.
+	Asked bool `json:"asked,omitempty"`
+	// Options is what this message offered, in the order it offered them, because
+	// the letters a reply names are positions in exactly this list. Each carries
+	// what choosing it does as well as what it said, so an answer that arrives
+	// hours later does what the message promised rather than what the sink can
+	// work out afresh.
+	Options []notify.Option `json:"options,omitempty"`
+	// Topic is what the escalation was about, as a topic key. It is what a decision
+	// recorded from the reply is scoped to: the item where one item is stopped, and
+	// the whole line where the line is.
+	Topic string `json:"topic"`
+}
+
+// DirectMap is what has been said to whom, keyed by the saying and the person.
+type DirectMap struct {
+	SchemaVersion int               `json:"schema_version"`
+	Directs       map[string]Direct `json:"directs"`
+}
+
+// directKey names one telling: one saying of one state, one person. Both halves
+// are needed — one saying reaches every operator, and one operator hears every
+// saying — and the separator is one neither half contains, because a saying is
+// named with colons and a hash and a member id is the workspace's own opaque
+// name.
+func directKey(telling, member string) string { return telling + "|" + member }
+
+// LoadDirects reads what has already been said directly. A product that has
+// never stopped on a person has no record rather than a broken one.
+func (s *Store) LoadDirects() (DirectMap, error) {
+	var stored DirectMap
+	found, err := readJSON(s.directPath(), "slack direct messages", &stored)
+	if err != nil {
+		return DirectMap{}, err
+	}
+	if !found {
+		return DirectMap{SchemaVersion: DirectMapSchemaVersion, Directs: map[string]Direct{}}, nil
+	}
+	if stored.SchemaVersion != DirectMapSchemaVersion {
+		return DirectMap{}, fmt.Errorf("slack direct message schema version %d is not supported", stored.SchemaVersion)
+	}
+	if stored.Directs == nil {
+		stored.Directs = map[string]Direct{}
+	}
+	return stored, nil
+}
+
+// SaveDirects replaces the record durably, forgetting the oldest tellings past
+// the bound.
+func (s *Store) SaveDirects(directs DirectMap) error {
+	directs.SchemaVersion = DirectMapSchemaVersion
+	if directs.Directs == nil {
+		directs.Directs = map[string]Direct{}
+	}
+	directs.forgetOldest()
+	return s.write(s.directPath(), "slack direct messages", directs)
+}
+
+// Told reports what one operator has already been told in one saying.
+func (m DirectMap) Told(telling, member string) (Direct, bool) {
+	sent, found := m.Directs[directKey(telling, member)]
+	return sent, found
+}
+
+// Record remembers one telling.
+func (m *DirectMap) Record(telling string, sent Direct) {
+	if m.Directs == nil {
+		m.Directs = map[string]Direct{}
+	}
+	m.Directs[directKey(telling, sent.Member)] = sent
+}
+
+// Answering finds what a reply in a direct-message thread is answering. The map
+// is kept the other way round — a state and a person are looked up to decide
+// whether to send — and it is walked here for the reason the thread map is: it is
+// tens of entries, read once per message somebody types.
+func (m DirectMap) Answering(channel, threadTS string) (Direct, bool) {
+	for _, sent := range m.Directs {
+		if sent.Channel == channel && sent.ThreadTS == threadTS {
+			return sent, true
+		}
+	}
+	return Direct{}, false
+}
+
+// forgetOldest drops tellings past the bound, oldest first, so a machine that
+// has run for months does not carry a record of every state it ever escalated.
+func (m *DirectMap) forgetOldest() {
+	if len(m.Directs) <= maxRememberedDirects {
+		return
+	}
+	keys := make([]string, 0, len(m.Directs))
+	for key := range m.Directs {
+		keys = append(keys, key)
+	}
+	// Sorted by when it was sent, and by key where two were sent in the same
+	// moment, so what a save forgets is the same twice over rather than whatever
+	// order a map handed back.
+	sort.Slice(keys, func(i, j int) bool {
+		first, second := m.Directs[keys[i]], m.Directs[keys[j]]
+		if first.SentAt.Equal(second.SentAt) {
+			return keys[i] < keys[j]
+		}
+		return first.SentAt.Before(second.SentAt)
+	})
+	for _, key := range keys[:len(keys)-maxRememberedDirects] {
+		delete(m.Directs, key)
+	}
+}
+
 // Cursor is how far the sink has read one durable stream, and the streams are
 // read four ways because they are four shapes.
 //
@@ -313,6 +459,7 @@ func (c *Cursors) Keep(streams map[string]struct{}) bool {
 
 func (s *Store) threadPath() string { return filepath.Join(s.root, "threads.json") }
 func (s *Store) cursorPath() string { return filepath.Join(s.root, "cursors.json") }
+func (s *Store) directPath() string { return filepath.Join(s.root, "directs.json") }
 
 // write replaces one record atomically: a sink killed mid-write leaves the
 // previous file rather than half of the new one, which for the thread map is the

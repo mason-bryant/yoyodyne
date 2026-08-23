@@ -386,6 +386,39 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+**And one thing does not wait to be read.** The heartbeat above is still something
+you find when you look, and the one condition under which nobody is going to look
+is the harness having stopped. So three states go the other way and are sent as
+direct messages to every human this project granted `direct-work` with a bound
+Slack member id: the **brake tripped**, so nothing new is chosen until a person
+releases it; **capacity gone past the point of waiting it out**, which is
+everything in flight parked on the provider for more than two hours; and a
+**directive nobody has settled**, which stops the work it names and is settled by
+the operator and nobody else. One at a time, in that order.
+
+Each says what stopped, why it is the operator's rather than a role's, whose move
+follows, and where the whole of it is — and under it, in its own thread, the ask:
+the options in plain terms and a recommendation. **The reply in that thread is the
+decision.** It goes into the same record `yoyo directive record` writes, against
+*which option was chosen* rather than as free text, so what a role reads
+afterwards is a decision rather than a paragraph to interpret. What it does not do
+is work the machine: choosing "release intake" records that intent where every
+role reads it, and `yoyo release` is still what releases it.
+
+The ask about an unsettled directive is the one whose options end the state
+themselves, and it is not an exception to that: nothing there is a command, and
+what ends it is resolving the directive, which a thread reply may already do. So
+choosing to settle or withdraw one resolves it exactly as `yoyo directive resolve`
+would — the work it stopped picks up, and the ask does not come back at somebody
+who has already answered it. Those two need the answer after the letter, because
+the work resumes on the answer rather than on the act of answering.
+
+A single blocked item is deliberately not one of these. It has an owner — the
+development manager's docket — and stays a `critical` in its own thread; something
+that messaged every operator for each of those would teach everybody to ignore the
+messages that matter. A state that is still stopped is said again every
+`--heartbeat`, and the moment it clears nothing more is sent.
+
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
 work routed to a role waits on somebody opening a conversation — and the silence

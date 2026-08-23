@@ -554,11 +554,17 @@ was red, and leaves nothing to undo. It also refuses a tag that is not
 `vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
 that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
+over it. The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl`, which the walkthrough rewrites on its way through — do
+not count as a dirty tree: the cut commits them as their own housekeeping
+commit once every gate is green, so the tag still names a tree with nothing
+uncommitted in it, and on a day it had to it prints
+`git push --atomic origin main <tag>` instead, because the branch has to carry
+that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
 
 ## The conversation
 
@@ -3443,6 +3449,20 @@ and the silence after it is indistinguishable from a healthy queue or a dead sin
 It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
+
+**And one thing does not wait to be read.** A channel line is still something you
+find when you look, and the one condition under which nobody looks is the harness
+having stopped. So three states are sent as direct messages to every human the
+project granted `direct-work`: the brake tripped, capacity gone past the point of
+waiting it out, and a directive nobody has settled. Each says what stopped, why it
+is yours, whose move follows, and where the record is, with the options and a
+recommendation in the thread under it — and **the reply in that thread is the
+decision**, recorded against the option it names in the same record `yoyo
+directive record` writes. Where the ask is about a directive nobody has settled,
+answering settles that one, so the work it stopped picks up and the ask does not
+come back. A single blocked item is deliberately not one of these: it has an
+owner, and messaging everybody about each of those is how a channel stops being
+read.
 
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest
