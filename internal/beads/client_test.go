@@ -710,35 +710,35 @@ func TestTheExecutorIsWrittenWhereSelectionCanReadItAndTheNotesCannot(t *testing
 	t.Parallel()
 
 	created := `{"id":"yoyodyne-ifd.138","title":"Promote the brief","description":"The architect promotes it.",
-	             "status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation"}}`
+	             "status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation:architect"}}`
 	runner := &fakeRunner{responses: []string{created}}
 	item, err := (Client{Runner: runner, Binary: "bd-test", Dir: "/repo"}).Create(context.Background(), NewWorkItem{
 		Title:       "Promote the brief",
 		Description: "The architect promotes it.",
 		Type:        "task",
-		Executor:    domain.WorkItemExecutorConversation,
+		Executor:    domain.ConversationWith(domain.RoleArchitect),
 	})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	if !slices.Contains(runner.args[0], `--metadata={"yoyodyne_executor":"conversation"}`) {
+	if !slices.Contains(runner.args[0], `--metadata={"yoyodyne_executor":"conversation:architect"}`) {
 		t.Fatalf("the creation carried no executor: %#v", runner.args[0])
 	}
-	if item.Executor != domain.WorkItemExecutorConversation {
+	if item.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Create() executor = %q, want the marker read back", item.Executor)
 	}
 
 	// An item admitted before the marker existed acquires one by an update, which
 	// is how the queue that provoked this gets marked at all.
 	marked := &fakeRunner{responses: []string{
-		`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation"}}]`,
+		`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task","metadata":{"yoyodyne_executor":"conversation:architect"}}]`,
 	}}
 	if _, err := (Client{Runner: marked}).Update(context.Background(), "yoyodyne-ifd.138", WorkItemChange{
-		Executor: domain.WorkItemExecutorConversation,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
 	}); err != nil {
 		t.Fatalf("Update() error = %v", err)
 	}
-	if !slices.Contains(marked.args[0], "--set-metadata=yoyodyne_executor=conversation") {
+	if !slices.Contains(marked.args[0], "--set-metadata=yoyodyne_executor=conversation:architect") {
 		t.Fatalf("the update carried no executor: %#v", marked.args[0])
 	}
 
@@ -750,13 +750,13 @@ func TestTheExecutorIsWrittenWhereSelectionCanReadItAndTheNotesCannot(t *testing
 	// returns.
 	unstored := &fakeRunner{responses: []string{`[{"id":"yoyodyne-ifd.138","title":"t","status":"open","priority":1,"issue_type":"task"}]`}}
 	if _, err := (Client{Runner: unstored}).Update(context.Background(), "yoyodyne-ifd.138", WorkItemChange{
-		Executor: domain.WorkItemExecutorConversation,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
 	}); err == nil {
 		t.Fatal("Update() with an executor bd did not store = nil error, want a failure")
 	}
 	unmarked := &fakeRunner{responses: []string{`{"id":"yoyodyne-ifd.138","title":"Promote the brief","status":"open","priority":1,"issue_type":"task"}`}}
 	if _, err := (Client{Runner: unmarked}).Create(context.Background(), NewWorkItem{
-		Title: "Promote the brief", Description: "d", Type: "task", Executor: domain.WorkItemExecutorConversation,
+		Title: "Promote the brief", Description: "d", Type: "task", Executor: domain.ConversationWith(domain.RoleArchitect),
 	}); err == nil {
 		t.Fatal("Create() with an executor bd did not store = nil error, want a failure")
 	}

@@ -509,9 +509,20 @@ func (a TrackerAction) validateArguments() []error {
 	// for the reason an unrecognized class is: what it names is a marker selection
 	// reads, and a word nothing reads would take the item out of the queue's reach
 	// without anybody having said which conversation carries it.
+	//
+	// The bare conversation marker is refused for the second half of that same
+	// sentence. It takes the item out of the queue's reach and says nothing about
+	// whose conversation carries it, so the thread has nobody to name from the
+	// handoff until somebody picks the work up — which is the silence the marker
+	// was extended to end, and it ends only if it is refused here.
 	if executor := domain.WorkItemExecutor(strings.TrimSpace(string(a.Executor))); executor != "" && !executor.Valid() {
-		problems = append(problems, fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
-			a.Executor, namedWorkItemExecutors()))
+		if executor == domain.WorkItemExecutorConversation {
+			problems = append(problems, fmt.Errorf("executor %q does not say whose conversation carries the work, so nothing could name who holds it until somebody picked it up; name the role: %s",
+				a.Executor, namedWorkItemExecutors()))
+		} else {
+			problems = append(problems, fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
+				a.Executor, namedWorkItemExecutors()))
+		}
 	}
 	return problems
 }

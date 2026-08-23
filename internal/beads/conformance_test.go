@@ -116,12 +116,12 @@ func TestExecutorMetadataConformance(t *testing.T) {
 		Title:       "Promote the brief",
 		Description: "The architect promotes it in conversation.",
 		Type:        "task",
-		Executor:    domain.WorkItemExecutorConversation,
+		Executor:    domain.ConversationWith(domain.RoleArchitect),
 	})
 	if err != nil {
 		t.Fatalf("Create() with an executor error = %v", err)
 	}
-	if created.Executor != domain.WorkItemExecutorConversation {
+	if created.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Create() executor = %q, want bd to echo the marker it stored", created.Executor)
 	}
 	// And it survives being read back separately, which is what selection does.
@@ -129,7 +129,7 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Show() error = %v", err)
 	}
-	if shown.Executor != domain.WorkItemExecutorConversation {
+	if shown.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Show() executor = %q, want the stored marker", shown.Executor)
 	}
 
@@ -144,11 +144,11 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	if !ordinary.Executor.DeveloperRun() {
 		t.Fatalf("Create() executor = %q, want ordinary work to carry none", ordinary.Executor)
 	}
-	marked, err := client.Update(ctx, ordinary.ID, WorkItemChange{Executor: domain.WorkItemExecutorConversation})
+	marked, err := client.Update(ctx, ordinary.ID, WorkItemChange{Executor: domain.ConversationWith(domain.RoleArchitect)})
 	if err != nil {
 		t.Fatalf("Update() with an executor error = %v", err)
 	}
-	if marked.Executor != domain.WorkItemExecutorConversation {
+	if marked.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Update() executor = %q, want bd to echo the marker it set", marked.Executor)
 	}
 }

@@ -144,13 +144,24 @@ func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
 		if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[kind]) {
 			t.Fatalf("ordinary %s reads as %q, want the queue's answer", kind, message.Body)
 		}
-		queued.Detail.Executor = "conversation"
+		queued.Detail.Executor = string(domain.WorkItemExecutorConversation)
 		handed, err := Render(topic, Persona(domain.RoleProductManager, ""), queued)
 		if err != nil {
 			t.Fatalf("render conversation-carried %s: %v", kind, err)
 		}
 		if !strings.HasSuffix(handed.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
 			t.Fatalf("conversation-carried %s reads as %q, want the handoff's answer", kind, handed.Body)
+		}
+		// An admission that says whose conversation carries the item answers with
+		// that role: the item is in the queue and nothing will pull it, so the wait
+		// starts here rather than at a later handoff.
+		queued.Detail.Executor = string(domain.ConversationWith(domain.RoleArchitect))
+		attributed, err := Render(topic, Persona(domain.RoleProductManager, ""), queued)
+		if err != nil {
+			t.Fatalf("render %s carried by a named role: %v", kind, err)
+		}
+		if !strings.HasSuffix(attributed.Body, nextMoveLead+"the architect's, in conversation — no run will ever be started for this.") {
+			t.Fatalf("%s carried by the architect reads as %q, want the wait left with them", kind, attributed.Body)
 		}
 	}
 }

@@ -277,10 +277,13 @@ goal your goals do not state are reported apart, because the first is work to
 attribute and the second is a claim to correct. [`yoyo goals`](artifacts.md#goals-and-what-work-serves-them)
 reads both from outside the conversation.
 
-An item also says what carries it, where that is not a developer run. Work whose
-execution is a conversation with a role — promoting a document the architect
-owns, settling a decomposition — is admitted with `executor: conversation`, and
-`update` sets it on work already in the queue. The harness never selects a marked
+An item also says what carries it, where that is not a developer run, and whose
+conversation that is. Work whose execution is a conversation with a role —
+promoting a document the architect owns, settling a decomposition — is admitted
+with `executor: conversation:architect`, naming the role whose conversation
+carries it, and `update` sets it on work already in the queue. The role is
+required: what the channel says about a handed-over item, until somebody picks it
+up, is whatever the marker named. The harness never selects a marked
 item for a developer run: it keeps its place in your order, the queue says what
 carries it rather than reporting it as ready, and a pass that reaches it says it
 passed it over rather than counting it among the work about to become pullable.

@@ -926,6 +926,14 @@ func executorProblem(executor domain.WorkItemExecutor) []error {
 	for _, known := range domain.WorkItemExecutors {
 		named = append(named, fmt.Sprintf("%q", known))
 	}
+	// The bare marker is refused here like anything else that may not be written,
+	// but it is not unrecognized — items marked before the marker named a role
+	// carry it and are read exactly as they were — so what it is told is what it
+	// is missing rather than that nobody knows the word.
+	if trimmed == domain.WorkItemExecutorConversation {
+		return []error{fmt.Errorf("executor %q does not say whose conversation carries the work; the executors that do are: %s",
+			executor, strings.Join(named, ", "))}
+	}
 	return []error{fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
 		executor, strings.Join(named, ", "))}
 }
