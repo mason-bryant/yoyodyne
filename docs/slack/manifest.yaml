@@ -47,9 +47,10 @@
 # two paragraphs as the only one in the text, where it is meant to be.
 #
 # The doubled blank line inside long_description is deliberate and not a stray:
-# a folded scalar collapses n+1 line breaks into n, so one blank line would give
+# a folded scalar collapses n+1 line breaks into n, so one empty line would give
 # the two paragraphs a bare line break and two give them the empty line between
-# them. Rewrap these paragraphs freely; just keep that gap two lines wide.
+# them. Rewrap these paragraphs freely; just keep exactly two empty lines there,
+# which is what renders as one blank line. Three would render as two.
 #
 # One part of the profile is not here at all: a manifest cannot carry an image,
 # so the app's icon is uploaded by hand. It is already checked in, as
