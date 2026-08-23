@@ -2370,6 +2370,17 @@ attribute a promotion to a developer. The avatar carries none of that:
 everything it distinguishes is already distinguished by the name beside it and
 the voice below it, so a reader whose client renders no picture loses nothing.
 
+**Every name says which product it speaks for**, from
+[`product.id`](#layout): `Development Manager (yoyodyne)`,
+`Yoyodyne (yoyodyne)`, and a project that configured a second agent for a role
+reads `Developer (opus) (yoyodyne)` — the product is last on every name, in the
+same shape, for every speaker including the harness. It is applied by the voice
+layer from the id the configuration already carries, never authored per message
+and not configurable beside the avatars, because it is a fact about which
+harness is talking rather than a claim about who did the work. An operator with
+two products in development is running two harnesses, and where both are read in
+one channel this is the only thing a message carries that tells them apart.
+
 **Who may steer the harness from a thread is not configured here.** The
 allow-list is derived from [`operators`](#operators): the humans granted
 `direct-work` who have bound a `slack_member_id`, and nobody else. It is a

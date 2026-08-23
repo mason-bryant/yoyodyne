@@ -43,7 +43,8 @@ const (
 
 // Store is the sink's own durable state for one product.
 type Store struct {
-	root string
+	root    string
+	product domain.ProductID
 }
 
 // NewStore roots the sink's state under the product, beside the runs it reads.
@@ -54,10 +55,20 @@ func NewStore(root string, productID domain.ProductID) (*Store, error) {
 	if err := domain.ValidateIdentifier("product id", string(productID)); err != nil {
 		return nil, err
 	}
-	return &Store{root: filepath.Join(filepath.Clean(root), "products", string(productID), "slack")}, nil
+	return &Store{
+		root:    filepath.Join(filepath.Clean(root), "products", string(productID), "slack"),
+		product: productID,
+	}, nil
 }
 
 func (s *Store) Root() string { return s.root }
+
+// Product is the product this store's state belongs to, and so the product the
+// sink built on it reports on. It is kept rather than re-derived from the path
+// because it is what every speaker's name is qualified by: a product read back
+// out of a directory name would be the same id spelled a second way, and two
+// spellings of one thing are two things that can disagree.
+func (s *Store) Product() domain.ProductID { return s.product }
 
 // Lease makes this process the product's only sink, reporting whether it got
 // it. Two sinks are not a redundancy: they hold separate thread maps, so they

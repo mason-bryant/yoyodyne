@@ -167,7 +167,11 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 		Channel: settings.Channel,
 		// What the project configured is the picture beside each name and nothing
 		// else about who is speaking; a speaker it named none for keeps the one
-		// the harness ships.
+		// the harness ships. Which product is talking goes after every speaker's
+		// name, and comes from the store above rather than from anything named
+		// again here — it is the id the configuration already carries, so an
+		// operator running a second harness can tell the two apart without opening
+		// a thread.
 		Avatars: notify.Avatars(settings.Avatars),
 		Store:   store,
 		API:     api,
