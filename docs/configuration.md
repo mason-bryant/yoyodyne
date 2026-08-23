@@ -58,6 +58,36 @@ carries every proposal with the artifact it came from, in the three lists the
 generated file keeps apart — `checks` written, `candidates` found and not
 settled, `alternatives` read and deliberately left out.
 
+### When the repository ignores the configuration
+
+`init` and `yoyo config validate` both ask Git whether the configuration they
+just wrote or just read is matched by an ignore rule, and say so when it is.
+Nothing fails: the files are there and valid, the exit code is what it would have
+been, and the warning goes to standard error.
+
+It is worth saying because nothing else announces it. A project whose
+`.yoyodyne` is ignored is configured on the machine that ran `init` and nowhere
+else — this checkout keeps reading the configuration off disk while every clone,
+every collaborator, and every dev worktree, which check out tracked files only,
+get a project with no configuration at all. The warning names the rule in Git's
+own `<file>:<line>:<pattern>` form, so the line is findable rather than
+searchable for.
+
+A configuration that is already tracked is not ignored however loudly a
+`.gitignore` names it — Git applies ignore rules to untracked paths only — so a
+project that committed its configuration and later added the rule is left alone.
+A rule that is local to the checkout, in `.git/info/exclude` or a
+`core.excludesFile`, is reported differently: that is the supported way to keep
+tool config out of a repository that is not yours to commit it to, so it is
+acknowledged rather than argued with, and what the warning names is `--config`
+for keeping the configuration outside the repository. Nothing is said where Git
+could not be asked — a project that is not a repository, a configuration kept
+outside the one it describes, a Git that would not run.
+
+`init --json` and `config validate --json` both report it under `ignored`, with
+the `path` that was asked about, the `rule` Git answered with, and the `source`
+file that rule lives in.
+
 ### Where the tracker syncs
 
 `init` also points the tracker at a remote, because a tracker that syncs
