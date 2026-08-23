@@ -73,12 +73,14 @@ isolated worktree, the checks your project declared, an independent reviewer,
 that reviewer's findings handed back to the developer to repair, a fast-forward
 into your target branch, and — [where you have asked for it](#optional-publishing-and-auto-merge)
 — a pull request that merges itself once your required checks pass. `yoyo run`,
-`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, and `yoyo resume`
+`yoyo review`, `yoyo status`, `yoyo reconcile`, `yoyo pause`, `yoyo resume`, and
+`yoyo release`
 sit beside that conversation as administrative and recovery entry points — one
 named item, one branch judged as a whole, what became of the runs already made
 and why one of them failed, settling what a killed process left behind, stopping
-everything the harness would spend until you say otherwise, and releasing a run
-waiting on a refusal the provider no longer makes — rather than as the way
+everything the harness would spend until you say otherwise, releasing a run
+waiting on a refusal the provider no longer makes, and letting the harness choose
+work again after intake was held — rather than as the way
 work normally happens.
 
 **Quick start.** With [Beads](https://github.com/gastownhall/beads) and
@@ -233,6 +235,16 @@ already true and what would still have to be done, so reading the report is
 never consent to alter the machine. `yoyo setup --yes --json` is what carries a
 walk out with nobody at the terminal — it leaves the keychain step, and only
 that step, to a walk somebody is watching.
+
+**Or have your own agent walk it.**
+[`skills/yoyo-setup/SKILL.md`](skills/yoyo-setup/SKILL.md) is a prompt rather
+than a document to read: paste it into your own coding session, or install it
+into `~/.claude/skills/` with the one command at the top of it, and ask for yoyo
+to be set up here. It walks the same path — and repairs an installation that
+used to work and stopped — acting on the structured findings `yoyo setup --json`
+and `yoyo doctor --json` return, which is what keeps it running the commands
+those reports carry rather than commands it invented. It asks before each one,
+and hands you back anything that needs your editor, a login, or a credential.
 
 **What you need.** Git and a repository with at least one commit;
 [Beads](https://github.com/gastownhall/beads) (`bd`), the tracker every role
@@ -419,13 +431,19 @@ statement about the repository rather than an error, and the product manager
 says exactly that rather than inferring what your product must be about. Tell it
 what you are building and it will draft the brief and the goals with you.
 
-It cannot save them. The product manager runs with no tools at all — it manages
-the Beads backlog through the harness and never touches your filesystem — so the
-division is plain: **the product manager drafts, and you put the files on disk.**
-Paste what you agreed into `docs/product/`, commit it, and the next conversation
-reads it back as the product's written intent. Nothing fails if you never do, but
-goals are what work is admitted against, and a product manager with no goals to
-name will stop and ask you for one.
+**It does not save them, and you do not transcribe them either.** The product
+manager runs with no tools at all — it manages the Beads backlog through the
+harness and never touches your filesystem — so when the document is ready it
+hands the harness a typed write instead. You are shown the document and asked;
+on your `y` the harness files it in `docs/product/`, generates the frontmatter,
+records the revision under the product manager, and records your approval in the
+document itself. Commit it with the rest of your changes, and the next
+conversation reads it back as the product's written intent. Nothing fails if you
+never write one, but goals are what work is admitted against, and a product
+manager with no goals to name will stop and ask you for one. The same mechanism
+files a design or a decision record when you are talking to the architect: see
+[writing a document from a
+conversation](#writing-a-document-from-a-conversation).
 
 **Then drive the work from the same conversation.** Talk about what you want and
 approve the work items it proposes, as many as you like in one answer. Once you
@@ -503,11 +521,32 @@ runs.
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
 archive for the platform it is running on and asserts the binary reports
-`<tag>`. That target is the whole of what a release is: the release workflow
-runs it for a pushed tag and publishes what it produced, and CI runs the same
-target on every change with a placeholder version, so a tag push reruns a path
-that is already exercised rather than executing it for the first time when a
-failure would mean a botched or missing release.
+`<tag>`. That target is the whole of what a release consists of: the release
+workflow runs it for a pushed tag and publishes what it produced, and CI runs
+the same target on every change with a placeholder version, so a tag push
+reruns a path that is already exercised rather than executing it for the first
+time when a failure would mean a botched or missing release.
+
+`make release VERSION=<tag>` is that build with its gate in front, so a daily
+cadence costs two commands rather than a procedure:
+
+```sh
+make release VERSION=v0.3.0
+git push origin v0.3.0
+```
+
+It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+`check`, builds and verifies the archives for `<tag>`, then tags the commit
+they were built from — in that order, so a red gate refuses the cut, names what
+was red, and leaves nothing to undo. It also refuses a tag that is not
+`vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
+that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
+origin is unreachable it says that last one went unchecked rather than passing
+over it. It stops at the tag: publishing is the `git push`, which is the
+irreversible half and what the release workflow acts on, so it stays something
+you do deliberately.
+[`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
+of those refusals against fabricated repositories.
 
 ## The conversation
 
@@ -596,7 +635,9 @@ It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](docs/reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -605,9 +646,12 @@ harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
-The brief and the goals stay yours. The product manager proposes a change to a
-goal and says plainly that it is yours to make; it cannot make one, and with no
-way to write a file it could not if it tried.
+The brief and the goals are the product manager's documents and yours to approve.
+It has no way to write a file, so it hands the harness the document instead: you
+are shown what would be written and asked, and only your `y` files it — with the
+revision recorded under the product manager and your approval recorded in the
+document. It is the same mechanism whichever role owns the document, and it is
+[writing a document from a conversation](#writing-a-document-from-a-conversation).
 
 The listing it is given names items by title, so when a title is not enough to
 judge whether new work belongs inside an existing item or beside it, it reads
@@ -939,7 +983,10 @@ the harness *choosing* new work, and lets everything already running finish. It
 is what you reach for when the queue looks wrong but nothing is on fire. It holds
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
-and `/release` lets the harness choose again. A held intake leads `/status` with
+and `/release` lets the harness choose again — as does `yoyo release` at a
+terminal, which lifts the same record, for when the hold is the one the
+failure-storm brake placed overnight and no conversation is open. A held intake
+leads `/status` with
 its own banner saying when it was placed and why, beneath the PAUSED banner if
 both are in force. It is recorded per product, unlike
 [`yoyo pause`](#pausing-everything-and-resuming-it), because what a development
@@ -1204,12 +1251,16 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
-The architect owns the designs, the decision records, and the invariants, and it
-cannot edit any of them from a conversation, because no conversation has tools.
-Decide the change with it and then record it yourself — `yoyo invariant` for an
-invariant, a revision to the document for the rest. Changes other roles proposed
-against its documents are carried into its conversation for it to argue, the
-same way the product manager hears proposals against the brief and the goals.
+The architect owns the designs, the decision records, and the invariants. It
+still has no tools, and a design or a decision record it writes reaches the
+repository anyway: it emits the document as a typed action, you are shown the
+document and asked, and the harness writes it under the architect's authority
+with your approval recorded in it — see [writing a document from a
+conversation](#writing-a-document-from-a-conversation). An invariant
+is the exception and stays yours to record with `yoyo invariant`. Changes other
+roles proposed against its documents are carried into its conversation for it to
+argue, the same way the product manager hears proposals against the brief and
+the goals.
 
 Each role is also given the documents it answers for. The architect gets the
 designs, the invariants, and the decision records alongside the specifications;
@@ -1957,8 +2008,8 @@ A project owns its configuration outright. `yoyo init` writes it:
 ```
 
 That writes a complete `.yoyodyne/config.yaml` — every agent with its role,
-backend, model selector, instance count, and persona reference, plus the
-execution, approval, and product settings — and copies the five personas into
+backend, model selector, provider account, instance count, and persona
+reference, plus the execution, approval, and product settings — and copies the five personas into
 `.yoyodyne/personas/`, where they are ordinary Markdown files in your
 repository. Nothing is inherited when the file loads, so
 `yoyo config show --origins` names the project file for every configured value —
@@ -1985,11 +2036,15 @@ checks:
   - go test ./...
   - go vet ./...
 
+accounts:
+  default: {}                       # the provider account the agents run under
+
 agents:
   developer:
     role: developer
     backend: claude-code
     model: opus
+    account: default
     instances: 1
     persona:
       version: v1
@@ -2094,9 +2149,10 @@ Who may change one of these documents is in the code rather than in a persona.
 The product manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no
 document at all. Creating, amending, superseding, and retiring an artifact each
-refuse a role that does not own the kind, the way the invariants already do —
-though no command reaches that path yet, so what it constrains today is nothing
-that is happening. What does run on every load is the other half: a document
+refuse a role that does not own the kind, the way the invariants already do, and
+that boundary is what a document written from a conversation goes through: the
+role writes it, you approve it, and the write happens under that role's
+authority or not at all. What also runs on every load is the other half: a document
 whose revision log records a change by a role that does not own it is reported,
 naming the file and the entries that crossed. It is reported rather than refused
 because the log is append-only, so losing the document would leave one that could
@@ -2118,6 +2174,84 @@ is asked to support anything. The
 [configuration guide](docs/configuration.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
+## Writing a document from a conversation
+
+A document the owning role drafted used to reach the repository by hand: fenced
+Markdown in a reply, your approval in prose, and then you or an agent of yours
+working out the path, writing the frontmatter, and committing it. The drafted
+content was rarely the part that went wrong — the transcription was.
+
+So a document is written the way work is proposed. Ask the product manager for
+the goals or the architect for a design, and what comes back is prose you read
+plus a typed action carrying the document. Nothing is written yet. You are shown
+what would happen and the document itself, and asked:
+
+```
+document document-4.1 · create v2-goals (goals) in docs/product
+  title: What v2 is for
+  because: drafted with you in this conversation
+
+  # Goals
+  ...
+
+create v2-goals (goals) in docs/product? [y or yes writes it and records your
+approval in it; anything else declines, and is kept as the reason]
+```
+
+On your `y` the harness performs the write itself: it files the document in the
+artifact home, generates the frontmatter the contract requires, records the
+revision under the role that wrote it, and records your approval against that
+revision. `yoyo artifact show v2-goals` then reads back exactly what any
+hand-written document reads back as, because it is one. Anything else declines,
+and what you said is kept as the reason.
+
+Nothing about that widens what a role may do. The write goes through the same
+ownership boundary every other change to these documents goes through, so the
+architect cannot write the goals and the product manager cannot write a design —
+each proposes to the other instead. Each kind also has one home and is written
+only there: the brief, the goals, and the non-goals go under
+`product.specifications`, designs and specifications under `product.designs`,
+and decision records under `product.decisions`. A role is told which of those its
+own kinds go in rather than being handed the list, so a design filed under the
+product manager's home is refused even though that is an artifact home — it is
+not the one a design is filed in.
+
+A kind the role does not own, a document filed anywhere but its kind's home, a
+revision of a document that belongs to another role, a revision of one that was
+superseded or retired, and a block the harness cannot read are all refused before
+anything is written, and you are never asked to approve one. A revision naming a
+document nothing records is refused the same way, saying that a document which
+does not exist yet is created rather than revised — and a creation over an id
+something already answers to is refused for the mirror of that reason. A role
+that owns no document at all — the development manager, the developer, the
+reviewer — cannot write one under any circumstances.
+
+A revision is the same action, carrying the document whole:
+
+```sh
+./bin/yoyo chat --message "revise the second goal to name the adoption path"
+./bin/yoyo chat --message "approve document-5.1"
+```
+
+Deciding it as its own message is what makes this work outside an interactive
+conversation: the drafted document is recorded with the conversation, so it
+survives the process that wrote it and your approval names it hours later. An
+approval sent as a message has to name the document — a bare "yes" decides
+nothing, because a message is not an answer to a question you were just asked.
+What is left undecided when a conversation ends is named on the way out.
+
+**What this does not do is commit or publish, and it says so every time it
+writes one.** The document lands in your working tree with the rest of your
+changes; committing it and opening a pull request for it are still yours. Commit
+it before you start a run: a run refuses to begin while the primary checkout has
+uncommitted changes, and a document you approved and left uncommitted is one of
+them.
+
+Whether the harness should go further — commit the document, or open a pull
+request for it — is an open question rather than a settled boundary, and it is
+the architect's to answer. An amendment asking the design to record the answer is
+filed; `yoyo amendment list --owner architect` says where it stands.
+
 ## Goals, and what work serves them
 
 Identity ends at the document. The last link of the chain is the goal a work
@@ -2132,9 +2266,9 @@ of them in the words that document states it in.
 ./bin/yoyo goals witness       # witness the goals already recorded on admitted work
 ```
 
-Nothing there writes an attribution, for the same reason nothing writes an
-artifact: what a piece of work is for is a product judgement, made by the
-product manager in the conversation where you can see it. What the harness owns
+Nothing there writes an attribution: what a piece of work is for is a product
+judgement, made by the product manager in the conversation where you can see it,
+the same way the documents themselves are. What the harness owns
 is resolving the claim. An item that names no goal at all and one that names a
 goal your goals do not state are reported apart and treated differently, because
 they are not the same thing to do: the first predates the check, is somebody's
@@ -2259,9 +2393,10 @@ silently, and what was delivered is recorded on the work item so an operator can
 see afterwards which constraints applied.
 
 The architect can be asked what an invariant should say — `yoyo agent chat
-architect` — and it cannot write one, because no conversation has tools. So the
-lifecycle is reachable from the command line, acting with the architect's
-authority and recording that it did:
+architect` — and it cannot write one. The typed write a conversation has covers
+the artifact kinds, and an invariant carries an identity scheme of its own that
+no conversation action reaches. So the lifecycle is reachable from the command
+line, acting with the architect's authority and recording that it did:
 
 ```sh
 ./bin/yoyo invariant list
@@ -2306,7 +2441,10 @@ sink that is supposed to be using them.
 
 **Every finding that is not healthy carries a remedy, and a remedy is a
 command.** That is the whole difference between this and a status listing: what
-it prints under a problem is what to run.
+it prints under a problem is what to run. `--json` carries the same findings with
+the same remedies, which is what [the setup and repair
+prompt](skills/yoyo-setup/SKILL.md) has your own agent session act on rather than
+parsing any of this.
 
 ```text
 yoyodyne cannot run work: 2 problems, and 1 warning worth knowing about
@@ -2412,6 +2550,22 @@ they have; the conversation's [`/hold`](#steering-the-work-from-the-conversation
 stops only the harness choosing new work and lets what is running finish. Reach
 for the first when the reason is your account or your afternoon, and the second
 when the reason is the queue.
+
+`yoyo release` lifts that narrow hold from a terminal:
+
+```bash
+./bin/yoyo release   # the harness may choose work from this backlog again
+```
+
+It is the same record `/release` lifts — one file under the product — so it does
+not matter which surface placed the hold or which lifts it. It is here because a
+hold you did not place is the one you are most likely to meet with no
+conversation open: the failure-storm brake holds intake itself when runs keep
+blocking, and every report of a held intake at a terminal now names this command
+beside `/release`. Releasing what is not held is not an error, an item you name
+with `yoyo run` was never subject to the hold, and a watching `yoyo work` session
+starts choosing again at its next poll. Placing a hold stays in the conversation,
+where the reason for it can be recorded with it.
 
 ### Waiting out a provider usage limit
 
@@ -2685,9 +2839,11 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
 run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
   selected by the operator: the operator ran this item by name from the command line
+  ran under default, configuration cfg-9f2c41ab7e05
   reason: developer reported failure: api_error: API Error: 529 Overloaded.
 run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
   selected: no reason recorded
+  ran under an account the record does not name, configuration a configuration the record does not name
   reason: verification failed: make test exited with 2
   failing check: make test exited 2
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
@@ -2698,6 +2854,17 @@ The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
 account for is exactly what you most need to see, and a line left out would read
 as a reason you had already looked at rather than as one nobody wrote.
+
+The `ran under` line beneath it is the same shape of fact and is printed for the
+same reason: which provider account the run spent, and the revision of the
+configuration that set it up. Yoyodyne runs one account today, so the line
+usually reads `ran under default` — the point of recording it now is that every
+run made before there is a second account can still be attributed to the one it
+actually spent. The revision is a digest of the effective configuration, so two
+runs carrying the same one were configured identically and a run whose
+configuration was edited under it is distinguishable from one that was not;
+`yoyo config show` prints the revision in force. A run recorded before either was
+carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
 what it is, because the records keep them apart deliberately. Only `reason` says
@@ -2790,7 +2957,8 @@ copy the single file out of it, if you want it:
 ```sh
 ./bin/yoyo-status          # follow the newest of any kind
 ./bin/yoyo-status -l       # list recent runs, conversations, and reviews and exit
-./bin/yoyo-status -c       # report token spend and cost for each, and in total
+./bin/yoyo-status -c       # report the last 7 days of spend, by day and in total
+./bin/yoyo-status -c 30    # report that many days instead of 7
 ```
 
 A conversation and a branch review each record the same kind of event stream a
@@ -2815,10 +2983,26 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is one row per run, per conversation, and
-per branch review, and a mixed total says how much of it was each — a
+reporting requires it. What it prices is every run, every conversation, and
+every branch review, and a mixed total says how much of it was each — a
 conversation turn and a branch review are each a provider invocation like any
 other, and leaving either out understated every total it belonged in.
+
+The rows are grouped by the local-timezone day the money was spent on, each
+day's group closing with that day's spend and today's group coming last: what an
+operator budgets against is what today cost, and the day they mean is the one
+their own clock is keeping. What counts on a day is each invocation rather than
+the log it was recorded in, so a conversation that has been open for a fortnight
+appears under today for the turn it was asked this morning and under each
+earlier day it spent on — one row per day it spent, each with the shape a row
+has always had. A report covers the last seven such days, today counting as the
+first of them. A number asks for a different count — `-c 30` — and naming a run,
+a conversation, or a review prices that one whatever day it ran on, because an
+id has already chosen what to show; an id prefix that is all digits has to carry
+its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
+count of days. A window with nothing in it says so and says since when, rather
+than reading like a machine that spent nothing.
+
 [`yoyo cost`](#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
 cost"; it leaves conversations and branch reviews out, deliberately and for the
@@ -2884,6 +3068,15 @@ how the sink records whose secrets it was launched with, so
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
 
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
+
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
 everything held, the watch session idle, or no session running — says so again
@@ -2913,6 +3106,10 @@ built.
 
 ## Further reading
 
+- [Setting up and repairing an installation with your own agent](skills/yoyo-setup/SKILL.md)
+  — the shipped prompt that walks a blank or broken installation to a passing
+  `yoyo doctor`, acting on what `yoyo setup --json` and `yoyo doctor --json`
+  report.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture, the
   artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.

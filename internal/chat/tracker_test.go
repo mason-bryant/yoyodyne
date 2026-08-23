@@ -443,6 +443,50 @@ func TestATrackerActionRecordsWhatTheItemItActedOnIsCalled(t *testing.T) {
 	}
 }
 
+// What already carried the item travels with what was done to it, for the same
+// reason its title does: a role acting on work no run can execute is that role
+// carrying the work out, and the marker is on the item rather than in anything
+// the action itself says. Without it a note the architect writes on work routed
+// to the architect is indistinguishable from the product manager tidying the
+// queue, and nothing ever reports the one thing the thread is missing.
+func TestATrackerActionRecordsWhatAlreadyCarriedTheItemItActedOn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.138": {
+			ID:       "yoyodyne-ifd.138",
+			Title:    "Promote the brief",
+			Status:   "open",
+			Executor: domain.WorkItemExecutorConversation,
+		},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Recording what the promotion settled.",
+			`{"action":"update","id":"yoyodyne-ifd.138","note":"the brief is promoted","reason":"the architect carried it out"}`)},
+		{SessionID: "session-1", FinalText: "Noted on the item."},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Record what the promotion settled.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if reply.Actions[0].WorkItemExecutor != domain.WorkItemExecutorConversation {
+		t.Fatalf("outcome executor = %q, want what the tracker says carries the item", reply.Actions[0].WorkItemExecutor)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventTrackerActionApplied)
+	if !strings.Contains(payload, `"work_item_executor":"conversation"`) {
+		t.Fatalf("recorded action = %s, want it to carry what the item's executor is", payload)
+	}
+}
+
 func TestSurveyingTheQueueAnswersFromTheTrackerRatherThanTheOpeningPicture(t *testing.T) {
 	t.Parallel()
 
@@ -676,7 +720,7 @@ func TestWhatIsRefusedOnClosedWorkIsWhatWouldMeanNothing(t *testing.T) {
 func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	t.Parallel()
 
-	contract := SystemPrompt(domain.RoleProductManager, Admission{}, "")
+	contract := SystemPrompt(domain.RoleProductManager, Admission{}, nil, "")
 	// An action a role may ask for but is never shown is one it will not use, and
 	// one shown to a role that may not ask for it is one it will ask for and be
 	// refused. Both are ways for a contract and the authority table to disagree,
@@ -685,7 +729,7 @@ func TestTheContractOffersEveryActionAndSaysWhoOwnsTheBacklog(t *testing.T) {
 	// manager's alone.
 	for _, role := range ConversationalRoles() {
 		authority, _ := AuthorityFor(role)
-		offered := SystemPrompt(role, Admission{}, "")
+		offered := SystemPrompt(role, Admission{}, nil, "")
 		for _, action := range trackerActionNames {
 			shown := strings.Contains(offered, `{"action":"`+action+`"`)
 			if authority.MayAct(action) && !shown {

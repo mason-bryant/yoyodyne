@@ -210,7 +210,7 @@ func TestChatResolvesTheConfiguredProductManager(t *testing.T) {
 	}
 	// The persona is guidance underneath the contract, never a replacement for
 	// it: the contract is what the conversation actually sends first.
-	prompt := chat.SystemPrompt(agent.Role, chat.Admission{}, agent.Persona.Text)
+	prompt := chat.SystemPrompt(agent.Role, chat.Admission{}, nil, agent.Persona.Text)
 	if !strings.HasPrefix(prompt, "You are the product manager for this product") {
 		t.Fatal("the conversation prompt does not begin with the immutable contract")
 	}
@@ -696,6 +696,20 @@ func TestConfigShowExplainsInheritance(t *testing.T) {
 	// The persona body belongs in a prompt, not in a diagnostic listing.
 	if strings.Contains(output, "You implement one bounded work item") {
 		t.Errorf("config show inlined a persona body:\n%s", output)
+	}
+	// The revision names these values as one thing, so what a run recorded and
+	// what the configuration says can be held up against each other.
+	resolved, err := config.LoadResolved(path)
+	if err != nil {
+		t.Fatalf("LoadResolved() error = %v", err)
+	}
+	if !strings.Contains(output, "# revision: "+resolved.Config.Revision()) {
+		t.Errorf("config show does not name the revision in force:\n%s", output)
+	}
+	// A project that names no account runs under one all the same, and says so
+	// where an operator reads what is in force.
+	if !strings.Contains(output, "account: "+config.DefaultAccountAlias) {
+		t.Errorf("config show does not say which account the agents run under:\n%s", output)
 	}
 }
 

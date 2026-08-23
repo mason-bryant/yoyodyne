@@ -109,6 +109,14 @@ type Conversation struct {
 	// It is bounded, and an id dropped from it is delivered once more rather
 	// than lost, which is the right way for this to fail.
 	DeliveredAmendmentIDs []string `json:"delivered_amendment_ids,omitempty"`
+	// DeliveredReportIDs are the collected reports this conversation has already
+	// carried into a turn. A report stays in the pile until somebody records what
+	// became of it, so without this the same unhandled reports would be delivered
+	// again every turn. It is durable and bounded for exactly the reasons the
+	// amendment ids above are, and an id dropped from it is offered once more
+	// rather than lost — which is the right way for this to fail, because the
+	// failure it must never have is a report nobody is ever shown.
+	DeliveredReportIDs []string `json:"delivered_report_ids,omitempty"`
 	// PendingProposals are the work items an agent proposed that nobody has
 	// decided yet. They are durable for the reason the provider session is, and
 	// the reason is sharper here than anywhere else in this record: a proposal
@@ -121,6 +129,18 @@ type Conversation struct {
 	// stays there; what is kept here is the set a later process may still act on,
 	// so a proposal leaves this list the moment it is approved or declined.
 	PendingProposals []PendingProposal `json:"pending_proposals,omitempty"`
+	// PendingWrites are the documents an owning role wrote that the operator has
+	// not decided about yet. They are durable for the reason the proposals above
+	// are, and the reason is the same one sharpened again: a document written by
+	// one `--message` invocation is approved by another, and a process that could
+	// not read back what was written had nothing for the approval to name — so
+	// the drafted document went back to being something a person transcribed by
+	// hand, which is the seam this record exists to close.
+	//
+	// It holds only the undecided ones. The write itself is an event in the log
+	// and stays there; what is kept here is what a later process may still be
+	// asked to carry out.
+	PendingWrites []PendingWrite `json:"pending_writes,omitempty"`
 	// PendingNotices is the account of harness activity the agent has not been
 	// told about yet, and PendingNoticesDropped says older activity was cut to
 	// keep it bounded. They are durable for the same reason the tracker results
@@ -163,6 +183,46 @@ type PendingProposal struct {
 	Asking string `json:"asking,omitempty"`
 }
 
+// PendingWrite is one document an owning role wrote, as the record keeps it:
+// what would be done to which document, the document itself, and which turn
+// wrote it. The conversation it belongs to is the record it sits in, so it is
+// not repeated here.
+//
+// It is declared in this package rather than shared with the conversation code
+// that builds it, for the reason the pending proposal beside it is: that code
+// already depends on this one and the dependency may not run both ways. The
+// field names are the ones the write contract uses, so what is written here
+// reads as what the role wrote.
+type PendingWrite struct {
+	ID   string `json:"id"`
+	Turn int    `json:"turn"`
+	// Action is "create" or "revise", kept as text because this record says what
+	// was waiting rather than deciding what is legal; what is legal is the
+	// artifact package's, and it judges this again when the write is carried out.
+	Action    string   `json:"action"`
+	Artifact  string   `json:"artifact"`
+	Kind      string   `json:"kind,omitempty"`
+	Title     string   `json:"title,omitempty"`
+	Supports  []string `json:"supports,omitempty"`
+	Directory string   `json:"directory,omitempty"`
+	Body      string   `json:"body"`
+	Reason    string   `json:"reason"`
+}
+
+// MaxPendingWrites bounds the undecided documents one conversation carries, and
+// MaxPendingWriteBytes bounds one of them. A document is the largest thing this
+// record holds — a whole Markdown file, not a description of one — so the count
+// is small where the proposals' is twenty: a conversation with two documents
+// waiting on the operator has already asked them for more than anybody answers
+// in one sitting, and the state file has to stay well inside its own limit.
+//
+// The byte bound matches what the write contract accepts, so a document the
+// harness took from a reply is never one it then cannot write down.
+const (
+	MaxPendingWrites     = 2
+	MaxPendingWriteBytes = 64 << 10
+)
+
 // MaxPendingProposals bounds the undecided proposals one conversation carries.
 // A proposal carries the whole of what an operator decides from — its
 // description and its rationale — so unlike the amendment identifiers above it
@@ -184,6 +244,11 @@ const MaxPendingNotices = 20
 // backlog of undecided proposals, and it exists so a conversation's state file
 // cannot grow without limit on a queue nobody works through.
 const MaxDeliveredAmendmentIDs = 256
+
+// MaxDeliveredReportIDs bounds the record of reports already carried into a
+// turn, for the reason the amendment bound exists: a conversation's state file
+// cannot be allowed to grow without limit on a pile nobody works through.
+const MaxDeliveredReportIDs = 256
 
 // MaxPendingTrackerResultBytes bounds the results a conversation may carry
 // forward. The record has to stay reloadable, so what waits inside it is bounded
@@ -243,6 +308,10 @@ func (c Conversation) Validate() error {
 		problems = append(problems, fmt.Errorf("%d delivered amendment ids are recorded, limit is %d",
 			len(c.DeliveredAmendmentIDs), MaxDeliveredAmendmentIDs))
 	}
+	if len(c.DeliveredReportIDs) > MaxDeliveredReportIDs {
+		problems = append(problems, fmt.Errorf("%d delivered report ids are recorded, limit is %d",
+			len(c.DeliveredReportIDs), MaxDeliveredReportIDs))
+	}
 	if len(c.PendingProposals) > MaxPendingProposals {
 		problems = append(problems, fmt.Errorf("%d undecided proposals are recorded, limit is %d",
 			len(c.PendingProposals), MaxPendingProposals))
@@ -252,6 +321,24 @@ func (c Conversation) Validate() error {
 	for i, proposal := range c.PendingProposals {
 		if strings.TrimSpace(proposal.ID) == "" {
 			problems = append(problems, fmt.Errorf("pending_proposals[%d] has no id", i))
+		}
+	}
+	if len(c.PendingWrites) > MaxPendingWrites {
+		problems = append(problems, fmt.Errorf("%d undecided documents are recorded, limit is %d",
+			len(c.PendingWrites), MaxPendingWrites))
+	}
+	for i, write := range c.PendingWrites {
+		// An undecided document nobody can name is one nobody can approve, and one
+		// with nothing under it is an approval that would write an empty file.
+		if strings.TrimSpace(write.ID) == "" {
+			problems = append(problems, fmt.Errorf("pending_writes[%d] has no id", i))
+		}
+		if strings.TrimSpace(write.Body) == "" {
+			problems = append(problems, fmt.Errorf("pending_writes[%d] carries no document", i))
+		}
+		if len(write.Body) > MaxPendingWriteBytes {
+			problems = append(problems, fmt.Errorf("pending_writes[%d] is %d bytes, limit is %d",
+				i, len(write.Body), MaxPendingWriteBytes))
 		}
 	}
 	if len(c.PendingNotices) > MaxPendingNotices {

@@ -5,20 +5,17 @@ package cli
 // artifacts at all.
 //
 // There is deliberately no create, amend, or retire here, unlike the invariant
-// commands beside it. An artifact's content is written by the role that owns
-// it — the operator and the product manager write the brief and the goals, the
-// architect writes designs and decisions — and its frontmatter is edited in the
-// same file at the same time. What the harness owns is refusing a document whose
-// identity is missing, malformed, or claimed by another file, and reporting a
-// revision recorded by a role that does not own the document, which is what this
-// prints.
+// commands beside it, and the reason is not that the store lacks them. It has
+// them, gated by the ownership boundary, and they are reached from the place a
+// document is actually written: the owning role emits the document as a typed
+// action in its conversation, the operator approves it, and the harness performs
+// the write under that role's authority (internal/artifact/write.go). A command
+// here would need the document's prose typed at a shell, which is the
+// transcription that path exists to end.
 //
-// The store those commands would go through has the mutations already, gated by
-// the same authorization boundary the invariants use, so a role that runs later
-// meets the boundary rather than a persona asking it to respect one. Nothing
-// calls them yet, which is why the reporting above is the whole of what is live:
-// exposing them needs an answer to how a document's prose reaches a command,
-// which is not how anybody writes prose today.
+// What is left for these commands is reading the result back: refusing a
+// document whose identity is missing, malformed, or claimed by another file, and
+// reporting a revision recorded by a role that does not own the document.
 //
 // `approve` is here for the opposite reason, and is the one thing these commands
 // write. An approval is the operator's, the operator is who runs a command, and

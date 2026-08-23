@@ -15,6 +15,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -147,6 +148,34 @@ func TestARunRecordsWhatTheItemIsCalled(t *testing.T) {
 	}
 	if state.WorkItemTitle != "Slack thread headers carry the item's title, not just its slug" {
 		t.Fatalf("recorded title = %q, want what the tracker called the item", state.WorkItemTitle)
+	}
+}
+
+// A run says which provider account it spent and which configuration set it up.
+// Both are read back from the record long after the configuration has been
+// edited and, one day, after there is more than one account to have spent: a run
+// that named neither could not be attributed to either afterwards.
+func TestARunRecordsTheAccountAndConfigurationItRanUnder(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Work", Status: "open"}}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	state, err := store.Load(outcome.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.AccountAlias != pipeline.Config.AccountAlias() {
+		t.Fatalf("recorded account = %q, want the configured %q", state.AccountAlias, pipeline.Config.AccountAlias())
+	}
+	if state.ConfigRevision != pipeline.Config.Revision() {
+		t.Fatalf("recorded configuration = %q, want the revision in force %q", state.ConfigRevision, pipeline.Config.Revision())
 	}
 }
 
@@ -449,6 +478,49 @@ func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
 	}
 	if len(states) != 0 {
 		t.Fatalf("blocked run created state: %#v", states)
+	}
+}
+
+// Naming an item runs it, whatever carries it. The executor marker steers what
+// the harness chooses for itself and never what the operator may ask for, which
+// is the same exemption the intake hold makes: naming an item is the operator
+// deciding it is the exception.
+//
+// It is asserted rather than left to the absence of a check, because the marker
+// withholds readiness in backlog.Order — shared state this path does not consult
+// today and could be made to consult by accident. If that ever changed, an
+// operator would be refused the one item they had deliberately reached for, and
+// the two documents that promise otherwise would be silently false.
+func TestPipelineRunsAConversationExecutedItemTheOperatorNamed(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	item := beads.WorkItem{
+		ID:       "yoyodyne-ifd.138",
+		Title:    "Promote the brief",
+		Status:   "open",
+		Executor: domain.WorkItemExecutorConversation,
+	}
+	tracker := &fakeTracker{item: item}
+	provider := roleBackend(func(backend.RunRequest) error { return nil }, approveVerdict)
+	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
+
+	outcome, err := pipeline.Run(context.Background(), item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a named item to run whatever carries it", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || !tracker.claimed {
+		t.Fatalf("Run() outcome = %#v, claimed = %v, want the named run carried out", outcome, tracker.claimed)
+	}
+	if _, err := store.Load(outcome.RunID); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	// The contrast, in one place: the same item the harness would never have
+	// chosen for itself.
+	queue := backlog.Order([]beads.WorkItem{item}, []string{item.ID})
+	if _, ok := queue.Next(); ok {
+		t.Fatal("the backlog offered an item no run carries, so the two paths no longer differ")
 	}
 }
 

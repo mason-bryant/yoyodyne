@@ -91,7 +91,9 @@ It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
@@ -100,9 +102,12 @@ harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
-The brief and the goals stay yours. The product manager proposes a change to a
-goal and says plainly that it is yours to make; it cannot make one, and with no
-way to write a file it could not if it tried.
+The brief and the goals are the product manager's documents and yours to approve.
+It has no way to write a file, so it hands the harness the document instead: you
+are shown what would be written and asked, and only your `y` files it — with the
+revision recorded under the product manager and your approval recorded in the
+document. It is the same mechanism whichever role owns the document, and it is
+[writing a document from a conversation](artifacts.md#writing-a-document-from-a-conversation).
 
 The listing it is given names items by title, so when a title is not enough to
 judge whether new work belongs inside an existing item or beside it, it reads
@@ -275,6 +280,28 @@ goal your goals do not state are reported apart, because the first is work to
 attribute and the second is a claim to correct. [`yoyo goals`](artifacts.md#goals-and-what-work-serves-them)
 reads both from outside the conversation.
 
+An item also says what carries it, where that is not a developer run, and whose
+conversation that is. Work whose execution is a conversation with a role —
+promoting a document the architect owns, settling a decomposition — is admitted
+with `executor: conversation:architect`, naming the role whose conversation
+carries it, and `update` sets it on work already in the queue. The role is
+required: what the channel says about a handed-over item, until somebody picks it
+up, is whatever the marker named. The harness never selects a marked
+item for a developer run: it keeps its place in your order, the queue says what
+carries it rather than reporting it as ready, and a pass that reaches it says it
+passed it over rather than counting it among the work about to become pullable.
+Naming an item yourself with `yoyo run` is unaffected, because that is you
+deciding. Work that says nothing is a developer run, which is nearly all of it —
+and which is why the marker is not retroactive: everything admitted before you
+start marking says nothing, and is chosen as ordinary developer work. Which
+queued items need one is a product judgement the harness cannot infer, so
+bringing an existing queue under the guard is a pass over it with `update`.
+Before this the harness could not tell, and it cost a whole run and two review
+rounds on an item no developer could execute — with those rounds counted against
+the item's cap, so a second mis-selection would have escalated work nobody had
+started. [How work flows](work.md#letting-the-harness-choose-the-work) is the
+selection side of it.
+
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
 answer them differently. Work it can find no goal for is usually a sign the
@@ -434,7 +461,10 @@ the harness *choosing* new work, and lets everything already running finish. It
 is what you reach for when the queue looks wrong but nothing is on fire. It holds
 nothing you name yourself — `/work <beads-id>` still runs an item under it, since
 you placed the hold and naming something is you deciding it is the exception —
-and `/release` lets the harness choose again. A held intake leads `/status` with
+and `/release` lets the harness choose again — as does `yoyo release` at a
+terminal, which lifts the same record, for when the hold is the one the
+failure-storm brake placed overnight and no conversation is open. A held intake
+leads `/status` with
 its own banner saying when it was placed and why, beneath the PAUSED banner if
 both are in force. It is recorded per product, unlike
 [`yoyo pause`](operations.md#pausing-everything-and-resuming-it), because what a development
@@ -607,12 +637,16 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
-The architect owns the designs, the decision records, and the invariants, and it
-cannot edit any of them from a conversation, because no conversation has tools.
-Decide the change with it and then record it yourself — `yoyo invariant` for an
-invariant, a revision to the document for the rest. Changes other roles proposed
-against its documents are carried into its conversation for it to argue, the
-same way the product manager hears proposals against the brief and the goals.
+The architect owns the designs, the decision records, and the invariants. It
+still has no tools, and a design or a decision record it writes reaches the
+repository anyway: it emits the document as a typed action, you are shown the
+document and asked, and the harness writes it under the architect's authority
+with your approval recorded in it — see [writing a document from a
+conversation](artifacts.md#writing-a-document-from-a-conversation). An invariant
+is the exception and stays yours to record with `yoyo invariant`. Changes other
+roles proposed against its documents are carried into its conversation for it to
+argue, the same way the product manager hears proposals against the brief and
+the goals.
 
 Each role is also given the documents it answers for. The architect gets the
 designs, the invariants, and the decision records alongside the specifications;

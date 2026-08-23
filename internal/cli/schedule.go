@@ -212,7 +212,11 @@ func reportSchedule(stdout, stderr io.Writer, jsonOutput bool, schedule orchestr
 	} else {
 		fmt.Fprint(stdout, schedule.Render())
 		if schedule.IntakeHeld != nil {
-			fmt.Fprintln(stdout, "/release in a conversation lets the harness choose work again, and `yoyo run <id>` runs one item now regardless")
+			// The remedy is named as something runnable from here. `/release` in a
+			// conversation lifts the same hold, but somebody reading this at a
+			// terminal with no conversation open was being told a remedy they had
+			// no way to reach.
+			fmt.Fprintln(stdout, "`yoyo release` lets the harness choose work again, as does /release in a conversation, and `yoyo run <id>` runs one item now regardless")
 		}
 		if err != nil {
 			fmt.Fprintf(stderr, "scheduling stopped: %v\n", err)
@@ -253,7 +257,7 @@ execution.work_poll and reads the queue again, until you stop it with Ctrl-C.
 Nothing is cached between readings, so work you admit or reorder is picked up at
 the next poll, and an idle session costs one tracker read per interval and no
 provider call at all. Holding intake brakes a watching session in place -- it
-keeps polling and chooses nothing -- and releasing it resumes it.
+keeps polling and chooses nothing -- and "yoyo release" resumes it.
 
 A watching session guards itself three ways. It does not start the same item
 twice unless the item has changed -- what it says, what it is for, its priority,
@@ -261,7 +265,8 @@ its status, what it depends on, its notes -- so a start the harness cannot get
 past is not retried every interval, and a blocker you release is picked up
 because releasing it changed the item. Runs blocking one after another with
 nothing landing between them hold intake at
-execution.blocked_runs_before_intake_hold, and it stays held for you to lift.
+execution.blocked_runs_before_intake_hold, and it stays held until "yoyo release"
+lifts it.
 And what the session is doing -- watching, idle, braked, resumed, stopped -- is
 recorded where "yoyo status" and the Slack sink read it, because an idle session
 and a dead one are otherwise the same silence.

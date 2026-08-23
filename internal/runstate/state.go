@@ -45,8 +45,22 @@ import (
 // run written before triage docketed anything meant. What the work item was
 // called is the newest of them and behaves the same way: absent means nothing
 // recorded a title for it, which is what every run written before a surface
-// needed to name the work in words meant.
+// needed to name the work in words meant. The account the run ran under and the
+// configuration revision in force are the two newest, and they behave the same
+// way: absent means nothing recorded which account or which configuration, which
+// is what every run written before either was carried meant.
 const StateSchemaVersion = 1
+
+// The shape of the two things a run records about how it was configured. They
+// are stated here rather than imported from the configuration package for the
+// reason the review decisions above are: the durable schema stays independent of
+// the code that produces what it stores, so a record is checked against what a
+// record may hold rather than against what this version of the harness happens
+// to write.
+var (
+	accountAliasPattern   = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
+	configRevisionPattern = regexp.MustCompile(`^cfg-[a-f0-9]{8,}$`)
+)
 
 type Status string
 
@@ -436,6 +450,27 @@ type State struct {
 	// choice with no reason and is reported as such.
 	Selection *Selection     `json:"selection,omitempty"`
 	Backend   domain.Backend `json:"backend"`
+	// AccountAlias is the provider account this run's agents ran under, named by
+	// the alias the configuration gives it. It is written when the run is reserved
+	// and never rewritten, because it is a fact about what was spent rather than
+	// about what is configured now: one account is what the harness runs today, so
+	// what this buys is that every record already says which — and the day there
+	// is a second account, nothing written before it has to be guessed at.
+	//
+	// Absent means nothing recorded an account, which is what every run written
+	// before this did.
+	AccountAlias string `json:"account_alias,omitempty"`
+	// ConfigRevision identifies the configuration in force when this run was
+	// started: a digest of every effective value, so two runs carrying one
+	// revision were configured identically and a run whose configuration was
+	// edited under it is distinguishable from one that was not. Like the account,
+	// it is written once and never rewritten — a run resumed by a later process
+	// keeps the revision it was set up under, which is what makes it evidence
+	// about this run rather than a reading of whatever the file says now.
+	//
+	// Absent means nothing recorded a configuration, which is what every run
+	// written before this did.
+	ConfigRevision string `json:"config_revision,omitempty"`
 	// ProviderSessionID is the developer session. The reviewer's session is
 	// recorded separately because the two are always distinct invocations.
 	ProviderSessionID string `json:"provider_session_id,omitempty"`
@@ -753,6 +788,16 @@ func (s State) Validate() error {
 		if err := s.Selection.Validate(); err != nil {
 			problems = append(problems, fmt.Errorf("selection: %w", err))
 		}
+	}
+	// Both are absent from every record written before they were carried, so what
+	// is checked is the shape of one that is there: a record naming an account or
+	// a configuration nothing could have produced says less than one naming
+	// neither, because it reads as evidence.
+	if s.AccountAlias != "" && !accountAliasPattern.MatchString(s.AccountAlias) {
+		problems = append(problems, errors.New("account_alias is not an account alias"))
+	}
+	if s.ConfigRevision != "" && !configRevisionPattern.MatchString(s.ConfigRevision) {
+		problems = append(problems, errors.New("config_revision is not a configuration revision"))
 	}
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))

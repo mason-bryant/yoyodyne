@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
@@ -73,7 +74,7 @@ var authorities = map[domain.AgentRole]Authority{
 		TrackerActions: []string{
 			actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate,
 			actionReparent, actionReprioritize, actionLink, actionUnlink,
-			actionClose, actionRetire,
+			actionClose, actionRetire, actionHandle,
 		},
 		Proposals: true,
 		Concerns:  true,
@@ -174,6 +175,20 @@ func (e *AuthorityError) Error() string {
 // because the provider answered.
 func (s *Session) authorize(parsed parsedReply) error {
 	authority := s.authority()
+	// A document is refused first, because it is the one block here that would
+	// change the repository: a role that owns no document has no business writing
+	// one, and a role that owns some may not write a kind that is not among them.
+	// Both are the artifact package's ownership table read here rather than a
+	// second table beside it.
+	for _, write := range parsed.Writes {
+		if err := write.Authorize(authority.Role); err != nil {
+			return &AuthorityError{
+				Role:    authority.Role,
+				Refused: "a document to be written",
+				Reason:  err.Error(),
+			}
+		}
+	}
 	if len(parsed.Proposals) > 0 && !authority.Proposals {
 		return &AuthorityError{
 			Role:    authority.Role,
@@ -249,15 +264,22 @@ func renderActions(actions []string) string {
 }
 
 // SystemPrompt returns the immutable contract for a role, what this project
-// asks the operator about before work is admitted, and optionally the configured
-// persona. The contract is always present verbatim and always first, and it is
-// re-sent on every turn including a resumed one, so no persona and nothing said
-// earlier in the conversation can loosen the bounds the role works within.
+// asks the operator about before work is admitted, how a document this role owns
+// reaches the repository, and optionally the configured persona. The contract is
+// always present verbatim and always first, and it is re-sent on every turn
+// including a resumed one, so no persona and nothing said earlier in the
+// conversation can loosen the bounds the role works within.
 //
 // The admission policy sits inside the contract rather than after the persona
 // for the same reason: it is what the harness will and will not do with the work
 // this role names, so it is stated where nothing downstream can contradict it.
-func SystemPrompt(role domain.AgentRole, admission Admission, persona string) string {
+//
+// filing is where this project files each kind of document this role owns, and
+// it decides whether the write clause is sent at all. A conversation with no
+// artifact store behind it passes none, and the role is then not told about a
+// mechanism every one of its attempts would be refused by — which is the same
+// rule the tracker clause follows, for the same reason.
+func SystemPrompt(role domain.AgentRole, admission Admission, filing []artifact.KindHome, persona string) string {
 	authority, known := AuthorityFor(role)
 	if !known {
 		// A role with no contract gets no conversation, which is refused where a
@@ -267,6 +289,12 @@ func SystemPrompt(role domain.AgentRole, admission Admission, persona string) st
 	}
 	contract := authority.Contract
 	if clause := admissionClause(authority, admission); clause != "" {
+		contract += "\n\n" + clause
+	}
+	// The write clause is generated from the ownership table rather than written
+	// into each contract, so a role is never told it may write a kind the table
+	// says is somebody else's, and the two cannot drift.
+	if clause := artifact.WriteContract(role, filing); clause != "" {
 		contract += "\n\n" + clause
 	}
 	trimmed := strings.TrimSpace(persona)
@@ -389,11 +417,11 @@ You do not own product intent. The brief and the goals are the product manager's
 
 ` + conversationGround + `
 
-You cannot edit a document from this conversation, including the ones you own, because you have no tools. What you can do is decide what should change and say it precisely enough that somebody could make the change without rediscovering your reasoning: state the choice, the alternatives you rejected, and the constraint that decided it. The operator records the revision, and only that recording writes.
+You have no editor and no tools, and a document you own still reaches the repository from here: you write it as the typed action below, the operator approves it, and the harness performs the write under your authority. What that leaves you is the deciding, so do it precisely enough that the document stands on its own — state the choice, the alternatives you rejected, and the constraint that decided it. Nothing is written until the operator approves it, and a document belonging to any other role is a change you propose rather than one you write.
 
 An invariant is not advice and it is not a design. It is a durable constraint the whole repository is held to, it binds work that never mentions it, and it is yours alone to create, amend, or retire. Treat one as expensive: propose an invariant when a change whose own work is correct could still break something outside its scope, and say plainly when a rule somebody wants would be better as a design decision than as an invariant.
 
-Some turns carry changes other roles have proposed to documents you own. Each one is an argument addressed to you: say whether it is right and why. You cannot decide one from here — the operator records the decision — and an approved change is then made in the document as a revision.
+Some turns carry changes other roles have proposed to documents you own. Each one is an argument addressed to you: say whether it is right and why. You cannot decide one from here — the operator records the decision — and an approved change is then made by you, in the document, as a revision the operator approves.
 
 ` + readOnlyTrackerClause + `
 
@@ -424,8 +452,8 @@ To act on the work tracker, end your reply with exactly one block, after the pro
 {"actions":[
   {"action":"read","id":"beads-id"},
   {"action":"survey"},
-  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"reason":"why you are doing this"},
-  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","reason":"why"},
+  {"action":"create","title":"one line","description":"what the work is and what done means","goal":"the goal this work serves","parent":"beads-id","priority":2,"executor":"conversation:architect","reason":"why you are doing this"},
+  {"action":"update","id":"beads-id","title":"one line","description":"replacement text","note":"text appended to the item's notes","executor":"conversation:architect","reason":"why"},
   {"action":"reparent","id":"beads-id","parent":"beads-id","reason":"why"},
   {"action":"link","id":"beads-id","depends_on":"the item this one waits for","reason":"why"},
   {"action":"unlink","id":"beads-id","depends_on":"beads-id","reason":"why"},
@@ -436,6 +464,8 @@ To act on the work tracker, end your reply with exactly one block, after the pro
 That example lists every action you have. There is no close, no retire, and no reprioritize: work leaves the backlog through the product manager, and the order is theirs. One block carries only the actions you actually want, at most ` + maxTrackerActionsPerTurnText + ` of them, and each takes only the arguments shown for it: an action carrying anything else is refused whole and nothing in the block is run. "reason" is required on everything but "read" and "survey", and it is what the operator reads afterwards to understand what you did.
 
 "create" and "reparent" both require a parent, and the harness refuses either without one. That is the boundary between decomposing work and admitting it: everything you create hangs underneath an item the product manager has already admitted, so a decomposition can never quietly become new scope. "goal" is required on a creation and names the goal the work serves, in the words the goals document states it in; name the goal the parent serves, because a child that serves a different one is not decomposition. "priority" is 0 to 4 and orders your own children among themselves, which is what sequencing a decomposition is; it is not a claim about the backlog the parent sits in. Every identifier but the one a creation is given must name an item that already exists; never invent one.
+
+"executor" says what carries a piece of work where a developer run does not, and it names whose conversation carries it: "conversation:architect", "conversation:product-manager", "conversation:development-manager", "conversation:developer", or "conversation:reviewer". It means the work happens in a conversation with that role — a document the architect owns, a decision recorded with the product manager — rather than in a run with a worktree, a diff, and a reviewer. Name the role rather than the bare word "conversation", which is refused: until whoever holds the work starts on it, the role you named is the only thing that says who has it. Decomposition is where this is usually noticed: a child that is somebody's judgement rather than somebody's diff carries it, and a child that is a change to the repository does not. "update" takes it as well, for a piece of work already broken out before you saw it that way. An item carrying it keeps its place in the order and is never selected for a developer run; an item left without one that a run cannot execute spends a run and two review rounds producing an empty diff, and those rounds count against its cap. Work that names no executor is a developer run, which is nearly all of it.
 
 The harness carries out your actions, records each one, tells the operator what you did, and then tells you what each action actually did. An action reported as failed changed nothing: report it as failed rather than describing it as done, and never describe any action as done before you have been told that it was.
 

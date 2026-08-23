@@ -446,14 +446,14 @@ func TestAClassTheHarnessDoesNotRecognizeIsRefused(t *testing.T) {
 func TestTheContractStatesTheExemptionsAProjectActuallyHas(t *testing.T) {
 	t.Parallel()
 
-	gated := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalHuman}, "")
+	gated := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalHuman}, nil, "")
 	if strings.Contains(gated, "diagnosis") {
 		t.Fatalf("a project that exempts nothing was told about a class it does not have")
 	}
 	exempting := SystemPrompt(domain.RoleProductManager, Admission{
 		WorkItems: domain.ApprovalHuman,
 		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
-	}, "")
+	}, nil, "")
 	for _, required := range []string{"diagnosis", "produces findings rather than a change", `"class"`} {
 		if !strings.Contains(exempting, required) {
 			t.Fatalf("the contract does not say %q", required)
@@ -465,7 +465,7 @@ func TestTheContractStatesTheExemptionsAProjectActuallyHas(t *testing.T) {
 	automatic := SystemPrompt(domain.RoleProductManager, Admission{
 		WorkItems: domain.ApprovalAutomatic,
 		Exempt:    []domain.WorkItemClass{domain.WorkItemClassDiagnosis},
-	}, "")
+	}, nil, "")
 	if strings.Contains(automatic, "diagnosis") {
 		t.Fatalf("a project with no per-item gate was told about a class that narrows one")
 	}

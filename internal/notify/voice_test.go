@@ -93,6 +93,79 @@ func TestEveryPersonaSaysEveryReportableKind(t *testing.T) {
 	}
 }
 
+// A thread's silence must never leave a reader guessing who holds the ball, and
+// which message turns out to be a thread's last is not knowable when it is
+// written. So the guarantee is on every message from every persona rather than
+// on the ones somebody predicted would be final.
+func TestEveryMessageSaysWhoseMoveFollowsIt(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.68.2")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, speaker := range speakers() {
+		for _, kind := range Kinds() {
+			message, err := Render(topic, speaker, fullyRecorded(kind))
+			if err != nil {
+				t.Fatalf("the %s says %s: %v", speaker.Key(), kind, err)
+			}
+			move, ok := nextMoves[kind]
+			if !ok {
+				t.Fatalf("%s says nothing about whose move follows it", kind)
+			}
+			if !strings.HasSuffix(message.Body, nextMoveLead+move) {
+				t.Fatalf("the %s says %s as %q, which does not end on whose move follows", speaker.Key(), kind, message.Body)
+			}
+			// The clause is the harness's note about where the thread stands rather
+			// than part of what the persona said, and most lines finish on words
+			// somebody typed rather than on a full stop.
+			account := strings.TrimSuffix(message.Body, nextMoveLead+move)
+			if !strings.HasSuffix(account, ".") && !strings.HasSuffix(account, "!") && !strings.HasSuffix(account, "?") {
+				t.Fatalf("the %s says %s as %q, which runs the clause into the account", speaker.Key(), kind, message.Body)
+			}
+		}
+	}
+}
+
+// Work marked for a conversation is not queued for a run and never will be, so
+// the queue's answer to what comes next would be telling the reader to expect
+// something that cannot arrive — which is the same guessing, dressed up as an
+// answer.
+func TestWorkAConversationCarriesIsNeverSaidToBeWaitingForARun(t *testing.T) {
+	topic, err := WorkItem("yoyodyne-ifd.138")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	for _, kind := range []Kind{KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized} {
+		queued := fullyRecorded(kind)
+		message, err := Render(topic, Persona(domain.RoleProductManager, ""), queued)
+		if err != nil {
+			t.Fatalf("render ordinary %s: %v", kind, err)
+		}
+		if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[kind]) {
+			t.Fatalf("ordinary %s reads as %q, want the queue's answer", kind, message.Body)
+		}
+		queued.Detail.Executor = string(domain.WorkItemExecutorConversation)
+		handed, err := Render(topic, Persona(domain.RoleProductManager, ""), queued)
+		if err != nil {
+			t.Fatalf("render conversation-carried %s: %v", kind, err)
+		}
+		if !strings.HasSuffix(handed.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
+			t.Fatalf("conversation-carried %s reads as %q, want the handoff's answer", kind, handed.Body)
+		}
+		// An admission that says whose conversation carries the item answers with
+		// that role: the item is in the queue and nothing will pull it, so the wait
+		// starts here rather than at a later handoff.
+		queued.Detail.Executor = string(domain.ConversationWith(domain.RoleArchitect))
+		attributed, err := Render(topic, Persona(domain.RoleProductManager, ""), queued)
+		if err != nil {
+			t.Fatalf("render %s carried by a named role: %v", kind, err)
+		}
+		if !strings.HasSuffix(attributed.Body, nextMoveLead+"the architect's, in conversation — no run will ever be started for this.") {
+			t.Fatalf("%s carried by the architect reads as %q, want the wait left with them", kind, attributed.Body)
+		}
+	}
+}
+
 func TestNoTwoPersonasSayTheSameEventTheSameWay(t *testing.T) {
 	// This is the whole point of a voice: a reader who has scrolled past the
 	// display name still knows who is talking.
@@ -426,6 +499,12 @@ func TestABodyTooLongIsCutWithTheRecordThatHoldsTheWhole(t *testing.T) {
 	}
 	if !strings.Contains(message.Body, "run-4d1f") || !strings.Contains(message.Body, "cut") {
 		t.Fatalf("a cut body does not name the record that holds the whole: %q", message.Body[len(message.Body)-80:])
+	}
+	// A reader given a truncated account can go to the record for the rest; a
+	// reader given no idea who holds the ball has nothing to go to, so the cut
+	// takes the account rather than the clause.
+	if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindReportFiled]) {
+		t.Fatalf("a cut body lost whose move follows it: %q", message.Body[len(message.Body)-80:])
 	}
 }
 

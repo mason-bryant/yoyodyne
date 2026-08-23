@@ -308,6 +308,7 @@ content with no row here stops and reports rather than choosing a home.
 | `### Publishing, and the merge that follows it` | 58 | `work.md` |
 | `## Configuring a project` | 90 | **merged** into `docs/configuration.md`'s index — see below |
 | `## Artifact identity` | 82 | `artifacts.md` |
+| `## Writing a document from a conversation` | 55 | `artifacts.md` |
 | `## Goals, and what work serves them` | 64 | `artifacts.md` |
 | `## What a change upstream leaves stale` | 40 | `artifacts.md` |
 | `## Architectural invariants` | 60 | `artifacts.md` |

@@ -185,7 +185,7 @@ func TestReportsCommandShowsWhatEveryRoleReported(t *testing.T) {
 	}
 	transcript := out.String()
 	for _, required := range []string{
-		"reports (1 collected)",
+		"reports (1 collected, 1 unhandled)",
 		"critical",
 		"from the developer on yoyodyne-ifd.19",
 		"bd lint could not run",
@@ -240,7 +240,7 @@ func TestTheContractTellsTheProductManagerHowAndWhenToReport(t *testing.T) {
 
 	// Guidance on what merits a report belongs in the contract, where a persona
 	// cannot weaken it.
-	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, nil, hostilePersona)
 	for _, required := range []string{
 		report.Fence,
 		"A report is not a blocker",
@@ -259,10 +259,14 @@ func reportReply(answer string, entries ...string) string {
 }
 
 // fakeReports is the collected pile without a filesystem. err refuses every
-// append, which is how a conversation that cannot keep a report is tested.
+// append, which is how a conversation that cannot keep a report is tested, and
+// handlingErr refuses only what became of them, which is how a listing that can
+// read the pile but not its dispositions is tested.
 type fakeReports struct {
-	appended []report.Report
-	err      error
+	appended    []report.Report
+	handled     []report.Handling
+	err         error
+	handlingErr error
 }
 
 func (f *fakeReports) Append(reported report.Report) error {
@@ -281,4 +285,22 @@ func (f *fakeReports) List() ([]report.Report, error) {
 		return nil, f.err
 	}
 	return f.appended, nil
+}
+
+func (f *fakeReports) Handle(handling report.Handling) error {
+	if f.handlingErr != nil {
+		return f.handlingErr
+	}
+	if err := handling.Validate(); err != nil {
+		return err
+	}
+	f.handled = append(f.handled, handling)
+	return nil
+}
+
+func (f *fakeReports) Handlings() ([]report.Handling, error) {
+	if f.handlingErr != nil {
+		return nil, f.handlingErr
+	}
+	return f.handled, nil
 }

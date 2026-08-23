@@ -28,7 +28,7 @@ func TestEveryConversationalRoleCarriesItsOwnContractAheadOfThePersona(t *testin
 		if strings.TrimSpace(authority.Contract) == "" {
 			t.Fatalf("%s has an empty contract", role)
 		}
-		prompt := SystemPrompt(role, Admission{}, hostilePersona)
+		prompt := SystemPrompt(role, Admission{}, nil, hostilePersona)
 		if !strings.HasPrefix(prompt, authority.Contract) {
 			t.Fatalf("%s prompt does not begin with its contract: %q", role, prompt)
 		}
@@ -48,7 +48,7 @@ func TestEveryConversationalRoleCarriesItsOwnContractAheadOfThePersona(t *testin
 		if clause := admissionClause(authority, Admission{}); clause != "" {
 			want += "\n\n" + clause
 		}
-		if bare := SystemPrompt(role, Admission{}, "  "); bare != want {
+		if bare := SystemPrompt(role, Admission{}, nil, "  "); bare != want {
 			t.Fatalf("%s with no persona is not the contract alone", role)
 		}
 	}
@@ -127,7 +127,7 @@ func TestEachRoleKeepsItsOwnDurableConversation(t *testing.T) {
 	if request.Role != domain.RoleArchitect {
 		t.Fatalf("request role = %q, want %q", request.Role, domain.RoleArchitect)
 	}
-	if request.SystemPrompt != SystemPrompt(domain.RoleArchitect, Admission{}, architectOptions.Persona) {
+	if request.SystemPrompt != SystemPrompt(domain.RoleArchitect, Admission{}, nil, architectOptions.Persona) {
 		t.Fatalf("the architect was sent another role's contract")
 	}
 	if request.SessionID != "" {
