@@ -124,18 +124,25 @@ type Message struct {
 	Username  string
 	IconEmoji string
 	IconURL   string
+	// Broadcast asks Slack to show a thread reply in the main channel view as
+	// well as inside its thread. It is Slack's also-send-to-channel, and it means
+	// nothing on a message that is not a reply: what decides it is severity, and
+	// that decision is made where a message is turned into a post rather than
+	// here.
+	Broadcast bool
 }
 
 // postRequest is the wire shape of chat.postMessage. The fields are omitted
 // when empty so a top-level message is a top-level message rather than a reply
 // to an empty thread.
 type postRequest struct {
-	Channel   string `json:"channel"`
-	Text      string `json:"text"`
-	ThreadTS  string `json:"thread_ts,omitempty"`
-	Username  string `json:"username,omitempty"`
-	IconEmoji string `json:"icon_emoji,omitempty"`
-	IconURL   string `json:"icon_url,omitempty"`
+	Channel        string `json:"channel"`
+	Text           string `json:"text"`
+	ThreadTS       string `json:"thread_ts,omitempty"`
+	ReplyBroadcast bool   `json:"reply_broadcast,omitempty"`
+	Username       string `json:"username,omitempty"`
+	IconEmoji      string `json:"icon_emoji,omitempty"`
+	IconURL        string `json:"icon_url,omitempty"`
 }
 
 // Post sends one message and reports the timestamp Slack gave it. That
@@ -153,12 +160,16 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 		TS string `json:"ts"`
 	}
 	request := postRequest{
-		Channel:   message.Channel,
-		Text:      message.Text,
-		ThreadTS:  message.ThreadTS,
-		Username:  message.Username,
-		IconEmoji: message.IconEmoji,
-		IconURL:   message.IconURL,
+		Channel:  message.Channel,
+		Text:     message.Text,
+		ThreadTS: message.ThreadTS,
+		// Slack takes the broadcast as a property of a reply, so it is only ever
+		// sent with the thread it is a reply into: asking to also-send a message
+		// that is already in the channel is a flag that says nothing.
+		ReplyBroadcast: message.ThreadTS != "" && message.Broadcast,
+		Username:       message.Username,
+		IconEmoji:      message.IconEmoji,
+		IconURL:        message.IconURL,
 	}
 	if err := a.call(ctx, "chat.postMessage", a.botToken, request, &response); err != nil {
 		return "", err

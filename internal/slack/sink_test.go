@@ -435,6 +435,75 @@ func TestProductLevelNewsIsNotBuriedInAnItemsThread(t *testing.T) {
 	}
 }
 
+// The main channel view hides thread replies by design, which is right for a
+// routine note and wrong for a warning: a run parked out of tokens can sit
+// unseen inside a thread while the channel looks quiet. So the severity the
+// envelope already carries decides — a note stays where the narrative is, and
+// anything asking for attention is also sent to the channel.
+func TestRepliesThatAskForAttentionAreAlsoSentToTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		filedReport(1, report.SeverityNote, "the replay was clean"),
+		filedReport(2, report.SeverityWarning, "the replay conflicted with the merged package"),
+		filedReport(3, report.SeverityCritical, "the target branch has diverged under the change"),
+	}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 4 {
+		t.Fatalf("posts = %d, want the thread opened and all three reports in it", len(posts.requests))
+	}
+	// The message a thread hangs from is already in the channel, so asking for it
+	// to be sent there as well is a flag that says nothing.
+	if posts.requests[0].ReplyBroadcast {
+		t.Fatalf("thread header = %#v, want no broadcast on a message that is not a reply", posts.requests[0])
+	}
+	for index, want := range []bool{false, true, true} {
+		reply := posts.requests[index+1]
+		if reply.ThreadTS != posts.timestamps[0] {
+			t.Fatalf("reply = %#v, want every severity still inside the topic's thread", reply)
+		}
+		if reply.ReplyBroadcast != want {
+			t.Fatalf("reply %q broadcast = %v, want %v", reply.Text, reply.ReplyBroadcast, want)
+		}
+	}
+}
+
+// Product-level news is already at the top of the channel, so nothing about its
+// severity turns it into a reply Slack is asked to send there twice.
+func TestProductLevelNewsIsNeverBroadcastBackIntoTheChannel(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	sink := newTestSink(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{{
+		Stream: reportStream,
+		Cursor: Cursor{Position: 1},
+		Notification: notify.Notification{
+			Topic:   notify.Product(),
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: report.SeverityCritical,
+				Text:     "the provider refused every account",
+			},
+		},
+	}}}, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 1 {
+		t.Fatalf("posts = %d, want one unthreaded message", len(posts.requests))
+	}
+	if posts.requests[0].ThreadTS != "" || posts.requests[0].ReplyBroadcast {
+		t.Fatalf("post = %#v, want product news posted once at the top level", posts.requests[0])
+	}
+}
+
 // A message leads back to the durable record it was read from rather than
 // standing in for it.
 func TestAMessageNamesTheRecordItWasReadFrom(t *testing.T) {
@@ -1178,6 +1247,27 @@ func milestone(position uint64, kind notify.Kind) Delivery {
 				At:       time.Now(),
 				Severity: report.SeverityNote,
 				Refs:     notify.Refs{RunID: "run-a", WorkItemID: "yoyodyne-ifd.68.3"},
+			},
+		},
+	}
+}
+
+// filedReport is one agent's report against a work item, at the severity it was
+// filed under. It is what a test needs to watch severity decide anything: the
+// milestones above are all notes.
+func filedReport(position uint64, severity report.Severity, text string) Delivery {
+	return Delivery{
+		Stream: reportStream,
+		Cursor: Cursor{Position: position},
+		Notification: notify.Notification{
+			Topic:   notify.Topic{Kind: notify.TopicWorkItem, ID: "yoyodyne-ifd.68.12"},
+			Speaker: notify.Persona(domain.RoleDeveloper, ""),
+			Event: notify.Event{
+				Kind:     notify.KindReportFiled,
+				At:       time.Now(),
+				Severity: severity,
+				Refs:     notify.Refs{RunID: "run-a", WorkItemID: "yoyodyne-ifd.68.12"},
+				Text:     text,
 			},
 		},
 	}

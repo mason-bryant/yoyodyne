@@ -345,7 +345,9 @@ rather than any one item: the operator holding and releasing intake, the
 operator holding and lifting all harness activity, proposed work you turned
 down — there is no item, because nothing was created — and anything an agent
 filed with no work item attached. Burying those in one item's thread would
-misfile them.
+misfile them. That list is what is *addressed* to the channel rather than
+everything that appears in it: a thread reply asking for attention is shown there
+as well, which is what the severity rule below does.
 
 A provider refusing the harness for want of capacity goes there too, wherever it
 happened. The harness asks a provider for work in three places, and each one
@@ -425,6 +427,16 @@ Severity is said in words rather than only in colour: a `critical` says
 "Critical" and a `warning` says "Warning", so a client that renders no emoji
 still shows them for what they are. An ordinary fact carries no marker, because a
 label on everything is a label that means nothing.
+
+**Severity also decides where a message is seen.** Slack's main channel view
+hides thread replies, which is right for a routine note and wrong for a warning:
+a run parked out of tokens can sit unseen inside a thread while the channel looks
+quiet. So a `note` stays thread-only, and a `warning` or a `critical` is also
+sent to the channel — Slack's own also-send-to-channel — while still being a
+reply in its item's thread, so the narrative there is unbroken. Nothing new
+judges this: it is the severity the record was already filed under, so the
+channel view shows exactly the messages whose severity says somebody should see
+them without opening threads.
 
 Each transition is said once. A thread is a narrative rather than an event log
 scrolling sideways, so a restart does not repeat what it already said — how far

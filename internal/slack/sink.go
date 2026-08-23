@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
 const (
@@ -612,6 +613,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 		Channel:   sink.channel,
 		Text:      renderText(message),
 		ThreadTS:  threadTS,
+		Broadcast: broadcast(message.Severity),
 		Username:  message.Identity.Name,
 		IconEmoji: emoji,
 		IconURL:   url,
@@ -717,6 +719,27 @@ func label(topic notify.Topic) string {
 		return "this product"
 	default:
 		return topic.ID
+	}
+}
+
+// broadcast reports whether a thread reply should also be shown in the main
+// channel view. A thread is where a narrative belongs, and the channel view
+// hiding replies is what keeps three items in flight readable — but it hides a
+// warning exactly as thoroughly as it hides a routine note, and a run that
+// parked out of tokens sitting unseen inside a thread is the ten-silent-hours
+// problem at a different layer.
+//
+// So the line is the severity the envelope already carries: a note stays where
+// the narrative is, and anything asking for attention is shown where somebody
+// who has opened no threads is looking. No new judgment anywhere — a surface
+// that decided this for itself would be a second severity model disagreeing with
+// the recorded one.
+func broadcast(severity report.Severity) bool {
+	switch severity {
+	case report.SeverityCritical, report.SeverityWarning:
+		return true
+	default:
+		return false
 	}
 }
 
