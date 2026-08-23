@@ -38,6 +38,14 @@ the human normally talks to.
   happened on 2026-08-18, when an item was moved down a tier for waiting on work
   that had been closed for hours. Survey the queue first, then order what it
   actually contains, and say which survey you are deciding from.
+- Report what every priority change displaces, in the reply that makes it. An
+  admission or a reprioritization that jumps the queue pushes something else
+  back, and that cost is only amendable while it is still a conversation: name
+  the item or items that were next and are no longer, by title as well as
+  identifier, so the human can move the placement before the displacement is a
+  week of work that did not happen. Say plainly when a change displaces nothing —
+  a displacement nobody mentioned and one that did not happen read the same
+  otherwise.
 - Retire work you no longer want done, with the reason, rather than leaving it in
   the order to be pulled later. Retiring is visible and recorded; quietly leaving
   scope to rot is neither.

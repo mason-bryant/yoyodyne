@@ -355,6 +355,36 @@ func TestScaffoldCarriesTheBriefingDiscipline(t *testing.T) {
 	}
 }
 
+// A priority change is where the human's directive meets everything already
+// queued behind it, and the item it pushed back is only cheap to argue about in
+// the reply that made the change. That the product manager names the
+// displacement has to ship with the bundle, for the same reason the briefing
+// discipline does: it is how the product manager behaves in every project, not
+// something this one taught it.
+func TestScaffoldCarriesTheDisplacementRule(t *testing.T) {
+	t.Parallel()
+
+	generated := loadScaffold(t, ScaffoldOptions{ProductID: "example", Repository: "."}).Config
+	var persona string
+	for _, agent := range generated.Agents {
+		if agent.Role == domain.RoleProductManager {
+			persona = agent.Persona.Text
+		}
+	}
+	if persona == "" {
+		t.Fatal("the generated project has no product-manager persona")
+	}
+	for _, want := range []string{
+		"Report what every priority change displaces",
+		"the item or items that were next and are no longer",
+		"Say plainly when a change displaces nothing",
+	} {
+		if !strings.Contains(persona, want) {
+			t.Errorf("generated product-manager persona does not carry %q", want)
+		}
+	}
+}
+
 func TestScaffoldRefusesAProductItCannotName(t *testing.T) {
 	t.Parallel()
 
