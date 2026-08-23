@@ -429,6 +429,16 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// records one in, so an exhausted limit reaches the channel from wherever
 		// it was met rather than only from a run.
 		UsageLimits: parts.usageLimits,
+		// And how long a turn it refused may wait for it to serve again. They are
+		// the bounds a run waits under, taken from the same configuration: an
+		// exhausted limit stops a conversation exactly as it stops a run, and an
+		// operator who said how long the harness may wait out one said it about
+		// every invocation they pay for.
+		UsageLimitPause: chat.UsageLimitPause{
+			Maximum:   cfg.Execution.UsageLimitMaxPause.Duration(),
+			InProcess: cfg.Execution.UsageLimitInProcessPause.Duration(),
+			Probe:     cfg.Execution.UsageLimitUnknownResetPause.Duration(),
+		},
 		// The operator's switch over the work the harness chooses for itself, so
 		// holding intake is something they can do from the conversation they are
 		// already in rather than from a second tool.

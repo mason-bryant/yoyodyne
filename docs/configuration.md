@@ -1849,6 +1849,21 @@ refused it. A reset that is not in the future is refused deliberately: a limit
 still declining work while claiming it has already reset is not describing a
 wait, and honoring it would mean reissuing straight back into the same refusal.
 
+These three settings are not only a run's. A conversation turn — `yoyo chat`,
+interactive or `--message` — waits out a refusing provider under exactly the same
+bounds and the same polling discipline, because an operator who has said how long
+the harness may wait out a limit has said it about every invocation they pay for.
+Two things differ. The budget covers the message the operator is waiting for
+rather than one run, across however many rounds that message takes. And a wait
+this configuration will not take fails the turn instead of parking it: a run
+leaves its deadline in durable state for a later invocation to continue, and a
+turn has no such record, so it says what refused it and when the provider claimed
+it lifts, and saying the same thing again takes the turn. What the turn had
+already done is unaffected either way — tracker actions applied by a round that
+finished stay applied, and only the invocation the provider declined is reissued.
+[Waiting out a provider usage limit](operations.md#waiting-out-a-provider-usage-limit)
+covers what an operator sees while it happens.
+
 `server_overload_pause` is the same discipline on a different clock, for the
 other way a provider refuses without judging the work: its own servers are
 transiently unable to serve the attempt. That names no reset time at all and

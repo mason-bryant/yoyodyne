@@ -143,6 +143,16 @@ type Options struct {
 	// not at this terminal needs to be told. It is optional like the rest, and a
 	// conversation without one fails a refused turn exactly as it always did.
 	UsageLimits UsageLimits
+	// UsageLimitPause is how long a turn the provider refused may wait for it to
+	// serve again before being asked a second time. It is the same bounds a run
+	// waits under, taken from the same configuration, because an operator who said
+	// how long the harness may wait out a limit said it about every invocation
+	// they pay for. Its zero value waits for nothing, which fails a refused turn
+	// exactly as it did before waiting existed.
+	UsageLimitPause UsageLimitPause
+	// Sleep waits out a usage limit. It is a field so a test can drive a wait
+	// without spending it; a conversation leaves it alone and sleeps for real.
+	Sleep func(ctx context.Context, duration time.Duration) error
 	// Intake is the operator's switch over the work the harness chooses for
 	// itself: what a development manager may pull, as opposed to what the operator
 	// names. It is optional like the rest, and a conversation without one says it
@@ -310,6 +320,12 @@ type Session struct {
 	// invocation rather than per message: the round that carried an answer back
 	// belongs to the exchange, and the rest of the message does not.
 	lastInvocationCostUSD float64
+	// usageLimitWaited is what this message has already spent waiting out a
+	// provider that refused it. It is per message rather than per invocation for
+	// the reason a run's budget is per run: a bound checked against each wait on
+	// its own would let a provider that keeps refusing walk one message far past
+	// what the operator configured, one acceptable-looking wait at a time.
+	usageLimitWaited time.Duration
 	// titled says a run this conversation reported renamed the operator's
 	// terminal window, so the conversation knows to put the name back when it
 	// ends rather than leaving it announcing work that finished.
@@ -563,6 +579,10 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 	// it takes: what the operator asked for is the answer, not any one turn of
 	// it, so that is what a per-turn cost has to describe.
 	s.turnCostUSD = 0
+	// What this message may spend waiting out a refusing provider is counted from
+	// here for the same reason and over the same span: the budget covers the answer
+	// the operator is waiting for rather than any one round of it.
+	s.usageLimitWaited = 0
 	prompt := s.turnPrompt(trimmed)
 	// chargeTo is the exchange the next invocation belongs to, set when a round of
 	// asking is delivered into it. asksTaken bounds how much asking one message
@@ -760,49 +780,110 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		s.activity.observe(event)
 		return nil
 	}
-	// No tools at all and a read-only permission mode, whichever role is
-	// answering. Whatever authority a role has over the tracker is exercised by
-	// the harness on its behalf, so nothing here gives it a filesystem, a shell,
-	// or a network to reach.
-	result, err := s.options.Backend.Run(ctx, backend.RunRequest{
-		RunID:            s.state.ConversationID,
-		Role:             s.state.Role,
-		WorkingDirectory: s.options.Repository,
-		Prompt:           prompt,
-		SystemPrompt:     systemPrompt,
-		SessionID:        s.state.ProviderSessionID,
-		Model:            s.options.Model,
-		PermissionMode:   "plan",
-		AllowedTools:     []string{},
-		Timeout:          s.options.timeout(),
-		LastSequence:     lastSequence,
-		RedactValues:     s.options.RedactValues,
-		EventSink:        sink,
-		// The reply is shown as the provider writes it where somebody is
-		// watching. It is the same text this turn is built from, redacted and
-		// recorded before it arrives here, so nothing about what is recorded
-		// depends on whether anybody was.
-		ReplySink: s.stream.write,
-	})
-	// Whatever happened, the event log advanced, and the record has to agree
-	// with it or the next turn would renumber events that already exist.
-	s.state.LastSequence = lastSequence
-	if result.LastEvent > s.state.LastSequence {
-		s.state.LastSequence = result.LastEvent
+	// The invocation is what waits out a provider with no capacity for it, so it
+	// is taken in a loop: a refused attempt that the harness will wait for is the
+	// same attempt asked again, with the same prompt, on the same provider
+	// session. What this round already did to the tracker was done by rounds that
+	// finished and is not repeated by a reissue.
+	var (
+		result backend.RunResult
+		err    error
+		// refusal is what went wrong writing a refusal down, and notReissued says
+		// why an invocation the provider declined was not asked again — a wait the
+		// harness would not take, or the operator pausing everything while it
+		// waited. Both travel to the end of the turn rather than failing it here,
+		// because the events this turn recorded have to reach the record whichever
+		// way the invocation ended.
+		refusal     error
+		notReissued error
+	)
+	// What this invocation costs is counted across the attempts it took. An
+	// exchange is charged per invocation rather than per message, and an attempt
+	// the provider refused was charged for exactly as the one it served was.
+	s.lastInvocationCostUSD = 0
+	for {
+		// No tools at all and a read-only permission mode, whichever role is
+		// answering. Whatever authority a role has over the tracker is exercised by
+		// the harness on its behalf, so nothing here gives it a filesystem, a shell,
+		// or a network to reach.
+		result, err = s.options.Backend.Run(ctx, backend.RunRequest{
+			RunID:            s.state.ConversationID,
+			Role:             s.state.Role,
+			WorkingDirectory: s.options.Repository,
+			Prompt:           prompt,
+			SystemPrompt:     systemPrompt,
+			SessionID:        s.state.ProviderSessionID,
+			Model:            s.options.Model,
+			PermissionMode:   "plan",
+			AllowedTools:     []string{},
+			Timeout:          s.options.timeout(),
+			LastSequence:     lastSequence,
+			RedactValues:     s.options.RedactValues,
+			EventSink:        sink,
+			// The reply is shown as the provider writes it where somebody is
+			// watching. It is the same text this turn is built from, redacted and
+			// recorded before it arrives here, so nothing about what is recorded
+			// depends on whether anybody was.
+			ReplySink: s.stream.write,
+		})
+		// Whatever happened, the event log advanced, and the record has to agree
+		// with it or the next turn would renumber events that already exist. A
+		// reissued attempt numbers its events after the refused one's, so what is
+		// carried forward is the highest sequence any attempt reached.
+		if result.LastEvent > lastSequence {
+			lastSequence = result.LastEvent
+		}
+		// What the provider charged for this invocation is what it reported for it.
+		// The harness works none of it out and records none of it: it is shown to an
+		// operator who is watching what a conversation costs them. It is counted
+		// before the invocation is judged, because an invocation that failed was
+		// charged for exactly as one that succeeded was.
+		s.lastInvocationCostUSD += result.CostUSD
+		s.turnCostUSD += result.CostUSD
+		s.sessionCostUSD += result.CostUSD
+		limit := refusedForUsageLimit(result, err)
+		if limit == nil {
+			break
+		}
+		// A provider that declined this turn for want of capacity is recorded
+		// before anything is decided about waiting, because the refusal is a fact
+		// about the whole product rather than about this conversation, and nothing
+		// else in the record would ever say it happened.
+		refusal = errors.Join(refusal, s.noteUsageLimit(*limit))
+		if !s.options.UsageLimitPause.waits() {
+			break
+		}
+		if notReissued = s.waitOutUsageLimit(ctx, *limit); notReissued != nil {
+			break
+		}
+		// Every provider call this conversation makes reads the operator's pause
+		// first, and a reissue is one. A wait can last hours, which is exactly long
+		// enough for the operator to pause everything while it is happening, and a
+		// wait that then asked the provider anyway would be a pause they could
+		// watch themselves spend through.
+		hold, held, holdErr := s.heldByOperator()
+		if holdErr != nil {
+			notReissued = holdErr
+			break
+		}
+		if held {
+			notReissued = &OperatorHoldError{Hold: hold}
+			break
+		}
+		// Whatever prose the refused attempt managed to show is not the start of
+		// the answer the reissued one will write, so it is closed off before the
+		// next attempt writes over it.
+		s.stream.interrupted()
 	}
-	// What the provider charged for this invocation is what it reported for it.
-	// The harness works none of it out and records none of it: it is shown to an
-	// operator who is watching what a conversation costs them. It is counted
-	// before the invocation is judged, because an invocation that failed was
-	// charged for exactly as one that succeeded was.
-	s.lastInvocationCostUSD = result.CostUSD
-	s.turnCostUSD += result.CostUSD
-	s.sessionCostUSD += result.CostUSD
-	// A provider that declined this turn for want of capacity is recorded before
-	// the turn is failed, because the refusal is a fact about the whole product
-	// rather than about this conversation, and nothing else in the record would
-	// ever say it happened.
-	refusal := s.noteUsageLimit(result, err)
+	s.state.LastSequence = lastSequence
+	// A refused invocation that will not be asked again ends the turn the way any
+	// other stopped one does, and says what stopped it: an operator who knows when
+	// the limit lifts, or that they paused the harness themselves, knows when to
+	// say this again.
+	if notReissued != nil {
+		s.stream.cutOff()
+		return "", errors.Join(notReissued, refusal, s.record())
+	}
 	// A failed invocation is exactly the case a reply shown as it formed must not
 	// be left looking whole: whatever prose reached the screen was the start of
 	// an answer nobody finished. The two failures below are the only ones that
@@ -1502,6 +1583,15 @@ func (s *Session) converse(ctx context.Context, screen console.Console) error {
 			fmt.Fprintf(out, "%v\n\n", held)
 			continue
 		}
+		// A turn the provider had no capacity for and would not be waited out is
+		// the same kind of thing: nothing is broken, the conversation stays open,
+		// and what the operator needs is when it lifts so they know when to say it
+		// again. A limit the harness did wait out never reaches here at all.
+		var refused *UsageLimitError
+		if errors.As(err, &refused) {
+			fmt.Fprintf(out, "%v\n\n", refused)
+			continue
+		}
 		var unreadable *ProposalError
 		if errors.As(err, &unreadable) {
 			fmt.Fprintf(out, "%v\nNothing was proposed as far as the harness is concerned; ask again if you want those items.\n\n", unreadable)
@@ -2145,6 +2235,24 @@ func (o Options) clock() execution.Clock {
 		return execution.RealClock{}
 	}
 	return o.Clock
+}
+
+// sleep waits out a probe, and gives up where the operator gave up on the turn.
+// A cancelled context is the operator stopping a wait they were shown, so it
+// reports rather than swallowing it: the turn then fails as an interrupted turn
+// rather than as one that quietly asked again.
+func (o Options) sleep(ctx context.Context, duration time.Duration) error {
+	if o.Sleep != nil {
+		return o.Sleep(ctx, duration)
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // askRounds bounds how much asking one message may set off. A caller that states

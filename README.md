@@ -2883,9 +2883,30 @@ same machinery on a much shorter clock.
 An exhausted limit is not only a run's problem, either. The harness asks a
 provider for work in three places: inside a run, which parks as above; a
 conversation turn; and an independent `yoyo review`, which uses the same reviewer
-with no run around it. The last two have no run to park, so each records the
-refusal instead — what was stopped, the limit the provider named, and when it
-said it lifts. Nothing waits on it: the turn or the review fails at your terminal
+with no run around it. All three record the refusal — what was stopped, the limit
+the provider named, and when it said it lifts — and the last two have no run to
+park in.
+
+A conversation turn waits anyway, under the bounds above and on the same polling
+discipline: it sleeps the probe interval or the time left to the quoted reset,
+whichever is shorter, and asks the refused invocation again on the same provider
+session. Nothing the turn had already done is done twice — tracker actions applied
+by a round that finished stay applied, because what is reissued is the single
+invocation the provider declined, with the prompt it was declined with. In an
+interactive conversation the wait is on the activity line, saying what is being
+waited out and when the turn will ask again; `yoyo chat --message` waits the same
+way, because an unattended caller is exactly the one who cannot retry by hand. The
+budget covers the message the operator is waiting for rather than each wait inside
+it, so a provider that keeps refusing reaches the configured maximum instead of
+walking one message past it a wait at a time.
+
+What a conversation cannot do is what a run does when the wait is one the harness
+will not take — a reset already behind us, or a wait past
+`execution.usage_limit_max_pause` or `execution.usage_limit_in_process_pause`. A
+run leaves its deadline in durable state and a later invocation continues it; a
+turn has no such record to be continued from, so it fails at your terminal with
+the limit and its reset time stated, and saying the same thing again takes the
+turn that was refused. An independent `yoyo review` still fails on a refusal
 exactly as it did before. What the record buys is that
 [reporting into Slack](#reporting-into-slack) says it as a `warning` without you
 there, and a run that parks on the same limit is said at that weight too. Hours
