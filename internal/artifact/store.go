@@ -409,27 +409,41 @@ func (s Store) path(id, directory string) (absolute, relative string, err error)
 	if err != nil {
 		return "", "", err
 	}
-	homes, err := resolveDirectories("artifact home", s.Homes)
+	target, err := s.resolveDirectory(directory)
 	if err != nil {
 		return "", "", err
-	}
-	excluded, err := resolveDirectories("excluded directory", s.Excluded)
-	if err != nil {
-		return "", "", err
-	}
-	targets, err := resolveDirectories("artifact directory", []string{directory})
-	if err != nil {
-		return "", "", err
-	}
-	target := targets[0]
-	if !within(target, homes) {
-		return "", "", fmt.Errorf("artifact directory %q is not inside an artifact home (%s); an artifact filed outside one is a document nothing reads", directory, strings.Join(homes, ", "))
-	}
-	if within(target, excluded) {
-		return "", "", fmt.Errorf("artifact directory %q carries an identity scheme of its own and is not read as an artifact home", directory)
 	}
 	relative = target + "/" + name
 	return filepath.Join(root, filepath.FromSlash(relative)), relative, nil
+}
+
+// resolveDirectory is where a document may be filed: one of the artifact homes,
+// or a directory beneath one, and never a directory that carries an identity
+// scheme of its own. It touches no filesystem, so the same rule can be applied
+// to an action before anything is written as is applied to the write itself —
+// which is what lets a document be refused before the operator is asked about
+// it rather than after they approved it.
+func (s Store) resolveDirectory(directory string) (string, error) {
+	homes, err := resolveDirectories("artifact home", s.Homes)
+	if err != nil {
+		return "", err
+	}
+	excluded, err := resolveDirectories("excluded directory", s.Excluded)
+	if err != nil {
+		return "", err
+	}
+	targets, err := resolveDirectories("artifact directory", []string{directory})
+	if err != nil {
+		return "", err
+	}
+	target := targets[0]
+	if !within(target, homes) {
+		return "", fmt.Errorf("artifact directory %q is not inside an artifact home (%s); an artifact filed outside one is a document nothing reads", directory, strings.Join(homes, ", "))
+	}
+	if within(target, excluded) {
+		return "", fmt.Errorf("artifact directory %q carries an identity scheme of its own and is not read as an artifact home", directory)
+	}
+	return target, nil
 }
 
 // within reports a directory that is one of the named directories or below one.

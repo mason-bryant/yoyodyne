@@ -357,11 +357,11 @@ func TestAProposalTheTrackerRefusesIsLeftForTheOperatorRatherThanLost(t *testing
 func TestTheContractStatesTheAdmissionPolicyInForce(t *testing.T) {
 	t.Parallel()
 
-	automatic := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalAutomatic}, "")
+	automatic := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalAutomatic}, nil, "")
 	if !strings.Contains(automatic, "admits work that traces to a goal the operator approved") {
 		t.Fatalf("the contract does not state that work is admitted: %q", automatic)
 	}
-	perItem := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalHuman}, "")
+	perItem := SystemPrompt(domain.RoleProductManager, Admission{WorkItems: domain.ApprovalHuman}, nil, "")
 	if !strings.Contains(perItem, `"create" is refused`) {
 		t.Fatalf("the contract does not state that admission is refused: %q", perItem)
 	}
@@ -371,7 +371,7 @@ func TestTheContractStatesTheAdmissionPolicyInForce(t *testing.T) {
 	// A role that cannot admit work at all is told nothing about admission: the
 	// clause is about an authority it does not have.
 	for _, role := range []domain.AgentRole{domain.RoleArchitect, domain.RoleDevelopmentManager, domain.RoleDeveloper, domain.RoleReviewer} {
-		prompt := SystemPrompt(role, Admission{WorkItems: domain.ApprovalAutomatic}, "")
+		prompt := SystemPrompt(role, Admission{WorkItems: domain.ApprovalAutomatic}, nil, "")
 		if strings.Contains(prompt, "admits work that traces to a goal the operator approved") {
 			t.Fatalf("%s was told an admission policy it cannot act on", role)
 		}

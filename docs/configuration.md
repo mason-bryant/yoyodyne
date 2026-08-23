@@ -875,7 +875,11 @@ is shown what has been proposed against its documents and argues for or against
 it — proposals against the brief and the goals are carried into the product
 manager's conversation, and proposals against the designs, the specifications,
 and the decision records are carried into the architect's, each told in so many
-words that it cannot decide one and cannot edit anything. Both owners can now be
+words that it cannot decide one. An owner may write its own documents, which is
+how an approved change is made: it writes the revision as a typed action, you
+approve it, and the harness performs the write — see [writing a document from a
+conversation](artifacts.md#writing-a-document-from-a-conversation). What no
+owner can do is decide the proposal from there. Both owners can now be
 asked directly: `yoyo agent chat architect` is where the argument about a design
 happens. But no agent records a decision, `yoyo amendment` is the only thing that
 does, and the record says you exercised the owner's authority rather than that

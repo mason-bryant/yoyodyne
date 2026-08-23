@@ -102,9 +102,12 @@ harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
-The brief and the goals stay yours. The product manager proposes a change to a
-goal and says plainly that it is yours to make; it cannot make one, and with no
-way to write a file it could not if it tried.
+The brief and the goals are the product manager's documents and yours to approve.
+It has no way to write a file, so it hands the harness the document instead: you
+are shown what would be written and asked, and only your `y` files it — with the
+revision recorded under the product manager and your approval recorded in the
+document. It is the same mechanism whichever role owns the document, and it is
+[writing a document from a conversation](artifacts.md#writing-a-document-from-a-conversation).
 
 The listing it is given names items by title, so when a title is not enough to
 judge whether new work belongs inside an existing item or beside it, it reads
@@ -634,12 +637,16 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
-The architect owns the designs, the decision records, and the invariants, and it
-cannot edit any of them from a conversation, because no conversation has tools.
-Decide the change with it and then record it yourself — `yoyo invariant` for an
-invariant, a revision to the document for the rest. Changes other roles proposed
-against its documents are carried into its conversation for it to argue, the
-same way the product manager hears proposals against the brief and the goals.
+The architect owns the designs, the decision records, and the invariants. It
+still has no tools, and a design or a decision record it writes reaches the
+repository anyway: it emits the document as a typed action, you are shown the
+document and asked, and the harness writes it under the architect's authority
+with your approval recorded in it — see [writing a document from a
+conversation](artifacts.md#writing-a-document-from-a-conversation). An invariant
+is the exception and stays yours to record with `yoyo invariant`. Changes other
+roles proposed against its documents are carried into its conversation for it to
+argue, the same way the product manager hears proposals against the brief and
+the goals.
 
 Each role is also given the documents it answers for. The architect gets the
 designs, the invariants, and the decision records alongside the specifications;

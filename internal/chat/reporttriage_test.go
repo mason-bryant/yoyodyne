@@ -350,7 +350,7 @@ func TestOnlyTheProductManagerMayRecordWhatBecameOfAReport(t *testing.T) {
 func TestTheContractTellsTheProductManagerWhatToDoWithReports(t *testing.T) {
 	t.Parallel()
 
-	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, hostilePersona)
+	prompt := SystemPrompt(domain.RoleProductManager, Admission{}, nil, hostilePersona)
 	for _, required := range []string{
 		"Reports the other roles have filed",
 		`{"action":"handle"`,

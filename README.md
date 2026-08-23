@@ -431,13 +431,19 @@ statement about the repository rather than an error, and the product manager
 says exactly that rather than inferring what your product must be about. Tell it
 what you are building and it will draft the brief and the goals with you.
 
-It cannot save them. The product manager runs with no tools at all — it manages
-the Beads backlog through the harness and never touches your filesystem — so the
-division is plain: **the product manager drafts, and you put the files on disk.**
-Paste what you agreed into `docs/product/`, commit it, and the next conversation
-reads it back as the product's written intent. Nothing fails if you never do, but
-goals are what work is admitted against, and a product manager with no goals to
-name will stop and ask you for one.
+**It does not save them, and you do not transcribe them either.** The product
+manager runs with no tools at all — it manages the Beads backlog through the
+harness and never touches your filesystem — so when the document is ready it
+hands the harness a typed write instead. You are shown the document and asked;
+on your `y` the harness files it in `docs/product/`, generates the frontmatter,
+records the revision under the product manager, and records your approval in the
+document itself. Commit it with the rest of your changes, and the next
+conversation reads it back as the product's written intent. Nothing fails if you
+never write one, but goals are what work is admitted against, and a product
+manager with no goals to name will stop and ask you for one. The same mechanism
+files a design or a decision record when you are talking to the architect: see
+[writing a document from a
+conversation](#writing-a-document-from-a-conversation).
 
 **Then drive the work from the same conversation.** Talk about what you want and
 approve the work items it proposes, as many as you like in one answer. Once you
@@ -640,9 +646,12 @@ harness cannot read changes nothing at all. The distinction being drawn is
 deliberate: arbitrary execution is what was refused, and a typed call against the
 tracker is not that.
 
-The brief and the goals stay yours. The product manager proposes a change to a
-goal and says plainly that it is yours to make; it cannot make one, and with no
-way to write a file it could not if it tried.
+The brief and the goals are the product manager's documents and yours to approve.
+It has no way to write a file, so it hands the harness the document instead: you
+are shown what would be written and asked, and only your `y` files it — with the
+revision recorded under the product manager and your approval recorded in the
+document. It is the same mechanism whichever role owns the document, and it is
+[writing a document from a conversation](#writing-a-document-from-a-conversation).
 
 The listing it is given names items by title, so when a title is not enough to
 judge whether new work belongs inside an existing item or beside it, it reads
@@ -1242,12 +1251,16 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
-The architect owns the designs, the decision records, and the invariants, and it
-cannot edit any of them from a conversation, because no conversation has tools.
-Decide the change with it and then record it yourself — `yoyo invariant` for an
-invariant, a revision to the document for the rest. Changes other roles proposed
-against its documents are carried into its conversation for it to argue, the
-same way the product manager hears proposals against the brief and the goals.
+The architect owns the designs, the decision records, and the invariants. It
+still has no tools, and a design or a decision record it writes reaches the
+repository anyway: it emits the document as a typed action, you are shown the
+document and asked, and the harness writes it under the architect's authority
+with your approval recorded in it — see [writing a document from a
+conversation](#writing-a-document-from-a-conversation). An invariant
+is the exception and stays yours to record with `yoyo invariant`. Changes other
+roles proposed against its documents are carried into its conversation for it to
+argue, the same way the product manager hears proposals against the brief and
+the goals.
 
 Each role is also given the documents it answers for. The architect gets the
 designs, the invariants, and the decision records alongside the specifications;
@@ -2136,9 +2149,10 @@ Who may change one of these documents is in the code rather than in a persona.
 The product manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no
 document at all. Creating, amending, superseding, and retiring an artifact each
-refuse a role that does not own the kind, the way the invariants already do —
-though no command reaches that path yet, so what it constrains today is nothing
-that is happening. What does run on every load is the other half: a document
+refuse a role that does not own the kind, the way the invariants already do, and
+that boundary is what a document written from a conversation goes through: the
+role writes it, you approve it, and the write happens under that role's
+authority or not at all. What also runs on every load is the other half: a document
 whose revision log records a change by a role that does not own it is reported,
 naming the file and the entries that crossed. It is reported rather than refused
 because the log is append-only, so losing the document would leave one that could
@@ -2160,6 +2174,66 @@ is asked to support anything. The
 [configuration guide](docs/configuration.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
+## Writing a document from a conversation
+
+A document the owning role drafted used to reach the repository by hand: fenced
+Markdown in a reply, your approval in prose, and then you or an agent of yours
+working out the path, writing the frontmatter, and committing it. The drafted
+content was rarely the part that went wrong — the transcription was.
+
+So a document is written the way work is proposed. Ask the product manager for
+the goals or the architect for a design, and what comes back is prose you read
+plus a typed action carrying the document. Nothing is written yet. You are shown
+what would happen and the document itself, and asked:
+
+```
+document document-4.1 · create v2-goals (goals) in docs/product
+  title: What v2 is for
+  because: drafted with you in this conversation
+
+  # Goals
+  ...
+
+create v2-goals (goals) in docs/product? [y or yes writes it and records your
+approval in it; anything else declines, and is kept as the reason]
+```
+
+On your `y` the harness performs the write itself: it files the document in the
+artifact home, generates the frontmatter the contract requires, records the
+revision under the role that wrote it, and records your approval against that
+revision. `yoyo artifact show v2-goals` then reads back exactly what any
+hand-written document reads back as, because it is one. Anything else declines,
+and what you said is kept as the reason.
+
+Nothing about that widens what a role may do. The write goes through the same
+ownership boundary every other change to these documents goes through, so the
+architect cannot write the goals and the product manager cannot write a design —
+each proposes to the other instead. A document filed outside your artifact homes,
+a kind the role does not own, and a block the harness cannot read are all refused
+before anything touches the filesystem, and you are never asked to approve one.
+A role that owns no document at all — the development manager, the developer, the
+reviewer — cannot write one under any circumstances.
+
+A revision is the same action, carrying the document whole:
+
+```sh
+./bin/yoyo chat --message "revise the second goal to name the adoption path"
+./bin/yoyo chat --message "approve document-5.1"
+```
+
+Deciding it as its own message is what makes this work outside an interactive
+conversation: the drafted document is recorded with the conversation, so it
+survives the process that wrote it and your approval names it hours later. An
+approval sent as a message has to name the document — a bare "yes" decides
+nothing, because a message is not an answer to a question you were just asked.
+What is left undecided when a conversation ends is named on the way out.
+
+What this does not do is commit or publish. The document lands in your working
+tree with the rest of your changes, and the commit and the pull request are still
+yours. Commit it before you start a run: a run refuses to begin while the primary
+checkout has uncommitted changes, and a document you approved and left uncommitted
+is one of them.
+
 ## Goals, and what work serves them
 
 Identity ends at the document. The last link of the chain is the goal a work
@@ -2174,9 +2248,9 @@ of them in the words that document states it in.
 ./bin/yoyo goals witness       # witness the goals already recorded on admitted work
 ```
 
-Nothing there writes an attribution, for the same reason nothing writes an
-artifact: what a piece of work is for is a product judgement, made by the
-product manager in the conversation where you can see it. What the harness owns
+Nothing there writes an attribution: what a piece of work is for is a product
+judgement, made by the product manager in the conversation where you can see it,
+the same way the documents themselves are. What the harness owns
 is resolving the claim. An item that names no goal at all and one that names a
 goal your goals do not state are reported apart and treated differently, because
 they are not the same thing to do: the first predates the check, is somebody's
@@ -2301,9 +2375,10 @@ silently, and what was delivered is recorded on the work item so an operator can
 see afterwards which constraints applied.
 
 The architect can be asked what an invariant should say — `yoyo agent chat
-architect` — and it cannot write one, because no conversation has tools. So the
-lifecycle is reachable from the command line, acting with the architect's
-authority and recording that it did:
+architect` — and it cannot write one. The typed write a conversation has covers
+the artifact kinds, and an invariant carries an identity scheme of its own that
+no conversation action reaches. So the lifecycle is reachable from the command
+line, acting with the architect's authority and recording that it did:
 
 ```sh
 ./bin/yoyo invariant list

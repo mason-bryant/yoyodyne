@@ -79,7 +79,18 @@ type chatOutput struct {
 	// same list as Proposals: that one is what this turn proposed, and this one is
 	// everything nobody has decided, including proposals from earlier messages.
 	Pending []chat.PendingProposal `json:"pending,omitempty"`
-	Error   string                 `json:"error,omitempty"`
+	// Writes are the documents this turn wrote and PendingWrites is everything
+	// still awaiting a decision once the message is over, kept apart for the
+	// reason the proposals above are. Nothing was written to the repository for
+	// either list: a document reaches it when an approval names it and not before.
+	Writes        []chat.PendingWrite `json:"writes,omitempty"`
+	PendingWrites []chat.PendingWrite `json:"pending_writes,omitempty"`
+	// WriteDecisions are what the message decided about documents the
+	// conversation was waiting on. Unlike the lists above these already happened:
+	// an approved document is in the repository, with the operator's approval
+	// recorded in its frontmatter.
+	WriteDecisions []chat.WriteOutcome `json:"write_decisions,omitempty"`
+	Error          string              `json:"error,omitempty"`
 }
 
 func runChat(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -160,6 +171,7 @@ func converse(ctx context.Context, role domain.AgentRole, request conversationRe
 	}
 	printOpenConcerns(stdout, theme, session.Concerns())
 	printUndecidedProposals(stdout, theme, session.Proposals())
+	printUndecidedWrites(stdout, theme, session.Writes())
 	printChatEvidence(stdout, session.Evidence())
 	if converseErr != nil {
 		fmt.Fprintf(stderr, "conversation ended: %v\n", converseErr)
@@ -187,6 +199,13 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	if outcomes, decided, err := session.Decide(ctx, message); decided {
 		return reportChatDecisions(stdout, stderr, jsonOutput, role, session, outcomes, err)
 	}
+	// An answer to a document the conversation is waiting on is carried out here
+	// for the same reason, and the cost of getting it wrong is higher: the "y"
+	// that reached the agent as speech was an approval to write a file, and the
+	// document went back to being something a person transcribed by hand.
+	if outcomes, decided, err := session.DecideWrites(message); decided {
+		return reportChatWriteDecisions(stdout, stderr, jsonOutput, role, session, outcomes, err)
+	}
 	// A one-shot message resumes the same recorded conversation an interactive
 	// one does, and carries the same risk of answering from a picture taken hours
 	// ago. It is said on stderr because stdout is the reply and, with --json, a
@@ -209,7 +228,12 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 			// that, so a turn that reported only what it had just proposed would
 			// hide the earlier proposals from the reader least able to go
 			// looking for them.
-			Pending:            session.Proposals(),
+			Pending: session.Proposals(),
+			// The documents this turn wrote, and everything still waiting: nothing
+			// was written for either, and a script that will approve one next has
+			// to be able to name it.
+			Writes:             reply.Writes,
+			PendingWrites:      session.Writes(),
 			Admitted:           reply.Admitted,
 			Concerns:           reply.Concerns,
 			Actions:            reply.Actions,
@@ -227,6 +251,7 @@ func runChatMessage(ctx context.Context, session *chat.Session, role domain.Agen
 	// decision arrives as its own message, so what the operator has to be able to
 	// name is the whole of what is still waiting on them.
 	printChatProposals(stdout, role, session.Proposals())
+	printChatWrites(stdout, role, session.Writes())
 	printChatEvidence(stdout, reply.Evidence)
 	return 0
 }
@@ -254,6 +279,35 @@ func reportChatDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.
 	}
 	printChatDecisions(stdout, outcomes)
 	printChatProposals(stdout, role, pending)
+	if err != nil {
+		fmt.Fprintf(stderr, "%v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// reportChatWriteDecisions reports what a message decided about the documents a
+// conversation was waiting on. Like the proposal decisions beside it, what was
+// carried out is written whether or not the answer went on to fail: a document
+// that reached the repository is in it, and the failure is about the rest.
+func reportChatWriteDecisions(stdout, stderr io.Writer, jsonOutput bool, role domain.AgentRole, session *chat.Session, outcomes []chat.WriteOutcome, err error) int {
+	pending := session.Writes()
+	if jsonOutput {
+		evidence := session.Evidence()
+		output := chatOutput{Evidence: &evidence, WriteDecisions: outcomes, PendingWrites: pending}
+		if err != nil {
+			output.Error = err.Error()
+		}
+		if code := writeJSON(stdout, stderr, output); code != 0 {
+			return code
+		}
+		if err != nil {
+			return 1
+		}
+		return 0
+	}
+	printChatWriteDecisions(stdout, outcomes)
+	printChatWrites(stdout, role, pending)
 	if err != nil {
 		fmt.Fprintf(stderr, "%v\n", err)
 		return 1
@@ -430,6 +484,13 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// They are read here so the owner hears the argument; deciding them is the
 		// operator's, through `yoyo amendment`.
 		Amendments: parts.amendments,
+		// How a document this role owns reaches the repository: the role writes it,
+		// the operator approves it, and the harness performs the write through the
+		// same ownership boundary every other mutation of these documents goes
+		// through. It is the harness's hand like the tracker beside it — the role
+		// still has no filesystem — and it is the same store `yoyo artifact` reads,
+		// so a document written from a conversation is one that command lists.
+		Documents: artifactStore(repository, cfg.Product),
 		// What work admitted here has to name. It is read from the repository
 		// rather than from the conversation, so a goal retired since the
 		// conversation opened stops being one work can be admitted under.
@@ -517,6 +578,10 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 		// thing in the reply that is waiting on a person, so it travels with the
 		// failure rather than behind it.
 		output.Concerns = reply.Concerns
+		// A document recorded before the turn failed is waiting on the operator, so
+		// it travels with the failure for the reason the concerns do: nothing was
+		// written, and a document nobody can name has to be written out again.
+		output.Writes = reply.Writes
 		// A turn that failed may still have changed the tracker before it did, so
 		// what it changed is reported with the failure rather than lost behind it.
 		// The same is true of anything it reported: the report is already
@@ -540,6 +605,7 @@ func reportChatFailure(stdout, stderr io.Writer, jsonOutput bool, role domain.Ag
 	printChatReports(stdout, role, output.Reports, output.ReportProblem)
 	printChatConcerns(stdout, role, output.Concerns)
 	printChatProposals(stdout, role, output.Proposals)
+	printChatWrites(stdout, role, output.Writes)
 	fmt.Fprintf(stderr, "chat failed: %v\n", err)
 	if output.Evidence != nil && output.Evidence.ConversationID != "" {
 		fmt.Fprintf(stderr, "conversation: %s\n", output.Evidence.ConversationID)
@@ -564,8 +630,10 @@ func printChatHeader(writer io.Writer, role domain.AgentRole, evidence chat.Evid
 	fmt.Fprintln(writer, "It owns the backlog: what is admitted to it, and the order work is pulled in.")
 	fmt.Fprintln(writer, "It manages the work tracker itself: it can read, create, attribute to a goal,")
 	fmt.Fprintln(writer, "update, reparent, reprioritize, link, unlink, close, and retire items, and every")
-	fmt.Fprintln(writer, "change it makes is reported to you here. It has no files, commands, or network,")
-	fmt.Fprintln(writer, "and it proposes changes to the brief and the goals rather than making them.")
+	fmt.Fprintln(writer, "change it makes is reported to you here. It has no files, commands, or network.")
+	fmt.Fprintln(writer, "The brief and the goals are its documents to write: it hands you one to read and")
+	fmt.Fprintln(writer, "approve, and the harness files it with your approval recorded in it. A design")
+	fmt.Fprintln(writer, "or a decision record is the architect's, and it proposes a change there instead.")
 	fmt.Fprintln(writer, "It may also propose work items; one is created only when you approve it by name,")
 	fmt.Fprintln(writer, "and every one of them names a goal your goals state, checked rather than taken.")
 	fmt.Fprintln(writer, "Work admitted before that check names none, and it says which items those are.")
@@ -611,10 +679,12 @@ func printOtherRoleHeader(writer io.Writer, role domain.AgentRole) {
 	}
 	switch role {
 	case domain.RoleArchitect:
-		fmt.Fprintln(writer, "It cannot edit the documents it owns from here. Decide the change with it, then")
-		fmt.Fprintln(writer, "record it yourself: `yoyo invariant` for an invariant, and a revision to the")
-		fmt.Fprintln(writer, "design for the rest. Changes other roles proposed to its documents are carried")
-		fmt.Fprintln(writer, "into this conversation for it to argue; you decide them with `yoyo amendment`.")
+		fmt.Fprintln(writer, "A design, a specification, or a decision record it writes here is put to you")
+		fmt.Fprintln(writer, "as a document to approve, and the harness writes it under the architect's")
+		fmt.Fprintln(writer, "authority with your approval recorded in it. An invariant is still yours to")
+		fmt.Fprintln(writer, "record with `yoyo invariant`. Changes other roles proposed to its documents")
+		fmt.Fprintln(writer, "are carried into this conversation for it to argue; you decide them with")
+		fmt.Fprintln(writer, "`yoyo amendment`.")
 	case domain.RoleDeveloper, domain.RoleReviewer:
 		fmt.Fprintln(writer, "Its real work happens inside runs, with a worktree, checks, and a verdict, and")
 		fmt.Fprintln(writer, "none of that is happening here. What you get here is its judgement.")
@@ -696,6 +766,51 @@ func printChatProposals(writer io.Writer, role domain.AgentRole, proposals []cha
 	}
 	first := proposals[0].ID
 	fmt.Fprintf(writer, "\nDecide one from here: `yoyo chat --message \"approve %s\"` creates it, and\n`yoyo chat --message \"decline %s <reason>\"` turns it down. `yoyo chat` puts them\nto you as a prompt instead.\n", first, first)
+}
+
+// printChatWrites reports the documents awaiting the operator's decision, and
+// says how to make one. Nothing was written for any of them: the document is in
+// the conversation's record and the repository is untouched until an approval
+// names it, which is why the identifier is printed rather than the position.
+func printChatWrites(writer io.Writer, role domain.AgentRole, writes []chat.PendingWrite) {
+	if len(writes) == 0 {
+		return
+	}
+	fmt.Fprintf(writer, "\n%d document(s) the %s wrote are awaiting your decision, and nothing was written to the repository:\n\n", len(writes), chat.RoleTitle(role))
+	for _, write := range writes {
+		fmt.Fprintf(writer, "  [%s] %s\n", write.ID, write.Write.Describe())
+		fmt.Fprintf(writer, "      because: %s\n", strings.TrimSpace(write.Write.Reason))
+	}
+	first := writes[0].ID
+	fmt.Fprintf(writer, "\nDecide one from here: `yoyo chat --message \"approve %s\"` writes it and records\nyour approval in it, and `yoyo chat --message \"decline %s <reason>\"` turns it\ndown. `yoyo chat` shows you the document and asks instead.\n", first, first)
+}
+
+// printChatWriteDecisions says what the operator's message did to each document
+// it named. Nothing here was said by the agent: the harness wrote the file, or
+// did not, and which of the two happened is the whole of what has to be clear.
+func printChatWriteDecisions(writer io.Writer, outcomes []chat.WriteOutcome) {
+	if len(outcomes) == 0 {
+		return
+	}
+	fmt.Fprintln(writer)
+	for _, outcome := range outcomes {
+		fmt.Fprint(writer, outcome.Render())
+	}
+}
+
+// printUndecidedWrites names the documents a conversation ended without
+// deciding, so a drafted document nobody filed is a visible loose end rather
+// than something that has to be written out again.
+func printUndecidedWrites(writer io.Writer, theme console.Theme, writes []chat.PendingWrite) {
+	if len(writes) == 0 {
+		return
+	}
+	var undecided strings.Builder
+	fmt.Fprintf(&undecided, "%d document(s) were left undecided and nothing was written for them:\n", len(writes))
+	for _, write := range writes {
+		fmt.Fprintf(&undecided, "  [%s] %s\n", write.ID, write.Write.Describe())
+	}
+	fmt.Fprint(writer, theme.Proposal(undecided.String()))
 }
 
 // printChatConcerns reports what a one-shot message would not propose. There is
@@ -790,6 +905,12 @@ decision words, as "y", "no", or "approve 1,3". Everything else is said to the
 product manager as it always was and leaves every proposal where it was —
 including a reply that opens with one of those words, because "no, let us look at
 the resolver instead" is a sentence rather than a decline.
+
+A --message that decides a document the conversation wrote is carried out here as
+well, and it has to name one: "approve document-4.1" writes the document and
+records your approval in it, and "decline document-4.1 <reason>" turns it down.
+A bare "y" decides no document, because a message is not an answer to a question
+you were just asked.
 
 This is the product manager's conversation. Every other configured agent is
 reached the same way through "yoyo agent chat <name>", which takes the same
