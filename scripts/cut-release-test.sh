@@ -81,6 +81,10 @@ SH
     printf 'dist-verify:\n'
     if [ "$mk" = "build-red" ]; then
       printf '\t@echo "stub dist-verify is red"; exit 1\n'
+    elif [ "$mk" = "no-checksums" ]; then
+      # A build that succeeded and put its checksums somewhere else: what a
+      # rename of the real dist recipe's output would look like from here.
+      printf '\t@echo "stub built $(VERSION), checksums elsewhere"\n'
     else
       printf '\t@mkdir -p dist\n'
       printf '\t@echo "abc123  yoyo_$(VERSION)_stub.tar.gz" > dist/checksums.txt\n'
@@ -154,6 +158,47 @@ output="$(cut "$project" "v0.3.0")"
 contains "$output" "a release is cut from main" "refuses a cut from a feature branch"
 contains "$output" "some-feature" "the refusal names the branch it is on"
 
+step "a tag does not name a commit origin does not have"
+project="$(fabricate diverged-from-origin green green)"
+# A bare repository on disk is an origin a fetch can reach with no network, so
+# the comparison itself is executed rather than only its unreachable path.
+origin="$scratch/diverged-origin.git"
+git init -q --bare "$origin"
+git -C "$project" remote add origin "$origin"
+git -C "$project" push -q origin main
+shared="$(git -C "$project" rev-parse HEAD)"
+git -C "$project" commit -q --allow-empty -m "a commit origin does not have"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "HEAD is not where origin/main is" "refuses a HEAD that has diverged from origin"
+contains "$output" "$shared" "the refusal names the commit origin has"
+missing "$output" "adoption walkthrough" "refuses before spending the walkthrough"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
+step "and cuts when origin agrees, without pushing anything to it"
+project="$(fabricate agrees-with-origin green green)"
+origin="$scratch/agreeing-origin.git"
+git init -q --bare "$origin"
+git -C "$project" remote add origin "$origin"
+git -C "$project" push -q origin main
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "origin/main agrees" "a reachable origin that agrees is checked and said so"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag was written"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+# The strongest form of "it does not publish": there was a remote to push to,
+# and the cut left nothing on it.
+if [ -z "$(git -C "$origin" tag --list)" ]; then
+  pass "the tag was not pushed, because publishing is the operator's own command"
+else
+  fail "the cut pushed a tag to origin: $(git -C "$origin" tag --list)"
+fi
+
 step "a red walkthrough refuses the cut and names the failure"
 project="$(fabricate red-walk red green)"
 output="$(cut "$project" "v0.3.0")"
@@ -192,6 +237,7 @@ fi
 step "green all the way through: one invocation, a tagged build with checksums"
 project="$(fabricate green green green)"
 output="$(cut "$project" "v0.3.0")"
+contains "$output" "SKIPPED: origin is unreachable" "an origin it cannot reach is named as unchecked rather than passed over"
 contains "$output" "documented adoption path works" "the walkthrough ran"
 contains "$output" "stub check passed" "the checks ran"
 contains "$output" "stub built v0.3.0" "the archives were built for the tag"
@@ -218,6 +264,25 @@ if [ -z "$(git -C "$project" remote)" ]; then
   pass "the cut needed no remote, because it does not publish"
 else
   fail "the scratch repository gained a remote"
+fi
+
+step "a finished cut is never reported as a failure"
+# Once the tag exists the cut has happened, so nothing left to print may fail
+# it: an operator told the release failed, holding a tag that is real and
+# never shown the push it needs, is worse off than one told nothing.
+project="$(fabricate silent-checksums green no-checksums)"
+if output="$("$project/scripts/cut-release.sh" "v0.3.0" 2>&1)"; then status=0; else status=$?; fi
+if [ "$status" = "0" ]; then
+  pass "a cut whose checksums are not where it looked still exits 0"
+else
+  fail "the cut exited $status after tagging -- got: $output"
+fi
+contains "$output" "is not where it was expected" "it says the checksums were not found"
+contains "$output" "git push origin v0.3.0" "the push the tag needs is still printed"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag it reported is really there"
+else
+  fail "expected v0.3.0, got: $(tags "$project")"
 fi
 
 step "make release passes the tag through, and withholds the describe default"

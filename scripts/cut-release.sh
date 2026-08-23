@@ -31,6 +31,10 @@ repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 walkthrough="$repository/scripts/walk-adoption.sh"
 # When this was reached through `make release`, use the same make.
 make_program="${MAKE:-make}"
+# Where `dist` writes, spelled the way the Makefile spells it: DIST ?= dist,
+# and a caller who overrode it on the make command line has it in the
+# environment here too.
+dist_directory="$repository/${DIST:-dist}"
 # What a release tag is: vMAJOR.MINOR.PATCH, and nothing else. The release
 # workflow triggers on "v*" and the archives are named for this string, so a
 # tag in another shape produces a release whose files nobody can predict. The
@@ -136,6 +140,11 @@ git -C "$repository" tag -a "$tag" -m "$tag"
 printf '%s tagged at %s\n' "$tag" "$head"
 
 printf '\n=== cut\n'
-cat "$repository/dist/checksums.txt"
+# The cut is finished from here: the tag exists and the archives are on disk.
+# Nothing below is allowed to fail it. A completed release that exits non-zero
+# because a report could not be printed is the worst of both -- the tag is
+# real, `make release` says it failed, and the push it needs never appears.
+cat "$dist_directory/checksums.txt" 2>/dev/null ||
+  printf 'the cut succeeded, but %s/checksums.txt is not where it was expected\n' "$dist_directory"
 printf '\nPublishing is the tag push, which the release workflow acts on:\n'
 printf '  git push origin %s\n' "$tag"
