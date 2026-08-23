@@ -412,8 +412,8 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 	// The one instant nothing else in this harness can express: the world moves
 	// after the local promotion has happened and before the forge is asked.
 	pipeline.Worktrees = remoteMovingWorktrees{
-		Worktrees:      pipeline.Worktrees,
-		afterIntegrate: func() { driftRemoteTarget(t, remote, "main") },
+		WorktreeManager: pipeline.Worktrees,
+		afterIntegrate:  func() { driftRemoteTarget(t, remote, "main") },
 	}
 
 	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
@@ -470,12 +470,12 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 // before it asks the forge to merge. That window is a race against another
 // machine, so nothing a test can drive from outside reaches it.
 type remoteMovingWorktrees struct {
-	Worktrees
+	WorktreeManager
 	afterIntegrate func()
 }
 
 func (w remoteMovingWorktrees) Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error) {
-	integration, err := w.Worktrees.Integrate(ctx, worktree, message)
+	integration, err := w.WorktreeManager.Integrate(ctx, worktree, message)
 	if err == nil && w.afterIntegrate != nil {
 		w.afterIntegrate()
 	}
