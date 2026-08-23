@@ -110,6 +110,12 @@ agents file while their work carries on live outside the repository under an
 operating-system state directory, so nothing there depends on where the project
 is checked out.
 
+Committing it is the default rather than a requirement, and a contributor to a
+repository they do not own has two supported ways not to: the README's
+[Keeping the configuration out of the repository](../README.md#keeping-the-configuration-out-of-the-repository)
+covers a `.yoyodyne` listed in `.git/info/exclude` and a configuration kept
+outside the repository behind `--config`.
+
 What `init` writes looks like this, with the explanatory comments trimmed:
 
 ```yaml
