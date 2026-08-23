@@ -145,9 +145,11 @@ type Titles interface {
 // pacer is shared on purpose, since a pace two callers each advanced from their
 // own reading of it is not a pace, and it holds a mutex for exactly that. The
 // API is an HTTP client, which is safe to use from several goroutines. And the
-// store is read from both and written from one: the delivery pass owns the thread
-// map, and the acknowledgment path is structurally unable to write it, because
-// the poster it is given cannot open a thread (see `poster.opens`).
+// store holds two maps, each written by exactly one of them and read by both:
+// the delivery pass owns the thread map, and the acknowledgment path is
+// structurally unable to write it, because the poster it is given cannot open a
+// thread (see `poster.opens`); the connection owns the steer map, which is where
+// a directive said in a thread is remembered, and the pass only ever reads it.
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -458,6 +460,11 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 		if notification, say := plan.say(index, delivery); say {
 			into.reached = false
+			// Almost every delivery is for whoever is reading the channel and carries
+			// nobody. The exception is what became of something one person asked for,
+			// which is said to them by name: it is set per delivery rather than per
+			// poster because the poster is one and the deliveries are many.
+			into.mention = delivery.Mention
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
@@ -604,6 +611,45 @@ func (s *Sink) remark(ctx context.Context, thread Thread, status notify.Status) 
 	return s.api.React(ctx, thread.Channel, thread.ThreadTS, status.Symbol())
 }
 
+// receipt marks one reply of somebody's with what became of it, on their own
+// message. It is the twin of the status a thread's opener wears: the opener says
+// what the item is doing, and this says what the harness did with what they
+// said.
+//
+// The arrival mark goes on alone, because it goes on a message nothing has
+// marked yet and because the acknowledgment behind it is what the operator is
+// actually waiting for — two removals that hit nothing would put the pace's wait
+// between somebody typing and being answered. A disposition sweeps instead, for
+// the reason a status change does: what the message is wearing is the question,
+// and a sink killed between the workspace taking a mark and the disposition
+// landing leaves exactly that, so the sweep is what settles it.
+//
+// It reports its error rather than logging, because unlike a status mark this
+// has one caller, on one path, that already knows how to say what a reply could
+// not be told.
+func (s *Sink) receipt(ctx context.Context, messageTS string, receipt notify.Receipt) error {
+	if !receipt.Valid() {
+		return fmt.Errorf("%q is not one of the marks a reply can wear", receipt)
+	}
+	if receipt != notify.ReceiptUnderConsideration {
+		for _, stale := range notify.Receipts() {
+			if stale == receipt {
+				continue
+			}
+			if err := s.pace.wait(ctx); err != nil {
+				return err
+			}
+			if err := s.api.Unreact(ctx, s.channel, messageTS, stale.Symbol()); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.pace.wait(ctx); err != nil {
+		return err
+	}
+	return s.api.React(ctx, s.channel, messageTS, receipt.Symbol())
+}
+
 // post puts one message in the workspace at the pace the workspace sustains.
 // Every message the sink sends goes through here rather than to the client
 // directly, because what Slack suppresses is an application posting too fast and
@@ -643,6 +689,17 @@ type poster struct {
 	// is the one way this path could damage anything. It cannot, because it is not
 	// given the capability rather than because it never takes it.
 	opens bool
+	// mention is the Slack member id this message is for, empty for the ordinary
+	// message that is for whoever is reading the channel. It is set where a
+	// message answers one person — the acknowledgment of their reply, and what
+	// later became of what they asked for — because a thread they are not looking
+	// at is indistinguishable from silence, and being told is the whole point of
+	// both.
+	//
+	// It is carried here rather than in the envelope because it is Slack's own
+	// shape: who a message is about is the record's, and how a workspace pokes
+	// somebody is this surface's.
+	mention string
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -692,7 +749,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	emoji, url := icon(message.Identity.Avatar)
 	if _, err := sink.post(ctx, Message{
 		Channel:   sink.channel,
-		Text:      renderText(message),
+		Text:      tagged(p.mention, renderText(message)),
 		ThreadTS:  threadTS,
 		Broadcast: broadcast(message.Severity),
 		Username:  message.Identity.Name,
@@ -761,6 +818,21 @@ func (s *Sink) named(ctx context.Context, topic notify.Topic) notify.Topic {
 		return topic
 	}
 	return topic.WithTitle(title)
+}
+
+// tagged puts a Slack mention in front of a message that is for one person, and
+// leaves every other message exactly as it was rendered.
+//
+// The mention is the member id in Slack's own syntax, which is what makes the
+// workspace notify them: a message that named them in words would read the same
+// and reach nobody who was not already looking at the thread. A member id is
+// what the operators mapping binds, so nothing here has to resolve anybody.
+func tagged(member, text string) string {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return text
+	}
+	return "<@" + trimmed + "> " + text
 }
 
 // icon splits one avatar into the two fields Slack takes for it: a shortcode

@@ -280,7 +280,9 @@ you are re-pointing at a new workspace — stop the sink and delete
 and otherwise `~/Library/Application Support/Yoyodyne/state` on macOS or
 `~/.local/state/yoyodyne` elsewhere. The sink takes a new moment on its next pass
 and says which one. Leave `threads.json` beside it alone unless you also want new
-threads.
+threads, and `steers.json` — which is where each directive you asked for in a
+thread is remembered, so what later becomes of it is said where you asked —
+unless you no longer want to hear about the ones still open.
 
 **Do not run two.** One sink per product: two of them hold separate thread maps,
 so the second opens its own threads and posts everything twice. The second to
@@ -486,7 +488,9 @@ blocked, and what landed without a thread being opened. Nothing else is ever
 added to an opener: **a status is about the item and a severity is about one
 message**, and they never share a symbol, so a reader never has to work out which
 of the two a mark is talking about. Anyone reacting to a thread themselves is
-untouched — the sink only ever adds and removes those four.
+untouched — the sink only ever adds and removes those four, and the three it
+puts on a reply of yours (*Steering the work from a thread*, below), which are
+never on an opener.
 
 Three things are worth knowing about it:
 
@@ -557,11 +561,31 @@ attribution rather than routing — the record reaches every run of the item
 whichever role it names — and a reply that mentions nobody is the product
 manager's.
 
-Every reply is answered in its own thread, with the directive as recorded and its
-identifier, or with why nothing was recorded. What that answer says is the whole
-of what happened: there is no other confirmation, and a reply that stopped work is
-shown at the top of the channel as well, because work stopping is what somebody
-who has opened no threads most needs to see.
+Every reply is answered in its own thread, **tagging you**, with the directive as
+recorded and its identifier, or with why nothing was recorded. What that answer
+says is the whole of what happened at that moment: there is no other
+confirmation, and a reply that stopped work is shown at the top of the channel as
+well, because work stopping is what somebody who has opened no threads most needs
+to see.
+
+Your own message carries what became of it, as a reaction, so scrolling back
+through what you said says which replies landed without any of them being read:
+
+| Mark | What it means |
+| --- | --- |
+| :thinking_face: | Read, and being decided. It goes on as the reply arrives. |
+| :white_check_mark: | Settled: a directive was recorded, or the one you named was resolved. The thread says which. |
+| :no_entry_sign: | Nothing was recorded. The thread says why. |
+
+Those three are the whole vocabulary, they are only ever on a reply, and the four
+status marks are only ever on a thread's opener, so no message carries both.
+
+**What later becomes of it is said in the same thread, tagging you.** A directive
+you asked for from a thread is remembered against that thread, so when the record
+says it was settled — by you at a terminal, in a conversation, by anybody — the
+settlement and what it was are said where you asked rather than only where it was
+typed. A directive recorded at a terminal has no thread and nobody to tag, so
+nothing is said about it here.
 
 Three things are refused, visibly:
 

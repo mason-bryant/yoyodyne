@@ -428,7 +428,10 @@ Replies go the other way. A reply in a work item's thread, from somebody this
 project granted `direct-work` with a bound Slack member id, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
-and the same resolution, so a run meets it whichever way it arrived. Every reply is answered in its own thread with
-what was recorded or why nothing was, and a project that has granted nobody is
-steered by nobody. What a reply may say is in
+and the same resolution, so a run meets it whichever way it arrived. Every reply
+is answered in its own thread, tagging whoever wrote it, with what was recorded
+or why nothing was; the reply itself is marked with what became of it; and when
+the record later says the directive was settled, that is said in the same thread
+and tagged the same way. A project that has granted nobody is steered by nobody.
+What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).

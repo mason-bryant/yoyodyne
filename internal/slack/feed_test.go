@@ -8,6 +8,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/amendment"
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
@@ -443,6 +444,80 @@ func TestTheOperatorHoldIsSaidSeparatelyFromTheIntakeHold(t *testing.T) {
 	harness.poll(t, cursors, notify.KindHoldLifted)
 }
 
+// Somebody who steers from a thread is told what was recorded and then hears
+// nothing more, because what becomes of a directive is settled at a terminal
+// they are not at. So the record is read for it, and it is said where they asked
+// and addressed to them — once, however often the record is read afterwards.
+func TestWhatBecomesOfADirectiveSaidInAThreadIsSaidInThatThread(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", member)
+
+	// Nothing has become of it yet. The thread already carries what was recorded,
+	// and a directive nobody has settled is not news a second time.
+	cursors := harness.poll(t, harness.start())
+
+	if _, err := harness.directives.Resolve(recorded.ID, "the second one, and the design says so", moment); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	said := 0
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream != directiveStream {
+			continue
+		}
+		said++
+		cursors.Streams[delivery.Stream] = delivery.Cursor
+		if delivery.Notification.Event.Kind != notify.KindDirectiveResolved {
+			t.Fatalf("said %q, want what became of the directive", delivery.Notification.Event.Kind)
+		}
+		if delivery.Notification.Topic.Key() != "work-item:yoyodyne-ifd.68.3" {
+			t.Fatalf("said in %q, want the thread the directive was asked for in", delivery.Notification.Topic.Key())
+		}
+		if delivery.Mention != member {
+			t.Fatalf("mention = %q, want the human who asked for it tagged", delivery.Mention)
+		}
+		if delivery.Notification.Event.Text != "the second one, and the design says so" {
+			t.Fatalf("said %q, want what settled it", delivery.Notification.Event.Text)
+		}
+		if delivery.Notification.Event.Refs.DirectiveID != recorded.ID {
+			t.Fatalf("refs = %#v, want the directive it is about", delivery.Notification.Event.Refs)
+		}
+	}
+	if said != 1 {
+		t.Fatalf("said %d outcomes, want exactly one", said)
+	}
+
+	// Read again, and it says nothing: a settlement is said once, like every
+	// other crossing.
+	harness.poll(t, cursors)
+}
+
+// A directive recorded at a terminal has no thread to answer in and nobody to
+// tag, so nothing is said about it here. Reporting on every directive the
+// product has would be a channel narrating a record nobody asked it to.
+func TestADirectiveNobodySaidInAThreadIsNotAnsweredInOne(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.directive(t, "yoyodyne-ifd.68.3", "U0OPERATOR")
+	// The sink's note of where it came from is what makes it answerable, and a
+	// directive typed at a terminal never has one.
+	if err := harness.steers.SaveSteers(SteerMap{}); err != nil {
+		t.Fatalf("SaveSteers() error = %v", err)
+	}
+	if _, err := harness.directives.Resolve(recorded.ID, "settled at the terminal it was typed at", moment); err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	harness.poll(t, harness.start())
+}
+
 // testHarness is a product's durable records and a feed reading them, so what a
 // test exercises is the reading rather than a stand-in for it.
 type testHarness struct {
@@ -462,6 +537,12 @@ type testHarness struct {
 	holds   *runstate.OperatorHoldStore
 	watch   *runstate.WatchStore
 	limits  *runstate.UsageLimitStore
+	// directives is the product's directive record, and steers is the sink's own
+	// note of which of those were said into a thread. The outcome half reads both:
+	// one says what became of a directive, the other says whose thread to say it
+	// in.
+	directives *runstate.DirectiveStore
+	steers     *Store
 }
 
 func newTestHarness(t *testing.T, since time.Time) *testHarness {
@@ -499,17 +580,27 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 	if err != nil {
 		t.Fatalf("NewUsageLimitStore() error = %v", err)
 	}
+	directives, err := runstate.NewDirectiveStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewDirectiveStore() error = %v", err)
+	}
+	steers, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
 	harness := &testHarness{
-		since:   since,
-		now:     moment.Add(time.Hour),
-		runs:    runs,
-		chats:   chats,
-		reports: reports,
-		amend:   amend,
-		intake:  intake,
-		holds:   holds,
-		watch:   watch,
-		limits:  limits,
+		since:      since,
+		now:        moment.Add(time.Hour),
+		runs:       runs,
+		chats:      chats,
+		reports:    reports,
+		amend:      amend,
+		intake:     intake,
+		holds:      holds,
+		watch:      watch,
+		limits:     limits,
+		directives: directives,
+		steers:     steers,
 	}
 	harness.feed = &HarnessFeed{
 		Runs:          runs,
@@ -520,6 +611,8 @@ func newTestHarness(t *testing.T, since time.Time) *testHarness {
 		Holds:         holds,
 		Watch:         watch,
 		UsageLimits:   limits,
+		Directives:    directives,
+		Steers:        steers,
 		Now:           func() time.Time { return harness.now },
 	}
 	return harness
@@ -564,6 +657,44 @@ func (h *testHarness) poll(t *testing.T, cursors Cursors, want ...notify.Kind) C
 // product: nothing read, and the watermark already taken.
 func (h *testHarness) start() Cursors {
 	return Cursors{SchemaVersion: CursorsSchemaVersion, Since: h.since, Streams: map[string]Cursor{}}
+}
+
+// directive records one directive the way a reply in a thread records it: in
+// the product's own directive record, with the sink's note of which thread it
+// was said in and by whom beside it.
+func (h *testHarness) directive(t *testing.T, workItemID, member string) directive.Directive {
+	t.Helper()
+	id, err := directive.NewID()
+	if err != nil {
+		t.Fatalf("NewID() error = %v", err)
+	}
+	recorded := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            id,
+		ProductID:     "yoyodyne",
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    moment,
+		Text:          "ambiguous: which of the two branches did you mean",
+		Unresolved:    "which of the two branches did you mean",
+		Scope:         []string{workItemID},
+	}
+	if err := h.directives.Record(recorded); err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+	topic, err := notify.WorkItem(workItemID)
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	steers, err := h.steers.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	steers.Record(id, Steer{Member: member, Topic: topic.Key(), RecordedAt: moment})
+	if err := h.steers.SaveSteers(steers); err != nil {
+		t.Fatalf("SaveSteers() error = %v", err)
+	}
+	return recorded
 }
 
 func (h *testHarness) run(t *testing.T, status runstate.Status) runstate.State {

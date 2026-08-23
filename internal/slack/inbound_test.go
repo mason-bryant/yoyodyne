@@ -65,6 +65,92 @@ func TestAPlainReplyRecordsAnOperationalDirectiveAgainstTheThreadsItem(t *testin
 	}
 }
 
+// An answer is for the person who typed the reply, so it tags them rather than
+// relying on them to come back and find the thread. Their own message wears what
+// became of it as well: heard while it is being decided, then settled.
+func TestAnAnsweredReplyTagsWhoWroteItAndTheirMessageWearsWhatBecameOfIt(t *testing.T) {
+	t.Parallel()
+
+	const replyTS = "1750000001.000200"
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testOperator, "prefer the smaller change here", replyTS))
+
+	recorded := onlyDirective(t, directives)
+	answer := onlyPost(t, posts)
+	if !strings.HasPrefix(answer.Text, "<@"+testOperator+"> ") {
+		t.Fatalf("answer = %q, want it to tag the operator who wrote the reply", answer.Text)
+	}
+	if !strings.Contains(answer.Text, recorded.ID) {
+		t.Fatalf("answer = %q, want the tag in front of what was recorded rather than instead of it", answer.Text)
+	}
+
+	// Heard first, on the reply itself, and then the disposition — which sweeps
+	// the marks that are no longer true rather than the one a record happens to
+	// name, so a sink killed mid-change settles.
+	wantMarks(t, posts.marks,
+		mark{method: "reactions.add", ts: replyTS, name: notify.ReceiptUnderConsideration.Symbol()},
+		mark{method: "reactions.remove", ts: replyTS, name: notify.ReceiptUnderConsideration.Symbol()},
+		mark{method: "reactions.remove", ts: replyTS, name: notify.ReceiptRefused.Symbol()},
+		mark{method: "reactions.add", ts: replyTS, name: notify.ReceiptSettled.Symbol()})
+	if worn := posts.wearing[replyTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply wears %#v, want the settled mark and nothing else", worn)
+	}
+}
+
+// A reply that recorded nothing wears a mark of its own. The absence of one
+// would be indistinguishable from a reply nobody read, which is the silence this
+// whole path exists to end.
+func TestARefusedReplyWearsARefusalRatherThanNothing(t *testing.T) {
+	t.Parallel()
+
+	const replyTS = "1750000001.000200"
+	sink, _, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testStranger, "do it the other way", replyTS))
+
+	if worn := posts.wearing[replyTS]; !worn[notify.ReceiptRefused.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply wears %#v, want the refusal mark and nothing else", worn)
+	}
+	if answer := onlyPost(t, posts); !strings.HasPrefix(answer.Text, "<@"+testStranger+"> ") {
+		t.Fatalf("answer = %q, want a refusal addressed to whoever it refuses", answer.Text)
+	}
+}
+
+// A settlement said in the thread by the reply that made it is not said a second
+// time by the delivery pass reading the same record. The two halves post from
+// different goroutines and remember what they have said in different places, so
+// the connection writes down that it answered.
+func TestASettlementMadeFromAThreadIsNotSaidTwice(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, _ := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	steers, err := sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	steer, found := steers.Lookup(recorded.ID)
+	if !found || steer.Member != testOperator {
+		t.Fatalf("steer for %s = %#v (found %t), want the thread and the member it was said by", recorded.ID, steer, found)
+	}
+	if steer.Said {
+		t.Fatalf("steer = %#v, want an unsettled directive to be one nothing has answered yet", steer)
+	}
+
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve "+recorded.ID[:16]+" the one already on the target branch", "1750000002.000300"))
+
+	steers, err = sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	if steer, _ := steers.Lookup(recorded.ID); !steer.Said {
+		t.Fatalf("steer = %#v, want the settlement marked as already said in the thread", steer)
+	}
+}
+
 // The pausing kinds are stated rather than inferred, and a stated one pauses the
 // work exactly as one recorded at a terminal does. Nothing about arriving through
 // a chat workspace makes it a weaker record.
@@ -463,7 +549,7 @@ func TestAnAcknowledgmentNeverOpensAThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("address a work item: %v", err)
 	}
-	sink.steering.answer(context.Background(), ThreadMap{Threads: map[string]Thread{}},
+	sink.steering.answer(context.Background(), ThreadMap{Threads: map[string]Thread{}}, testOperator,
 		refused(topic, time.Now(), "a reason"))
 
 	if len(posts.requests) != 0 {

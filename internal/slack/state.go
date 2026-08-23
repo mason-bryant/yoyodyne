@@ -1,7 +1,8 @@
 package slack
 
-// What the sink remembers between runs: which thread each topic opened, and how
-// far it has read each durable stream.
+// What the sink remembers between runs: which thread each topic opened, how far
+// it has read each durable stream, and which directives were said to it in a
+// thread rather than at a terminal.
 //
 // Both live at the state root beside the runs, conversations, and reports they
 // are read from, per product, and both are owned by the sink alone. A restart
@@ -36,8 +37,10 @@ const (
 	// a sink is free to be upgraded without every other record moving with it.
 	ThreadMapSchemaVersion = 1
 	CursorsSchemaVersion   = 1
-	// maxRecordBytes bounds either file. A thread map is one line per topic and
-	// a cursor set is one line per stream, so anything near this bound is a file
+	SteerMapSchemaVersion  = 1
+	// maxRecordBytes bounds any of them. A thread map is one line per topic, a
+	// cursor set one line per stream, and a steer map one line per directive
+	// somebody typed into a thread, so anything near this bound is a file
 	// something other than the sink has written.
 	maxRecordBytes = 4 << 20
 )
@@ -154,6 +157,94 @@ func (m *ThreadMap) Record(topic string, thread Thread) {
 		m.Threads = map[string]Thread{}
 	}
 	m.Threads[topic] = thread
+}
+
+// Steer is one directive somebody said into a thread: who said it, and where
+// they said it. Neither is anywhere else. The durable directive record is the
+// product's and is the same record whichever way a directive arrived, so a
+// Slack member id and a thread key have no business in it — they are facts
+// about this workspace rather than about what the operator directed.
+//
+// What they are for is the other half of an acknowledgment: when something
+// later becomes of that directive, the person who asked for it is told where
+// they asked, by name, instead of being left to find the thread again.
+type Steer struct {
+	// Member is the Slack member id of the human whose reply recorded it, which
+	// is what a message tags to reach them.
+	Member string `json:"member"`
+	// Topic is the key of the thread it was said in, so what becomes of it is
+	// said in the same narrative rather than in a thread nobody was reading.
+	Topic string `json:"topic"`
+	// RecordedAt is when the directive was received, kept so a reader of this
+	// file can tell a live steer from one left over from months ago.
+	RecordedAt time.Time `json:"recorded_at"`
+	// Said marks a directive whose outcome the inbound half has already put in
+	// the thread, which is exactly the one it settled itself. Without it the
+	// delivery pass would say the same settlement again on its next reading: the
+	// two halves post from different goroutines and remember what they have said
+	// in different places, and this is the connection's half of that memory.
+	Said bool `json:"said,omitempty"`
+}
+
+// SteerMap is the directive-to-reply map as it is stored.
+//
+// It is written by the connection alone — the goroutine that reads replies — and
+// read by the delivery pass, which is the same division the thread map is held
+// to the other way round. Nothing prunes it: it grows by one line per directive
+// somebody typed into a thread, which is a human typing rather than a machine
+// recording, and losing the origin of a directive that is still unresolved would
+// lose exactly the case this exists for.
+type SteerMap struct {
+	SchemaVersion int              `json:"schema_version"`
+	Steers        map[string]Steer `json:"steers"`
+}
+
+// LoadSteers reads the steer map. A product nobody has steered from a thread has
+// no map rather than a broken one, so an absent file is an empty map.
+func (s *Store) LoadSteers() (SteerMap, error) {
+	var stored SteerMap
+	found, err := readJSON(s.steerPath(), "slack steer map", &stored)
+	if err != nil {
+		return SteerMap{}, err
+	}
+	if !found {
+		return SteerMap{SchemaVersion: SteerMapSchemaVersion, Steers: map[string]Steer{}}, nil
+	}
+	if stored.SchemaVersion != SteerMapSchemaVersion {
+		return SteerMap{}, fmt.Errorf("slack steer map schema version %d is not supported", stored.SchemaVersion)
+	}
+	if stored.Steers == nil {
+		stored.Steers = map[string]Steer{}
+	}
+	return stored, nil
+}
+
+// SaveSteers replaces the steer map durably.
+func (s *Store) SaveSteers(steers SteerMap) error {
+	steers.SchemaVersion = SteerMapSchemaVersion
+	if steers.Steers == nil {
+		steers.Steers = map[string]Steer{}
+	}
+	return s.write(s.steerPath(), "slack steer map", steers)
+}
+
+// Lookup reports where one directive was said, and by whom. A directive nobody
+// said in a thread is not in the map, which is every directive recorded at a
+// terminal.
+func (m SteerMap) Lookup(directiveID string) (Steer, bool) {
+	steer, found := m.Steers[directiveID]
+	if !found || strings.TrimSpace(steer.Topic) == "" {
+		return Steer{}, false
+	}
+	return steer, true
+}
+
+// Record remembers where one directive was said.
+func (m *SteerMap) Record(directiveID string, steer Steer) {
+	if m.Steers == nil {
+		m.Steers = map[string]Steer{}
+	}
+	m.Steers[directiveID] = steer
 }
 
 // Cursor is how far the sink has read one durable stream, and the streams are
@@ -313,6 +404,7 @@ func (c *Cursors) Keep(streams map[string]struct{}) bool {
 
 func (s *Store) threadPath() string { return filepath.Join(s.root, "threads.json") }
 func (s *Store) cursorPath() string { return filepath.Join(s.root, "cursors.json") }
+func (s *Store) steerPath() string  { return filepath.Join(s.root, "steers.json") }
 
 // write replaces one record atomically: a sink killed mid-write leaves the
 // previous file rather than half of the new one, which for the thread map is the
