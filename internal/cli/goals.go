@@ -14,9 +14,16 @@ package cli
 // into the tracker's metadata, where replacing those notes cannot reach it. It
 // decides nothing about any work, which is precisely why it can run over a
 // backlog somebody else attributed.
+//
+// One command here refuses, and it is the same boundary again seen from in
+// front: guarding reads a shell command an agent session is about to run and
+// stops the one that would replace an item's notes without carrying its goal
+// through. It judges no work either -- what it knows is what the command would
+// destroy, which is a fact about the command and not about the item.
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -70,7 +77,7 @@ type itemWitness struct {
 	Failure    string `json:"failure,omitempty"`
 }
 
-func runGoals(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+func runGoals(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 || args[0] == "help" || args[0] == "-h" || args[0] == "--help" {
 		printGoalsUsage(stdout)
 		return 0
@@ -82,6 +89,10 @@ func runGoals(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return reportAttribution(ctx, args[1:], stdout, stderr)
 	case "witness":
 		return witnessRecordedGoals(ctx, args[1:], stdout, stderr)
+	case "guard":
+		// The tool call being decided arrives on stdin, which is why this is the
+		// one goals command bound to the process's own input.
+		return guardNotesReplacement(args[1:], stdin, stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown goals command %q\n\n", args[0])
 		printGoalsUsage(stderr)
@@ -220,11 +231,15 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 	return attributionExitCode(attributions)
 }
 
-// witnessRecordedGoals records, on every admitted item whose notes state a goal
-// and which the tracker holds no witness for, the goal those notes state. It is
+// witnessRecordedGoals records, on every work item whose notes state a goal and
+// which the tracker holds no witness for, the goal those notes state. It is
 // what closes the gap the witness would otherwise leave: an attribution written
 // before the witness existed is protected by nothing, and replacing its notes
 // tomorrow would leave it reading as work nobody ever attributed.
+//
+// It walks every status rather than the backlog -- see witnessStatuses for why
+// the item somebody is working on and the item somebody closed are exactly the
+// ones a backlog-scoped sweep would have left out.
 //
 // It writes no attribution, which is why it is here at all. What it stores is
 // what the item already says about itself, copied to where a careless writer
@@ -243,18 +258,18 @@ func witnessRecordedGoals(ctx context.Context, args []string, stdout, stderr io.
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 	tracker := parts.tracker()
-	admitted, err := admittedWorkItems(ctx, tracker)
+	swept, err := workItemsWithStatus(ctx, tracker, witnessStatuses)
 	if err != nil {
 		return reportGoalsError(stdout, stderr, *flags.jsonOutput, err)
 	}
 
-	witnessed, failures := recordGoalWitnesses(ctx, tracker, admitted)
+	witnessed, failures := recordGoalWitnesses(ctx, tracker, swept)
 	if *flags.jsonOutput {
 		if code := writeJSON(stdout, stderr, goalsOutput{Witnessed: witnessed}); code != 0 {
 			return code
 		}
 	} else {
-		printWitnessed(stdout, len(admitted), witnessed)
+		printWitnessed(stdout, len(swept), witnessed)
 	}
 	if failures > 0 {
 		return 1
@@ -291,9 +306,91 @@ func recordGoalWitnesses(ctx context.Context, tracker beads.Client, admitted []b
 	return witnessed, failures
 }
 
-func printWitnessed(stdout io.Writer, admitted int, witnessed []itemWitness) {
-	fmt.Fprintf(stdout, "%d admitted item(s): %d newly witnessed, %d already witnessed or recording no goal\n",
-		admitted, len(witnessed), admitted-len(witnessed))
+// maxToolCallBytes bounds the tool call read from stdin. It is generous because
+// a replacement's notes are prose and a command line can carry a lot of it, and
+// it is bounded at all for the reason every other read here is: a hook is given
+// whatever the session hands it, and a guard that could be made to hold a
+// session's whole memory is a guard that becomes the failure.
+const maxToolCallBytes = 1 << 20
+
+// toolCall is the tool invocation a Claude Code `PreToolUse` hook is given on
+// stdin. Only the two fields this decides on are read; everything else the hook
+// carries belongs to whoever put it there.
+type toolCall struct {
+	ToolName  string `json:"tool_name"`
+	ToolInput struct {
+		Command string `json:"command"`
+	} `json:"tool_input"`
+}
+
+// hookDecision is the answer a `PreToolUse` hook gives back, in the shape the
+// hook protocol reads it in. Nothing is printed to allow a call: silence is how
+// the protocol spells "this hook has no opinion", and it is what nearly every
+// command an agent runs gets.
+type hookDecision struct {
+	Output hookDecisionOutput `json:"hookSpecificOutput"`
+}
+
+type hookDecisionOutput struct {
+	EventName string `json:"hookEventName"`
+	Decision  string `json:"permissionDecision"`
+	Reason    string `json:"permissionDecisionReason"`
+}
+
+// guardNotesReplacement decides one shell command an agent session is about to
+// run: it refuses `bd update --notes` where the replacement would destroy the
+// goal the item records, and says nothing about anything else.
+//
+// It is deliberately the only thing here that never fails a session. A tool call
+// this cannot read is allowed, and said so on stderr: this stands in front of
+// every shell command an agent takes, so refusing what it cannot parse would
+// turn a hook payload it did not recognise into a session that can run no
+// commands at all. That is the guard being the outage instead of preventing one.
+//
+// What makes fail-open honest is that this is not the only protection. A
+// witnessed attribution destroyed on work the audit reads is a loss
+// `goals attribution` reports and exits non-zero for, and on the work it does
+// not read the witness still holds the words to put back. This is the writer
+// stopped before the fact; the witness is what survives it.
+func guardNotesReplacement(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("goals guard", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	if err := flags.Parse(args); err != nil {
+		return 2
+	}
+	if flags.NArg() != 0 {
+		fmt.Fprintln(stderr, "goals guard does not accept positional arguments; the tool call it decides is read from stdin")
+		return 2
+	}
+	payload, err := io.ReadAll(io.LimitReader(stdin, maxToolCallBytes))
+	if err != nil {
+		fmt.Fprintf(stderr, "goals guard read the tool call: %v; the command was allowed unexamined\n", err)
+		return 0
+	}
+	var call toolCall
+	if err := json.Unmarshal(payload, &call); err != nil {
+		fmt.Fprintf(stderr, "goals guard could not read the tool call: %v; the command was allowed unexamined\n", err)
+		return 0
+	}
+	// Only a shell command can carry the writer. Every other tool reaches the
+	// tracker through the harness, which appends rather than replaces.
+	if call.ToolName != "Bash" {
+		return 0
+	}
+	destroyed := beads.DestroyedAttribution(call.ToolInput.Command)
+	if destroyed == "" {
+		return 0
+	}
+	return writeJSON(stdout, stderr, hookDecision{Output: hookDecisionOutput{
+		EventName: "PreToolUse",
+		Decision:  "deny",
+		Reason:    destroyed,
+	}})
+}
+
+func printWitnessed(stdout io.Writer, swept int, witnessed []itemWitness) {
+	fmt.Fprintf(stdout, "%d work item(s): %d newly witnessed, %d already witnessed or recording no goal\n",
+		swept, len(witnessed), swept-len(witnessed))
 	for _, entry := range witnessed {
 		if entry.Failure != "" {
 			fmt.Fprintf(stdout, "  %s could not be witnessed: %s\n", entry.WorkItemID, entry.Failure)
@@ -340,21 +437,51 @@ func attributionExitCode(attributions []itemAttribution) int {
 	return 0
 }
 
+// witnessStatuses are the tracker slices the sweep covers: every status an item
+// can be in, rather than the backlog's `open` and `blocked`.
+//
+// The scope is wider than the backlog's deliberately, because what destroys an
+// attribution is a command somebody types and it reaches a claimed or a closed
+// item exactly as easily as a queued one. Of the twelve recorded losses, one was
+// on an item somebody was working on and nine were on closed items, several of
+// those written over after the item closed -- so a sweep scoped to the backlog
+// would have covered two of the twelve.
+//
+// What the witness buys is not the same on both sides of that line, and saying
+// so is the difference between this scope and an overclaim. On work the audit
+// reads, a witnessed loss becomes a `lost` state that `goals attribution`
+// reports and exits non-zero for. On claimed and closed work, which
+// admittedWorkItems does not list, it buys recovery rather than detection: the
+// statement is kept where replacing the notes cannot reach it, so a destroyed
+// attribution can be put back from the record instead of being judged again.
+// That is precisely what the nine closed losses needed and what nothing else
+// would have held, which is why the sweep goes wider than the audit rather than
+// the audit being widened to match. Widening the audit is a change to what the
+// backlog means, and it is not this sweep's to make.
+var witnessStatuses = []string{"open", "in_progress", "blocked", "closed"}
+
 // admittedWorkItems is the work that has been admitted and is not finished,
 // assembled from the same tracker slices the backlog is.
 func admittedWorkItems(ctx context.Context, tracker beads.Client) ([]beads.WorkItem, error) {
-	var admitted []beads.WorkItem
-	for _, status := range backlogStatuses {
+	return workItemsWithStatus(ctx, tracker, backlogStatuses)
+}
+
+// workItemsWithStatus reads the tracker one status at a time, because that is
+// what the tracker offers, and orders what it read the way the backlog is
+// ordered so a report and a sweep walk the same items in the same order.
+func workItemsWithStatus(ctx context.Context, tracker beads.Client, statuses []string) ([]beads.WorkItem, error) {
+	var read []beads.WorkItem
+	for _, status := range statuses {
 		listCtx, cancel := context.WithTimeout(ctx, goalsTrackerTimeout)
 		items, err := tracker.List(listCtx, status)
 		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("list %s work items: %w", status, err)
 		}
-		admitted = append(admitted, items...)
+		read = append(read, items...)
 	}
-	backlog.Sort(admitted)
-	return admitted, nil
+	backlog.Sort(read)
+	return read, nil
 }
 
 func printAttributions(stdout io.Writer, attributions []itemAttribution, goals goal.Set) {
@@ -511,7 +638,7 @@ func reportGoalsError(stdout, stderr io.Writer, jsonOutput bool, err error) int 
 }
 
 func printGoalsUsage(writer io.Writer) {
-	fmt.Fprintln(writer, `Usage: yoyo goals <list|attribution|witness> [options]
+	fmt.Fprintln(writer, `Usage: yoyo goals <list|attribution|witness|guard> [options]
 
 The goals the repository records, read from the goals artifacts themselves: each
 statement under a goals document's `+"`Goals`"+` heading is a goal that work can be
@@ -525,7 +652,9 @@ what the harness owns is resolving what an item names and saying what it found.
   list          the goals work may be attributed to, and where each is stated
   attribution   what each admitted work item says it is for
   witness       record, where a careless writer cannot reach it, the goal each
-                admitted item's notes already state
+                work item's notes already state
+  guard         refuse a shell command that would replace an item's notes and
+                destroy the goal recorded in them
 
 "list" is laid out to be read: one goal to an entry, a blank line between
 entries, and where the goal is stated indented under it, closing with a line
@@ -547,6 +676,20 @@ goal it stores is the one the item's own notes state, copied into the tracker's
 metadata so that replacing those notes is a loss "attribution" can report rather
 than one it cannot see. An attribution made before this existed carries no
 witness until it is swept, which is why it is worth running once over a backlog.
+It sweeps every work item the tracker holds and not only the queue: the command
+that destroys an attribution reaches a claimed or a closed item just as easily,
+and most of the losses on record were on closed ones. "attribution" reads the
+queue, so a loss it reports is a loss on the queue; on a claimed or closed item
+the witness holds the words to put back and nothing fails.
+
+"guard" is the same loss stopped before it happens. It reads a `+"`PreToolUse`"+` tool
+call on stdin, as an agent session's hook gives it, and refuses a shell command
+running `+"`bd update <id> --notes`"+` -- which replaces an item's notes rather than
+adding to them, taking the recorded goal with them. A replacement that carries
+the `+"`Goal served:`"+` line through is allowed, because nothing is destroyed by one.
+It takes no options, prints nothing at all to allow a command, and allows a tool
+call it cannot read rather than failing a session over a payload it did not
+recognise.
 
 Options:
   --config <path>       configuration file (default: the nearest .yoyodyne/config.yaml)
