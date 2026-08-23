@@ -212,6 +212,13 @@ type TrackerOutcome struct {
 	// WorkItemID names the item the action affected, including the identifier a
 	// creation was assigned.
 	WorkItemID string `json:"work_item_id,omitempty"`
+	// WorkItemTitle is what the tracker calls that item, taken from the same
+	// reading the action was carried out against. A creation names the item it is
+	// admitting and every other action does not, so without this the record of a
+	// reprioritization or an attribution is an identifier and nothing else — and
+	// whatever reports it afterwards has no way to say which item moved to
+	// somebody who has not read the tracker.
+	WorkItemTitle string `json:"work_item_title,omitempty"`
 	// TargetStatus is the state the tracker held the acted-on item in at the
 	// moment the action ran, and TargetUnread is why the tracker would not say.
 	// They are read as the action is carried out rather than taken from the
@@ -569,6 +576,10 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 			"turn":         outcome.Turn,
 			"action":       action,
 			"work_item_id": outcome.WorkItemID,
+			// What the item is called travels with what was done to it, because an
+			// action that names no title of its own leaves the record an identifier
+			// nobody reading it later can resolve.
+			"work_item_title": outcome.WorkItemTitle,
 			// What state the item was in when it was acted on is recorded beside
 			// what was done to it, because it is the reason an action was refused
 			// or carried out with a caveat, and a later reader has no other way to
@@ -704,13 +715,19 @@ func (s *Session) readActionTarget(ctx context.Context, outcome *TrackerOutcome)
 		outcome.TargetUnread = singleLine(err.Error(), maxTrackerFailureBytes)
 		return
 	}
-	outcome.recordTargetStatus(item)
+	outcome.recordTarget(item)
 }
 
-// recordTargetStatus keeps what one item said about its own state, or says that
-// it said nothing. A status the tracker omitted is unknown rather than open: the
-// whole point of reading the item is that "open" is the assumption being checked.
-func (o *TrackerOutcome) recordTargetStatus(item beads.WorkItem) {
+// recordTarget keeps what one item said about itself as the action ran: the
+// state it is in, or that it said nothing, and what the tracker calls it. A
+// status the tracker omitted is unknown rather than open: the whole point of
+// reading the item is that "open" is the assumption being checked. The title is
+// kept beside it because this reading is the only place an action that names no
+// title of its own can learn one.
+func (o *TrackerOutcome) recordTarget(item beads.WorkItem) {
+	if title := strings.TrimSpace(item.Title); title != "" {
+		o.WorkItemTitle = title
+	}
 	if status := strings.TrimSpace(item.Status); status != "" {
 		o.TargetStatus = status
 		return
@@ -761,7 +778,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.WorkItemID = item.ID
-		outcome.recordTargetStatus(item)
+		outcome.recordTarget(item)
 		outcome.Detail = renderWorkItemEvidence(item, s.options.Goals)
 		outcome.applied("read %s: %s", item.ID, singleLine(item.Title, maxSurveyTitleBytes))
 	case actionSurvey:
@@ -805,6 +822,7 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.WorkItemID = created.ID
+		outcome.WorkItemTitle = strings.TrimSpace(created.Title)
 		if action.Priority != nil {
 			outcome.applied("%s at priority %d: %s",
 				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes))

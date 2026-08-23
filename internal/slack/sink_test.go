@@ -3,6 +3,8 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -66,7 +68,8 @@ func TestATopicOpensOneThreadAndEverythingElseRepliesIntoIt(t *testing.T) {
 // A thread header is read by people, and an identifier on its own is a name
 // they have to go and resolve before they know what the thread is about. So the
 // header names the item and then says what it is called, from what the durable
-// record carried — the sink never asks the tracker anything.
+// record carried — which is where a title comes from wherever a record has one,
+// and nothing is asked of the tracker.
 func TestAThreadHeaderNamesTheItemAndWhatItIsCalled(t *testing.T) {
 	t.Parallel()
 
@@ -88,9 +91,10 @@ func TestAThreadHeaderNamesTheItemAndWhatItIsCalled(t *testing.T) {
 	}
 }
 
-// A record that carried no title heads its thread with the identifier alone,
-// which is exactly what every thread was before titles were carried: a header
-// with a dangling separator would read as a name somebody failed to write.
+// A sink with nothing to ask heads an untitled topic's thread with the
+// identifier alone, which is exactly what every thread was before titles were
+// carried: a header with a dangling separator would read as a name somebody
+// failed to write.
 func TestAThreadForAnUntitledTopicIsHeadedByTheIdentifierAlone(t *testing.T) {
 	t.Parallel()
 
@@ -104,6 +108,75 @@ func TestAThreadForAnUntitledTopicIsHeadedByTheIdentifierAlone(t *testing.T) {
 	}
 	if posts.requests[0].Text != "*yoyodyne-ifd.68.3*" {
 		t.Fatalf("header = %q, want the identifier alone", posts.requests[0].Text)
+	}
+}
+
+// An item whose first appearance in the channel is a bookkeeping event — a
+// priority changed, a goal recorded — is mentioned by a record that says what
+// happened without saying what the item is. Every item admitted before the
+// channel existed is one of those, so the tracker is asked rather than the
+// thread being opened on a bare identifier.
+func TestAThreadWhoseRecordCarriedNoTitleIsNamedFromTheTracker(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{}
+	titles := &fixedTitles{titles: map[string]string{
+		"yoyodyne-ifd.68.3": "Park the Codex adapter until the provider answers",
+	}}
+	feed := &fixedFeed{deliveries: []Delivery{
+		milestone(1, notify.KindItemReprioritized),
+		milestone(2, notify.KindRunParked),
+	}}
+	sink := newTestSinkWithTitles(t, root, feed, posts, titles)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	want := "*yoyodyne-ifd.68.3 — Park the Codex adapter until the provider answers*"
+	if posts.requests[0].Text != want {
+		t.Fatalf("header = %q, want %q", posts.requests[0].Text, want)
+	}
+	// A thread is opened once and the map that says so is durable, so the tracker
+	// is asked once however many messages the thread goes on to carry — and never
+	// again after a restart.
+	if len(titles.asked) != 1 || titles.asked[0] != "yoyodyne-ifd.68.3" {
+		t.Fatalf("asked the tracker %#v, want the one item whose thread was opened", titles.asked)
+	}
+	feed.deliveries = append(feed.deliveries, milestone(3, notify.KindChecksPassed))
+	if err := newTestSinkWithTitles(t, root, feed, posts, titles).pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	if len(titles.asked) != 1 {
+		t.Fatalf("asked the tracker %#v, want a thread that is named once", titles.asked)
+	}
+}
+
+// A tracker that will not say what an item is called costs the header its title
+// and nothing else. Reporting is never a gate, and a thread nobody opened is a
+// whole narrative missing rather than a name.
+func TestATrackerThatWillNotSayWhatAnItemIsCalledStillOpensTheThread(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	titles := &fixedTitles{err: errors.New("bd show failed: no work item yoyodyne-ifd.68.3")}
+	said := ""
+	sink := newTestSinkWithTitles(t, t.TempDir(), &fixedFeed{deliveries: []Delivery{
+		milestone(1, notify.KindItemReprioritized),
+	}}, posts, titles)
+	sink.log = func(format string, args ...any) { said += fmt.Sprintf(format, args...) }
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread and the milestone in it", len(posts.requests))
+	}
+	if posts.requests[0].Text != "*yoyodyne-ifd.68.3*" {
+		t.Fatalf("header = %q, want the identifier alone", posts.requests[0].Text)
+	}
+	if !strings.Contains(said, "would not say what yoyodyne-ifd.68.3 is called") {
+		t.Fatalf("the sink's log = %q, want it to say why the header carries no title", said)
 	}
 }
 
@@ -758,9 +831,36 @@ func waitFor(t *testing.T, condition func() bool) {
 	}
 }
 
+// fixedTitles is the tracker as the sink sees it: what each item is called, or
+// one refusal to say. Every question it was asked is kept, so a sink that asks
+// the same thread's name twice is visible rather than merely wasteful.
+type fixedTitles struct {
+	titles map[string]string
+	err    error
+	asked  []string
+}
+
+func (f *fixedTitles) Title(_ context.Context, workItemID string) (string, error) {
+	f.asked = append(f.asked, workItemID)
+	if f.err != nil {
+		return "", f.err
+	}
+	return f.titles[workItemID], nil
+}
+
 func newTestSink(t *testing.T, root string, feed Feed, posts *recordedPosts) *Sink {
 	t.Helper()
 	return newTestSinkAt(t, root, feed, posts, time.Time{})
+}
+
+// newTestSinkWithTitles is a sink that can ask what an item is called, which is
+// every sink the harness builds and none of the ones above: what the rest are
+// about is what the records carry.
+func newTestSinkWithTitles(t *testing.T, root string, feed Feed, posts *recordedPosts, titles Titles) *Sink {
+	t.Helper()
+	sink := newTestSink(t, root, feed, posts)
+	sink.titles = titles
+	return sink
 }
 
 // newTestSinkAt is a sink that says the time is whatever a test needs it to be,

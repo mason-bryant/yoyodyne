@@ -165,6 +165,56 @@ func TestAnAttributionAndAReprioritizationSayWhatChanged(t *testing.T) {
 	}
 }
 
+// An action that names no title of its own is still about an item somebody has
+// to recognize, and for an item admitted before the channel existed a
+// reordering is the first thing ever said about it. So the topic is named from
+// what the record says the tracker called the item, and the thread it opens is
+// headed like any other.
+func TestAnActionThatNamesNoTitleIsNamedByTheItemItActedOn(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":   "reprioritize",
+			"id":       "yoyodyne-ifd.6",
+			"priority": 2,
+			"reason":   "the adapter is parked and nothing is waiting on it",
+		},
+		"work_item_id":    "yoyodyne-ifd.6",
+		"work_item_title": "Park the Codex adapter until the provider answers",
+		"summary":         "the harness's own account of it",
+	})}
+	notification, message := said(t, conversation, events, 0)
+	if notification.Topic.Title != "Park the Codex adapter until the provider answers" {
+		t.Fatalf("topic title = %q, want what the tracker called the item", notification.Topic.Title)
+	}
+	if message.TopicTitle != notification.Topic.Title {
+		t.Fatalf("envelope carried %q, want the topic's own title", message.TopicTitle)
+	}
+	// The title names the topic and nothing else: what a reordering says is where
+	// the item went in the queue.
+	if !strings.Contains(message.Body, "priority 2") {
+		t.Fatalf("body %q does not say where in the queue it went", message.Body)
+	}
+}
+
+// A record written before titles travelled with tracker actions leaves the topic
+// addressed exactly as it was, so nothing is worse off than before.
+func TestAnActionRecordedWithoutATitleLeavesTheTopicUnnamed(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{applied(t, 1, "yoyodyne-ifd.6", map[string]any{
+		"action":   "reprioritize",
+		"id":       "yoyodyne-ifd.6",
+		"priority": 2,
+		"reason":   "recorded before titles travelled with an action",
+	})}
+	notification, _ := said(t, conversation, events, 0)
+	if notification.Topic.Title != "" {
+		t.Fatalf("topic title = %q, want a topic named by its identifier alone", notification.Topic.Title)
+	}
+}
+
 func TestAPriorityTheRecordDoesNotStateIsSaidAsAbsent(t *testing.T) {
 	conversation := conversationWith(domain.RoleProductManager)
 	events := []execution.Event{applied(t, 1, "yoyodyne-ifd.99", map[string]any{

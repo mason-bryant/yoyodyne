@@ -94,6 +94,11 @@ type trackerAction struct {
 		Reason   string  `json:"reason"`
 	} `json:"action"`
 	WorkItemID string `json:"work_item_id"`
+	// WorkItemTitle is what the tracker called the item as the action ran. It is
+	// what names the topic for every action that carries no title of its own —
+	// a reordering, an attribution — and a record written before it was carried
+	// leaves the topic addressed exactly as it was before there was one.
+	WorkItemTitle string `json:"work_item_title"`
 }
 
 // fromTrackerAction says what one applied action did to the queue. Only actions
@@ -144,8 +149,12 @@ func fromTrackerAction(conversation runstate.Conversation, event execution.Event
 	}
 	return Notification{
 		// An admission is usually the first thing said about an item, so this is
-		// where most threads get the name their header carries.
-		Topic: topic.WithTitle(detail.Title),
+		// where most threads get the name their header carries. An action that
+		// names no title of its own is named by the item the record says it acted
+		// on: an item's first appearance in the channel is as often a reordering as
+		// an admission, and a thread opened by one of those would otherwise be
+		// headed by a bare identifier.
+		Topic: topic.WithTitle(namedItem(detail.Title, recorded.WorkItemTitle)),
 		// The role's own act, in its own voice: what is admitted, decomposed,
 		// attributed, or reordered is a judgment the role made, and the harness
 		// only carried it out on the role's behalf.
@@ -161,6 +170,18 @@ func fromTrackerAction(conversation runstate.Conversation, event execution.Event
 			Detail: detail,
 		},
 	}, nil
+}
+
+// namedItem is what to call the item an action was about: what the action itself
+// named, and otherwise what the tracker called the item when the action ran. The
+// action comes first because it is the more specific of the two — a creation
+// names the item it is admitting, and the reading beside it is of the item as it
+// already was.
+func namedItem(named, recorded string) string {
+	if strings.TrimSpace(named) != "" {
+		return named
+	}
+	return strings.TrimSpace(recorded)
 }
 
 // approvedWork is the part of a created item's record this reads.

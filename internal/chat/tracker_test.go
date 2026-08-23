@@ -10,6 +10,7 @@ import (
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 )
 
@@ -402,6 +403,43 @@ func TestAdmittingWorkIsRecordedAsAdmissionToTheBacklog(t *testing.T) {
 	if len(tracker.updates) != 1 || tracker.updates[0].id != "yoyodyne-ifd.26" ||
 		tracker.updates[0].change.Priority == nil || *tracker.updates[0].change.Priority != 3 {
 		t.Fatalf("updates = %#v", tracker.updates)
+	}
+}
+
+// What the item is called travels with what was done to it, whether or not the
+// action named a title itself. An action that names none — a reordering, an
+// attribution — would otherwise leave a record that is an identifier and
+// nothing else, and whatever reports it later has only the record to go on.
+func TestATrackerActionRecordsWhatTheItemItActedOnIsCalled(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	tracker := &fakeTracker{items: map[string]beads.WorkItem{
+		"yoyodyne-ifd.6": {ID: "yoyodyne-ifd.6", Title: "Park the Codex adapter until the provider answers", Status: "open"},
+	}}
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Moving it down; nothing is waiting on it.",
+			`{"action":"reprioritize","id":"yoyodyne-ifd.6","priority":2,"reason":"the adapter is parked"}`)},
+		{SessionID: "session-1", FinalText: "It sits at 2 now."},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	options.Tracker = tracker
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Move the Codex adapter down.")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if reply.Actions[0].WorkItemTitle != "Park the Codex adapter until the provider answers" {
+		t.Fatalf("outcome title = %q, want what the tracker calls the item", reply.Actions[0].WorkItemTitle)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventTrackerActionApplied)
+	if !strings.Contains(payload, `"work_item_title":"Park the Codex adapter until the provider answers"`) {
+		t.Fatalf("recorded action = %s, want it to carry what the item is called", payload)
 	}
 }
 
