@@ -444,7 +444,9 @@ than intent anything refers to, and everything inside the invariants directory,
 which sits inside the decisions home by default and carries
 [its own identity scheme](#architectural-invariants). A home that does not exist
 is not an error — a project that has not written its designs down yet records no
-design artifacts.
+design artifacts. Frontmatter written on a skipped index, and a document
+carrying identity outside every home, are
+[reported rather than governed](#identity-the-homes-do-not-reach).
 
 The metadata is the model the invariants already use, deliberately rather than a
 second scheme beside it: **the file name is the id**, a frontmatter id that
@@ -509,6 +511,47 @@ yoyo artifact list                  # the recorded artifacts; what is not one go
 yoyo artifact list --kind decision  # one kind
 yoyo artifact show v1-goals         # one artifact, its revisions, and your approvals
 ```
+
+### Identity the homes do not reach
+
+A file the homes contain is either an artifact or a named refusal, and either
+way something looked at it. Two documents are neither, because nothing walked
+them, and both read as governed to whoever opens the file:
+
+- **Artifact frontmatter outside every home.** Nothing resolves a reference to
+  it, nothing traces through it, and no staleness or proposal reaches it.
+- **Artifact frontmatter on a `README.md`.** An index is skipped by name
+  wherever it sits, so the identity written on it is inert.
+
+Both are reported by `yoyo artifact list` and `yoyo stale` on stderr, and carried
+in `yoyo artifact list --json` under `ungoverned`, with a `kind` of
+`outside-every-home` or `directory-index`. **Neither is ever refused.** Nothing
+is added to the set, no exit status moves, and an index stays an index — what the
+report buys is that identity nothing reads stops looking like identity that
+works.
+
+Two bounds decide what is looked at, and both are deliberate:
+
+- **Where.** The parent of each configured home — `docs/` in the recommended
+  layout — walked to any depth, minus the directories that carry an identity
+  scheme of their own (`product.invariants`) and any directory whose name begins
+  with a dot. A document filed beside the homes is the case worth reporting; a
+  test fixture or a vendored document three directories away is not. A project
+  that configures a home at the top of its repository is therefore scanned
+  repository-wide, which is what that bound means there. A directory the scan
+  cannot read is itself reported, with a `kind` of `unread`, rather than passed
+  over.
+- **What counts as identity.** An `id` and a `kind` declared together, read
+  leniently — so a document that would have been refused inside a home for a
+  mistyped field is still reported outside one, while an invariant's own scheme
+  (an id and no kind) and the frontmatter conventions other tools write are not
+  read as governed documents somebody misfiled.
+
+A directory index is ungoverned by design rather than by omission, and it stays
+that way: it is navigation rather than authority, `README` is not a usable id,
+and a governed index would be stale by construction — it describes a directory
+whose contents change without it. Normative prose therefore belongs in a
+governed document, with the index keeping pointers to it.
 
 There is no `yoyo artifact create` or `amend`, unlike the invariant commands: an
 artifact's content is written by the role that owns it, and its frontmatter is

@@ -41,6 +41,13 @@
 // ownership because it is a different boundary: every one of these documents is
 // drafted by the role that owns it, so approval a role could record would be
 // that role approving its own document.
+//
+// Identity none of the four ever reaches is a fifth question, and it is
+// answered in ungoverned.go: a document carrying artifact frontmatter outside
+// every configured home, and frontmatter on a directory index, are governed by
+// nothing and — unlike a file the store refused — nothing looked at them, so a
+// clean load is exactly what makes them look governed. Both are reported beside
+// the set and neither is refused.
 package artifact
 
 import (
@@ -357,6 +364,13 @@ type Set struct {
 	// the set, and one of these is a document that is. Nothing is dropped over
 	// one.
 	ReferenceProblems []ReferenceProblem `json:"reference_problems,omitempty"`
+	// Ungoverned is identity nothing in the set reads: a document carrying
+	// artifact frontmatter outside every home, and frontmatter on a directory
+	// index, which is skipped by name. It is kept apart from both of the above
+	// because it is neither — a Problem is a file the store judged and refused,
+	// and one of these is a file the store never governs at all. Nothing is
+	// refused over one. See ungoverned.go.
+	Ungoverned []Ungoverned `json:"ungoverned,omitempty"`
 }
 
 // Find returns the artifact with an id, whatever its lifecycle status.

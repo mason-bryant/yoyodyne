@@ -2238,6 +2238,20 @@ identity to yet says so. Nothing else changes for it: a specification with no
 frontmatter is still read as product intent, because refusing intent somebody
 wrote down is worse than reading it and saying its identity is missing.
 
+**Identity nothing reads is named too**, and it is the opposite failure: a
+document the loader never looked at, so nothing was refused and nothing was
+reported. Two shapes of it, both printed on stderr beside the listing and
+neither of them a refusal. **A document carrying artifact frontmatter outside
+every home** reads as governed to whoever opens it and is governed by nothing —
+no `supports` entry resolves to it, no staleness reaches it, and no proposal can
+be made against it, which is exactly how the v1 harness design sat in a
+repository whose every check was green. And **frontmatter on a `README.md`** is
+inert: a directory index is skipped by name wherever it sits, deliberately and
+permanently, because it says what is filed beside it rather than stating intent
+and a governed index would be stale by construction. What is looked at is what
+sits beside the homes — `docs/` in the recommended layout — so a fixture or a
+vendored document elsewhere is not reported.
+
 Who may change one of these documents is in the code rather than in a persona.
 The product manager owns the brief and the goals, the architect owns the designs,
 specifications, and decision records, and the development manager owns no

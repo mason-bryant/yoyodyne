@@ -849,9 +849,11 @@ func TestEveryGoalYoyodyneRecordsNamesABriefGoalTheBriefStates(t *testing.T) {
 
 	// The design this item brought under governance has to still be in the set.
 	// It is named rather than counted because a document outside every home is
-	// invisible to the store rather than reported by it: the load stays clean and
-	// every assertion here keeps passing while the design is governed by nothing,
-	// which is exactly the state this item found it in.
+	// not in it: the assertions above keep passing while the design is governed
+	// by nothing, which is exactly the state this item found it in. The store now
+	// reports such a document beside the set rather than saying nothing about it
+	// at all, and that report is asserted where it is made — this stays a check
+	// that the design is governed, rather than that somebody was told it is not.
 	design, recorded := artifacts.Find("v1-harness-design")
 	if !recorded {
 		t.Fatalf("no artifact answers to %q; a design outside every configured home is governed by nothing", "v1-harness-design")
@@ -876,11 +878,13 @@ func TestNoDocumentUnderDocsCarriesIdentityOutsideAConfiguredHome(t *testing.T) 
 	t.Parallel()
 
 	// Identity outside a configured home is identity nothing reads. The store
-	// never walks the file, so it is neither an artifact nor a reported problem,
-	// and a document can look governed to a reader while nothing downstream can
-	// refer to it — which is how the v1 harness design sat for as long as it did.
-	// The load being clean is therefore not evidence on its own, and this is the
-	// check that makes it so.
+	// never walks the file, so it is not an artifact, and a document can look
+	// governed to a reader while nothing downstream can refer to it — which is
+	// how the v1 harness design sat for as long as it did. The harness reports
+	// such a document now, and this stays beside that report deliberately: it
+	// reads the tree by hand and asks only whether the file opens with
+	// frontmatter, so it catches a document the store's own narrower rule — an id
+	// and a kind together — would say nothing about.
 	root := repositoryRoot(t)
 	store := configuredStore(t, root)
 	homes := append([]string(nil), store.Homes...)

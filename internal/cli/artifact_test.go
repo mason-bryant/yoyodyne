@@ -172,6 +172,64 @@ func TestBrokenArtifactRelationshipsAreReportedRatherThanRefused(t *testing.T) {
 	}
 }
 
+func TestIdentityNothingReadsIsReportedBesideTheListing(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil))
+	// A design filed beside the homes rather than in one, which is the state the
+	// v1 harness design itself sat in: it reads as governed and nothing governs
+	// it.
+	writeArtifact(t, project, "docs/v1-harness.md", artifactDocument("v1-harness", "design", "V1 harness design", []string{"brief"}))
+	// Frontmatter on a directory index, which the loader skips by name wherever
+	// it sits, so what is written on it is inert rather than nearly working.
+	writeArtifact(t, project, "docs/product/goals/README.md", artifactDocument("README", "goals", "Goals directory", []string{"brief"}))
+
+	stdout, stderr, code := runCLI(t, "artifact", "list", "--config", configPath)
+	// Reported, never refused: the listing succeeds and holds what the homes
+	// hold, and neither document has become an artifact by being named.
+	if code != 0 {
+		t.Fatalf("list code = %d, stderr = %q", code, stderr)
+	}
+	if !strings.Contains(stdout, "brief [brief, active]") || strings.Contains(stdout, "v1-harness [design") {
+		t.Fatalf("list stdout = %q", stdout)
+	}
+	for _, want := range []string{
+		"identity nothing reads (outside-every-home): docs/v1-harness.md",
+		"identity nothing reads (directory-index): docs/product/goals/README.md",
+		"inert",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("list stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+
+	stdout, stderr, code = runCLI(t, "artifact", "list", "--config", configPath, "--json")
+	if code != 0 {
+		t.Fatalf("list --json code = %d, stderr = %q", code, stderr)
+	}
+	var listed struct {
+		Ungoverned []struct {
+			Kind string `json:"kind"`
+			Path string `json:"path"`
+			ID   string `json:"id"`
+		} `json:"ungoverned"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &listed); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %q", err, stdout)
+	}
+	if len(listed.Ungoverned) != 2 {
+		t.Fatalf("ungoverned = %#v", listed.Ungoverned)
+	}
+	if listed.Ungoverned[0].Path != "docs/product/goals/README.md" || listed.Ungoverned[0].Kind != string(artifact.UngovernedIndex) {
+		t.Fatalf("ungoverned = %#v", listed.Ungoverned)
+	}
+	if listed.Ungoverned[1].ID != "v1-harness" || listed.Ungoverned[1].Kind != string(artifact.UngovernedOutsideHomes) {
+		t.Fatalf("ungoverned = %#v", listed.Ungoverned)
+	}
+}
+
 func TestApprovalIsRecordedAgainstTheDocumentAndSurvivesReadingItBack(t *testing.T) {
 	t.Parallel()
 

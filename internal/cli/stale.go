@@ -105,6 +105,12 @@ func reportStaleness(ctx context.Context, args []string, stdout, stderr io.Write
 	for _, problem := range goals.Problems {
 		fmt.Fprintf(stderr, "goals not read: %s\n", problem)
 	}
+	// A document nothing governs is the same hole read from the other side: it is
+	// never reported as stale however far its upstream has moved, because nothing
+	// upstream reaches it at all.
+	for _, reported := range artifacts.Ungoverned {
+		fmt.Fprintf(stderr, "identity nothing reads (%s): %s\n", reported.Kind, reported)
+	}
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, staleOutput{
 			Documents:       report.Documents,

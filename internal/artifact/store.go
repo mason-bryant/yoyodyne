@@ -144,6 +144,11 @@ func (s Store) Load() (Set, error) {
 	// rule validated only when somebody asked holds only where somebody asked.
 	// Nothing loaded above is dropped over what either of them finds.
 	set.ReferenceProblems = append(referenceProblems(set.Artifacts, set.Problems), UnauthorizedRevisions(set.Artifacts)...)
+	// Identity nothing walked is reported here for the same reason: a document
+	// carrying frontmatter outside every home, and frontmatter on an index the
+	// walk above skipped by name, are invisible rather than refused, and a load
+	// that came back clean is what makes them look governed. See ungoverned.go.
+	set.Ungoverned = s.ungoverned(root, homes, excluded)
 	return set, nil
 }
 
