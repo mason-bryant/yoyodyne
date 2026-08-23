@@ -936,8 +936,18 @@ A developer that could not be talked out of its argument makes it again on every
 repair attempt, and the second and later copies within one run are dropped: one
 disagreement is one proposal, rather than one per attempt for whoever decides to
 answer several times over. Two proposals count as the same argument when they
-ask for the same change to the same document; restating the reasoning does not
-make a new one.
+ask for the same change to the same document, and the comparison is how much
+wording the two changes share rather than whether they match — restating the
+reasoning does not make a new one, and neither does moving a clause or swapping
+a word between attempts.
+
+What the comparison deliberately will not do is guess. A developer that makes
+its case over from scratch on the next attempt writes something that shares no
+more with its own first draft than two genuinely different changes to one
+document share with each other, so that one reaches you as a second proposal
+rather than being dropped on a resemblance. One more proposal to read is the
+cheaper of the two mistakes: the other one drops an argument silently, which is
+the thing this whole channel exists to prevent.
 
 **This is a second proposal path rather than a reuse of the one the conversation
 already has**, and that is worth knowing because it was not the first choice. The

@@ -874,10 +874,13 @@ type activeRun struct {
 	// this run proposes a change to one and kept so a second proposal in the same
 	// run does not read the repository again. Nil means nothing has needed it.
 	artifactSet *artifact.Set
-	// proposedAmendments is the changes this run has already recorded, by document
-	// and change, so a developer that makes the same argument again on a repair
-	// attempt raises one proposal rather than one per attempt.
-	proposedAmendments map[string]bool
+	// proposedAmendments is the changes this run has already recorded, reduced to
+	// the document each names and the words the change is made of, so a developer
+	// that makes the same argument again on a repair attempt raises one proposal
+	// rather than one per attempt. It is a list rather than a lookup because what
+	// makes two of them the same argument is how alike they are rather than
+	// whether they match.
+	proposedAmendments []amendmentRequest
 	// inProcessWait is how long this process has already slept waiting out usage
 	// limits for this run, across every probe and every phase. It is what the
 	// in-process bound is measured against, because that bound is on how long a
