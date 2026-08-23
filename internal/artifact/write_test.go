@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
 
@@ -132,11 +133,7 @@ func TestCheckWriteRefusesTheWrongHomeWithoutTouchingTheRepository(t *testing.T)
 	t.Parallel()
 
 	root := t.TempDir()
-	store := Store{
-		RepositoryRoot: root,
-		Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
-		Excluded:       []string{"docs/decisions/invariants"},
-	}
+	store := generatedStore(root)
 	if err := store.CheckWrite(domain.RoleProductManager, aWrite()); err != nil {
 		t.Fatalf("CheckWrite() refused a document in an artifact home: %v", err)
 	}
@@ -160,6 +157,28 @@ func TestCheckWriteRefusesTheWrongHomeWithoutTouchingTheRepository(t *testing.T)
 		t.Fatal("CheckWrite() admitted a document in the invariants directory")
 	}
 
+	// Inside an artifact home is not enough. A design filed under the product
+	// manager's home loads, validates, and sits in another role's directory where
+	// only a reader would ever notice, so the kind decides the directory and
+	// anything else is refused.
+	misfiled := aWrite()
+	misfiled.ID, misfiled.Kind, misfiled.Directory = "v1-design", KindDesign, config.DefaultSpecifications
+	if err := store.CheckWrite(domain.RoleArchitect, misfiled); err == nil ||
+		!strings.Contains(err.Error(), "is not where a design artifact is filed") {
+		t.Fatalf("CheckWrite() on a design in the product manager's home = %v", err)
+	}
+	misfiled.Directory = config.DefaultDesigns
+	if err := store.CheckWrite(domain.RoleArchitect, misfiled); err != nil {
+		t.Fatalf("CheckWrite() refused a design in the designs home: %v", err)
+	}
+	// A directory beneath the kind's home is still that home, because the product
+	// files its goals below its brief.
+	beneath := aWrite()
+	beneath.Directory = config.DefaultSpecifications + "/goals"
+	if err := store.CheckWrite(domain.RoleProductManager, beneath); err != nil {
+		t.Fatalf("CheckWrite() refused a document filed below its own home: %v", err)
+	}
+
 	// None of that wrote anything, which is the point of checking before the
 	// operator is asked rather than after they approved.
 	entries, err := filepath.Glob(filepath.Join(root, "*"))
@@ -178,8 +197,7 @@ func TestCheckWriteRefusesTheWrongHomeWithoutTouchingTheRepository(t *testing.T)
 func TestCheckWriteResolvesARevisionsOwnerBeforeAnybodyIsAskedAboutIt(t *testing.T) {
 	t.Parallel()
 
-	root := t.TempDir()
-	store := Store{RepositoryRoot: root, Homes: []string{"docs/product", "docs/designs"}}
+	store := generatedStore(t.TempDir())
 	design := Write{
 		Action: WriteCreate, ID: "v1-design", Kind: KindDesign, Title: "How it is built",
 		Directory: "docs/designs", Body: "# Design", Reason: "recorded with the operator",
@@ -231,7 +249,7 @@ func TestCheckWriteResolvesARevisionsOwnerBeforeAnybodyIsAskedAboutIt(t *testing
 func TestAnApprovedWriteBecomesADocumentWithFrontmatterAndAnApproval(t *testing.T) {
 	t.Parallel()
 
-	store := Store{RepositoryRoot: t.TempDir(), Homes: []string{"docs/product"}}
+	store := generatedStore(t.TempDir())
 	written, err := store.Create(domain.RoleProductManager, aWrite().Draft(), moment())
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
@@ -271,33 +289,80 @@ func TestAnApprovedWriteBecomesADocumentWithFrontmatterAndAnApproval(t *testing.
 	}
 }
 
+// generatedStore is the store a generated project gets, assembled the one way
+// production assembles it — including the order the homes are configured in,
+// which is what made the example directory bug invisible when a test picked its
+// own order.
+func generatedStore(root string) Store {
+	return StoreFor(root, config.Product{
+		Specifications: config.DefaultSpecifications,
+		Designs:        config.DefaultDesigns,
+		Decisions:      config.DefaultDecisions,
+		Invariants:     config.DefaultInvariants,
+	})
+}
+
 func TestTheWriteContractStatesTheBoundsItIsHeldTo(t *testing.T) {
 	t.Parallel()
 
-	contract := WriteContract(domain.RoleArchitect, []string{"docs/designs", "docs/decisions"})
+	store := generatedStore(t.TempDir())
+	filing, err := store.Filing(domain.RoleArchitect)
+	if err != nil {
+		t.Fatalf("Filing() error = %v", err)
+	}
+	contract := WriteContract(domain.RoleArchitect, filing)
 	for _, required := range []string{
 		"yoyodyne-artifact",
-		"docs/designs",
-		`"design"`,
+		`"design" in ` + config.DefaultDesigns,
+		`"decision" in ` + config.DefaultDecisions,
 		maxWritesPerReplyText + " document",
 	} {
 		if !strings.Contains(contract, required) {
 			t.Fatalf("the write contract does not state %q: %s", required, contract)
 		}
 	}
+	// The defect this guards: the example directory came from the first configured
+	// home, which is the product manager's, so the architect's own example filed a
+	// design under docs/product — the wrong-home mistake arriving through the
+	// instruction the role reads. The homes here are in the order a generated
+	// project configures them, which is the order that exposed it.
+	example := `"kind":"design","title":"one line","supports":["upstream-artifact-id"],"directory":"` + config.DefaultDesigns + `"`
+	if !strings.Contains(contract, example) {
+		t.Fatalf("the architect's example does not file a design in %s: %s", config.DefaultDesigns, contract)
+	}
+	if strings.Contains(contract, `"directory":"`+config.DefaultSpecifications+`"`) {
+		t.Fatalf("the architect's example files a document in the product manager's home: %s", contract)
+	}
 	// A role is never told it may write a kind the ownership table gives to
-	// somebody else.
+	// somebody else, and the product manager gets its own home rather than the
+	// architect's.
 	if strings.Contains(contract, `"goals"`) {
 		t.Fatalf("the architect's contract offers it the goals: %s", contract)
 	}
-	// A role that owns nothing, and a project the harness cannot write for, are
-	// told nothing at all: a mechanism every attempt would be refused by is an
-	// invitation to attempt it.
-	if got := WriteContract(domain.RoleDeveloper, []string{"docs/designs"}); got != "" {
+	product, err := store.Filing(domain.RoleProductManager)
+	if err != nil {
+		t.Fatalf("Filing() error = %v", err)
+	}
+	intent := WriteContract(domain.RoleProductManager, product)
+	if !strings.Contains(intent, `"kind":"brief","title":"one line","supports":["upstream-artifact-id"],"directory":"`+config.DefaultSpecifications+`"`) {
+		t.Fatalf("the product manager's example does not file a brief in %s: %s", config.DefaultSpecifications, intent)
+	}
+	// A role that owns nothing, and a project whose filing the harness does not
+	// know, are told nothing at all: a mechanism every attempt would be refused by
+	// is an invitation to attempt it.
+	developer, err := store.Filing(domain.RoleDeveloper)
+	if err != nil || developer != nil {
+		t.Fatalf("Filing(developer) = %v, %v, want nothing", developer, err)
+	}
+	if got := WriteContract(domain.RoleDeveloper, product); got != "" {
 		t.Fatalf("the developer was offered a write contract: %s", got)
 	}
 	if got := WriteContract(domain.RoleArchitect, nil); got != "" {
-		t.Fatalf("a conversation with no artifact homes was offered a write contract: %s", got)
+		t.Fatalf("a conversation with no filing was offered a write contract: %s", got)
+	}
+	unfiled, err := Store{RepositoryRoot: t.TempDir(), Homes: []string{"docs/product"}}.Filing(domain.RoleProductManager)
+	if err != nil || unfiled != nil {
+		t.Fatalf("Filing() on a store that says where nothing is filed = %v, %v", unfiled, err)
 	}
 	// The bound the contract states is the bound the decoder enforces, so a role
 	// held to a number it was never told is impossible.

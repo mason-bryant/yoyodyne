@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -370,7 +371,7 @@ func (s Store) CheckWrite(role domain.AgentRole, write Write) error {
 	}
 	id := strings.TrimSpace(write.ID)
 	if write.Action == WriteCreate {
-		if _, err := s.resolveDirectory(write.Directory); err != nil {
+		if err := s.checkFiling(write.Kind, write.Directory); err != nil {
 			return err
 		}
 	}
@@ -405,10 +406,39 @@ func (s Store) CheckWrite(role domain.AgentRole, write Write) error {
 	return nil
 }
 
-// Directories reports the artifact homes this store reads and writes, which is
-// what a role has to be told before it can name one. They are resolved rather
-// than repeated from the configuration, so what a role is told is where
-// documents actually go.
+// checkFiling refuses a new document filed anywhere but the home its kind
+// belongs in. Being inside some artifact home is not enough: three homes in one
+// configuration are three different sorts of document, and a design filed under
+// the product manager's home is exactly the wrong-home mistake this gate exists
+// to catch — it loads, it validates, and it sits in another role's directory
+// where nothing but a reader would notice.
+//
+// A store that was not told where kinds are filed refuses the write rather than
+// falling back to any home. The role is not offered the write in the first place
+// on such a store, so reaching here means something asked for one anyway, and
+// filing it on a guess is the outcome this whole path exists to prevent.
+func (s Store) checkFiling(kind Kind, directory string) error {
+	target, err := s.resolveDirectory(directory)
+	if err != nil {
+		return err
+	}
+	home, filed := s.homeFor(kind)
+	if !filed {
+		return fmt.Errorf("this project does not say where a %s artifact is filed, so there is nowhere to write one", kind)
+	}
+	expected, err := s.resolveDirectory(home)
+	if err != nil {
+		return err
+	}
+	if !within(target, []string{expected}) {
+		return fmt.Errorf("artifact directory %q is not where a %s artifact is filed, which is %s", directory, kind, expected)
+	}
+	return nil
+}
+
+// Directories reports the artifact homes this store reads, which is what a
+// refusal names when it says where documents live. Where a document is written
+// is the narrower question Filing answers, per kind.
 func (s Store) Directories() ([]string, error) {
 	return resolveDirectories("artifact home", s.Homes)
 }
@@ -423,20 +453,30 @@ func roleName(role domain.AgentRole) string {
 }
 
 // WriteContract is what a role that owns documents is told about writing one.
-// It is generated from the ownership table and the configured homes rather than
-// written out per role, so a role is never told it may write a kind it does not
-// own, and never asked to guess where this project files its documents.
+// It is generated from the ownership table and this project's own filing rather
+// than written out per role, so a role is never told it may write a kind it does
+// not own, and never asked to guess where a document of that kind goes.
 //
-// A role that owns nothing gets nothing: telling it about a mechanism every one
-// of its attempts would be refused by is an invitation to attempt it.
-func WriteContract(role domain.AgentRole, homes []string) string {
-	owned := Owned(role)
-	if len(owned) == 0 || len(homes) == 0 {
+// The filing is the role's own, per kind, rather than a list of every artifact
+// home: an example that named the first configured home would hand the architect
+// the product manager's directory, and a role that copies its own example would
+// file the document in the wrong home — which is the mistake this whole path
+// exists to stop, arriving through the instruction rather than around it.
+//
+// A role that owns nothing gets nothing, and so does a project whose filing is
+// unknown: telling a role about a mechanism every one of its attempts would be
+// refused by is an invitation to attempt it.
+func WriteContract(role domain.AgentRole, filing []KindHome) string {
+	if len(Owned(role)) == 0 || len(filing) == 0 {
 		return ""
 	}
-	kinds := make([]string, 0, len(owned))
-	for _, kind := range owned {
-		kinds = append(kinds, `"`+string(kind)+`"`)
+	kinds := make([]string, 0, len(filing))
+	directories := make([]string, 0, len(filing))
+	for _, filed := range filing {
+		kinds = append(kinds, `"`+string(filed.Kind)+`" in `+filed.Directory)
+		if !slices.Contains(directories, filed.Directory) {
+			directories = append(directories, filed.Directory)
+		}
 	}
 	return `# Writing a document you own
 
@@ -445,12 +485,14 @@ The documents you own are yours to write, and this is how one reaches the reposi
 To write one, end your reply with exactly one block of this shape:
 
 ` + "```" + `yoyodyne-artifact
-{"documents":[{"action":"create","id":"artifact-id","kind":"` + string(owned[0]) + `","title":"one line","supports":["upstream-artifact-id"],"directory":"` + homes[0] + `","body":"the whole document, in Markdown, below the frontmatter","reason":"why you are recording it"}]}
+{"documents":[{"action":"create","id":"artifact-id","kind":"` + string(filing[0].Kind) + `","title":"one line","supports":["upstream-artifact-id"],"directory":"` + filing[0].Directory + `","body":"the whole document, in Markdown, below the frontmatter","reason":"why you are recording it"}]}
 ` + "```" + `
 
 A revision replaces what an existing document says: ` + "`" + `{"action":"revise","id":"artifact-id","body":"the whole document","reason":"why it is changing"}` + "`" + `. It carries the document whole rather than the part that changed, and it takes "title" and "supports" only where those change too. "kind" and "directory" are refused on a revision — the kind decides who owns the document, and the file has already been referred to by where it is.
 
-The kinds you may write are ` + strings.Join(kinds, ", ") + `; any other is refused and nothing is written. This project files documents under ` + strings.Join(homes, ", ") + `, and a document filed anywhere else is refused before it reaches disk. The id is the file name without its extension, so it also has to be one: an id that already answers to a document is a revision rather than a creation.
+The kinds you may write, and where this project files each of them, are ` + strings.Join(kinds, ", ") + `. Any other kind is refused and nothing is written, and so is a document filed anywhere but the directory its own kind belongs in — being inside one of this project's ` + strings.Join(directories, " or ") + ` is not enough. The id is the file name without its extension, so it also has to be one: an id that already answers to a document is a revision rather than a creation.
+
+A document you write is placed in the operator's working tree. Nothing here commits it, pushes it, or opens a pull request for it, so do not say that it did.
 
 The body is a JSON string, so the document's own newlines and quotes are escaped in it — a Markdown document with code fences in it is carried perfectly well, and a block that is not valid JSON writes nothing at all. One reply carries ` + maxWritesPerReplyText + ` document, at most ` + fmt.Sprintf("%d", MaxWriteBodyBytes) + ` bytes of it, and leaves the block out entirely when you are not writing one, which is most replies. Never describe a document as written before the harness has told you it was.`
 }

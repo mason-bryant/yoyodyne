@@ -691,7 +691,7 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		}
 		return "", &OperatorHoldError{Hold: hold}
 	}
-	systemPrompt := SystemPrompt(s.state.Role, s.options.Admission, s.artifactHomes(), s.options.Persona)
+	systemPrompt := SystemPrompt(s.state.Role, s.options.Admission, s.artifactFiling(), s.options.Persona)
 	// The repository documents, the tracker's own text, and the operator's words
 	// all go to the provider, so anything recognizably sensitive is redacted on
 	// the way out rather than only in what comes back.

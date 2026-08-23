@@ -20,8 +20,8 @@ package chat
 // revision the write produced.
 //
 // What the role never gets is a way past its own boundary. It cannot write a
-// kind it does not own, cannot file a document outside the artifact homes, and
-// cannot write anything at all without the operator. A role that owns no
+// kind it does not own, cannot file a document anywhere but the home that kind
+// is filed in, and cannot write anything at all without the operator. A role that owns no
 // document is refused before any of this, and proposing a change to the owner
 // remains its only move.
 
@@ -48,12 +48,14 @@ import (
 // who wrote it and why.
 type Documents interface {
 	// CheckWrite refuses a write before anything is done about it: its shape, the
-	// role's authority over the kind, and whether the directory is one this
-	// project files documents in.
+	// role's authority over the document it names, and whether the directory is
+	// the one its kind is filed in.
 	CheckWrite(role domain.AgentRole, write artifact.Write) error
-	// Directories are the artifact homes, which a role has to be told before it
-	// can name one.
-	Directories() ([]string, error)
+	// Filing is where each kind this role owns is filed, which is what the role
+	// has to be told before it can name a directory — and it is per role rather
+	// than a list of every home, because an example naming the wrong one steers
+	// the document into another role's directory.
+	Filing(role domain.AgentRole) ([]artifact.KindHome, error)
 	Create(role domain.AgentRole, draft artifact.Draft, now time.Time) (artifact.Artifact, error)
 	Amend(role domain.AgentRole, id string, amendment artifact.Amendment, now time.Time) (artifact.Artifact, error)
 	// Approve records the operator's approval of a document as it now stands. It
@@ -158,21 +160,21 @@ func (e *DocumentError) Error() string {
 
 func (e *DocumentError) Unwrap() error { return e.Err }
 
-// artifactHomes is where this project files its documents, which is what the
-// write contract has to name before a role can. A conversation with no artifact
-// store behind it has none, and a store whose homes cannot be resolved is
-// reported the same way: the role is not told it can write a document, which is
-// the truthful answer in both cases, rather than being told to guess where one
-// goes.
-func (s *Session) artifactHomes() []string {
+// artifactFiling is where this role's own kinds of document are filed, which is
+// what the write contract has to name before the role can name a directory. A
+// conversation with no artifact store behind it has none, and so does a store
+// that cannot say where a kind goes or whose homes will not resolve: the role is
+// not told it can write a document, which is the truthful answer in every one of
+// those cases, rather than being told to guess where one goes.
+func (s *Session) artifactFiling() []artifact.KindHome {
 	if s.options.Documents == nil {
 		return nil
 	}
-	homes, err := s.options.Documents.Directories()
+	filing, err := s.options.Documents.Filing(s.state.Role)
 	if err != nil {
 		return nil
 	}
-	return homes
+	return filing
 }
 
 // Writes returns the documents from this conversation the operator has not

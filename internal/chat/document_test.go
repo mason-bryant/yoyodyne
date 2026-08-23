@@ -10,6 +10,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -38,11 +39,14 @@ func documentOptions(t *testing.T, provider Backend) (Options, string) {
 	options := testOptions(t, provider)
 	repository := t.TempDir()
 	options.Repository = repository
-	options.Documents = artifact.Store{
-		RepositoryRoot: repository,
-		Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
-		Excluded:       []string{"docs/decisions/invariants"},
-	}
+	// The store a generated project gets, assembled the one way production
+	// assembles it, so a test can never be reading a filing no project has.
+	options.Documents = artifact.StoreFor(repository, config.Product{
+		Specifications: config.DefaultSpecifications,
+		Designs:        config.DefaultDesigns,
+		Decisions:      config.DefaultDecisions,
+		Invariants:     config.DefaultInvariants,
+	})
 	return options, repository
 }
 
@@ -197,6 +201,48 @@ func TestADocumentFiledOutsideTheArtifactHomesIsRefusedAtTheActionLayer(t *testi
 	}
 	if _, err := os.Stat(filepath.Join(repository, "internal")); !os.IsNotExist(err) {
 		t.Fatalf("a refused document reached the repository: %v", err)
+	}
+}
+
+// Inside an artifact home is not enough either, and this is the case the write
+// contract used to steer a role into: the architect filing a design under the
+// product manager's home, which loads and validates and is in the wrong role's
+// directory.
+func TestADocumentFiledInAnotherKindsHomeIsRefusedAtTheActionLayer(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{{
+		SessionID: "session-1", ResolvedModel: "claude-opus-5",
+		FinalText: documentReply("create", "v1-design", "design", config.DefaultSpecifications, "# Design"),
+	}}}
+	options, repository := documentOptions(t, provider)
+	options.Role = domain.RoleArchitect
+	options.Agent = string(domain.RoleArchitect)
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "Write the design up.")
+	var refusal *DocumentError
+	if err == nil || !errors.As(err, &refusal) {
+		t.Fatalf("Send() error = %v, want a refused document", err)
+	}
+	if !strings.Contains(err.Error(), config.DefaultDesigns) {
+		t.Fatalf("the refusal does not name where a design is filed: %v", err)
+	}
+	if len(reply.Writes) != 0 || len(session.Writes()) != 0 {
+		t.Fatalf("a misfiled document was recorded: %#v", session.Writes())
+	}
+	if _, err := os.Stat(filepath.Join(repository, "docs")); !os.IsNotExist(err) {
+		t.Fatalf("a refused document reached the repository: %v", err)
+	}
+
+	// And the contract this role is sent tells it the directory that is accepted,
+	// rather than the first home the project happens to configure.
+	contract := SystemPrompt(domain.RoleArchitect, testAdmission, session.artifactFiling(), "")
+	if !strings.Contains(contract, `"directory":"`+config.DefaultDesigns+`"`) {
+		t.Fatalf("the architect's contract does not file a design in %s", config.DefaultDesigns)
+	}
+	if strings.Contains(contract, `"directory":"`+config.DefaultSpecifications+`"`) {
+		t.Fatalf("the architect's contract steers a document into the product manager's home")
 	}
 }
 

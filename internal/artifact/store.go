@@ -64,6 +64,58 @@ type Store struct {
 	// are already identified by their own file names, and reading them twice
 	// under two schemes is exactly the confusion one identity model is for.
 	Excluded []string
+	// KindHomes is which home each kind of document is filed in. Reading needs
+	// none of it — a document says what kind it is — and writing one needs all of
+	// it: a role has to be told where its own documents go, and a design filed in
+	// the product manager's home is the wrong-home mistake nothing else here can
+	// see, because it is inside an artifact home like any other. It is empty on a
+	// store assembled without it, and a write is then refused rather than filed
+	// on a guess: see Filing.
+	KindHomes map[Kind]string
+}
+
+// KindHome pairs one kind of document with the directory this project files it
+// in. It is what a role is told before it names a directory, and what a write to
+// the wrong home is judged against.
+type KindHome struct {
+	Kind      Kind
+	Directory string
+}
+
+// Filing returns where each kind a role owns is filed, in the order the kinds
+// are declared. It is empty for a role that owns no document and for a store
+// that was not told where kinds are filed, and both mean the same thing to the
+// caller: this role is not offered the write, because a mechanism that would
+// have to guess the directory is one that files documents in the wrong place.
+func (s Store) Filing(role domain.AgentRole) ([]KindHome, error) {
+	owned := Owned(role)
+	filing := make([]KindHome, 0, len(owned))
+	for _, kind := range owned {
+		home, filed := s.KindHomes[kind]
+		if !filed || strings.TrimSpace(home) == "" {
+			continue
+		}
+		directory, err := s.resolveDirectory(home)
+		if err != nil {
+			return nil, err
+		}
+		filing = append(filing, KindHome{Kind: kind, Directory: directory})
+	}
+	if len(filing) == 0 {
+		return nil, nil
+	}
+	return filing, nil
+}
+
+// homeFor returns the directory a kind is filed in, and whether this store knows
+// one. It is the single reading of that table, so what a role is told and what a
+// write is refused against cannot disagree.
+func (s Store) homeFor(kind Kind) (string, bool) {
+	home, filed := s.KindHomes[kind]
+	if !filed || strings.TrimSpace(home) == "" {
+		return "", false
+	}
+	return home, true
 }
 
 // Load reads every artifact the repository records. A home that does not exist

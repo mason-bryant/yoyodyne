@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
+	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -652,11 +652,14 @@ func openTestDocumentSession(t *testing.T, root, repository string, provider cha
 		Backend: provider,
 		Store:   store,
 		Tracker: tracker,
-		Documents: artifact.Store{
-			RepositoryRoot: repository,
-			Homes:          []string{"docs/product", "docs/designs", "docs/decisions"},
-			Excluded:       []string{"docs/decisions/invariants"},
-		},
+		// The same assembly `yoyo chat` builds, so the dispatch is exercised over
+		// the store an operator actually has.
+		Documents: artifactStore(repository, config.Product{
+			Specifications: config.DefaultSpecifications,
+			Designs:        config.DefaultDesigns,
+			Decisions:      config.DefaultDecisions,
+			Invariants:     config.DefaultInvariants,
+		}),
 		Model:        "opus",
 		Provider:     domain.BackendClaudeCode,
 		Repository:   repository,

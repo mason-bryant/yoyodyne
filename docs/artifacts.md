@@ -120,15 +120,23 @@ and what you said is kept as the reason.
 Nothing about that widens what a role may do. The write goes through the same
 ownership boundary every other change to these documents goes through, so the
 architect cannot write the goals and the product manager cannot write a design —
-each proposes to the other instead. A document filed outside your artifact homes,
-a kind the role does not own, a revision of a document that belongs to another
-role, a revision of one that was superseded or retired, and a block the harness
-cannot read are all refused before anything is written, and you are never asked
-to approve one. A revision naming a document nothing records is refused the same
-way, saying that a document which does not exist yet is created rather than
-revised — and a creation over an id something already answers to is refused for
-the mirror of that reason. A role that owns no document at all — the development manager, the
-developer, the reviewer — cannot write one under any circumstances.
+each proposes to the other instead. Each kind also has one home and is written
+only there: the brief, the goals, and the non-goals go under
+`product.specifications`, designs and specifications under `product.designs`,
+and decision records under `product.decisions`. A role is told which of those its
+own kinds go in rather than being handed the list, so a design filed under the
+product manager's home is refused even though that is an artifact home — it is
+not the one a design is filed in.
+
+A kind the role does not own, a document filed anywhere but its kind's home, a
+revision of a document that belongs to another role, a revision of one that was
+superseded or retired, and a block the harness cannot read are all refused before
+anything is written, and you are never asked to approve one. A revision naming a
+document nothing records is refused the same way, saying that a document which
+does not exist yet is created rather than revised — and a creation over an id
+something already answers to is refused for the mirror of that reason. A role
+that owns no document at all — the development manager, the developer, the
+reviewer — cannot write one under any circumstances.
 
 A revision is the same action, carrying the document whole:
 
@@ -149,11 +157,12 @@ writes one.** The document lands in your working tree with the rest of your
 changes; committing it and opening a pull request for it are still yours. Commit
 it before you start a run: a run refuses to begin while the primary checkout has
 uncommitted changes, and a document you approved and left uncommitted is one of
-them. The harness stops at the working tree deliberately for now — a conversation
-that committed would sweep whatever else you had in progress into the commit, and
-one that opened a pull request would be a second path into your target branch
-that no reviewer sees. Which of those is right is a decision for whoever owns the
-design rather than one this mechanism should make quietly.
+them.
+
+Whether the harness should go further — commit the document, or open a pull
+request for it — is an open question rather than a settled boundary, and it is
+the architect's to answer. An amendment asking the design to record the answer is
+filed; `yoyo amendment list --owner architect` says where it stands.
 
 ## Goals, and what work serves them
 

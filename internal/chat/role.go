@@ -274,12 +274,12 @@ func renderActions(actions []string) string {
 // for the same reason: it is what the harness will and will not do with the work
 // this role names, so it is stated where nothing downstream can contradict it.
 //
-// homes are the artifact directories this project files documents in, and they
-// decide whether the write clause is sent at all. A conversation with no
+// filing is where this project files each kind of document this role owns, and
+// it decides whether the write clause is sent at all. A conversation with no
 // artifact store behind it passes none, and the role is then not told about a
 // mechanism every one of its attempts would be refused by — which is the same
 // rule the tracker clause follows, for the same reason.
-func SystemPrompt(role domain.AgentRole, admission Admission, homes []string, persona string) string {
+func SystemPrompt(role domain.AgentRole, admission Admission, filing []artifact.KindHome, persona string) string {
 	authority, known := AuthorityFor(role)
 	if !known {
 		// A role with no contract gets no conversation, which is refused where a
@@ -294,7 +294,7 @@ func SystemPrompt(role domain.AgentRole, admission Admission, homes []string, pe
 	// The write clause is generated from the ownership table rather than written
 	// into each contract, so a role is never told it may write a kind the table
 	// says is somebody else's, and the two cannot drift.
-	if clause := artifact.WriteContract(role, homes); clause != "" {
+	if clause := artifact.WriteContract(role, filing); clause != "" {
 		contract += "\n\n" + clause
 	}
 	trimmed := strings.TrimSpace(persona)

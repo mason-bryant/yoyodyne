@@ -716,15 +716,19 @@ document: its decomposition is Beads work rather than Markdown. Nothing here
 constrains **you**. The boundary is between agent roles, and the operator directs
 any of them.
 
-It holds in two places, and only one of them is live today.
+It holds in two places, and both are live.
 
 **Writing.** The package that writes an artifact refuses a role that does not own
 the kind, on creating, amending, superseding, and retiring one, and records the
-role that did in the revision log. That path exists and is enforced, but no
-command reaches it yet — there is no `yoyo artifact create`, and the roles that
-own documents reach no tools from a conversation — so today it constrains nothing
-that is actually happening. It is the boundary a role meets when it arrives, rather than a persona
-asking it to behave.
+role that did in the revision log. That is the path a document written from a
+conversation takes: the owning role emits a typed action, you approve it, and the
+harness performs the write through this boundary under that role's authority —
+see [writing a document from a
+conversation](artifacts.md#writing-a-document-from-a-conversation). A role that
+names a kind it does not own, or a home its kind is not filed in, is refused
+before you are asked about it. There is still no `yoyo artifact create`: a
+command would need the document's prose typed at a shell, which is the
+transcription the typed action exists to end.
 
 **Reading.** A document whose revision log records a change by a role that does
 not own it is **reported every time the artifacts are loaded**, as an
