@@ -58,7 +58,11 @@ const (
 // Side is one of the two reviews held up against each other: which review it
 // was, what made it, what it decided, and what it cost.
 type Side struct {
-	ReviewID      string    `json:"review_id"`
+	ReviewID string `json:"review_id"`
+	// Branch is the name this side's review was made under. It is carried per
+	// side because the two need not match: a historical state is shadowed under
+	// whatever local branch was put on that commit.
+	Branch        string    `json:"branch,omitempty"`
 	Model         string    `json:"model,omitempty"`
 	ResolvedModel string    `json:"resolved_model,omitempty"`
 	Decision      string    `json:"decision,omitempty"`
@@ -166,11 +170,11 @@ type Comparer struct {
 // reports what the two made of the same branch state. Naming a branch narrows it
 // to that branch; naming nothing compares everything recorded.
 //
-// Two reviews shadow the same change when they judged the same branch at the
-// same base and head commit. The head commit is what makes that exact rather
-// than approximate: a branch is a moving name, and a shadow review of what the
-// branch is today measures nothing about a verdict given on what it was last
-// week.
+// Two reviews shadow the same change when they judged the same head commit over
+// the same base, whatever branch name each was made under. The commits are what
+// make that exact rather than approximate: a branch is a moving name, and a
+// shadow review of what the branch is today measures nothing about a verdict
+// given on what it was last week.
 func (c Comparer) Compare(branch string) (Report, error) {
 	if c.Reviews == nil {
 		return Report{}, errors.New("comparing shadow reviews needs the recorded branch reviews to read")
@@ -211,7 +215,7 @@ func (c Comparer) Compare(branch string) (Report, error) {
 		if !found {
 			report.Unpaired = append(report.Unpaired, Unpaired{
 				ReviewID: reviewed.ReviewID, Branch: reviewed.Branch,
-				Reason: fmt.Sprintf("no other review decided %s at %s, so this shadow has nothing to be measured against", reviewed.Branch, short(reviewed.HeadCommit)),
+				Reason: fmt.Sprintf("no other review decided %s over %s, so this shadow has nothing to be measured against", short(reviewed.HeadCommit), short(reviewed.BaseCommit)),
 			})
 			continue
 		}
@@ -278,6 +282,7 @@ func (c Comparer) compare(baseline, shadowed runstate.BranchReview) Comparison {
 func (c Comparer) side(reviewed runstate.BranchReview) Side {
 	side := Side{
 		ReviewID:      reviewed.ReviewID,
+		Branch:        reviewed.Branch,
 		Model:         reviewed.Model,
 		ResolvedModel: reviewed.ResolvedModel,
 		Decision:      reviewed.Decision,
@@ -411,10 +416,21 @@ func total(comparisons []Comparison) Totals {
 	return totals
 }
 
-// stateKey names the branch state a review judged. Two reviews share it when
-// they were given the same commits over the same base.
+// stateKey names the branch state a review judged: the base it was measured
+// against and the head it reached. Two reviews share it when they were given the
+// same commits over the same base, which is the whole of what makes them
+// comparable.
+//
+// The branch name is deliberately not part of it. A branch is a moving label on
+// a commit, and reaching a historical state to shadow it means putting some
+// local branch on that commit — so keying on the name would make a review of
+// exactly the same code unpairable for having been reached under a different
+// label, which is the common case rather than the rare one. What the two
+// reviewers were shown then differs by one name in one sentence of the context
+// and by nothing in the code under review; the names are carried on each side so
+// a reader can see when they differed.
 func stateKey(reviewed runstate.BranchReview) string {
-	return reviewed.Branch + "\x00" + reviewed.BaseCommit + "\x00" + reviewed.HeadCommit
+	return reviewed.BaseCommit + "\x00" + reviewed.HeadCommit
 }
 
 func decided(reviewed runstate.BranchReview) bool {

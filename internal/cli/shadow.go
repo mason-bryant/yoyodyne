@@ -48,6 +48,7 @@ func printShadowComparison(writer io.Writer, report shadow.Report) {
 		fmt.Fprintln(writer, "`yoyo review --shadow --model <name> --base <ref>` makes one")
 		return
 	}
+	printClassLegend(writer, report)
 	for _, comparison := range report.Comparisons {
 		printOneComparison(writer, comparison)
 	}
@@ -55,6 +56,22 @@ func printShadowComparison(writer io.Writer, report shadow.Report) {
 		fmt.Fprintf(writer, "%s compared nothing: %s\n", unpaired.ReviewID, unpaired.Reason)
 	}
 	printComparisonTotals(writer, report.Totals)
+}
+
+// printClassLegend says which side each column of the tables below counts from.
+// The columns count from two sides on purpose: a matched pair is counted under
+// the severity the baseline gave it, while the shadow's own column counts the
+// severity the shadow gave. So a row where the two reviewers disagreed about how
+// serious something was is not meant to add up, and without this the table reads
+// as arithmetic that does not — which is a worse defect than the disagreement it
+// is reporting.
+func printClassLegend(writer io.Writer, report shadow.Report) {
+	if len(report.Comparisons) == 0 {
+		return
+	}
+	fmt.Fprintln(writer, "in the tables below, baseline/matched/missed count the baseline's own findings at")
+	fmt.Fprintln(writer, "the severity it gave them, and shadow/shadow-only count the shadow's at the severity")
+	fmt.Fprintln(writer, "it gave them; a row where the two disagreed about severity therefore does not add up")
 }
 
 func printOneComparison(writer io.Writer, comparison shadow.Comparison) {
@@ -77,6 +94,14 @@ func printOneComparison(writer io.Writer, comparison shadow.Comparison) {
 	}
 	if comparison.Baseline.Truncated || comparison.Shadow.Truncated {
 		fmt.Fprintln(writer, "  one of these reviews was shown an incomplete change, so the two saw different evidence")
+	}
+	// The same commits reached under two names is the ordinary way a historical
+	// state is shadowed, and the code under review is identical either way. It is
+	// said rather than hidden because it is the one thing the two reviewers were
+	// told differently.
+	if comparison.Baseline.Branch != comparison.Shadow.Branch {
+		fmt.Fprintf(writer, "  the same commits under two names: baseline reviewed %s, shadow reviewed %s\n",
+			comparison.Baseline.Branch, comparison.Shadow.Branch)
 	}
 }
 

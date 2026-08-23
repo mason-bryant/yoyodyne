@@ -59,6 +59,10 @@ func TestTheComparisonReportsEveryClassTheCostAndTheFindings(t *testing.T) {
 		"+ minor [internal/review/verdict.go:3]: this comment reads oddly",
 		"missed 1 of 2 baseline finding(s) (50%)",
 		"baseline cost $2.00, shadow cost $0.40",
+		// The columns count from two sides, so a row where the reviewers
+		// disagreed about severity is not meant to reconcile. Without the legend
+		// the table reads as arithmetic that does not add up.
+		"does not add up",
 		// The number is a difference between two reviewers, and says so: a
 		// shadow-only finding is a candidate false positive, not a proven one.
 		"candidate false positive",

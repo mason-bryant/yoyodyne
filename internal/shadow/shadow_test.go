@@ -157,6 +157,39 @@ func TestCompareOnlyPairsReviewsOfTheSameBranchState(t *testing.T) {
 	}
 }
 
+// Reaching a historical state to shadow it means putting some local branch on
+// that commit, so the name the two reviews were made under routinely differs
+// while the code under review is identical. Refusing to pair those would make
+// every verdict older than the current branch head unmeasurable, which is most
+// of the recorded ones.
+func TestComparePairsTheSameCommitsReachedUnderTwoNames(t *testing.T) {
+	t.Parallel()
+
+	baseline := reviewed("review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false,
+		finding(runstate.SeverityMajor, "store.go", "the two halves disagree"))
+	shadowed := reviewed("review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true,
+		finding(runstate.SeverityMajor, "store.go", "the two halves disagree"))
+	shadowed.Branch = "shadow-f654b6420a2a"
+	comparer := Comparer{Reviews: recordedReviews{reviews: []runstate.BranchReview{baseline, shadowed}}}
+
+	report, err := comparer.Compare("")
+	if err != nil {
+		t.Fatalf("Compare() error = %v", err)
+	}
+	if len(report.Comparisons) != 1 || len(report.Unpaired) != 0 {
+		t.Fatalf("Compare() = %#v", report)
+	}
+	// Each side keeps the name it was made under, so the one thing the two
+	// reviewers were told differently is visible rather than lost in the pairing.
+	comparison := report.Comparisons[0]
+	if comparison.Baseline.Branch != "milestone" || comparison.Shadow.Branch != "shadow-f654b6420a2a" {
+		t.Errorf("branch names = %q and %q", comparison.Baseline.Branch, comparison.Shadow.Branch)
+	}
+	if comparison.Classes[0].Matched != 1 {
+		t.Errorf("the same finding under two branch names did not match: %#v", comparison.Classes)
+	}
+}
+
 // Nothing can pair a finding that names no file, so each one is counted as a
 // miss or as the shadow's own and the count is reported: a miss rate read as
 // more certain than the pairing behind it is worse than no rate at all.
@@ -222,10 +255,14 @@ func TestCompareNarrowsToOneBranchAndReportsWhatItCannotRead(t *testing.T) {
 
 	here := reviewed("review-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false)
 	shadowedHere := reviewed("review-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", true)
+	// A different branch is a different state here, so its reviews carry their
+	// own head: what narrows the report is the filter, not a commit collision.
 	elsewhere := reviewed("review-cccccccccccccccccccccccccccccccc", false)
 	elsewhere.Branch = "other"
+	elsewhere.HeadCommit = "4444444444444444444444444444444444444444"
 	shadowedElsewhere := reviewed("review-dddddddddddddddddddddddddddddddd", true)
 	shadowedElsewhere.Branch = "other"
+	shadowedElsewhere.HeadCommit = elsewhere.HeadCommit
 	comparer := Comparer{Reviews: recordedReviews{reviews: []runstate.BranchReview{here, shadowedHere, elsewhere, shadowedElsewhere}}}
 
 	report, err := comparer.Compare("other")

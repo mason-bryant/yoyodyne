@@ -312,18 +312,22 @@ question it was actually asked — whether it produced a verdict — so a shadow
 `repair` verdict is a successful measurement rather than a failure.
 
 The baselines are the branch reviews already recorded. Every verdict `yoyo
-review` has ever given is in the `branch-reviews` log with the branch, base
-commit, and head commit it was given on, and `--compare` pairs on exactly those
-three — so a branch state the configured reviewer has already judged can be
-shadowed without paying for its baseline again. What that costs is one shadow
-review per state and nothing else.
+review` has ever given is in the `branch-reviews` log with the base commit and
+head commit it was given on, and `--compare` pairs on those two — so a branch
+state the configured reviewer has already judged can be shadowed without paying
+for its baseline again. What that costs is one shadow review per state and
+nothing else.
 
 Reaching one of those states is the only manual step. `--branch` takes a local
 branch name, so a state that is still a branch head is shadow-reviewable as it
 stands; an earlier state needs a local branch pointed at the head commit the
 recorded verdict names (`git branch <name> <commit>`), and `--base` takes the
-base commit from the same record. A state nothing has reviewed has no baseline
-at all, and there an ordinary `yoyo review` is what makes one first.
+base commit from the same record. That new branch name is deliberately not part
+of the pairing: the same commits reached under a second name are the same code,
+so the two reviews still pair, and each side's own branch name is reported so the
+one thing the reviewers were told differently is visible. A state nothing has
+reviewed has no baseline at all, and there an ordinary `yoyo review` is what
+makes one first.
 
 `--compare` reads what was recorded and invokes nothing. For each shadow review
 it reports, per severity, how many of the baseline reviewer's findings the shadow

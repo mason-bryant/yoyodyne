@@ -3,9 +3,11 @@
 Work item: yoyodyne-ifd.92. Records read 2026-08-23 against the harness's own
 state at `state/products/yoyodyne/branch-reviews/`.
 
-**Status: the instrument is delivered and the measurement is not.** This document
-is the half that says what remains, so that the gap is visible in the repository
-rather than only in a run summary nobody reads again.
+**Status: the instrument is delivered; the measurement is blocked, not descoped.**
+The run that built the instrument could not invoke a provider at all, so the
+experiment has not been run and the decision about running it is an operator's
+rather than a developer's. This document is what that decision needs: what is
+built, what the benchmark is, and exactly what remains.
 
 ## What was delivered
 
@@ -17,13 +19,27 @@ alone, with each side's own cost from its own event log.
 [The operator documentation](../work.md#measuring-the-reviewer-against-itself)
 describes both.
 
-## What was not, and why
+## What is blocked
 
-No shadow review was run, so there is no miss rate, no shadow-only rate, and no
-Sonnet-side cost. The run that built the instrument had no provider access, and
-spending on provider invocations was not something it was asked for. Running the
-experiment is the remaining work, and it is the deliverable the work item
-actually names.
+No shadow review was run, so there is no miss rate, no false-positive-candidate
+rate per class, and no Sonnet-side cost. That is the work item's actual
+deliverable and it is outstanding.
+
+Two things stopped it, and neither is a judgement the developer run was free to
+make:
+
+- **The provider is unreachable.** The run executes inside a sandbox with an
+  empty network allowlist. `claude -p … --model sonnet` returns
+  `Failed to authenticate. API Error: 403 Connection blocked by network allowlist`,
+  and `https://api.anthropic.com` fails the CONNECT tunnel with a 403. A branch
+  review is one provider invocation, so no shadow review can be made from here at
+  all — this is not a matter of how much spend was authorized.
+- **Five of the six states need a branch created.** `--branch` takes a local
+  branch name, and only the sixth round's head is still a branch head. The other
+  five need `git branch <name> <commit>`, which the developer contract forbids.
+
+So an operator or a run with provider access and the authority to create those
+five local branches is what finishes this. The steps are below.
 
 ## The benchmark is ready as recorded
 
@@ -53,6 +69,38 @@ head commit above (`git branch <name> <commit>`), which is the one manual step;
 The whole outstanding cost is therefore six Sonnet reviews of evidence that has
 already been described once. What each of them costs is not a projection to make
 here — it is half of what the experiment measures.
+
+## Running it
+
+From the repository, with a provider reachable:
+
+```sh
+# The sixth round needs no branch: ifd19-docs-true is still at that head.
+./bin/yoyo review --shadow --model sonnet --base 78395930d880 --branch ifd19-docs-true
+
+# Each earlier round needs a local branch at its recorded head first.
+for head in f654b6420a2a 3a01ace9a467 5bf53efc2907 23fb91e171b6 e06954210f87; do
+  git branch "shadow-$head" "$head"
+  ./bin/yoyo review --shadow --model sonnet --base 78395930d880 --branch "shadow-$head"
+done
+
+./bin/yoyo review --compare
+```
+
+`--compare` pairs on the base and head commits, not on the branch name, so each
+`shadow-<head>` review pairs with the `ifd19-docs-true` verdict recorded on the
+same commits, and each comparison names both branches. Nothing has to be
+force-moved onto a historical commit to make the pairing work.
+
+Then record below: the per-severity matched/missed/shadow-only counts, each
+side's cost, and — the part the counts cannot make — which of the 19 baseline
+findings are local, mechanical catches and which only exist in the accumulated
+shape of the branch, so the miss rate can be read per class rather than in
+aggregate.
+
+## Result
+
+Not yet measured. See "What is blocked" above.
 
 ## What the numbers will and will not settle
 
