@@ -38,6 +38,21 @@ const (
 	// every persona says them differently.
 	KindWorkApproved Kind = "proposed-work.approved"
 	KindWorkDeclined Kind = "proposed-work.declined"
+	// Work leaving the run queue for a role's conversation, that role starting
+	// it, and that role finishing it. They are the transitions of the one class
+	// of work no run ever touches, and before they existed a thread said nothing
+	// at all about it: an item rerouted to the architect and worked to completion
+	// there showed a run that failed, and then silence for the rest of its life.
+	//
+	// Three kinds rather than one with a field, for the reason the verdict is
+	// two: handed to somebody, taken up by them, and done by them are different
+	// news, and the middle one is the only thing that says the routing was acted
+	// on rather than merely recorded. The completion is here and nowhere else
+	// because closing an item is otherwise said by the run that finished it, and
+	// this is the work that has no run to say it.
+	KindWorkHandedOff  Kind = "work.handed-off"
+	KindWorkPickedUp   Kind = "work.picked-up"
+	KindWorkCarriedOut Kind = "work.carried-out"
 	// KindRunStarted carries the recorded selection reason with it, so the fact
 	// the selected-work-passes-intake-and-records-why invariant makes durable is
 	// the fact an operator actually reads.
@@ -125,6 +140,9 @@ func Kinds() []Kind {
 		KindItemReprioritized,
 		KindWorkApproved,
 		KindWorkDeclined,
+		KindWorkHandedOff,
+		KindWorkPickedUp,
+		KindWorkCarriedOut,
 		KindRunStarted,
 		KindChecksPassed,
 		KindChecksFailed,
@@ -163,6 +181,7 @@ func (k Kind) Valid() bool {
 	switch k {
 	case KindItemAdmitted, KindItemDecomposed, KindItemAttributed, KindItemReprioritized,
 		KindWorkApproved, KindWorkDeclined,
+		KindWorkHandedOff, KindWorkPickedUp, KindWorkCarriedOut,
 		KindRunStarted, KindChecksPassed, KindChecksFailed,
 		KindReviewApproved, KindReviewRepairs,
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
@@ -483,6 +502,13 @@ type Detail struct {
 	// KindItemReprioritized. It is negative where the record did not say, because
 	// zero is the highest priority rather than an unstated one.
 	Priority int `json:"priority,omitempty"`
+	// Executor is what carries an item where a developer run does not, read by
+	// the three handoff kinds and by the admission kinds. It is also what decides
+	// whose move follows an admission: work marked for a conversation is not
+	// waiting for a run and never will be, so a thread that said it was waiting
+	// for one would be telling the reader to expect something that cannot come.
+	// Empty is the ordinary case, which is work a developer run carries.
+	Executor string `json:"executor,omitempty"`
 	// Stopped, Since, and Ready are read by KindLineWaiting: what has stopped the
 	// harness choosing work, when it became that way, and how much admitted work
 	// the tracker calls ready behind it. The age is rendered from Since against

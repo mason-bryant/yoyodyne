@@ -225,6 +225,13 @@ type TrackerOutcome struct {
 	// whatever reports it afterwards has no way to say which item moved to
 	// somebody who has not read the tracker.
 	WorkItemTitle string `json:"work_item_title,omitempty"`
+	// WorkItemExecutor is what the tracker said carried that item as the action
+	// ran, which is the state before the action rather than after it. It travels
+	// with the outcome because it is what separates a role doing work handed to it
+	// from a role tidying the queue: nothing else in the record says the item this
+	// action touched was one no run was ever going to carry. It is empty for
+	// ordinary work, and for a creation, which has no before.
+	WorkItemExecutor domain.WorkItemExecutor `json:"work_item_executor,omitempty"`
 	// TargetStatus is the state the tracker held the acted-on item in at the
 	// moment the action ran, and TargetUnread is why the tracker would not say.
 	// They are read as the action is carried out rather than taken from the
@@ -598,6 +605,10 @@ func (s *Session) performTrackerActions(ctx context.Context, actions []TrackerAc
 			// action that names no title of its own leaves the record an identifier
 			// nobody reading it later can resolve.
 			"work_item_title": outcome.WorkItemTitle,
+			// What already carried the item travels with what was done to it, because
+			// a role acting on work no run can execute is that role carrying it out,
+			// and nothing else in the record distinguishes that from queue tidying.
+			"work_item_executor": outcome.WorkItemExecutor,
 			// What state the item was in when it was acted on is recorded beside
 			// what was done to it, because it is the reason an action was refused
 			// or carried out with a caveat, and a later reader has no other way to
@@ -741,11 +752,13 @@ func (s *Session) readActionTarget(ctx context.Context, outcome *TrackerOutcome)
 // status the tracker omitted is unknown rather than open: the whole point of
 // reading the item is that "open" is the assumption being checked. The title is
 // kept beside it because this reading is the only place an action that names no
-// title of its own can learn one.
+// title of its own can learn one, and the executor for the same reason: what
+// carries an item is on the item, so an action's own words never say it.
 func (o *TrackerOutcome) recordTarget(item beads.WorkItem) {
 	if title := strings.TrimSpace(item.Title); title != "" {
 		o.WorkItemTitle = title
 	}
+	o.WorkItemExecutor = item.Executor
 	if status := strings.TrimSpace(item.Status); status != "" {
 		o.TargetStatus = status
 		return
