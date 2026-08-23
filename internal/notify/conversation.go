@@ -48,12 +48,18 @@ import (
 // rule above inverts — the actions that are silent everywhere else are the whole
 // of its narrative, and without them its thread ends on a failed run and says
 // nothing for the rest of the item's life.
+//
+// The inversion is exactly that narrow. It covers the two actions that are a role
+// doing the work, and it does not touch the ones that are the queue being kept
+// around the work: an item marked for a conversation still gets attributed to a
+// goal and still gets reordered, those are still what they always were, and
+// reading either of them as somebody starting the work would report a milestone
+// that did not happen and lose the one that did.
 const (
-	trackerRead         = "read"
-	trackerSurvey       = "survey"
 	trackerCreate       = "create"
 	trackerAttribute    = "attribute"
 	trackerReprioritize = "reprioritize"
+	trackerUpdate       = "update"
 	trackerClose        = "close"
 )
 
@@ -107,7 +113,14 @@ type trackerAction struct {
 		Goal     string  `json:"goal"`
 		Parent   *string `json:"parent"`
 		Priority *int    `json:"priority"`
-		Executor string  `json:"executor"`
+		// Executor is a pointer for the reason the parent and the priority are: an
+		// action that said nothing about what carries the item and one that said it
+		// is carried by nothing are opposite requests, and a plain string reads them
+		// the same. The tracker cannot express the second today — an empty executor
+		// on an update means "leave it alone" all the way down to the beads client —
+		// so what this buys is that the day it can, handing work back to the run
+		// queue is not narrated as a role taking it up.
+		Executor *string `json:"executor"`
 		Reason   string  `json:"reason"`
 	} `json:"action"`
 	WorkItemID string `json:"work_item_id"`
@@ -126,23 +139,40 @@ type trackerAction struct {
 // handsOff is the executor this action gives the item, and is empty for the
 // actions that say nothing about what carries the work, which is nearly all of
 // them.
-func (a trackerAction) handsOff() string { return strings.TrimSpace(a.Action.Executor) }
+func (a trackerAction) handsOff() string {
+	if a.Action.Executor == nil {
+		return ""
+	}
+	return strings.TrimSpace(*a.Action.Executor)
+}
+
+// saysWhatCarriesIt reports an action that spoke about the item's executor at
+// all, whatever it said. It is what keeps an action that took the marker off an
+// item out of the pickup below: nothing reports work returning to the run queue
+// yet, and saying nothing about it is a gap, where narrating it as a role
+// starting the work would be the opposite of what happened.
+func (a trackerAction) saysWhatCarriesIt() bool { return a.Action.Executor != nil }
 
 // carriedBy is what the tracker already said carried the item when the action
 // ran, and is empty for ordinary work a developer run carries.
 func (a trackerAction) carriedBy() string { return strings.TrimSpace(a.WorkItemExecutor) }
 
-// changesTheItem reports an action that did something to the work rather than
-// asked about it. It is what makes a role's first such action the moment it
-// picked the work up: reading an item and surveying the queue are what a role
-// does before deciding anything, and treating either as starting the work would
-// announce a pickup for a conversation that went on to do nothing.
-func (a trackerAction) changesTheItem() bool {
+// carriesTheWork reports an action that is a role doing work handed to it,
+// rather than the queue being kept around that work. Recording what was done on
+// the item and closing it are the whole of what carrying work in a conversation
+// looks like from the tracker's side; the goal an item serves, where it sits in
+// the order, what it depends on, and what it hangs under are all still the queue,
+// and they are as much the queue on conversation work as on any other.
+//
+// It is deliberately narrower than "the action changed something". A reordering
+// is not somebody picking work up, and reading it as one would both announce a
+// pickup nobody performed and swallow the reordering that did happen.
+func (a trackerAction) carriesTheWork() bool {
 	switch a.Action.Action {
-	case "", trackerRead, trackerSurvey:
-		return false
-	default:
+	case trackerUpdate, trackerClose:
 		return true
+	default:
+		return false
 	}
 }
 
@@ -180,12 +210,18 @@ func fromTrackerAction(conversation runstate.Conversation, earlier []execution.E
 	case recorded.carriedBy() != "" && recorded.Action.Action == trackerClose:
 		kind = KindWorkCarriedOut
 		detail.Executor = recorded.carriedBy()
-	// The first thing a conversation does to work that was handed to a
+	// The first thing a conversation does to carry work that was handed to a
 	// conversation is that role starting it. It is read from this conversation's
 	// own log, so a second role taking the same item up later is a second pickup
 	// rather than silence — which is the honest reading, since it is a second role
 	// starting on it.
-	case recorded.carriedBy() != "" && recorded.changesTheItem() && !actedOn(earlier, recorded.WorkItemID):
+	//
+	// What it is not is any first act on the item. Attributing a goal and
+	// reordering the queue are below this and stay themselves, because they are
+	// what they are whoever carries the item, and an arm here that swallowed them
+	// would report a pickup that did not happen instead of the change that did.
+	case recorded.carriedBy() != "" && recorded.carriesTheWork() && !recorded.saysWhatCarriesIt() &&
+		!actedOn(earlier, recorded.WorkItemID):
 		kind = KindWorkPickedUp
 		detail.Executor = recorded.carriedBy()
 	case recorded.Action.Action == trackerCreate:
@@ -260,11 +296,17 @@ func namedItem(named, recorded string) string {
 	return strings.TrimSpace(recorded)
 }
 
-// actedOn reports this conversation having already changed one item earlier in
-// its own log. It is what makes a pickup the first act rather than every act: a
-// role carrying work in conversation writes on the item repeatedly, and a thread
-// that said it had been picked up each time would say the one thing that matters
-// so often it stopped meaning anything.
+// actedOn reports this conversation having already carried one item's work
+// earlier in its own log. It is what makes a pickup the first such act rather
+// than every act: a role carrying work in conversation writes on the item
+// repeatedly, and a thread that said it had been picked up each time would say
+// the one thing that matters so often it stopped meaning anything.
+//
+// It asks the same narrow question the pickup does, so the queue being kept
+// around an item never consumes its pickup: a conversation that reorders an item
+// and then starts working on it has started working on it, and a reading that
+// counted the reordering would leave the thread's most important message unsaid
+// on the grounds that something unrelated happened first.
 //
 // A record it cannot read is not an earlier act. Skipping it would be the safe
 // direction for a message nobody wants twice, and this is the opposite case: the
@@ -283,7 +325,7 @@ func actedOn(earlier []execution.Event, workItemID string) bool {
 		if err := json.Unmarshal(event.Payload, &recorded); err != nil {
 			continue
 		}
-		if strings.TrimSpace(recorded.WorkItemID) == wanted && recorded.changesTheItem() {
+		if strings.TrimSpace(recorded.WorkItemID) == wanted && recorded.carriesTheWork() {
 			return true
 		}
 	}

@@ -445,6 +445,119 @@ func TestTheFirstThingARoleDoesToHandedWorkIsSaidAsPickingItUp(t *testing.T) {
 	}
 }
 
+// Keeping the queue around handed work is not carrying it. An item marked for a
+// conversation is still attributed to a goal and still reordered, both are still
+// what they always were, and a reading that took either for somebody starting the
+// work would report a pickup nobody performed and lose the change that did
+// happen.
+func TestKeepingTheQueueAroundHandedWorkIsNotPickingItUp(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	for _, tidying := range []struct {
+		name   string
+		action map[string]any
+		want   Kind
+		says   string
+	}{
+		{
+			name: "reprioritize",
+			action: map[string]any{
+				"action":   "reprioritize",
+				"id":       "yoyodyne-ifd.138",
+				"priority": 1,
+				"reason":   "the brief matters more than the rest of the epic",
+			},
+			want: KindItemReprioritized,
+			says: "priority 1",
+		},
+		{
+			name: "attribute",
+			action: map[string]any{
+				"action": "attribute",
+				"id":     "yoyodyne-ifd.138",
+				"goal":   "Run development nearly autonomously",
+				"reason": "it was admitted before goals were checked",
+			},
+			want: KindItemAttributed,
+			says: "Run development nearly autonomously",
+		},
+	} {
+		t.Run(tidying.name, func(t *testing.T) {
+			// The first act of the conversation, which is exactly where a pickup arm
+			// reading every change would swallow it.
+			events := []execution.Event{appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", tidying.action)}
+			notification, message := said(t, conversation, events, 0)
+			if notification.Event.Kind != tidying.want {
+				t.Fatalf("a %s on conversation-carried work is %s, want %s", tidying.name, notification.Event.Kind, tidying.want)
+			}
+			if !strings.Contains(message.Body, tidying.says) {
+				t.Fatalf("body %q loses what the %s actually changed", message.Body, tidying.name)
+			}
+			// The item is still not queued for a run and never will be, so what
+			// follows is the handoff's answer rather than the queue's.
+			if !strings.HasSuffix(message.Body, nextMoveLead+nextMoves[KindWorkHandedOff]) {
+				t.Fatalf("body %q says this is waiting for a run", message.Body)
+			}
+		})
+	}
+}
+
+// Tidying the queue must not consume the pickup either: a conversation that
+// reorders an item and then starts working on it has started working on it, and
+// the reordering is no reason to leave the thread's most important message
+// unsaid.
+func TestQueueTidyingDoesNotConsumeThePickupThatFollowsIt(t *testing.T) {
+	conversation := conversationWith(domain.RoleArchitect)
+	events := []execution.Event{
+		appliedTo(t, 1, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action":   "reprioritize",
+			"id":       "yoyodyne-ifd.138",
+			"priority": 0,
+			"reason":   "doing this one first",
+		}),
+		appliedTo(t, 2, "yoyodyne-ifd.138", "conversation", map[string]any{
+			"action": "update",
+			"id":     "yoyodyne-ifd.138",
+			"note":   "the revision as promoted",
+			"reason": "starting the promotion",
+		}),
+	}
+	if reordered, _ := said(t, conversation, events, 0); reordered.Event.Kind != KindItemReprioritized {
+		t.Fatalf("the reordering is %s", reordered.Event.Kind)
+	}
+	taken, _ := said(t, conversation, events, 1)
+	if taken.Event.Kind != KindWorkPickedUp {
+		t.Fatalf("the first act that carries the work is %s, want the pickup", taken.Event.Kind)
+	}
+}
+
+// Handing work back to the run queue is the inverse of a handoff, and nothing
+// reports it yet. Saying nothing is a gap; narrating it as a role taking the work
+// up would be a message that is exactly wrong, so the executor being spoken about
+// at all keeps the action out of the pickup.
+func TestTakingTheMarkerOffWorkIsNeverSaidToBePickingItUp(t *testing.T) {
+	conversation := conversationWith(domain.RoleProductManager)
+	events := []execution.Event{recorded(t, 1, execution.EventTrackerActionApplied, map[string]any{
+		"action_id": "t1.1",
+		"turn":      1,
+		"action": map[string]any{
+			"action":   "update",
+			"id":       "yoyodyne-ifd.138",
+			"executor": "",
+			"reason":   "a run can carry this after all",
+		},
+		"work_item_id":       "yoyodyne-ifd.138",
+		"work_item_executor": "conversation",
+		"summary":            "the harness's own account of it",
+	})}
+	notification, err := FromConversation(conversation, events, 0)
+	if err != nil {
+		t.Fatalf("select from a cleared executor: %v", err)
+	}
+	if notification.Event.Kind == KindWorkPickedUp {
+		t.Fatal("work handed back to the run queue was said to have been picked up")
+	}
+}
+
 // Closing an item is otherwise said by the run that finished it, and work a
 // conversation carries has no run. Without this its thread simply stops, which
 // is the silence that reads exactly like abandoned work.
