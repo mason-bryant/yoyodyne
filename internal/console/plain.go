@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 )
 
@@ -69,6 +70,50 @@ func (p *plain) Prompt(ctx context.Context, prompt string, _ <-chan struct{}) (s
 	// one would either double the line or change what a redirected transcript
 	// has always contained.
 	return p.scanner.Text(), nil
+}
+
+// choiceHint is how a stream says the list above it can be answered by number.
+// A stream cannot move a marker, so the numbers are the whole affordance, and
+// one that is never named is one the operator has to guess at.
+const choiceHint = "  (type the number of a choice, or answer in your own words)"
+
+// Choose puts the answers to the operator as a numbered list and reads the
+// number they type. This is the same question a terminal offers a marker for,
+// asked the only way a stream can ask it: every answer that was on offer, and a
+// way to name one of them.
+//
+// Free entry costs nothing extra here. A line that is not one of the numbers is
+// already the operator's own answer, so it is returned as one, and the numbered
+// choice that says as much is there for the operator who reads the list before
+// typing rather than after.
+func (p *plain) Choose(ctx context.Context, prompt string, options []string, interrupt <-chan struct{}) (string, error) {
+	choices := offered(options)
+	var list strings.Builder
+	for index, choice := range choices {
+		fmt.Fprintf(&list, "  %d. %s\n", index+1, choice)
+	}
+	fmt.Fprintln(&list, choiceHint)
+	p.mu.Lock()
+	_, err := io.WriteString(p.out, list.String())
+	p.mu.Unlock()
+	if err != nil {
+		return "", err
+	}
+	line, err := p.Prompt(ctx, prompt, interrupt)
+	if err != nil {
+		return "", err
+	}
+	index, numbered := chosenNumber(line, len(choices))
+	switch {
+	case numbered && index < len(options):
+		return options[index], nil
+	case numbered:
+		// They named their own words, which are still to come: the prompt is put
+		// again and what they say to it is the answer.
+		return p.Prompt(ctx, prompt, interrupt)
+	default:
+		return line, nil
+	}
 }
 
 // Working says each phase once, as a line like any other. A stream has nothing

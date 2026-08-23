@@ -309,8 +309,21 @@ product is for is an opinion it states and can be wrong about, because you can
 overrule an opinion it voiced and cannot overrule one it kept to itself. Each
 question waits for your answer before the conversation moves on, what you say
 reaches it on your next message, and a question you leave unanswered is named
-when the conversation ends rather than passing for agreement. `--message` has
-nobody to answer, so it prints the questions and proposes nothing.
+when the conversation ends rather than passing for agreement.
+
+Where the answer is one of a few, the question arrives as those few. The answers
+are listed under it and you pick one with the cursor keys, and the last of them
+is always your own words — for the answer nobody listed, or for the question you
+want to ask back. Where the terminal cannot do better, which is a pipe, a
+redirected conversation, and anything that reports itself as `dumb`, the same
+answers are the same numbered list and you type the number instead of moving a
+marker; typing anything else there is that answer, so a numbered prompt never
+costs you a sentence you had already written. What is recorded either way is the
+answer itself, in the words it was offered in, and that is what reaches the
+product manager. Offering answers never narrows what you may say, which is why
+your own words are on every list there is. `--message` has nobody to answer, so
+it prints the questions with the answers that were on offer, and proposes
+nothing.
 
 ## Steering the work from the conversation
 

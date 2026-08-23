@@ -1584,6 +1584,24 @@ func money(amount float64) string { return fmt.Sprintf("$%.4f", amount) }
 // the console is an ordinary stream there is no such moment, so the run is
 // reported before the next question instead.
 func (s *Session) ask(ctx context.Context, screen console.Console, prompt string) (string, error) {
+	return s.await(ctx, screen, func(interrupt <-chan struct{}) (string, error) {
+		return screen.Prompt(ctx, prompt, interrupt)
+	})
+}
+
+// choose puts a question the product manager enumerated the answers to, and
+// waits for the operator exactly as ask does. What comes back is the answer
+// itself, whether they picked one of the answers offered or said it in their
+// own words, because that is what is recorded either way.
+func (s *Session) choose(ctx context.Context, screen console.Console, prompt string, options []string) (string, error) {
+	return s.await(ctx, screen, func(interrupt <-chan struct{}) (string, error) {
+		return screen.Choose(ctx, prompt, options, interrupt)
+	})
+}
+
+// await is the waiting the operator's answer is read inside, however it is
+// being asked for.
+func (s *Session) await(ctx context.Context, screen console.Console, read func(interrupt <-chan struct{}) (string, error)) (string, error) {
 	for {
 		// A run that crossed a phase or finished while the operator was reading is
 		// reported before they are asked for the next line, so the prompt never
@@ -1594,7 +1612,7 @@ func (s *Session) ask(ctx context.Context, screen console.Console, prompt string
 		harness := s.theme.Harness(screen)
 		s.reportMilestones(harness)
 		s.reportFinishedWork(harness)
-		answer, err := screen.Prompt(ctx, prompt, s.attention())
+		answer, err := read(s.attention())
 		if errors.Is(err, console.ErrInterrupted) {
 			continue
 		}
@@ -1658,10 +1676,11 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 	for _, concern := range concerns {
 		// A concern is dressed as what it is: the question in it gets the colour
 		// questions get, and the text says what kind of concern it is without the
-		// colour.
-		fmt.Fprint(out, s.theme.Questions(concern.Render()))
+		// colour. The answers it enumerates are left to the prompt below, which
+		// is where they can be chosen rather than only read.
+		fmt.Fprint(out, s.theme.Questions(concern.question()))
 		fmt.Fprintln(out)
-		line, err := s.ask(ctx, screen, fmt.Sprintf(answerPrompt, concern.ID))
+		line, err := s.answerTo(ctx, screen, concern)
 		if errors.Is(err, io.EOF) {
 			fmt.Fprintln(out, "input ended before you answered; the question is still open.")
 			return nil
@@ -1680,6 +1699,20 @@ func (s *Session) raise(ctx context.Context, concerns []PendingConcern, screen c
 		fmt.Fprintf(out, "answered %s; what you said reaches the product manager when you next say something.\n\n", concern.ID)
 	}
 	return nil
+}
+
+// answerTo reads the operator's answer to one concern. A question whose answers
+// the product manager could enumerate is put as those answers, so the common
+// case is one keystroke rather than a sentence typed into a chat field; a
+// question it could not is the prose question it always was. Neither shape
+// narrows what the operator may say: the answers on offer always end in their
+// own words, which is also where a counter-question goes.
+func (s *Session) answerTo(ctx context.Context, screen console.Console, concern PendingConcern) (string, error) {
+	prompt := fmt.Sprintf(answerPrompt, concern.ID)
+	if len(concern.Concern.Options) > 0 {
+		return s.choose(ctx, screen, prompt, concern.Concern.Options)
+	}
+	return s.ask(ctx, screen, prompt)
 }
 
 // decide puts the proposals from a turn to the operator as numbered cards and
@@ -2202,10 +2235,12 @@ Every piece of work you admit or propose serves a goal, and you check that befor
 A concern mentioned in passing inside a paragraph is not a concern; it reads as agreement and the work carries on. To raise one, end your reply with exactly one block, after the prose:
 
 ` + "```" + `yoyodyne-concern
-{"concerns":[{"kind":"unplaceable|conflict|judgement","subject":"the work this is about, in one line","goal":"the goal at issue","detail":"what you see","question":"what you need the operator to decide?"}]}
+{"concerns":[{"kind":"unplaceable|conflict|judgement","subject":"the work this is about, in one line","goal":"the goal at issue","detail":"what you see","question":"what you need the operator to decide?","options":["one answer you would accept","another"]}]}
 ` + "```" + `
 
-"kind" says which case this is: "unplaceable" is work you can attach to no goal, "conflict" is work that would cut against one, and "judgement" is work that fits the goals and that you think is against the product's intent. "goal" names the goal at issue — the one the work would cut against, or the one it fits on paper — and is required on "conflict" and "judgement" and refused on "unplaceable", which is exactly the case with no goal to name. "subject", "detail", and "question" are required, and "question" ends in a question mark because it is a question. Raise at most ` + maxConcernsPerTurnText + ` concerns in one reply. The harness puts each one to the operator, waits for their answer, and tells you what they said on your next turn. Nothing you raise this way is proposed, admitted, or created, so raise a concern instead of proposing the work rather than as well as.
+"kind" says which case this is: "unplaceable" is work you can attach to no goal, "conflict" is work that would cut against one, and "judgement" is work that fits the goals and that you think is against the product's intent. "goal" names the goal at issue — the one the work would cut against, or the one it fits on paper — and is required on "conflict" and "judgement" and refused on "unplaceable", which is exactly the case with no goal to name. "subject", "detail", and "question" are required, and "question" ends in a question mark because it is a question. "options" is optional and lists the answers you would accept, between 2 and ` + maxConcernOptionsText + ` of them, each on one line and each different from the others. Give it where the answer really is one of a few — which goal it should serve, whether to retire the work or reshape it — and leave it out where it is not, because two invented options are a worse question than an open one. The harness puts them to the operator to choose from, and always offers their own words as the last choice, so listing options never narrows what they can say and one of them is never the only way to answer. You are told which answer they gave, in the words of the option they chose, exactly as you are told what they typed.
+
+Raise at most ` + maxConcernsPerTurnText + ` concerns in one reply. The harness puts each one to the operator, waits for their answer, and tells you what they said on your next turn. Nothing you raise this way is proposed, admitted, or created, so raise a concern instead of proposing the work rather than as well as.
 
 Keeping the queue coherent is yours to do, not to ask for. To act on the work tracker, end your reply with exactly one block, after the prose:
 

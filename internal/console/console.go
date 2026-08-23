@@ -7,7 +7,8 @@
 // written is redrawn, so the terminal's own scrollback, selection, copying, and
 // resizing keep working on the conversation exactly as they would on any other
 // command's output. The same region carries the account of work in progress
-// while the operator is waiting for an answer, and the theme dresses what is
+// while the operator is waiting for an answer, and the answers to a question
+// that enumerates them while they are picking one, and the theme dresses what is
 // written above it so one kind of thing can be told from another.
 //
 // Anything that is not a terminal gets the same conversation as an ordinary
@@ -48,6 +49,15 @@ type Console interface {
 	// can write above the composing line and prompt again. A closed input
 	// returns io.EOF.
 	Prompt(ctx context.Context, prompt string, interrupt <-chan struct{}) (string, error)
+	// Choose puts a question whose answers can be counted to the operator and
+	// returns the one they gave: one of the options, exactly as it was handed
+	// over, or whatever they said instead. Their own words are always on offer
+	// as the last choice, so a list nobody's answer is on never traps them.
+	// What differs between the consoles is only how the choice is made — a
+	// marker moved with the cursor keys where the screen can be addressed, and
+	// a numbered list to type the number of where it cannot. It reports
+	// ErrInterrupted and io.EOF exactly as Prompt does.
+	Choose(ctx context.Context, prompt string, options []string, interrupt <-chan struct{}) (string, error)
 	// Working starts an account of something the operator is waiting for,
 	// beginning with the phase it is in now. It is closed by the caller once
 	// there is an answer to read.

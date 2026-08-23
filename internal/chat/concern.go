@@ -34,6 +34,17 @@ const (
 	maxConcernsPerTurnText = "5"
 )
 
+// MaxConcernOptions bounds the answers one concern may enumerate, and
+// maxConcernOptionsText is the same bound as the contract states it. It is
+// small for two reasons that agree: a list nobody can hold in their head is a
+// list they read past rather than choose from, and the answers are numbered as
+// well as selectable, so every one of them stays reachable by a single digit
+// once the operator's own words are added at the end.
+const (
+	MaxConcernOptions     = 8
+	maxConcernOptionsText = "8"
+)
+
 // MaxConcernBlockBytes bounds the untrusted concern payload one turn may carry.
 const MaxConcernBlockBytes = 16 << 10
 
@@ -113,6 +124,14 @@ type Concern struct {
 	// and an observation does not stop anything.
 	Detail   string `json:"detail"`
 	Question string `json:"question"`
+	// Options are the answers the question can be answered by, where it has
+	// them. They are optional because most questions do not: a question whose
+	// answer is one of a few is put to the operator as a list to choose from,
+	// and one whose answer is not is the question it always was. Offering them
+	// never narrows what can be said — the harness always offers the operator's
+	// own words as well — so what this decides is how cheap the common answer
+	// is to give, not which answers are allowed.
+	Options []string `json:"options,omitempty"`
 }
 
 // PendingConcern is a raised concern awaiting the operator's answer, together
@@ -224,6 +243,7 @@ func (c Concern) Validate() error {
 	}
 	problems = append(problems, boundConcernText("detail", c.Detail))
 	problems = append(problems, boundConcernText("question", c.Question))
+	problems = append(problems, boundConcernOptions(c.Options)...)
 	if question := strings.TrimSpace(c.Question); question != "" && !strings.HasSuffix(question, "?") {
 		// A question that does not ask anything is the failure this whole block
 		// exists to prevent: it reads as a remark the operator scrolls past.
@@ -262,6 +282,40 @@ func boundConcernLine(field, value string, limit int, required bool) error {
 	return nil
 }
 
+// boundConcernOptions checks the answers a concern enumerates. Offering none is
+// ordinary and is not checked at all; offering some means the operator is about
+// to pick one, so the list has to be one they can pick from. Two at least,
+// because one answer is not a choice and reads as an instruction. Few enough to
+// take in. Each of them a line, and each of them different from the others,
+// because what the harness records is the text of the answer they chose and two
+// that read the same are one answer twice.
+func boundConcernOptions(options []string) []error {
+	if len(options) == 0 {
+		return nil
+	}
+	var problems []error
+	if len(options) < 2 {
+		problems = append(problems, errors.New("options offers 1 answer; one answer is not a choice, so offer at least 2 or leave it out"))
+	}
+	if len(options) > MaxConcernOptions {
+		problems = append(problems, fmt.Errorf("options offers %d answers, limit is %d", len(options), MaxConcernOptions))
+	}
+	offered := make(map[string]bool, len(options))
+	for index, option := range options {
+		field := fmt.Sprintf("options[%d]", index)
+		if err := boundConcernLine(field, option, maxConcernSubjectBytes, true); err != nil {
+			problems = append(problems, err)
+			continue
+		}
+		trimmed := strings.TrimSpace(option)
+		if offered[trimmed] {
+			problems = append(problems, fmt.Errorf("%s repeats %q; the answer recorded is the one they chose, and two answers that read alike are one answer", field, trimmed))
+		}
+		offered[trimmed] = true
+	}
+	return problems
+}
+
 func boundConcernText(field, value string) error {
 	trimmed := strings.TrimSpace(value)
 	if trimmed == "" {
@@ -275,8 +329,19 @@ func boundConcernText(field, value string) error {
 
 // Render describes one concern for an operator who is about to answer it. The
 // kind is the harness's own line and everything under it came from the
-// provider, so provider text is indented and never printed at the margin.
-func (c PendingConcern) Render() string {
+// provider, so provider text is indented and never printed at the margin. The
+// answers it enumerates are listed with it, because a reader who is not being
+// prompted — a one-shot message, a conversation that ended unanswered — has to
+// be told what was on offer or the question reads as narrower than it was.
+func (c PendingConcern) Render() string { return c.render(true) }
+
+// question is the same concern without the answers it enumerates, for a console
+// that is about to put those to the operator itself. The list is the console's
+// to draw where it can be chosen from, and asking the same question twice on
+// one screen is worse than either way of asking it once.
+func (c PendingConcern) question() string { return c.render(false) }
+
+func (c PendingConcern) render(withOptions bool) string {
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "[%s] %s\n", c.ID, c.Concern.Kind.Headline())
 	rendered.WriteString(indent("about: " + strings.TrimSpace(c.Concern.Subject)))
@@ -285,6 +350,12 @@ func (c PendingConcern) Render() string {
 	}
 	rendered.WriteString(indent(c.Concern.Detail))
 	rendered.WriteString(indent(strings.TrimSpace(c.Concern.Question)))
+	if !withOptions {
+		return rendered.String()
+	}
+	for index, option := range c.Concern.Options {
+		rendered.WriteString(indent(fmt.Sprintf("%d. %s", index+1, strings.TrimSpace(option))))
+	}
 	return rendered.String()
 }
 

@@ -523,6 +523,16 @@ func (c *scriptedConsole) Prompt(_ context.Context, prompt string, interrupt <-c
 	return step.line, nil
 }
 
+// Choose puts the answers out as a stream does — numbered, in order — and then
+// reads a line, so a scripted step answers a question with options exactly as
+// it answers any other.
+func (c *scriptedConsole) Choose(ctx context.Context, prompt string, options []string, interrupt <-chan struct{}) (string, error) {
+	for index, option := range append(append([]string(nil), options...), console.FreeEntryChoice) {
+		fmt.Fprintf(c.out, "  %d. %s\n", index+1, option)
+	}
+	return c.Prompt(ctx, prompt, interrupt)
+}
+
 // Working and Theme are what a stream gets: the phases said once each, and
 // nothing dressed. This console exists to script prompts, and a test that reads
 // its transcript should read the same text a redirected conversation holds.

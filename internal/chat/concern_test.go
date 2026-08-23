@@ -2,11 +2,13 @@ package chat
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"strings"
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -125,6 +127,36 @@ func TestConcernsRefuseWhatWouldNotStopAnOperator(t *testing.T) {
 			name:  "unclosed block",
 			reply: "prose\n" + concernFence + "\n{\"concerns\":[" + valid + "]}\n",
 			want:  "not closed",
+		},
+		{
+			// One answer is not a choice: put to the operator as a list it reads
+			// as an instruction with a way out rather than as a question.
+			name:  "one answer offered",
+			reply: concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"s\",\"detail\":\"d\",\"question\":\"q?\",\"options\":[\"only this\"]}]}\n```",
+			want:  "one answer is not a choice",
+		},
+		{
+			name: "more answers than anybody reads",
+			reply: concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"s\",\"detail\":\"d\",\"question\":\"q?\",\"options\":[" +
+				strings.TrimSuffix(strings.Repeat("\"a\",", MaxConcernOptions+1), ",") + "]}]}\n```",
+			want: "limit is " + strconv.Itoa(MaxConcernOptions),
+		},
+		{
+			// What is recorded is the text of the answer they chose, so two that
+			// read alike are one answer offered twice.
+			name:  "two answers that read alike",
+			reply: concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"s\",\"detail\":\"d\",\"question\":\"q?\",\"options\":[\"retire it\",\" retire it \"]}]}\n```",
+			want:  "repeats",
+		},
+		{
+			name:  "an answer spanning lines",
+			reply: concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"s\",\"detail\":\"d\",\"question\":\"q?\",\"options\":[\"retire it\",\"keep it\\n  1. and something else\"]}]}\n```",
+			want:  "cannot span lines",
+		},
+		{
+			name:  "an empty answer",
+			reply: concernFence + "\n{\"concerns\":[{\"kind\":\"unplaceable\",\"subject\":\"s\",\"detail\":\"d\",\"question\":\"q?\",\"options\":[\"retire it\",\"  \"]}]}\n```",
+			want:  "options[1] is required",
 		},
 		{
 			name:  "oversized block",
@@ -259,6 +291,155 @@ func TestConverseStopsAndWaitsForAnAnswerToEachConcern(t *testing.T) {
 	}
 }
 
+// TestAnEnumerableQuestionIsAnsweredByChoosing is the operator's side of the
+// one question a turn is allowed to stop on: where the product manager can name
+// the answers, answering is a selection rather than a sentence typed into a
+// chat field, and what they chose is what the record and the next turn carry.
+func TestAnEnumerableQuestionIsAnsweredByChoosing(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: concernReply(
+			"Nothing in the goals covers this.",
+			`{"kind":"unplaceable","subject":"A plugin marketplace","detail":"No goal covers third-party extensions.","question":"Which of these should it be?","options":["Write a goal for extensions","Retire the work"]}`,
+		)},
+		{SessionID: "session-1", FinalText: "Retired, then."},
+	}}
+	options := testOptions(t, provider)
+	options.Store = newTestStore(t, root)
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	// The conversation is a stream here, which is the degraded path every
+	// terminal falls back to: the answers are numbered and the number is typed.
+	input := strings.NewReader("what should we do about the marketplace?\n2\nnoted\n")
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	transcript := out.String()
+	for _, required := range []string{
+		"Which of these should it be?",
+		"  1. Write a goal for extensions",
+		"  2. Retire the work",
+		// Free entry is offered wherever the question is put, so a list nobody's
+		// answer is on never traps the operator.
+		"  3. " + console.FreeEntryChoice,
+		"answer c1.1?",
+		"answered c1.1",
+	} {
+		if !strings.Contains(transcript, required) {
+			t.Fatalf("transcript = %q, want it to contain %q", transcript, required)
+		}
+	}
+	// The answers are put once. The question above the prompt does not list them
+	// as well, because the prompt is where they can be chosen from.
+	if listed := strings.Count(transcript, "2. Retire the work"); listed != 1 {
+		t.Fatalf("the answers were listed %d times:\n%s", listed, transcript)
+	}
+	if open := session.Concerns(); len(open) != 0 {
+		t.Fatalf("a chosen answer left the question open: %#v", open)
+	}
+	// What lands in the record is the answer itself, in the words it was offered
+	// in, rather than the number that was typed to choose it.
+	payload := onlyEventPayload(t, root, session, execution.EventConcernAnswered)
+	if !strings.Contains(payload, `"answer":"Retire the work"`) {
+		t.Fatalf("answer event = %s", payload)
+	}
+	// And it reaches the product manager as the answer to that question, which
+	// is what stopping to ask was for.
+	if len(provider.requests) != 2 {
+		t.Fatalf("provider turns = %d, want 2", len(provider.requests))
+	}
+	if !strings.Contains(provider.requests[1].Prompt, "answered concern c1.1") ||
+		!strings.Contains(provider.requests[1].Prompt, "Retire the work") {
+		t.Fatalf("second prompt = %q", provider.requests[1].Prompt)
+	}
+}
+
+// TestOfferedAnswersNeverNarrowWhatTheOperatorMaySay covers the answer nobody
+// listed and the question asked back. A prompt that could not carry one would
+// make the operator abandon it, which is the opposite of what offering the
+// answers is for.
+func TestOfferedAnswersNeverNarrowWhatTheOperatorMaySay(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: concernReply(
+			"Nothing in the goals covers this.",
+			`{"kind":"unplaceable","subject":"A plugin marketplace","detail":"No goal covers third-party extensions.","question":"Which of these should it be?","options":["Write a goal for extensions","Retire the work"]}`,
+		)},
+	}})
+	options.Store = newTestStore(t, root)
+	session := openTestSession(t, options)
+
+	var out strings.Builder
+	input := strings.NewReader("what should we do about the marketplace?\nneither; what would a goal cost us?\n")
+	if err := session.Converse(context.Background(), testConsole(input, &out)); err != nil {
+		t.Fatalf("Converse() error = %v", err)
+	}
+
+	if open := session.Concerns(); len(open) != 0 {
+		t.Fatalf("a question answered in the operator's own words is still open: %#v", open)
+	}
+	payload := onlyEventPayload(t, root, session, execution.EventConcernAnswered)
+	if !strings.Contains(payload, "neither; what would a goal cost us?") {
+		t.Fatalf("answer event = %s", payload)
+	}
+}
+
+// TestTheAnswersOnOfferReachAReaderWhoIsNotBeingPrompted covers `--message` and
+// `--json`, which have nobody standing at a prompt. Nothing is put to anybody
+// there, so the answers are reported as what they are: what was on offer, in
+// the words the product manager offered them in, and nothing the console adds.
+func TestTheAnswersOnOfferReachAReaderWhoIsNotBeingPrompted(t *testing.T) {
+	t.Parallel()
+
+	pending := PendingConcern{
+		ID:             "c1.1",
+		ConversationID: "chat-0123456789abcdef0123456789abcdef",
+		Turn:           1,
+		Concern: Concern{
+			Kind:     ConcernUnplaceable,
+			Subject:  "A plugin marketplace",
+			Detail:   "No goal covers third-party extensions.",
+			Question: "Which of these should it be?",
+			Options:  []string{"Write a goal for extensions", "Retire the work"},
+		},
+	}
+	rendered := pending.Render()
+	for _, required := range []string{"1. Write a goal for extensions", "2. Retire the work"} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered concern = %q, want it to contain %q", rendered, required)
+		}
+	}
+	if strings.Contains(rendered, console.FreeEntryChoice) {
+		t.Fatalf("a reader who is not being prompted was offered a prompt's choice: %q", rendered)
+	}
+
+	document, err := json.Marshal(pending)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(document), `"options":["Write a goal for extensions","Retire the work"]`) {
+		t.Fatalf("encoded concern = %s", document)
+	}
+	if strings.Contains(string(document), console.FreeEntryChoice) {
+		t.Fatalf("the console's own choice reached the document: %s", document)
+	}
+	// A question with no answers to enumerate encodes exactly as it always did.
+	pending.Concern.Options = nil
+	document, err = json.Marshal(pending)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if strings.Contains(string(document), "options") {
+		t.Fatalf("encoded concern = %s", document)
+	}
+}
+
 func TestAnsweringAConcernIsRecordedOnceAndOnlyForAConcernThatExists(t *testing.T) {
 	t.Parallel()
 
@@ -349,14 +530,23 @@ func TestContractStatesTheConcernProtocolItEnforces(t *testing.T) {
 		"Every piece of work you admit or propose serves a goal",
 		"waits for their answer",
 		"Nothing you raise this way is proposed, admitted, or created",
+		// And how a question whose answers can be named is asked, including the
+		// thing the product manager must not conclude from being able to name
+		// them: that the operator is confined to what it listed.
+		"\"options\" is optional",
+		"between 2 and " + maxConcernOptionsText,
+		"always offers their own words as the last choice",
 	} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("system prompt does not state %q", required)
 		}
 	}
-	// The bound the product manager is told is the bound that is enforced.
+	// The bounds the product manager is told are the bounds that are enforced.
 	if maxConcernsPerTurnText != strconv.Itoa(MaxConcernsPerTurn) {
 		t.Fatalf("contract states a limit of %s, enforced limit is %d", maxConcernsPerTurnText, MaxConcernsPerTurn)
+	}
+	if maxConcernOptionsText != strconv.Itoa(MaxConcernOptions) {
+		t.Fatalf("contract states %s answers, enforced limit is %d", maxConcernOptionsText, MaxConcernOptions)
 	}
 }
 
