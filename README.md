@@ -619,7 +619,9 @@ It has no tools: no filesystem, no commands, no network. What it has instead is
 the work tracker, through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
 goal, update, reparent, reprioritize, link and unlink a dependency, close, and
-retire. Every
+retire. One further operation is about none of that: `handle` records
+what became of a report another role filed, which is how the pile it is shown
+[stops being asked about](docs/reporting.md#who-reads-them-and-what-became-of-each-one). Every
 argument is validated before anything runs, at most ten actions happen per reply,
 each one is recorded in the conversation's log as asked-for and then as applied
 or failed, and all of them are printed to you as they happen. An action that
