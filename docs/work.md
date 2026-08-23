@@ -272,7 +272,8 @@ conversations, and what the reviewer noticed beside its verdict is collected
 with every other report. It is a provider invocation like any other the harness
 makes, so it records the event stream every other one records: it can be
 followed while it runs with
-[`yoyo-status`](operations.md#following-a-run-a-conversation-or-a-branch-review), and what
+[`yoyo status --follow`](operations.md#following-a-run-a-conversation-or-a-branch-review),
+and what
 the provider reported it cost is priced beside runs and conversations rather
 than quietly missing from the harness's total.
 
@@ -345,7 +346,8 @@ the other reviewer, not what is true of the branch.
 
 A shadow review costs money like any other provider invocation, and is priced
 where every other branch review is: it records the same event stream, so
-[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) counts it
+[`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+counts it
 under `branch reviews`, and `--compare` reports each side's own cost from that
 same log. It is not in `yoyo cost`, which prices work items from the runs made
 for them — a branch review belongs to no run, and a shadow review belongs to no

@@ -345,7 +345,7 @@ func TestStatusRefusesArgumentsItCannotHonor(t *testing.T) {
 	if code != 2 {
 		t.Fatalf("code = %d, want 2; stderr = %q", code, stderr)
 	}
-	if !strings.Contains(stderr, "at most one Beads work item id") {
+	if !strings.Contains(stderr, "at most one id") {
 		t.Fatalf("stderr = %q", stderr)
 	}
 
@@ -372,7 +372,7 @@ func TestStatusReadsTheSameStoreRunsAreRecordedIn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildComponents() error = %v", err)
 	}
-	store, caps, err := recordedRunStore(configPath)
+	store, caps, _, err := recordedRunStore(configPath)
 	if err != nil {
 		t.Fatalf("recordedRunStore() error = %v", err)
 	}

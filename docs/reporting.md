@@ -47,8 +47,8 @@ item* is runs: the conversations that steer them cost money too and are recorded
 just as durably, but attributing a conversation that discussed five items to any
 one of them is a judgement rather than a join, so it is left out here and said
 to be left out. It is not left out of what the harness has spent altogether —
-[`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
-conversations and branch reviews beside runs, because a total that skipped
+[`yoyo status --spend`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+prices conversations and branch reviews beside runs, because a total that skipped
 either would be wrong rather than merely unattributed.
 
 `/show` breaks one item's price down by attempt, which is what a single total

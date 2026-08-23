@@ -69,7 +69,7 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 	case "triage":
 		return runTriage(ctx, args[1:], stdout, stderr)
 	case "status":
-		return reportRunStatus(args[1:], stdout, stderr)
+		return reportRunStatus(ctx, args[1:], stdout, stderr)
 	case "pause":
 		return pauseHarness(args[1:], stdout, stderr)
 	case "resume":
