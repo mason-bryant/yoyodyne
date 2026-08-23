@@ -10,6 +10,9 @@
 # the project being worked on rather than of the harness, so a project supplies
 # them itself. Safety invariants — authority, sandboxing, review verdicts,
 # integration, and cleanup — are enforced in Go and are not configurable here.
+# The schema this bundle is written against. It is checked when the bundle
+# loads, so a bundle left behind by a schema change fails loudly instead of
+# resolving; a project declares its own version and never inherits this one.
 version: 1
 
 execution:
