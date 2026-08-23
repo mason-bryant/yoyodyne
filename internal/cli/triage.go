@@ -23,6 +23,7 @@ import (
 	"io"
 
 	"github.com/mason-bryant/yoyodyne/internal/orchestrator"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -205,6 +206,16 @@ func buildRerunner(configPath string) (orchestrator.Rerunner, error) {
 		// created it, which is what keeps the removal inside the ownership rules
 		// every other removal here is held to.
 		Preserved: parts.worktrees,
+		// The pull request it published is retired through the same forge client
+		// the sweep uses, so a publication closed at the moment of triage and one
+		// closed by a later `yoyo reconcile` are closed the same way and say the
+		// same thing.
+		Publications: publish.GitHub{
+			Runner:       parts.runner,
+			Dir:          parts.repository,
+			Remote:       parts.config.Execution.Remote,
+			RedactValues: parts.redactValues,
+		},
 		Start: func(ctx context.Context, workItemID string, selection runstate.Selection) (orchestrator.Outcome, error) {
 			// The pipeline is a value, so the run this starts carries its own
 			// selection: the development manager's decision, which is also what

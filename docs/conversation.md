@@ -828,7 +828,10 @@ retired explicitly then — removed, and the removal written onto the stopped ru
 own record so `/status` and the docket stop advertising a branch and a worktree
 that are gone. Anything that could not be retired is recorded as kept and why; a
 branch whose work nothing promoted is never deleted, so what survives is
-discoverable rather than orphaned.
+discoverable rather than orphaned. The pull request that stopped run published is
+retired with them: the fresh run's promotion is what its work landed by, so the
+request is closed with that vehicle named and the branch it published is deleted,
+and the forge's open list stops showing it as pending work.
 
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the

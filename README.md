@@ -3026,6 +3026,22 @@ branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
 
+The forge's half of the same hygiene is the pull requests nothing will ever
+merge. A run branch carries the run that published it, so an item attempted
+again — after a killed process, or as the loser of a duplicate selection —
+publishes a new branch and opens a new request, and nothing revisited the first
+one: it sat open with a green build and no queued merge, indistinguishable from
+pending work until somebody asked why. The sweep pairs each such request with
+the run whose work actually landed, closes it with a comment naming that
+vehicle — the superseding pull request, or the commit that reached the target
+branch — and deletes the branch it published. It refuses on evidence here too: a
+run that integrated something of its own is left alone, because its publication
+is outstanding rather than superseded; a request the forge reports merged is
+never touched; and a request opened after the landing is pending work rather
+than an orphan. A request somebody has already closed collects no second
+comment. A re-run closes the stopped run's publication itself at the moment its
+fresh run integrates, so the open list stays honest between sweeps.
+
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
 branch already level with the remote has nothing to catch up to, and cleanup
 over artifacts that are already gone does nothing. A run another process still holds

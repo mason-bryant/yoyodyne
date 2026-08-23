@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
@@ -56,6 +57,13 @@ type rerunHarness struct {
 	retirement gitworktree.Retirement
 	retired    int
 	retireErr  error
+	// closed is what the action asked the forge to close and deleted the remote
+	// branches it asked to have removed, which together are what retiring the
+	// stopped run's publication does.
+	closed    []publish.CloseRequest
+	closeErr  error
+	deleted   []string
+	deleteErr error
 	// capacity is execution.max_concurrent_developers as the action reads it. It
 	// leaves room for a run of something else, so only the sequences that are
 	// about a full harness fill it.
@@ -65,6 +73,22 @@ type rerunHarness struct {
 func (h *rerunHarness) RetirePreserved(context.Context, gitworktree.Worktree, string) (gitworktree.Retirement, error) {
 	h.retired++
 	return h.retirement, h.retireErr
+}
+
+func (h *rerunHarness) DeleteRemoteBranch(_ context.Context, worktree gitworktree.Worktree, _ string) error {
+	if h.deleteErr != nil {
+		return h.deleteErr
+	}
+	h.deleted = append(h.deleted, worktree.Branch)
+	return nil
+}
+
+func (h *rerunHarness) Close(_ context.Context, request publish.CloseRequest) (publish.Closure, error) {
+	if h.closeErr != nil {
+		return publish.Closure{}, h.closeErr
+	}
+	h.closed = append(h.closed, request)
+	return publish.Closure{Closed: true, State: "CLOSED"}, nil
 }
 
 // Show is the tracker's answer about the item, read and never written. A harness
@@ -84,7 +108,11 @@ func (h *rerunHarness) rerunner() Rerunner {
 		Items:     h,
 		Capacity:  h.capacity,
 		Preserved: h,
-		Clock:     docketClock{},
+		// The forge the stopped run's publication is closed through. A stopped run
+		// that published nothing never reaches it, which is every sequence here
+		// that is not about a publication.
+		Publications: h,
+		Clock:        docketClock{},
 		Start: func(_ context.Context, workItemID string, selection runstate.Selection) (Outcome, error) {
 			h.started = append(h.started, startedRun{workItemID: workItemID, selection: selection})
 			return h.outcome, h.failure
@@ -1209,5 +1237,109 @@ func TestARerunnerWithoutItsPartsRefuses(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("refusal is missing %q: %v", want, err)
 		}
+	}
+}
+
+// publishedStoppedState is the same stopped run with the publication it left
+// open: the branch it pushed and a pull request nothing has merged, which is
+// what a stopped run of a publishing project always leaves behind.
+func publishedStoppedState() runstate.State {
+	state := stoppedState()
+	state.PullRequest = &runstate.PullRequest{
+		Remote:     "origin",
+		Branch:     state.Branch,
+		Number:     124,
+		URL:        "https://example.invalid/pull/124",
+		HeadCommit: strings.Repeat("b", 40),
+		State:      "OPEN",
+	}
+	return state
+}
+
+// merged is the fresh run's own publication landing, which makes it the vehicle
+// the superseded request is closed in the name of.
+func (h *rerunHarness) merged(number int) {
+	h.outcome.PullRequest = &runstate.PullRequest{
+		Remote:     "origin",
+		Branch:     "yoyodyne/task/fedcba98",
+		Number:     number,
+		URL:        fmt.Sprintf("https://example.invalid/pull/%d", number),
+		HeadCommit: strings.Repeat("c", 40),
+		State:      "MERGED",
+		Merged:     true,
+	}
+}
+
+// The convergence sweep finds these eventually; triage knows at the moment it
+// decides. Once the fresh run has integrated, the pull request the stopped run
+// left open carries work that has landed by another vehicle and will never
+// merge, so it is closed here rather than left for the next sweep — which is
+// what the close-by-hand practice could not keep up with.
+func TestARerunClosesThePublicationTheStoppedRunLeftOpen(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, publishedStoppedState())
+	harness.integrated()
+	harness.merged(126)
+
+	result, err := harness.rerunner().Rerun(context.Background(), rerunRequest())
+	if err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if result.Publication == nil || !result.Publication.Closed || !result.Publication.BranchDeleted {
+		t.Fatalf("publication = %#v, want the request closed and its branch deleted", result.Publication)
+	}
+	if len(harness.closed) != 1 || harness.closed[0].Number != 124 {
+		t.Fatalf("closed = %#v, want the stopped run's pull request 124 closed once", harness.closed)
+	}
+	comment := harness.closed[0].Comment
+	for _, expected := range []string{"#126", harness.outcome.RunID, docketedRunID, docketedItem} {
+		if !strings.Contains(comment, expected) {
+			t.Errorf("close comment does not name %q:\n%s", expected, comment)
+		}
+	}
+	if len(harness.deleted) != 1 || harness.deleted[0] != "yoyodyne/task/abc" {
+		t.Errorf("deleted remote branches = %v, want the one the closed request published", harness.deleted)
+	}
+	if result.RecordProblem != "" {
+		t.Errorf("record problem = %q, want none", result.RecordProblem)
+	}
+
+	// The run's own record says which vehicle retired it, so a later sweep does
+	// not ask the forge about a request this already closed.
+	retired, err := harness.runs.Load(docketedRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(retired.PullRequest.Superseded, "#126") {
+		t.Errorf("recorded supersession = %q, want the merged pull request that landed the work", retired.PullRequest.Superseded)
+	}
+}
+
+// Nothing is superseded until something lands. A fresh run that failed leaves the
+// stopped run's publication exactly where it was — closing it would retire a
+// request for work that is still nobody's, on the strength of an attempt that
+// achieved nothing.
+func TestARerunLeavesThePublicationOpenWhenTheFreshRunIntegratedNothing(t *testing.T) {
+	t.Parallel()
+
+	harness := newRerunHarness(t, publishedStoppedState())
+	harness.outcome.Status = runstate.StatusFailed
+
+	if _, err := harness.rerunner().Rerun(context.Background(), rerunRequest()); err != nil {
+		t.Fatalf("Rerun() error = %v", err)
+	}
+	if len(harness.closed) != 0 {
+		t.Fatalf("closed = %#v, want nothing closed behind a run that landed nothing", harness.closed)
+	}
+	if len(harness.deleted) != 0 {
+		t.Fatalf("deleted = %v, want the published branch left where it is", harness.deleted)
+	}
+	kept, err := harness.runs.Load(docketedRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if kept.PullRequest.Superseded != "" {
+		t.Errorf("recorded supersession = %q, want none", kept.PullRequest.Superseded)
 	}
 }

@@ -276,6 +276,19 @@ type PullRequest struct {
 	// the run outstanding until somebody knows which way that went, and is
 	// cleared when reconciliation observes the merge land or be dropped.
 	MergeQueued bool `json:"merge_queued,omitempty"`
+	// Superseded names the vehicle this publication's work landed by, when it
+	// landed by another one: a later run's pull request, or the commit that run
+	// integrated. A branch carries the run that published it, so an item run
+	// again publishes a fresh branch and a fresh request rather than reusing this
+	// one, and this request would otherwise sit open for work that is already on
+	// the target branch.
+	//
+	// It is written when the harness retires the publication — the request
+	// closed with a comment naming that vehicle, the branch it carried deleted —
+	// and it is what stops a later sweep asking the forge about a request it has
+	// already dealt with. Absent is every publication that merged, that is still
+	// pending, or that stopped for a reason somebody has to decide about.
+	Superseded string `json:"superseded,omitempty"`
 }
 
 // Validate rejects a published record that cannot describe a real pull request.
@@ -295,6 +308,12 @@ func (p PullRequest) Validate() error {
 	}
 	if !commitPattern.MatchString(p.HeadCommit) {
 		problems = append(problems, errors.New("pull_request head_commit is invalid"))
+	}
+	// The two are contradictory claims about one request: a merge is this
+	// publication's work reaching the remote, and a supersession is another
+	// vehicle's work reaching it instead.
+	if p.Merged && strings.TrimSpace(p.Superseded) != "" {
+		problems = append(problems, errors.New("a merged pull request was not superseded; what landed is its own work"))
 	}
 	return errors.Join(problems...)
 }

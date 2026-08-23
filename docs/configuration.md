@@ -2136,6 +2136,17 @@ promotion of the run's own. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 
+The pull request the stopped run published is the third artifact, and it is
+retired at the same moment: once the fresh run has integrated, that request
+carries work that landed by another vehicle and will never merge, so it is closed
+with a comment naming that vehicle and the branch it published is deleted. The
+run's own record keeps which vehicle retired it — `superseded` on its
+`pull_request` — which is what stops the [convergence
+sweep](operations.md#recovering-interrupted-runs) asking the forge about a
+request that is already closed. That sweep closes the same requests for every
+stopped run nothing triaged, so a project wired without forge access here loses
+timeliness rather than the cleanup.
+
 `yoyo triage repair <run-id> --reason "<the recorded decision>"` is the other
 half of the same pair, and it starts nothing over. It re-enters the stopped run's
 own repair loop: the same branch, the same worktree, the same developer session,

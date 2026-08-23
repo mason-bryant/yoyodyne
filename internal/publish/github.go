@@ -63,6 +63,29 @@ type Request struct {
 	Body  string
 }
 
+// CloseRequest names a publication to retire and the comment that says why. The
+// comment is part of the request rather than optional: a pull request the
+// harness closes without saying where its work went is the same unexplained
+// state that closing it exists to end.
+type CloseRequest struct {
+	// Head is the branch the request carries. It is what the forge is asked
+	// about before anything is closed, so a number that has stopped naming this
+	// branch's request is refused rather than acted on.
+	Head    string
+	Number  int
+	Comment string
+}
+
+// Closure is what closing a publication did. A request the forge already has
+// closed reports Closed false and is not a failure: whoever closed it — a
+// person, or an earlier sweep — already did this, and repeating it must add
+// neither a second comment nor a second report.
+type Closure struct {
+	Closed bool
+	State  string
+	Merged bool
+}
+
 // MergeMethod names how the forge brings a pull request onto its base branch.
 // The three produce different remote histories, so a caller states which one it
 // means rather than inheriting whatever the repository happens to default to.
@@ -283,6 +306,57 @@ func (g GitHub) Ensure(ctx context.Context, request Request) (PullRequest, error
 		return PullRequest{}, fmt.Errorf("pull request for %s was created but cannot be found", request.Head)
 	}
 	return opened, nil
+}
+
+// Close retires a pull request whose work will never merge, leaving a comment
+// that names where that work actually landed.
+//
+// It is the one write here that is not part of publishing a run, and it is
+// narrow on purpose. The forge is asked about the request first, and only an
+// open one is closed: a merged request is never touched, because closing one
+// would be a claim about where the work is that the merge already answered, and
+// a request already closed is reported as it stands rather than commented on
+// again — a sweep that repeats every hour must not accumulate a comment an hour.
+//
+// The branch the request carries is deliberately left to the harness's own
+// deletion rather than asked for here with `--delete-branch`. That deletion is a
+// compare-and-swap on the exact commit the harness published, and the forge's is
+// not: a branch somebody else moved must survive this.
+func (g GitHub) Close(ctx context.Context, request CloseRequest) (Closure, error) {
+	if err := request.validate(); err != nil {
+		return Closure{}, err
+	}
+	existing, found, err := g.find(ctx, request.Head)
+	if err != nil {
+		return Closure{}, err
+	}
+	if !found {
+		return Closure{}, fmt.Errorf("no pull request exists for branch %s", request.Head)
+	}
+	if existing.Number != request.Number {
+		return Closure{}, fmt.Errorf("branch %s carries pull request %d rather than the %d this would close",
+			request.Head, existing.Number, request.Number)
+	}
+	closure := Closure{State: existing.State, Merged: existing.Merged}
+	if existing.Merged || !strings.EqualFold(existing.State, "OPEN") {
+		return closure, nil
+	}
+	scope, err := g.repoArgs(ctx)
+	if err != nil {
+		return closure, err
+	}
+	closed, err := g.exec(ctx, append([]string{"pr", "close", strconv.Itoa(request.Number)}, append(scope,
+		"--comment", boundedBody(request.Comment))...)...)
+	if err != nil {
+		return closure, fmt.Errorf("close pull request %d: %w", request.Number, err)
+	}
+	if closed.Status != execution.ProcessSucceeded {
+		return closure, fmt.Errorf("close pull request %d failed with exit code %d: %s",
+			request.Number, closed.ExitCode, g.redact(strings.TrimSpace(closed.Stderr)))
+	}
+	closure.Closed = true
+	closure.State = "CLOSED"
+	return closure, nil
 }
 
 // Merge asks the forge to merge a pull request when its requirements are met,
@@ -622,6 +696,20 @@ func (r Request) validate() error {
 		return errors.New("pull request title is required")
 	}
 	return nil
+}
+
+func (r CloseRequest) validate() error {
+	var problems []error
+	if err := validateArgument("head branch", r.Head); err != nil {
+		problems = append(problems, err)
+	}
+	if r.Number <= 0 {
+		problems = append(problems, errors.New("pull request number is required"))
+	}
+	if strings.TrimSpace(r.Comment) == "" {
+		problems = append(problems, errors.New("closing a pull request requires a comment naming where its work landed"))
+	}
+	return errors.Join(problems...)
 }
 
 func (r MergeRequest) validate() error {

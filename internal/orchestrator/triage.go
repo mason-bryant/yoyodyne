@@ -24,6 +24,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -346,6 +347,13 @@ func stuckPublication(state runstate.State, now time.Time, stuckMergeAge time.Du
 	// A run still in flight owns its own publication, and a parked one is owed
 	// the rest of its own step. Neither is work that has stopped.
 	if !state.Status.Terminal() {
+		return false
+	}
+	// A publication the harness retired as superseded is finished with, for the
+	// opposite reason a merged one is: its work landed by another vehicle and
+	// the request itself is closed. Docketing it would send the development
+	// manager to a pull request the harness has already dealt with.
+	if strings.TrimSpace(published.Superseded) != "" {
 		return false
 	}
 	// Only an approved publication is stuck. A pull request from a run that was

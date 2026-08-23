@@ -39,12 +39,18 @@ type ReconcileWorktrees interface {
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the
-// forge now says about a pull request whose merge it queued. It can only ask,
-// never merge, and that is the point — a queued merge the forge dropped means a
+// forge now says about a pull request whose merge it queued, and the closing of
+// one whose work landed by another vehicle. It can ask and it can close, never
+// merge, and that is the point — a queued merge the forge dropped means a
 // requirement went unmet, and satisfying it is a person's work rather than
 // something a sweep should force.
+//
+// Closing is the one write, and it is the opposite of forcing anything: it
+// retires a request that will never merge, which is a fact the harness's own
+// promotion record already settles. See supersession.go for what earns it.
 type ReconcilePullRequests interface {
 	State(ctx context.Context, head string) (publish.PullRequest, error)
+	SupersededPublications
 }
 
 // ReconcileStore is the durable run state reconciliation reads and settles.
