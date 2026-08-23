@@ -23,8 +23,11 @@
 # as it was. There is no half-cut release to clean up. The one thing written
 # before the tag is the housekeeping commit for the tracker's derived exports,
 # and it is written after the last gate has passed, for the reason given there.
+# It is held to the same claim: it is made or it is not, and a failure partway
+# through puts the index back rather than leaving the exports staged.
 #
-# Requires git, make, go, and whatever scripts/walk-adoption.sh needs (bd and
+# Requires git (1.9 or newer, for the `:(exclude)` pathspec the cleanliness
+# check uses), make, go, and whatever scripts/walk-adoption.sh needs (bd and
 # python3). Nothing outside the repository is written, and nothing is pushed.
 
 set -euo pipefail
@@ -159,9 +162,9 @@ fi
 step "housekeeping: the tracker's derived exports"
 # Here rather than at the top, for two reasons. The walkthrough and the checks
 # above touch the tracker themselves, so an earlier commit would be dirty again
-# behind them; and everything that can refuse the cut has now passed, so this is
-# the first thing written and a refusal above still left the repository exactly
-# as it found it. Committing rather than excepting these paths is what keeps the
+# behind them; and every gate has now passed, so this is the first thing written
+# and every refusal above it left the repository exactly as it found it.
+# Committing rather than excepting these paths is what keeps the
 # tag naming a tree with nothing uncommitted in it, so "the archives are the
 # commit the tag names" stays a property rather than a property with a footnote.
 housekept=()
@@ -176,7 +179,12 @@ if [ "${#housekept[@]}" -gt 0 ]; then
   if ! git -C "$repository" add -- "${housekept[@]}" ||
      ! git -C "$repository" -c core.hooksPath=/dev/null \
          commit -q -m "record the tracker's derived exports for $tag"; then
-    refuse "the tracker's derived exports could not be committed, so $tag was not cut; \`git reset\` clears anything this staged"
+    # Put the index back, so this refusal leaves the repository exactly as it
+    # was like every refusal above it rather than leaving the exports staged.
+    # Its own stderr stands if it cannot, which is the only way this leaves
+    # anything behind and is louder than the refusal that follows.
+    git -C "$repository" reset -q -- "${housekept[@]}" || true
+    refuse "the tracker's derived exports could not be committed, so $tag was not cut and the index was put back"
   fi
   head="$(git -C "$repository" rev-parse HEAD)"
   printf 'committed %s\n' "${housekept[*]}"
