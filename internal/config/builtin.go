@@ -45,29 +45,58 @@ func loadBuiltinBundle(name string) (bundle, error) {
 	if !ok {
 		return bundle{}, fmt.Errorf("unknown configuration bundle %q; this executable provides %s", name, strings.Join(BuiltinBundleNames(), ", "))
 	}
-	data, err := builtinFiles.ReadFile(directory + "/bundle.yaml")
-	if err != nil {
-		return bundle{}, fmt.Errorf("read bundle %s: %w", trimmed, err)
-	}
-	document, err := decodeDocument(bytes.NewReader(data))
-	if err != nil {
-		return bundle{}, fmt.Errorf("bundle %s: %w", trimmed, err)
-	}
-	if document.Extends != nil {
-		return bundle{}, fmt.Errorf("bundle %s must not extend another bundle", trimmed)
-	}
-	if document.Product != nil {
-		// Product identity belongs to the project, not to the harness. A bundle
-		// that supplied one would silently name every project after itself.
-		return bundle{}, fmt.Errorf("bundle %s must not declare a product", trimmed)
-	}
 	files, err := fs.Sub(builtinFiles, directory)
 	if err != nil {
 		return bundle{}, fmt.Errorf("open bundle %s: %w", trimmed, err)
 	}
+	return loadBundleFiles(trimmed, files)
+}
+
+// loadBundleFiles reads and checks one bundle from the filesystem rooted at its
+// own directory. It is separate from the lookup above so a bundle that is not
+// the embedded one can be put through the same rules in a test.
+func loadBundleFiles(name string, files fs.FS) (bundle, error) {
+	data, err := fs.ReadFile(files, "bundle.yaml")
+	if err != nil {
+		return bundle{}, fmt.Errorf("read bundle %s: %w", name, err)
+	}
+	document, err := decodeDocument(bytes.NewReader(data))
+	if err != nil {
+		return bundle{}, fmt.Errorf("bundle %s: %w", name, err)
+	}
+	if err := checkBundleDocument(name, document); err != nil {
+		return bundle{}, err
+	}
 	return bundle{
-		name:     trimmed,
+		name:     name,
 		document: document,
-		personas: builtinPersonaLoader{files: files, bundle: trimmed},
+		personas: builtinPersonaLoader{files: files, bundle: name},
 	}, nil
+}
+
+// checkBundleDocument holds a bundle to the constraints that apply to a bundle
+// rather than to a project layer. A bundle is embedded and read-only, so
+// anything it fails here is a defect in this executable rather than in a
+// project's configuration: every message names the bundle, and the load fails
+// instead of resolving into an effective configuration.
+func checkBundleDocument(name string, document configDocument) error {
+	// The project layer states its own version and overwrites this one in every
+	// valid configuration, so the bundle's version is never what a project runs
+	// under. It is checked anyway, because the only thing it can report is a
+	// bundle shipped against a schema this executable does not implement.
+	if document.Version == nil {
+		return fmt.Errorf("bundle %s must declare version %d", name, CurrentVersion)
+	}
+	if *document.Version != CurrentVersion {
+		return fmt.Errorf("bundle %s declares version %d, and this executable implements version %d", name, *document.Version, CurrentVersion)
+	}
+	if document.Extends != nil {
+		return fmt.Errorf("bundle %s must not extend another bundle", name)
+	}
+	if document.Product != nil {
+		// Product identity belongs to the project, not to the harness. A bundle
+		// that supplied one would silently name every project after itself.
+		return fmt.Errorf("bundle %s must not declare a product", name)
+	}
+	return nil
 }
