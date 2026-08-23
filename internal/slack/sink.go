@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -140,7 +141,13 @@ type Sink struct {
 	// pace is what keeps a catch-up from being posted faster than Slack will
 	// carry it. Every post goes through it, including the message that opens a
 	// thread: what the workspace counts is messages, not what they are for.
-	pace       *pacer
+	pace *pacer
+	// marking is the refusal the status marks are currently getting, empty when
+	// they are working. A mark is reconciled on every pass, so a workspace that
+	// refuses one refuses it every fifteen seconds, and the first refusal is news
+	// while the tenth is noise — the same rule the delivery loop follows for the
+	// same reason.
+	marking    string
 	log        func(format string, args ...any)
 	connection *connection
 }
@@ -398,6 +405,12 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 
+	// The marks go on after the messages, so a thread this pass opened is marked
+	// in the same pass rather than on the next one. They are reconciled against
+	// the record rather than driven by what was posted: a run that finished with
+	// nothing left to say still has to stop reading as working.
+	s.mark(ctx, &threads, batch.Statuses)
+
 	// Cursors for streams that no longer exist are dropped only after a pass
 	// that read them all, so a feed that failed halfway never looks like a
 	// product whose runs have gone away.
@@ -407,6 +420,94 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// mark puts each item's current status on the message its thread hangs from, so
+// the channel's top level reads as a status board: a scan says what is working,
+// what is with the reviewer, what is blocked, and what landed, without a single
+// thread being opened. A status that has not moved is left alone, which is what
+// keeps this quiet — most passes mark nothing.
+//
+// It reports no error, and the reasons are the sink's own. The messages of this
+// pass are posted and their cursors written, so failing here would repeat all of
+// them next time in exchange for an emoji; and a mark stands for a thread whose
+// whole account is already in the thread, so a workspace that will not take one
+// costs a reader a glance rather than the record.
+//
+// The order inside is the whole of what makes an interrupted marking settle: the
+// stale mark comes off, the new one goes on, and only then is it written down.
+// What is written is therefore always what to remove next, so a process killed
+// between two calls leaves a thread under-marked for a pass rather than one
+// wearing two statuses at once — and the next pass, reconciling the same record
+// against it, puts it right.
+func (s *Sink) mark(ctx context.Context, threads *ThreadMap, statuses map[string]notify.Status) {
+	topics := make([]string, 0, len(statuses))
+	for topic := range statuses {
+		topics = append(topics, topic)
+	}
+	// Sorted, so what a pass does is the same twice over rather than whatever
+	// order a map handed back.
+	sort.Strings(topics)
+
+	for _, topic := range topics {
+		// A sink being shut down is not a workspace refusing anything, and saying
+		// so on the way out would be a line an operator has to rule out later.
+		if ctx.Err() != nil {
+			return
+		}
+		status := statuses[topic]
+		// A status this build has no symbol for is left unsaid rather than marked
+		// with nothing, which is the same refusal an unrecognized kind gets: a
+		// record written by a newer harness is read past, not mistranslated.
+		if !status.Valid() {
+			continue
+		}
+		// A topic with no thread is one nothing has been said about yet. There is
+		// no message to mark, and opening one to carry a status would put a thread
+		// in the channel that says nothing happened.
+		thread, found := threads.Lookup(s.channel, topic)
+		if !found || thread.Status == status {
+			continue
+		}
+		if err := s.remark(ctx, thread, status); err != nil {
+			if refusal := err.Error(); refusal != s.marking {
+				s.marking = refusal
+				s.log("the status mark on %s could not be set, so the channel's top level is stale until it can be; the messages are unaffected: %v", topic, err)
+			}
+			continue
+		}
+		s.marking = ""
+		thread.Status = status
+		threads.Record(topic, thread)
+		if err := s.store.SaveThreads(*threads); err != nil {
+			// The mark is on the message and nothing durable says which it is, so
+			// the next pass would take off a status this one replaced. Stopping
+			// here leaves that to one thread rather than to every thread behind it.
+			s.log("the status mark on %s could not be remembered, so the next pass sets it again: %v", topic, err)
+			return
+		}
+		s.log("marked %s as %s", topic, status)
+	}
+}
+
+// remark replaces one thread's mark: the stale one off, the new one on. Both go
+// through the pacer that holds the sink to what the workspace sustains — Slack
+// counts a reaction against a different allowance from a message, but a sink
+// that is catching up is the one moment it can least afford to be suppressed,
+// and nothing about a status mark is urgent.
+func (s *Sink) remark(ctx context.Context, thread Thread, status notify.Status) error {
+	if stale := thread.Status.Symbol(); stale != "" {
+		if err := s.pace.wait(ctx); err != nil {
+			return err
+		}
+		if err := s.api.Unreact(ctx, thread.Channel, thread.ThreadTS, stale); err != nil {
+			return err
+		}
+	}
+	if err := s.pace.wait(ctx); err != nil {
+		return err
+	}
+	return s.api.React(ctx, thread.Channel, thread.ThreadTS, status.Symbol())
 }
 
 // post puts one message in the workspace at the pace the workspace sustains.

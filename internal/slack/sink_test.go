@@ -725,15 +725,138 @@ func TestStoppingTheSinkStopsIt(t *testing.T) {
 	}
 }
 
+// The channel's top level is a status board. The message a thread hangs from
+// carries what its item is doing now, and the mark that has stopped being true
+// comes off as the record moves — so a scan of the channel answers what is
+// working, what is with the reviewer, and what landed without a thread being
+// opened.
+func TestAThreadsOpenerCarriesTheItemsStatusAndTheStaleMarkComesOff(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{}
+	feed := &fixedFeed{
+		deliveries: []Delivery{milestone(1, notify.KindRunStarted)},
+		statuses:   map[string]notify.Status{"work-item:yoyodyne-ifd.68.3": notify.StatusWorking},
+	}
+	sink := newTestSink(t, root, feed, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	opener := posts.timestamps[0]
+	wantMarks(t, posts.marks, mark{method: "reactions.add", ts: opener, name: notify.StatusWorking.Symbol()})
+
+	// A status that has not moved is left alone. Most passes are this one, and a
+	// sink that re-marked every fifteen seconds would spend a workspace's
+	// tolerance saying what it had already said.
+	posts.marks = nil
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	if len(posts.marks) != 0 {
+		t.Fatalf("marks = %#v, want a status that has not moved marked again by nothing", posts.marks)
+	}
+
+	// The record moves and the mark moves with it, stale one first.
+	feed.statuses["work-item:yoyodyne-ifd.68.3"] = notify.StatusInReview
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("third pass() error = %v", err)
+	}
+	wantMarks(t, posts.marks,
+		mark{method: "reactions.remove", ts: opener, name: notify.StatusWorking.Symbol()},
+		mark{method: "reactions.add", ts: opener, name: notify.StatusInReview.Symbol()})
+
+	// A restart is a second sink over the same durable state. Which mark is on
+	// the opener is remembered, so the one that comes off is the one that is
+	// actually there rather than whatever this process happened to set.
+	posts.marks = nil
+	feed.statuses["work-item:yoyodyne-ifd.68.3"] = notify.StatusCompleted
+	if err := newTestSink(t, root, feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("restarted pass() error = %v", err)
+	}
+	wantMarks(t, posts.marks,
+		mark{method: "reactions.remove", ts: opener, name: notify.StatusInReview.Symbol()},
+		mark{method: "reactions.add", ts: opener, name: notify.StatusCompleted.Symbol()})
+}
+
+// A topic nobody has said anything about has no thread and nothing to mark.
+// Opening one to carry a status would put a thread in the channel whose whole
+// content is that nothing has happened yet.
+func TestATopicWithNoThreadIsNotMarked(t *testing.T) {
+	t.Parallel()
+
+	posts := &recordedPosts{}
+	feed := &fixedFeed{statuses: map[string]notify.Status{
+		"work-item:yoyodyne-ifd.68.3": notify.StatusWorking,
+	}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+	if len(posts.requests) != 0 || len(posts.marks) != 0 {
+		t.Fatalf("posted %#v and marked %#v, want an item nothing has been said about left alone", posts.requests, posts.marks)
+	}
+}
+
+// Marking is not a delivery and it is never a gate. A workspace that refuses the
+// reaction — an app installed before the manifest asked for the scope — costs
+// the channel its status board and not one message; and because nothing durable
+// says the mark went on, it goes on by itself once somebody reinstalls, without
+// the item having to move again.
+func TestAWorkspaceThatRefusesAMarkStillGetsEveryMessage(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	posts := &recordedPosts{refuseMarks: "missing_scope"}
+	feed := &fixedFeed{
+		deliveries: []Delivery{milestone(1, notify.KindRunStarted)},
+		statuses:   map[string]notify.Status{"work-item:yoyodyne-ifd.68.3": notify.StatusBlocked},
+	}
+	sink := newTestSink(t, root, feed, posts)
+
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v, want a refused mark to cost the pass nothing", err)
+	}
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %d, want the thread opened and the milestone in it", len(posts.requests))
+	}
+
+	posts.refuseMarks = ""
+	if err := sink.pass(context.Background()); err != nil {
+		t.Fatalf("second pass() error = %v", err)
+	}
+	wantMarks(t, posts.marks, mark{
+		method: "reactions.add",
+		ts:     posts.timestamps[0],
+		name:   notify.StatusBlocked.Symbol(),
+	})
+}
+
+func wantMarks(t *testing.T, got []mark, want ...mark) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("marks = %#v, want %#v", got, want)
+	}
+	for index, marked := range want {
+		if got[index] != marked {
+			t.Fatalf("marks = %#v, want %#v", got, want)
+		}
+	}
+}
+
 // fixedFeed is a feed with a fixed answer, so the sink's own behavior is what a
 // test exercises rather than the reading of durable records. Every delivery
 // carries a position, which is how it knows what a cursor has already covered.
 type fixedFeed struct {
 	deliveries []Delivery
+	// statuses is what each topic is doing at the end of this pass, which is a
+	// reading rather than a history: a test moves it and polls again exactly as a
+	// record moving underneath the sink would.
+	statuses map[string]notify.Status
 }
 
 func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
-	batch := Batch{Streams: map[string]struct{}{}}
+	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses}
 	for _, delivery := range f.deliveries {
 		batch.Streams[delivery.Stream] = struct{}{}
 		if delivery.Cursor.Position <= cursors.Streams[delivery.Stream].Position {
@@ -744,11 +867,26 @@ func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
 	return batch, nil
 }
 
-// recordedPosts is the workspace: what it was asked to post, and what it
-// refused.
+// mark is one reaction the workspace was asked to put on or take off a message:
+// which call, which message, and which emoji.
+type mark struct {
+	method string
+	ts     string
+	name   string
+}
+
+// recordedPosts is the workspace: what it was asked to post, what it was asked
+// to mark, and what it refused.
 type recordedPosts struct {
 	requests   []postRequest
 	timestamps []string
+	// marks is every reaction call in the order it was made, which is what says a
+	// stale mark came off before the new one went on.
+	marks []mark
+	// refuseMarks, when set, is the error every reaction call is refused with —
+	// an app installed before the manifest asked for the scope, which is what
+	// every workspace looks like the first time it runs a sink that marks.
+	refuseMarks string
 	// allow, when set, is how many posts this workspace accepts before it
 	// starts refusing — which is how a test puts an outage exactly where it
 	// matters. It has to refuse every attempt rather than one, because a
@@ -765,6 +903,20 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
+	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
+		var reaction reactionRequest
+		if err := json.Unmarshal(body, &reaction); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseMarks != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseMarks})
+			return
+		}
+		r.marks = append(r.marks, mark{method: method, ts: reaction.Timestamp, name: reaction.Name})
+		writeJSON(writer, map[string]any{"ok": true})
+		return
+	}
 	var decoded postRequest
 	if err := json.Unmarshal(body, &decoded); err != nil {
 		writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})

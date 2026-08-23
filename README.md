@@ -2922,6 +2922,15 @@ how the sink records whose secrets it was launched with, so
 running from one that is running for this project. Leave it out and the sink
 still works; what is lost is anything being able to notice when it is wrong.
 
+**The top of the channel reads as a status board.** Each thread's opening message
+carries one reaction saying what that item is doing now — working, with the
+reviewer, blocked, or landed — replaced as the record moves and taken off when it
+stops being true. So which threads need you is answerable by scanning the channel
+rather than by opening them. Those four are the whole vocabulary: a status is
+about the item where a severity is about one message, and the two never share a
+symbol. It needs the `reactions:write` scope the checked-in manifest asks for, and
+a workspace that refuses it costs the board and not one message.
+
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
 everything held, the watch session idle, or no session running — says so again

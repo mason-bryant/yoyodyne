@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -86,6 +87,17 @@ type Thread struct {
 	Channel  string    `json:"channel"`
 	ThreadTS string    `json:"thread_ts"`
 	OpenedAt time.Time `json:"opened_at"`
+	// Status is the status this thread's opening message is currently marked
+	// with, which is remembered for one reason: it is what says which mark to
+	// take off when the item moves. Reading it back from the workspace would be a
+	// call per thread per pass to learn something the sink itself put there.
+	//
+	// It is an added field rather than a new schema version because a map written
+	// before there were status marks is a correct map of unmarked threads: absent
+	// reads as nothing to remove, and the first status the item reaches marks it.
+	// Refusing to load one would cost every existing product its threads over a
+	// mark that had not been invented when they were opened.
+	Status notify.Status `json:"status,omitempty"`
 }
 
 // ThreadMap is the topic-to-thread map as it is stored.
