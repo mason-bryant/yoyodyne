@@ -169,7 +169,13 @@ type exchangeVoice struct {
 	// provider invocation with neither a run nor a conversation behind it, so
 	// without this it would be the one invocation the harness makes whose cost
 	// nothing durable records at all.
-	spend        *runstate.SpendStore
+	//
+	// It is the log's interface rather than the store itself, as it is everywhere
+	// else the harness wires one. A store built and found wanting is a build
+	// failure rather than a nil handed on, so the type is the interface for
+	// uniformity rather than for safety: one hazard guarded at three sites and not
+	// the fourth is a hazard nobody can reason about.
+	spend        spend.Log
 	productID    domain.ProductID
 	redactValues []string
 }
@@ -189,8 +195,8 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 	// log beside every other provider invocation the harness makes, charged to
 	// the exchange because that is the only record it belongs to.
 	provider := spend.Metered{
-		Provider: v.provider,
-		Log:      v.spendLog(),
+		Provider:    v.provider,
+		Log:         v.spend,
 		Attribution: spend.Attribution{
 			ProductID:      v.productID,
 			Agent:          name,
@@ -235,17 +241,6 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 	}
 	spoken.Answer = result.FinalText
 	return spoken, nil
-}
-
-// spendLog is where this voice records what a round cost, and nothing where no
-// store was wired. It is a method rather than the field handed over directly
-// because a nil store put into an interface is not a nil interface, and the
-// meter's own test for having nowhere to record would miss it.
-func (v exchangeVoice) spendLog() spend.Log {
-	if v.spend == nil {
-		return nil
-	}
-	return v.spend
 }
 
 // noteUsageLimit records a provider refusal this round met, exactly as a

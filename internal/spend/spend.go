@@ -84,6 +84,17 @@ type Metered struct {
 // rather than carrying on unrecorded -- and it is the weight the cost log needs
 // for the same reason: a spend nothing wrote down is money the operator is never
 // shown, and the silence looks exactly like not having spent it.
+//
+// The cost of that choice is stated rather than hidden: an invocation the
+// provider already served and already charged for comes back as a failure when
+// the bookkeeping behind it fails. Two things bound it. The store refuses only a
+// line nobody could attribute, and every call site's attribution comes from
+// configuration the loader has already validated or from a run's own validated
+// state -- each of those sites has a test that the line it produces satisfies
+// the durable contract, so the refusal is not a path a working harness takes.
+// What is left is a state root that cannot be written, and that is a root whose
+// run state and event log are failing in the same breath; the run is lost either
+// way, and the alternative is losing the money silently as well.
 func (m Metered) Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error) {
 	result, err := m.Provider.Run(ctx, request)
 	// A provider with nowhere to record what it spends is one nothing is

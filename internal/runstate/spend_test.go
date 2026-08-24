@@ -86,41 +86,48 @@ func TestSpendsAreRefusedWhenNobodyCouldAttributeThem(t *testing.T) {
 	t.Parallel()
 
 	store := newTestSpendStore(t, t.TempDir())
+	// Each of these spoils one thing about a line the store would otherwise
+	// accept. The base line carries a known amount of nothing, which is legal --
+	// a provider may report an invocation as free -- so what each case breaks is
+	// the only thing wrong with it.
 	refused := map[string]func(*Spend){
-		"an amount nobody knows carrying a number": func(s *Spend) {
-			s.Classification = SpendUnknown
-			s.Unknown = "the provider said nothing"
-		},
-		"an amount nobody knows saying nothing about why": func(s *Spend) {
-			s.Classification = SpendUnknown
-			s.AmountUSD = 0
-		},
+		"unknown with no reason":          func(s *Spend) { s.Classification = SpendUnknown },
 		"a known amount below zero":       func(s *Spend) { s.AmountUSD = -1 },
 		"a classification nothing writes": func(s *Spend) { s.Classification = "estimated" },
 		"an account nothing configured":   func(s *Spend) { s.AccountAlias = "Work Account" },
 		"a revision of no digest":         func(s *Spend) { s.ConfigRevision = "yesterday's" },
 		"a phase nothing runs":            func(s *Spend) { s.Phase = "integrating" },
 		"a role nobody fills":             func(s *Spend) { s.Role = "auditor" },
-		"a backend the harness does not run": func(s *Spend) {
-			s.Backend = "handwritten"
-		},
-		"nothing at all to charge it to": func(s *Spend) {
-			s.RunID = ""
-			s.WorkItemID = ""
-		},
-		"two things to charge it to": func(s *Spend) { s.ConversationID = "conversation-1" },
-		"a work item with no run behind it": func(s *Spend) {
-			s.RunID = ""
-			s.ExchangeID = "0123456789abcdef0123456789abcdef"
-		},
-		"another product's spend": func(s *Spend) { s.ProductID = "elsewhere" },
+		"a backend nothing runs":          func(s *Spend) { s.Backend = "handwritten" },
+		"nothing to charge it to":         func(s *Spend) { s.RunID = "" },
+		"two things to charge it to":      func(s *Spend) { s.ConversationID = "conversation-1" },
+		"another product's spend":         func(s *Spend) { s.ProductID = "elsewhere" },
 	}
 	for name, spoil := range refused {
-		line := testSpend(SpendPhaseDevelopment, 1.5)
+		line := testSpend(SpendPhaseDevelopment, 0)
 		spoil(&line)
 		if err := store.Append(line); err == nil {
 			t.Errorf("Append() accepted %s", name)
 		}
+	}
+
+	// An amount nobody knows never carries a number, whatever it says about why:
+	// a total that added it in would be wrong by however much was really spent.
+	numbered := testSpend(SpendPhaseDevelopment, 1.5)
+	numbered.Classification = SpendUnknown
+	numbered.Unknown = "the provider said nothing"
+	if err := store.Append(numbered); err == nil {
+		t.Error("Append() accepted an unknown amount carrying a number")
+	}
+
+	// A work item belongs to a run and to nothing else, so an exchange round that
+	// claimed to have served one is refused rather than putting money on an item
+	// nothing was ever run for.
+	misattributed := testSpend(SpendPhaseExchange, 0.25)
+	misattributed.RunID = ""
+	misattributed.ExchangeID = "exchange-0123456789abcdef0123456789abcdef"
+	if err := store.Append(misattributed); err == nil {
+		t.Error("Append() accepted a work item with no run behind it")
 	}
 }
 

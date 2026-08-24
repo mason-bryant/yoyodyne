@@ -97,6 +97,11 @@ func TestAnInvocationTheProviderDidNotPriceIsRecordedAsUnknown(t *testing.T) {
 	}
 }
 
+// A line the log will not take is reported rather than swallowed, which is a
+// deliberate trade: an invocation the provider already served and charged for
+// comes back as a failure. It is the same weight the harness gives an event it
+// could not record, and the alternative is an operator's cost log quietly
+// missing lines nothing says are missing.
 func TestALineThatCannotBeMadeDurableIsReportedRatherThanLost(t *testing.T) {
 	t.Parallel()
 
@@ -145,8 +150,8 @@ func TestAProviderWithNowhereToRecordSpendsExactlyAsItWould(t *testing.T) {
 
 func testMetered(log Log, run func(backend.RunRequest) (backend.RunResult, error)) Metered {
 	return Metered{
-		Provider: providerFunc(run),
-		Log:      log,
+		Provider:    providerFunc(run),
+		Log:         log,
 		Attribution: Attribution{
 			ProductID:      "yoyodyne",
 			Agent:          "developer",
