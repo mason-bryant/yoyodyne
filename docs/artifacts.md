@@ -96,17 +96,18 @@ and it is the one you run:
 ```
 
 It reads every governed document — the artifacts, the goals stated in them, the
-invariants, and the Markdown links written inside an artifact home — and exits
-non-zero on a defect in any: a goal hard-wrapped across two physical lines, a
-`supports` entry naming a document nobody wrote, an artifact reaching no brief, a
-revision recorded by a role that does not own the file, a link that resolves to
-nothing. Each one is named with the role that owns it and the command that
-reaches that role.
+invariants, the index at the door of each home, and the Markdown links written in
+any file a developer's change may not touch — and exits non-zero on a defect in
+any: a goal hard-wrapped across two physical lines, a `supports` entry naming a
+document nobody wrote, an artifact reaching no brief, a revision recorded by a
+role that does not own the file, an index that has stopped saying what is filed
+there, a link that resolves to nothing. Each one is named with the role that owns
+it and the command that reaches that role.
 
 A broken link written anywhere else in the repository is not this command's. It
 is a developer's to fix and it fails in the check that found it, which is the
-same rule the whole arrangement runs on: the file the defect is written in
-decides whose it is.
+same rule the whole arrangement runs on: whether the change in hand may edit the
+file the defect is written in decides whose it is.
 
 **Nothing else goes red on what you wrote, and that is deliberate.** These
 documents live in directories every developer's change is refused in, so a
@@ -115,8 +116,12 @@ could open, with the only route out an amendment proposal made while every run
 stayed red. The checks a run makes still read these documents and still report
 what they find in full — they escalate it to the owning role instead of failing,
 naming the role and the route. This command is where the same defect fails, run
-by whoever can put it right. The index at the door of each artifact home says so
-too.
+by whoever can put it right.
+
+The index each home carries is meant to say this at the door, and the generator
+that writes one now does. The committed indexes do not yet: they live inside the
+homes, so nothing but `yoyo setup` — or your own editor — puts the sentence
+there. Run `yoyo setup` and the doors say it.
 
 ## Goals, and what work serves them
 

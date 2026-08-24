@@ -97,17 +97,16 @@ func (r Routed) String() string {
 // here can fix is how a defect stops being reported at all.
 func Route(cfg config.Config, defects ...Defect) []Routed {
 	homes := artifacthome.Homes(cfg)
-	protected := protectedpath.Protect(cfg)
 	routed := make([]Routed, 0, len(defects))
 	for _, defect := range defects {
 		entry := Routed{Defect: Defect{Path: normalize(defect.Path), Detail: defect.Detail}, Yours: true}
 		if home, found := homeOf(homes, entry.Path); found {
 			entry.Home, entry.Owner = home.Directory, home.Owner
 		}
-		// Nothing is granted here on purpose: a check runs in a worktree and has
-		// no work item to read a grant out of, and inventing one would be the
-		// gate granting itself the path the gate exists to hold.
-		if len(protected.Refused([]string{entry.Path}, nil)) > 0 {
+		// Protected rather than an equivalent test written out here, so a caller
+		// that has to ask the same question ahead of time is asking this code and
+		// not a second copy of it.
+		if Protected(cfg, entry.Path) {
 			entry.Yours = false
 			entry.Route = route(entry.Home, entry.Owner)
 		}
@@ -116,19 +115,29 @@ func Route(cfg config.Config, defects ...Defect) []Routed {
 	return routed
 }
 
-// Governed reports whether a document is filed in one of the artifact homes,
-// which is what makes a defect in it its owner's rather than the change's.
+// Protected reports whether a defect in this document would be escalated rather
+// than failed — which is to say whether the change in hand may edit the file at
+// all. It is the predicate Route decides Yours by, asked on its own.
 //
-// It is exported for the caller that has to decide which documents are governed
-// before it reads them rather than after: `yoyo artifact check` walks the whole
-// repository for links — resolving one needs the document at its other end — and
-// answers only for the ones written inside a home. Asking here rather than
-// comparing paths of its own is what keeps one answer to "is this governed", so
-// the gate that escalates a defect and the gate that fails on it cannot come to
-// disagree about which defects those are.
-func Governed(cfg config.Config, candidate string) bool {
-	_, found := homeOf(artifacthome.Homes(cfg), normalize(candidate))
-	return found
+// It is exported for the caller that has to decide which documents are its to
+// answer for before it reads them rather than after: `yoyo artifact check` walks
+// the whole repository for links, because resolving one needs the document at
+// its other end, and answers only for the links written in a document no
+// developer may edit. Asking here rather than comparing paths of its own is what
+// keeps one answer to that question, so the gate that escalates a defect and the
+// gate that fails on it cannot come to disagree about which defects those are.
+//
+// It is the protected paths rather than the artifact homes deliberately. The
+// homes are where the owned documents live, but the harness's own configuration
+// directory is protected and no home claims it — and it holds Markdown, the
+// personas among it. Filtering by home would leave a broken link there escalated
+// by every gate and failed by none, which is the hole this whole arrangement is
+// built to avoid.
+func Protected(cfg config.Config, candidate string) bool {
+	// Nothing is granted, on purpose: a check runs in a worktree and has no work
+	// item to read a grant out of, and inventing one would be the gate granting
+	// itself the path the gate exists to hold.
+	return len(protectedpath.Protect(cfg).Refused([]string{normalize(candidate)}, nil)) > 0
 }
 
 // Report hands each defect to whichever reporter it belongs to: fail for one the

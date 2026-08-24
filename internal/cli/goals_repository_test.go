@@ -12,15 +12,21 @@ package cli
 // reports the queue as unchecked rather than untraceable. Synthetic documents
 // written by a test satisfy the parser by construction and can never catch it.
 //
-// Two different questions are asked of that one read, and they fail in two
-// different places on purpose. Whether the harness can read this repository's
-// goals at all is a question about the reader, which is code and a developer's
-// to fix, so it fails here. Whether a document that was read is well-formed is a
-// question about the document — which lives in the product manager's home and is
-// refused in every developer's diff — so it is escalated to its owner and fails
+// Three different questions are asked of that one read, and they do not all fail
+// in the same place. Whether the harness can read this repository's goals at all
+// is a question about the reader, which is code and a developer's to fix, so it
+// fails here. Whether a document that was read is well-formed is a question about
+// the document — which lives in the product manager's home and is refused in
+// every developer's diff — so it is escalated to its owner and fails
 // `yoyo artifact check` instead. See internal/governeddoc for why: a build red
 // for every developer over a file none of them may touch stops the whole loop
 // and fixes nothing.
+//
+// The third is whether the attribution the backlog already carries still
+// resolves, and it fails here with the other reader question rather than routing
+// anywhere. Putting a defect right is what decides, and this one is put right in
+// the tracker and in this file: no protected path has to change, so there is
+// nothing to propose an amendment about and nobody to escalate it to.
 
 import (
 	"encoding/json"
@@ -82,7 +88,7 @@ func TestThisRepositoryOwnGoalsAreReadableByTheHarness(t *testing.T) {
 func TestThisRepositoryOwnGoalsResolveAsAttributions(t *testing.T) {
 	t.Parallel()
 
-	goals, cfg := repositoryGoals(t)
+	goals, _ := repositoryGoals(t)
 	if _, uncheckable := goals.Uncheckable(); uncheckable {
 		t.Fatalf("nothing in this repository can check an attribution; the gate is not running")
 	}
@@ -96,17 +102,23 @@ func TestThisRepositoryOwnGoalsResolveAsAttributions(t *testing.T) {
 			t.Fatalf("the goal %q does not resolve as an attribution: %s", recorded.Statement, attribution.Reason)
 		}
 	}
-	// The attribution the backlog already carries still resolves. If this is
-	// reported, a goal was reworded and the items attributed to the old wording
-	// now read as naming a goal the goals do not state: re-attribute them with
-	// the tracker's "attribute" action, which appends and rewrites nothing, and
-	// check the rest with `yoyo goals attribution`. It is the wording of a
-	// document nobody but its owner may change, so it is escalated rather than
-	// failed.
+	// The attribution the backlog already carries still resolves. This one fails
+	// rather than routing anywhere, and the reason is worth stating because every
+	// other finding in this file goes the other way: what is wrong here is not in
+	// a governed document. Nothing in a protected home has to change to put it
+	// right — the items are re-attributed with the tracker's "attribute" action,
+	// which appends and rewrites nothing, and the constant below is brought into
+	// line in this very file once they are. Escalating it would name an amendment
+	// nobody needs to make and leave the class failing in no gate at all.
+	//
+	// `yoyo goals attribution` is what says which items are affected; it reads the
+	// tracker, which is why the check that a specific wording still resolves lives
+	// here and not in `yoyo artifact check`.
 	if attribution := goals.Attribute(backlogAttribution); !attribution.Resolved() {
-		detail := "the goal this repository's attributed work items name no longer resolves: " + attribution.Reason
-		reworded := governeddoc.Defect{Path: goalsHomeOf(cfg), Detail: detail}
-		governeddoc.Report(cfg, []governeddoc.Defect{reworded}, t.Errorf, governeddoc.Escalate)
+		t.Fatalf("the goal this repository's attributed work items name no longer resolves: %s\n"+
+			"\tre-attribute them with the tracker's \"attribute\" action, check the rest with `yoyo goals attribution`, "+
+			"and bring backlogAttribution in this file into line with what the goals now state",
+			attribution.Reason)
 	}
 }
 
@@ -119,9 +131,10 @@ func TestThisRepositoryOwnGoalsResolveAsAttributions(t *testing.T) {
 // What it reports is a defect in a goals document, so it is escalated to the
 // product manager rather than failed: this is the very case the item behind
 // internal/governeddoc names, a hard-wrapped goal turning every developer run
-// red while no developer may open the file. The convention is still held —
-// `yoyo artifact check` exits non-zero on it, and the index at the door of the
-// goals home says to run it after an edit.
+// red while no developer may open the file. The convention is still held:
+// `yoyo artifact check` exits non-zero on it, and that is the command the index
+// internal/artifacthome writes at the door of the goals home tells an owner to
+// run after editing there.
 func TestThisRepositoryOwnGoalsAreEachWrittenOnOneLine(t *testing.T) {
 	t.Parallel()
 
@@ -173,12 +186,4 @@ func repositoryConfiguration(t *testing.T) (string, config.Config) {
 		t.Fatalf("resolve product repository: %v", err)
 	}
 	return repository, resolved.Config
-}
-
-// goalsHomeOf is where a finding about the goals as a whole, rather than about
-// one file in them, is reported against. The convention the harness reads is
-// that a goals document lives in a `goals` directory under the specifications
-// home, which is the same derivation the artifact homes make.
-func goalsHomeOf(cfg config.Config) string {
-	return strings.TrimRight(cfg.Product.Specifications, "/") + "/goals"
 }

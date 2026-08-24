@@ -32,8 +32,9 @@ Go check has ever run a line of bash.
 
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
-| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. A link written *inside* an artifact home is escalated rather than failed — see the note below. |
+| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. A link written in a file no developer's diff may touch is escalated rather than failed — see the note below. |
 | The harness being unable to read this repository's governed documents at all — no artifact recorded, no goal in force, a load that errored, a statement that will not resolve against the set it came from | `internal/cli` (`goals_repository_test.go`, `artifact_repository_test.go`) | That is the reader rather than any one document: a tightened loader, a moved home, or two code paths disagreeing. It is a developer's to fix, so it fails here. |
+| The goal this repository's attributed work items name no longer resolving | `internal/cli` (`goals_repository_test.go`) | A goal was reworded. Re-attribute the items with the tracker's `attribute` action, check the rest with `yoyo goals attribution`, and bring `backlogAttribution` in that file into line. It fails here rather than being escalated because nothing in a protected path has to change to put it right. |
 | A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
 | A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh` or `scripts/release-body.sh`. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
 | The release verb committing a derived export that a run does not declare as churn the primary checkout may acquire | `internal/cli` (`release_repository_test.go`) | Either declare the path in `AllowedPrimaryChanges` as well, or take it back out of `derived_exports`. The containment is one-way on purpose: a run may come to tolerate a path the cut has no business committing on the operator's behalf, so widening the run's list alone is fine and widening the cut's alone is not. |
@@ -47,12 +48,12 @@ The same checks read this repository's governed documents — the brief, the
 goals, the designs, the decision records, and the invariants — and what they find
 wrong with one of *those* is escalated rather than failed. A goal hard-wrapped
 across two lines, a `supports` entry naming a document nobody wrote, an artifact
-reaching no brief, a broken link inside an artifact home: each is named in full
-on stderr, with the role that owns the file and the command that reaches them,
-and `make test` stays green. Every one of them opens with
-`governed-document defect (escalated;`, so they are one grep away in the output
-of a build that passed — which they have to be, since a report nobody sees is
-the silence a red build was traded for.
+reaching no brief, a home whose index has stopped answering, a broken link in a
+file no developer's diff may touch: each is named in full on stderr, with the
+role that owns the file and the command that reaches them, and `make test` stays
+green. Every one of them opens with `governed-document defect (escalated;`, so
+they are one grep away in the output of a build that passed — which they have to
+be, since a report nobody sees is the silence a red build was traded for.
 
 That is not the check going soft. Those documents live in directories every
 developer's diff refuses
@@ -61,25 +62,37 @@ red build over one stopped every run in the project on a defect no developer
 could fix, with the only way out an amendment proposal made while every run
 stayed red. The rule is in
 [`internal/governeddoc`](../internal/governeddoc/governeddoc.go), and it is drawn
-by where the document lives rather than by what is wrong with it: a defect in a
-protected home is the owner's, and one anywhere else is still yours and still
-fails.
+by whether the change in hand may edit the file rather than by what is wrong with
+it: a defect in a protected path is somebody else's, and one anywhere else is
+still yours and still fails. The two rows above that still fail are there because
+neither is put right by editing a protected file.
 
-Where it does fail is `yoyo artifact check`, and the two sets are deliberately
-the same one: it reads the artifacts, the goals stated in them, the invariants,
-and the Markdown links written inside an artifact home, and exits non-zero on any
-of it. Nothing escalated above is missing from it — a class escalated in every
-gate and failed in none would be a defect nobody catches, which is worse than the
-red build this replaced. It decides which links are its own by asking
-`governeddoc.Governed`, the same lookup the escalation is routed by, so the two
-cannot drift into disagreeing about which documents are governed. That is the
-command an owner runs after editing one, and the index at the door of every
-artifact home says so.
+Where the escalated ones do fail is `yoyo artifact check`, and the two sets are
+deliberately one set: it reads the artifacts, the goals stated in them, the
+invariants, the index at the door of each artifact home, and every Markdown link
+written in a document the escalation would cover — which is the artifact homes
+and `.yoyodyne`, since that is protected too and holds the personas. It exits
+non-zero on any of it. Nothing escalated above is missing from it: a class
+escalated in every gate and failed in none would be a defect nobody catches,
+which is worse than the red build this replaced. It decides which links are its
+own by asking `governeddoc.Protected`, which is the same question `Route` decides
+the escalation by rather than a second copy of it, so the two cannot drift.
 
 The line has one known edge: a loader tightened until a governed document stops
 parsing is reported as that document being malformed and escalated, which is why
 "the harness could not read them at all" is asked as its own question in the
 table above and still fails here.
+
+One thing this does not yet demonstrate. The index each artifact home carries is
+generated by [`internal/artifacthome`](../internal/artifacthome/artifacthome.go),
+and its hand-edit answer now names `yoyo artifact check` as what an owner runs
+after editing there. The committed indexes under `docs/product`,
+`docs/designs`, and `docs/decisions` do **not** carry that sentence yet: those
+paths are refused in a developer's diff, so nothing here could write them.
+`yoyo setup` rewrites an index from the generator, and until somebody runs it the
+files at those doors say less than the generator does. `yoyo artifact check`
+reads whether an index still answers its three questions, which the current ones
+do, so it will not catch this — nothing does.
 
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the

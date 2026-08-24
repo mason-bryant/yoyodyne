@@ -16,7 +16,10 @@ package cli
 // diff refuses — so the only route out was an amendment proposal made while
 // every run stayed red. Those gates escalate now (internal/governeddoc), which
 // leaves this as the place the defect still fails loudly, run by the one person
-// who can put it right. The index at the door of every artifact home names it.
+// who can put it right. The index internal/artifacthome writes at the door of
+// every home names it, so an owner standing in the directory they just edited
+// meets the command — once `yoyo setup` has written that index, which is the one
+// thing a developer's change cannot do for them.
 
 import (
 	"flag"
@@ -25,11 +28,13 @@ import (
 	"strings"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doclink"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/governeddoc"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
 
 // governedCheck is what the check found, for a machine.
@@ -60,10 +65,20 @@ type governedDefect struct {
 // Every kind of finding is read in one pass rather than left to a command each:
 // an owner who has just edited a goals document wants one answer about what they
 // wrote, and a check they have to run five times is a check they run none of.
-// The set is the same one the gates during a run escalate — the artifacts, the
-// goals stated in them, the invariants, and the links written inside an artifact
-// home — because a class escalated there and failed nowhere here would leave a
-// defect no gate at all catches.
+//
+// The set is exactly the one the gates during a run escalate, and it is exactly
+// that set because a class escalated there and failed nowhere here would leave a
+// defect no gate at all catches. What the gates escalate is decided by
+// governeddoc.Protected, and so is what the links read below are narrowed to, so
+// the two cannot come to disagree: the artifacts, the goals stated in them, the
+// invariants, the index at the door of each artifact home, and every link written
+// in a document no developer's diff may touch.
+//
+// One thing the repository gates fail on rather than escalate is not read here
+// and does not need to be: whether the goal this repository's attributed work
+// items name still resolves. Putting that right is a tracker action and an edit
+// to the test that holds the wording, neither of them a protected path, so it is
+// a defect the change in hand can fix and it fails where it is found.
 func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("artifact check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -100,9 +115,14 @@ func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportGovernedCheckError(stdout, stderr, *jsonOutput, err)
 	}
+	indexes, err := indexProblems(repository, resolved.Config)
+	if err != nil {
+		return reportGovernedCheckError(stdout, stderr, *jsonOutput, err)
+	}
 
 	defects := governedDefects(artifacts.Problems, artifacts.ReferenceProblems,
 		goal.Collect(repository, artifacts), invariants, links)
+	defects = append(defects, indexes...)
 	routed := governeddoc.Route(resolved.Config, defects...)
 
 	read := readHomes(artifacts.Homes, product)
@@ -127,7 +147,7 @@ func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if len(routed) == 0 {
-		fmt.Fprintf(stdout, "every governed document in %s is well-formed\n", strings.Join(read, ", "))
+		fmt.Fprintf(stdout, "every governed document, index, and link under %s is well-formed\n", strings.Join(read, ", "))
 		return 0
 	}
 	// One defect to an entry, with the route under it: what somebody has to do is
@@ -189,17 +209,20 @@ func governedDefects(
 	return defects
 }
 
-// readHomes is every directory this check actually looked in: the artifact homes
-// and the invariants home beside them. The invariants carry an identity scheme of
-// their own and are excluded from the artifact set, so a clean report naming only
-// the artifact homes would claim less than the check covered — and one naming
-// more than it read would be worse.
+// readHomes is every directory this check actually looked in: the artifact homes,
+// the invariants home beside them, and the configuration directory. The
+// invariants carry an identity scheme of their own and are excluded from the
+// artifact set, and the configuration directory is no home at all — it holds no
+// governed document, but it is a protected path carrying Markdown, the personas
+// among it, so a broken link written there is escalated by the gates and is this
+// command's to fail on. A clean report naming only the artifact homes would claim
+// less than the check covered, and one naming more than it read would be worse.
 func readHomes(homes []string, product config.Product) []string {
-	invariants := strings.TrimSpace(product.Invariants)
-	if invariants == "" {
-		return homes
+	read := append([]string(nil), homes...)
+	if invariants := strings.TrimSpace(product.Invariants); invariants != "" {
+		read = append(read, invariants)
 	}
-	return append(append([]string(nil), homes...), invariants)
+	return append(read, config.DirectoryName)
 }
 
 // pathOr is the file a finding sends somebody to, and the file to fall back on
@@ -227,19 +250,20 @@ func invariantProblems(repository string, product config.Product) ([]invariant.P
 	return set.Problems, nil
 }
 
-// governedLinkProblems is every broken link written inside an artifact home.
+// governedLinkProblems is every broken link written in a document no developer's
+// diff may touch — the artifact homes and the configuration directory both.
 //
 // The links are read here because the gates that read these documents during a
-// run escalate a broken one written in a governed document — and a class
-// escalated in every gate and failed in none would be exactly the reporting this
-// command exists to be the other half of.
+// run escalate a broken one written in such a document, and a class escalated in
+// every gate and failed in none would be exactly the reporting this command
+// exists to be the other half of.
 //
-// The walk is the whole repository rather than the homes alone, because
+// The walk is the whole repository rather than those directories alone, because
 // resolving a link needs the document at its other end and that document is
-// usually not in a home. Which of the results this command answers for is then
-// decided by where the document making the link lives, asked of the one place
-// that answers it. A broken link outside the homes is a developer's, and it
-// fails in the check that found it rather than here.
+// usually somewhere else. Which of the results this command answers for is then
+// decided by governeddoc.Protected — the same question the escalation is decided
+// by, so the two sets are one set. A broken link anywhere else is a developer's,
+// and it fails in the check that found it rather than here.
 func governedLinkProblems(repository string, cfg config.Config) ([]doclink.Problem, error) {
 	problems, err := doclink.Check(repository)
 	if err != nil {
@@ -247,11 +271,42 @@ func governedLinkProblems(repository string, cfg config.Config) ([]doclink.Probl
 	}
 	governed := make([]doclink.Problem, 0, len(problems))
 	for _, problem := range problems {
-		if governeddoc.Governed(cfg, problem.Path) {
+		if governeddoc.Protected(cfg, problem.Path) {
 			governed = append(governed, problem)
 		}
 	}
 	return governed, nil
+}
+
+// indexProblems is what each artifact home's index is, for the homes whose index
+// is not what it should be. The indexes are the one file in a home that is not a
+// governed document, and they are checked here for the reason the documents
+// beside them are: they sit inside the homes, so every developer's diff refuses
+// them, and the gate that reads them during a run escalates what it finds.
+//
+// What is asked is the three questions the index exists to answer — what is filed
+// here, whose it is, whether you may edit one by hand — rather than whether the
+// file matches what the harness would write. That line is artifacthome's and not
+// this command's to redraw: an operator who added a paragraph of their own has
+// not broken their index, and a check that said otherwise is one they would learn
+// to skip past.
+func indexProblems(repository string, cfg config.Config) ([]governeddoc.Defect, error) {
+	root, err := repowrite.NewRoot(repository)
+	if err != nil {
+		return nil, fmt.Errorf("read the artifact homes in %s: %w", repository, err)
+	}
+	var defects []governeddoc.Defect
+	for _, status := range artifacthome.Inspect(root, cfg) {
+		if status.Written() {
+			continue
+		}
+		detail := "its index is " + string(status.State)
+		if status.Detail != "" {
+			detail += ": " + status.Detail
+		}
+		defects = append(defects, governeddoc.Defect{Path: status.Path, Detail: detail + " (`yoyo setup` writes it)"})
+	}
+	return defects, nil
 }
 
 func reportGovernedCheckError(stdout, stderr io.Writer, jsonOutput bool, err error) int {

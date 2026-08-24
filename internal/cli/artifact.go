@@ -429,14 +429,15 @@ admitted without asking you, and anything else is still put to you.
 
 All of that is reported and none of it refuses anything, which is what a listing
 should do. "check" is the same reading with an exit code: it reads every governed
-document -- the artifacts, the goals stated in them, the invariants, and the
-Markdown links written inside an artifact home -- and exits 1 on a defect in one,
-naming the role that owns the file and the way to reach them. That is where a
-malformed governed document fails. It does not fail anybody else's build: the
-checks that read these documents escalate a defect in one to its owner instead,
-because every developer's diff refuses these paths and a build red for everybody
-over a file only one role may edit stops the work and fixes nothing. Run "check"
-after you edit one of these documents.
+document -- the artifacts, the goals stated in them, the invariants, the index at
+the door of each home, and the Markdown links written in any file a developer's
+change may not touch -- and exits 1 on a defect in one, naming the role that owns
+the file and the way to reach them. That is where a malformed governed document
+fails. It does not fail anybody else's build: the checks that read these documents
+escalate a defect in one to its owner instead, because every developer's diff
+refuses these paths and a build red for everybody over a file only one role may
+edit stops the work and fixes nothing. Run "check" after you edit one of these
+documents.
 
 A broken link written anywhere else is not this command's: it is a developer's to
 fix and it fails in the check that found it.

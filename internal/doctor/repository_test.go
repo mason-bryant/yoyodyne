@@ -39,6 +39,14 @@ func TestThisRepositoryReportsItsOwnArtifactHomesDocumented(t *testing.T) {
 		// artifact home, so it is routed to that home's owner. The finding names
 		// every home it is about, so the report is made against the home the check
 		// was run over rather than against a path picked out of the prose.
+		//
+		// This escalating is not the class going unchecked: `yoyo artifact check`
+		// reads the same index states and exits non-zero on one that is missing,
+		// incomplete, or unreadable. What it does not read is whether an index still
+		// matches the text the generator would write, which is artifacthome's own
+		// decision — an operator who added a paragraph has not broken their index —
+		// so a generator whose wording moved on leaves the doors saying less than it
+		// does and nothing reports it.
 		detail := "artifact-readmes = " + string(finding.Status) + ": " + finding.Summary + " (" + finding.Detail + ")"
 		reported := governeddoc.Defect{Path: resolved.Config.Product.Specifications, Detail: detail}
 		governeddoc.Report(resolved.Config, []governeddoc.Defect{reported}, t.Errorf, governeddoc.Escalate)
