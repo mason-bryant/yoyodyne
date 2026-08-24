@@ -320,6 +320,95 @@ func FromLine(line Line, at time.Time) Notification {
 	})
 }
 
+// Escalation is a state that has stopped the whole system and waits on a person
+// to lift it, with the decision that would lift it.
+//
+// It is the governed escalation shape rather than a second one invented for a
+// channel: the blocked outcome, why it reaches the operator rather than a role,
+// the options in nontechnical terms, and a recommendation. What is different is
+// only the delivery — this one is pushed to the operators instead of read off a
+// docket — and the delivery is the point, because the states that produce one are
+// exactly the states under which nobody is going to come and look.
+//
+// It is deliberately narrow. A single item that is blocked has an owner and a
+// docket, and something that reached every operator for each of those would teach
+// them to stop reading. What reaches one is the system stopping.
+type Escalation struct {
+	// Stopped is the blocked outcome, in the words the message will use.
+	Stopped string
+	// Why is why this is the operator's and nobody else's, which is the half of an
+	// escalation that stops it reading as a complaint: a role that could resolve it
+	// would have, and saying which authority is missing is what says why it is here.
+	Why string
+	// Since is when it became that way. What makes a stopped system worth telling
+	// somebody about is not that it began but that it is still true.
+	Since time.Time
+	// Record is where the whole of it is, in the words a reader would use to find
+	// it. It is the fourth of the four things an escalation owes its reader, and
+	// the one that keeps the message an index into the durable account rather than
+	// a replacement for it.
+	Record string
+	// Options is what may be decided, in the order they are offered, each saying
+	// what choosing it does as well as what it is. The last of them is always the
+	// one that is not a decision — something else, or not enough information yet —
+	// because an ask with no way out other than the two the harness thought of is
+	// an ask that collects wrong answers.
+	Options []Option
+	// Recommendation is which of them the record supports, and why.
+	Recommendation string
+	// Topic is what this is about: the item where one item is stopped, and the
+	// product where the line is. It is what the decision ends up scoped to.
+	Topic Topic
+	// Refs are the correlation identifiers, so a message about a stopped run leads
+	// back to the run rather than only to a sentence about it.
+	Refs Refs
+}
+
+// FromEscalation is the alarm: what stopped, why it is the operator's, and where
+// the whole of it is. It is brief on purpose — it is read on a phone, by somebody
+// who was not expecting it — and the ask underneath it carries the rest.
+//
+// The harness speaks it, for the reason it speaks a park and a promotion: the
+// state was derived from the durable record rather than judged by anybody, and a
+// persona made to say it would be claiming a judgment it never made.
+//
+// It is a warning rather than a note or a critical. Something that stopped the
+// system and is waiting on a person is not a routine fact, and it is not the one
+// thing critical is kept for either — a run that stopped and stayed stopped is
+// news about work already lost, and this is news about work not happening yet.
+func FromEscalation(raised Escalation, at time.Time) Notification {
+	return raised.say(KindEscalationRaised, at)
+}
+
+// EscalationOptions is the ask: how long it has stood, what may be decided, and
+// which of those the record supports. It goes underneath the alarm rather than
+// beside it, so what interrupts somebody is one line and what they read when they
+// have a moment is the whole of it.
+func EscalationOptions(raised Escalation, at time.Time) Notification {
+	return raised.say(KindEscalationOptions, at)
+}
+
+func (e Escalation) say(kind Kind, at time.Time) Notification {
+	return Notification{
+		Topic:   e.Topic,
+		Speaker: Harness(),
+		Event: Event{
+			Kind:     kind,
+			At:       at.UTC(),
+			Severity: report.SeverityWarning,
+			Refs:     e.Refs,
+			Detail: Detail{
+				Stopped:        strings.TrimSpace(e.Stopped),
+				Reason:         strings.TrimSpace(e.Why),
+				Since:          e.Since,
+				Record:         strings.TrimSpace(e.Record),
+				Options:        e.Options,
+				Recommendation: strings.TrimSpace(e.Recommendation),
+			},
+		},
+	}
+}
+
 // Accumulation is what one topic gathered while nothing was posting its events:
 // how many there were, the first and last of them, and the most attention any
 // one of them asked for.
@@ -480,11 +569,13 @@ func verdictGiven(state runstate.State) bool {
 }
 
 // parked reports a run stopped short of finishing with an instruction to resume:
-// a provider that refused it, the operator holding everything, or a directive
-// nobody has resolved. All three keep the run's claim and its worktree, which is
-// what makes a park different from a failure.
+// a provider that refused it, the operator holding everything, a directive
+// nobody has resolved, or work the item was made to wait on. All four keep the
+// run's claim and its worktree, which is what makes a park different from a
+// failure.
 func parked(state runstate.State) bool {
-	return state.UsageLimitResetsAt != nil || state.OperatorHeldSince != nil || state.DirectivePause != nil
+	return state.UsageLimitResetsAt != nil || state.OperatorHeldSince != nil ||
+		state.DirectivePause != nil || state.DependencyPause != nil
 }
 
 // causeOf names what a parked run is waiting on, as the object of "waiting on".
@@ -498,6 +589,9 @@ func causeOf(state runstate.State) string {
 			waiting += ": " + unresolved
 		}
 		return waiting
+	}
+	if pause := state.DependencyPause; pause != nil {
+		return "unfinished work this item depends on: " + pause.Summary()
 	}
 	if state.OperatorHeldSince != nil {
 		return runstate.DescribePause(runstate.PauseOperatorHold, "")
@@ -515,13 +609,14 @@ func causeOf(state runstate.State) string {
 //
 // An exhausted usage limit is a warning and the other causes are notes. That is
 // not a judgement about which is worse: it is what an unattended reader can do
-// about each. A directive and an operator hold are waiting on the person reading
-// the channel, who already knows they placed them; an exhausted limit is hours
-// in which nothing will happen for a reason nobody chose, and it must not weigh
-// the same as checks passing. A transient overload lifts in seconds and stays a
-// note for exactly that reason.
+// about each. A directive, a dependency link, and an operator hold are waiting on
+// a decision somebody already made — the person reading the channel placed the
+// first and the last, and the middle one is a development manager's own link; an
+// exhausted limit is hours in which nothing will happen for a reason nobody
+// chose, and it must not weigh the same as checks passing. A transient overload
+// lifts in seconds and stays a note for exactly that reason.
 func parkSeverity(state runstate.State) report.Severity {
-	if state.DirectivePause != nil || state.OperatorHeldSince != nil {
+	if state.DirectivePause != nil || state.DependencyPause != nil || state.OperatorHeldSince != nil {
 		return report.SeverityNote
 	}
 	if state.PauseCause == runstate.PauseServerOverload {

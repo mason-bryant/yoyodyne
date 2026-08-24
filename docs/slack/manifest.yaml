@@ -33,9 +33,29 @@
 #                          against that thread's work item, and anybody else's is
 #                          answered saying it was not acted on. An operator who
 #                          does not want the harness steered from Slack at all
-#                          can remove it and the two message events below, and
+#                          can remove it and the message events below, and
 #                          replies then never arrive.
 #   groups:history         the same, for a private channel.
+#   im:write               open a direct-message conversation with an operator and
+#                          post into it. It is what the one pushed tier uses: when
+#                          the whole system has stopped on a person — the brake
+#                          tripped, capacity gone past the point of waiting it out,
+#                          a directive nobody has settled — every operator the
+#                          project mapped is messaged rather than left to find a
+#                          line in the channel. Without it the channel reports
+#                          exactly as it does with it and that one tier stays
+#                          quiet, saying so once in the sink's own log.
+#   im:history             read the reply under one of those direct messages, which
+#                          is where the decision is made: the answer names the
+#                          option it chose and is recorded as a directive like any
+#                          other.
+#
+# Three of these are declinable together, and declining them is supported rather
+# than merely tolerated. An operator who wants neither to steer from Slack nor to
+# be messaged removes im:write, the three *:history scopes, and the three message.*
+# events below; the channel then reports on the same schedule and nothing else
+# changes. There is no setting that turns the direct-message tier off, so the scope
+# is the switch.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness
 # runs on operators' machines behind NAT, and the Events API would demand a
@@ -72,11 +92,14 @@ oauth_config:
       - reactions:write
       - channels:history
       - groups:history
+      - im:write
+      - im:history
 settings:
   event_subscriptions:
     bot_events:
       - message.channels
       - message.groups
+      - message.im
   interactivity:
     # Buttons and menus are a control surface, and this app is a reporting one.
     is_enabled: false

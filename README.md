@@ -523,10 +523,12 @@ make build
 ```
 
 `make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs. Some of what `test` runs reads this repository's own documents rather than
-its code: a documentation link that resolves to nothing, a goal written across
-more than one physical line, and a governed document whose place in the chain is
-wrong each fail a check rather than costing a reviewer a paragraph.
+runs. Some of what `test` runs is not about the Go code at all: it reads this
+repository's own documents and executes the part of the build that is shell, so
+a documentation link that resolves to nothing, a goal written across more than
+one physical line, a governed document whose place in the chain is wrong, and a
+claim in the release scripts' own suites that no longer holds each fail a check
+rather than costing a reviewer a paragraph.
 [Working on yoyo itself](docs/developing-yoyo.md#what-test-checks-besides-the-code)
 says what each one holds and why.
 
@@ -540,25 +542,44 @@ reruns a path that is already exercised rather than executing it for the first
 time when a failure would mean a botched or missing release.
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once this tag's notes are on
+`main`:
 
 ```sh
 make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+It gates on [this release's notes](docs/releases/README.md), walks [the
+documented adoption path](scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
 `vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
 that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
+over it. The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl`, which the walkthrough rewrites on its way through — do
+not count as a dirty tree: the cut commits them as their own housekeeping
+commit once every gate is green, so the tag still names a tree with nothing
+uncommitted in it, and on a day it had to it prints
+`git push --atomic origin main <tag>` instead, because the branch has to carry
+that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
+
+A tag whose notes are missing is the one refusal that leaves something behind:
+the cut drafts `docs/releases/<tag>.md` from the work items closed since the
+last tag and stops, so you read it, place each item under **key functionality**,
+**enhancements**, or **bug fixes**, and land it on `main` — the cut refuses a
+`HEAD` that `origin/main` does not have, so notes committed only in your
+checkout stop the next cut rather than that one. Cut again once `origin/main`
+carries them: the tag then names a commit carrying its own notes, and the
+release workflow publishes that file as the release page's body.
+[`scripts/release-notes-test.sh`](scripts/release-notes-test.sh) executes the
+drafting, the section shape, and that composition, and `make test` runs it too.
 
 ## The conversation
 
@@ -3444,6 +3465,22 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+**And one thing does not wait to be read.** A channel line is still something you
+find when you look, and the one condition under which nobody looks is the harness
+having stopped. So three states are sent as direct messages to every human the
+project granted `direct-work`: the brake tripped, capacity gone past the point of
+waiting it out, and a directive nobody has settled. Each says what stopped, why it
+is yours, whose move follows, and where the record is, with the options and a
+recommendation in the thread under it — and **the reply in that thread is the
+decision**, recorded against the option it names in the same record `yoyo
+directive record` writes. Where the ask is about a directive nobody has settled,
+answering settles that one, so the work it stopped picks up and the ask does not
+come back. A single blocked item is deliberately not one of these: it has an
+owner, and messaging everybody about each of those is how a channel stops being
+read. It needs the app's `im:write` scope, and that scope is the tier's only
+switch: without it the channel reports exactly as it does with it, and this one
+tier stays quiet and says so once.
+
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest
 beside it rather than a list of checkboxes to work through by hand.
@@ -3484,5 +3521,7 @@ is steered by nobody, which is what a workspace gets until you add yourself.
   inheritance, and inspection.
 - [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
   reporting in threads, with the app manifest checked in beside it.
+- [Release notes](docs/releases/README.md) — one file per tag, what each section
+  is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.

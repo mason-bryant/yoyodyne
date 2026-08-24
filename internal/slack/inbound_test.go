@@ -65,6 +65,174 @@ func TestAPlainReplyRecordsAnOperationalDirectiveAgainstTheThreadsItem(t *testin
 	}
 }
 
+// An answer is for the person who typed the reply, so it tags them rather than
+// relying on them to come back and find the thread. Their own message says where
+// the directive got to, and a directive that has just been recorded has got
+// nowhere yet: it is open, so the reply wears the thinking face and keeps
+// wearing it. Marking it settled here would be the channel calling a directive
+// nobody has acted on an answered one.
+func TestAnAnsweredReplyTagsWhoWroteItAndSaysItsDirectiveIsOpen(t *testing.T) {
+	t.Parallel()
+
+	const replyTS = "1750000001.000200"
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testOperator, "prefer the smaller change here", replyTS))
+
+	recorded := onlyDirective(t, directives)
+	answer := onlyPost(t, posts)
+	if !strings.HasPrefix(answer.Text, "<@"+testOperator+"> ") {
+		t.Fatalf("answer = %q, want it to tag the operator who wrote the reply", answer.Text)
+	}
+	if !strings.Contains(answer.Text, recorded.ID) {
+		t.Fatalf("answer = %q, want the tag in front of what was recorded rather than instead of it", answer.Text)
+	}
+
+	// Heard, and nothing else: one call, on the reply itself, and no sweep — the
+	// disposition has not happened, so there is nothing yet to sweep for.
+	wantMarks(t, posts.marks,
+		mark{method: "reactions.add", ts: replyTS, name: notify.ReceiptUnderConsideration.Symbol()})
+	if worn := posts.wearing[replyTS]; !worn[notify.ReceiptUnderConsideration.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply wears %#v, want the thinking face alone while its directive is open", worn)
+	}
+	if settled, err := sink.store.LoadSteers(); err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	} else if steer, _ := settled.Lookup(recorded.ID); steer.Message != replyTS {
+		t.Fatalf("steer = %#v, want the message that asked remembered, so the mark can move when it is settled", steer)
+	}
+}
+
+// A reply that recorded nothing wears a mark of its own, and it wears it at
+// once: nothing about a refusal is still to be decided. The absence of one would
+// be indistinguishable from a reply nobody read, which is the silence this whole
+// path exists to end.
+func TestARefusedReplyWearsARefusalRatherThanNothing(t *testing.T) {
+	t.Parallel()
+
+	const replyTS = "1750000001.000200"
+	sink, _, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testStranger, "do it the other way", replyTS))
+
+	if worn := posts.wearing[replyTS]; !worn[notify.ReceiptRefused.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply wears %#v, want the refusal mark and nothing else", worn)
+	}
+	if answer := onlyPost(t, posts); !strings.HasPrefix(answer.Text, "<@"+testStranger+"> ") {
+		t.Fatalf("answer = %q, want a refusal addressed to whoever it refuses", answer.Text)
+	}
+}
+
+// The check mark lands when the directive is settled, which is what the item
+// asks the mark to mean. Here the settlement comes from the same thread, so the
+// connection makes it and moves the mark on the message that asked — the reply
+// that did the settling wears one of its own, because settling something is over
+// the moment it is done.
+func TestTheAskIsMarkedSettledWhenItsDirectiveIsSettled(t *testing.T) {
+	t.Parallel()
+
+	const askTS = "1750000001.000200"
+	const settleTS = "1750000002.000300"
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testOperator, "ambiguous: which branch", askTS))
+	recorded := onlyDirective(t, directives)
+
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve "+recorded.ID[:16]+" the one already on the target branch", settleTS))
+
+	if worn := posts.wearing[askTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that asked wears %#v, want the settled mark alone once its directive was settled", worn)
+	}
+	if worn := posts.wearing[settleTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that settled it wears %#v, want the settled mark alone", worn)
+	}
+}
+
+// A settlement said in the thread by the reply that made it is not said a second
+// time by the delivery pass reading the same record. The two halves post from
+// different goroutines and remember what they have said in different places, so
+// the connection writes down that it answered.
+func TestASettlementMadeFromAThreadIsNotSaidTwice(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, _ := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "ambiguous: which branch", "1750000001.000200"))
+	recorded := onlyDirective(t, directives)
+
+	steers, err := sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	steer, found := steers.Lookup(recorded.ID)
+	if !found || steer.Member != testOperator {
+		t.Fatalf("steer for %s = %#v (found %t), want the thread and the member it was said by", recorded.ID, steer, found)
+	}
+	if steer.Said {
+		t.Fatalf("steer = %#v, want an unsettled directive to be one nothing has answered yet", steer)
+	}
+
+	sink.steering.handle(context.Background(),
+		reply(testOperator, "resolve "+recorded.ID[:16]+" the one already on the target branch", "1750000002.000300"))
+
+	steers, err = sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	if steer, _ := steers.Lookup(recorded.ID); !steer.Said {
+		t.Fatalf("steer = %#v, want the settlement marked as already said in the thread", steer)
+	}
+}
+
+// Settling a directive from somewhere other than the thread that asked for it
+// answers where it was settled, and leaves the thread that asked still owed what
+// became of it — and its message still saying so. Marking either would be the
+// sink concluding somebody had been told because somebody else was.
+func TestASettlementSaidInAnotherThreadStillOwesTheThreadThatAsked(t *testing.T) {
+	t.Parallel()
+
+	const askTS = "1750000001.000200"
+	sink, directives, posts := newSteeringSink(t, testOperator)
+	sink.steering.handle(context.Background(), reply(testOperator, "ambiguous: which branch", askTS))
+	recorded := onlyDirective(t, directives)
+
+	// A second item, with a thread of its own: the operator settles it from
+	// wherever they happen to be reading.
+	threads, err := sink.store.LoadThreads()
+	if err != nil {
+		t.Fatalf("LoadThreads() error = %v", err)
+	}
+	elsewhere, err := notify.WorkItem("yoyodyne-ifd.68.20")
+	if err != nil {
+		t.Fatalf("address a work item: %v", err)
+	}
+	threads.Record(elsewhere.Key(), Thread{Channel: "C1", ThreadTS: "1750000003.000400"})
+	if err := sink.store.SaveThreads(threads); err != nil {
+		t.Fatalf("SaveThreads() error = %v", err)
+	}
+
+	settle := "resolve " + recorded.ID[:16] + " the one already on the target branch"
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "text": settle,
+		"ts": "1750000004.000500", "thread_ts": "1750000003.000400", "channel": "C1",
+	}))
+
+	settled, err := directives.Load(recorded.ID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !settled.Resolved() {
+		t.Fatalf("settled = %+v, want it settled from whichever thread said so", settled)
+	}
+	steers, err := sink.store.LoadSteers()
+	if err != nil {
+		t.Fatalf("LoadSteers() error = %v", err)
+	}
+	if steer, _ := steers.Lookup(recorded.ID); steer.Said {
+		t.Fatalf("steer = %#v, want the thread that asked still owed what became of it", steer)
+	}
+	if worn := posts.wearing[askTS]; !worn[notify.ReceiptUnderConsideration.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that asked wears %#v, want it still open until the pass answers it there", worn)
+	}
+}
+
 // The pausing kinds are stated rather than inferred, and a stated one pauses the
 // work exactly as one recorded at a terminal does. Nothing about arriving through
 // a chat workspace makes it a weaker record.
@@ -463,7 +631,7 @@ func TestAnAcknowledgmentNeverOpensAThread(t *testing.T) {
 	if err != nil {
 		t.Fatalf("address a work item: %v", err)
 	}
-	sink.steering.answer(context.Background(), ThreadMap{Threads: map[string]Thread{}},
+	sink.steering.answer(context.Background(), ThreadMap{Threads: map[string]Thread{}}, testOperator,
 		refused(topic, time.Now(), "a reason"))
 
 	if len(posts.requests) != 0 {

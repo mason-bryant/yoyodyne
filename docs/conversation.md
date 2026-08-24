@@ -787,6 +787,18 @@ saying how many review rounds the item has accumulated against the configured
 cap and what a repair grant would be worth. A decision made without those last
 ones is a decision the cap then contradicts.
 
+It carries what triage has already decided about the item too, joined from the
+durable record the guards spend and refuse against at the moment the docket is
+read rather than frozen into the entry when the work stopped: the repair grants,
+re-runs, and merge re-arms recorded beside the caps that refuse the next one,
+what a grant came to and whether the round cap cut it down, what the item now
+stands committed to, and which of those decisions the harness has carried out.
+Where a further decision would be refused, the entry says so and says which
+budget refuses it. That is what stops a decision already recorded from reading
+as an entry nobody has looked at — the reading that had one authorized recovery
+decided a second time, and then paid for by a round-trip on every docket after
+it.
+
 An entry states that something stopped; it decides nothing, and nothing decides
 it for the development manager. Docketing is keyed to what stopped, so a run
 that dockets its own ending and a sweep that settles it afterwards produce one

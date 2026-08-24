@@ -86,12 +86,27 @@ step 2 and turn Socket Mode on there. Events without a request URL require
 Socket Mode, so they cannot go in until it is actually on. Once it is, paste
 the original manifest back in under *App Manifest*.
 
-The manifest says what each scope is for. The two that read messages —
-`channels:history` and `groups:history` — are what carries a thread reply back to
-your machine, which is how the harness is steered from the channel. An operator
-who would rather not steer from Slack at all can delete those two scopes and the
-two `message.*` events beside them: everything else in this document still works,
-and replies simply never arrive.
+The manifest says what each scope is for. The ones that read messages —
+`channels:history`, `groups:history`, and `im:history` — are what carries a reply
+back to your machine, which is how the harness is steered from the channel and how
+a stopped system is answered. `im:write` is what lets it message you at all.
+
+**Both halves can be declined, and what each costs is bounded.** An operator who
+would rather not steer from Slack, and would rather not be messaged, can delete
+`im:write` and the three `*:history` scopes along with the three `message.*`
+events beside them. What that costs is exactly two things: replies never arrive,
+and the states that stop the whole system are not pushed to anybody. Everything
+else in this document is unaffected — the channel reports on the same schedule,
+with the same threads, the same status marks, and the same heartbeat, which is
+still where a stopped line is said. The sink notices the missing scope once, says
+so in its own log naming what went quiet and that the channel has not, and carries
+on at full pace. There is deliberately no setting that turns the direct-message
+tier off, so declining the scope is how you decline the tier.
+
+**Installed this app before?** `im:write`, `im:history`, and `message.im` are new,
+and an app installed without them keeps reporting into the channel and never
+messages anybody. Reinstalling once from *OAuth & Permissions* is the whole of the
+fix, and it is one approval for all three.
 
 ## 2. Install it and take the two tokens
 
@@ -280,7 +295,10 @@ you are re-pointing at a new workspace — stop the sink and delete
 and otherwise `~/Library/Application Support/Yoyodyne/state` on macOS or
 `~/.local/state/yoyodyne` elsewhere. The sink takes a new moment on its next pass
 and says which one. Leave `threads.json` beside it alone unless you also want new
-threads.
+threads, and `steers.json` — which is what it remembers about replies that
+steered the work — alone either way: a directive settled before the new moment is
+read past on its age, so starting the cursors over does not answer you again for
+everything you ever steered.
 
 **Do not run two.** One sink per product: two of them hold separate thread maps,
 so the second opens its own threads and posts everything twice. The second to
@@ -557,11 +575,36 @@ attribution rather than routing — the record reaches every run of the item
 whichever role it names — and a reply that mentions nobody is the product
 manager's.
 
-Every reply is answered in its own thread, with the directive as recorded and its
-identifier, or with why nothing was recorded. What that answer says is the whole
-of what happened: there is no other confirmation, and a reply that stopped work is
-shown at the top of the channel as well, because work stopping is what somebody
-who has opened no threads most needs to see.
+Every reply is answered in its own thread, **tagging you**, with the directive as
+recorded and its identifier, or with why nothing was recorded. What that answer
+says is the whole of what happened at that moment: there is no other
+confirmation, and a reply that stopped work is shown at the top of the channel as
+well, because work stopping is what somebody who has opened no threads most needs
+to see.
+
+Your own message then carries where that directive stands, as a reaction, so
+scrolling back through what you said says which of your replies is still open and
+which has been answered without any of them being read:
+
+| Mark | What it means |
+| --- | --- |
+| :thinking_face: | Recorded, and not settled yet. It goes on as the reply arrives and stays while the directive stands. |
+| :white_check_mark: | The directive is settled — carried out, decided, or answered. It lands when the outcome is said in the thread, not when the directive was written down. |
+| :no_entry_sign: | Nothing was recorded. The thread says why. |
+
+The mark is about the directive rather than about the harness having read you:
+recording one is not disposing of it, so a directive nobody has settled keeps
+saying so however long that takes. Those three are the whole vocabulary, they are
+only ever on a reply, and the four status marks are only ever on a thread's
+opener, so no message carries both.
+
+**What later becomes of it is said in the same thread, tagging you** — and that
+is the moment the mark on your message moves. A directive you asked for from a
+thread is remembered against that thread, so when the record says it was settled
+— by you at a terminal, in a conversation, by anybody — the settlement and what
+it was are said where you asked rather than only where it was typed. A directive
+recorded at a terminal has no thread and nobody to tag, so nothing is said about
+it here.
 
 Three things are refused, visibly:
 
@@ -584,6 +627,90 @@ itself.
 `yoyo directive list` shows what is recorded whichever way it arrived, and
 `yoyo directive resolve` settles one from the terminal. The two surfaces are the
 same record.
+
+## When the whole system stops on you
+
+Everything above waits to be read. That is right for a narrative and wrong for
+the one condition under which nobody is going to read anything: the harness has
+stopped, and it stays stopped until a person decides something. The heartbeat says
+so in the channel, and a channel line is still something you find when you look.
+
+So three states go the other way. **Every human this project granted
+`direct-work` with a bound `slack_member_id` is messaged directly**, all of them,
+because the first one to pick it up is the one who should:
+
+- **the brake has tripped** — intake is held, or all harness activity is, so
+  nothing new is chosen until a person releases it. No role can.
+- **capacity has gone, past the point of waiting it out** — everything in flight
+  is parked on the provider, and has been for more than two hours. Below that
+  there is nothing to decide: the runs resume from their own records when the
+  provider serves again.
+- **a directive nobody has settled** — an `ambiguous:` or `artifact:` one, which
+  stops the work it names at its next gate and is settled by you and nobody else.
+
+One of them at a time, in that order, because a machine that has stopped once
+should interrupt somebody once. Each message says the same four things: what
+stopped, why it is yours rather than a role's, whose move follows, and where the
+whole of it is. Underneath it, in its own thread, is the ask: how long it has
+stood, the options in plain terms, and a recommendation.
+
+**A single blocked item is not one of these, deliberately.** It stays a `critical`
+in its own thread with :octagonal_sign: on the opener, because it has an owner —
+the development manager's triage docket — and something that messaged every
+operator for each of those would teach everybody to ignore the ones that matter.
+
+**It needs `im:write`, and that scope is the tier's only switch.** An app installed
+without it reports into the channel exactly as it would otherwise — same schedule,
+same threads, same marks, same heartbeat — and this one tier stays quiet, saying so
+once in the sink's own log. That is the supported way to decline being messaged;
+see step 1.
+
+### Answering one
+
+Reply in the thread under the message, with the letter of the option you are
+choosing:
+
+```text
+b — leave it held until I've read what the brake caught
+```
+
+That reply **is** the decision. It goes into the same record
+[`yoyo directive record`](../conversation.md#directives-and-the-work-they-pause)
+writes and every run consults, against **which option you chose** rather than as
+the sentence you typed — so what the receipt says, and what a role reads
+afterwards, is the decision rather than something to interpret. The words after
+the letter are kept beside it.
+
+The letter is required, and a reply without one is answered saying so and naming
+the letters. That is not pedantry: an ask answered with prose is a decision nobody
+can name later, which is the thing the options exist to prevent. The last option
+is always *something else, or you want more of the record first* — that is where
+prose belongs, and choosing it records that you have not decided yet.
+
+Four things about it are worth knowing:
+
+- **It records the decision; it does not work the machine.** Choosing "release
+  intake" writes down that intake should be released, where every role reads it;
+  `yoyo release` is still what releases it, and the option says so. Directives
+  move intent and commands move the machine, and the machine is not driven from a
+  chat workspace.
+- **The exception is the ask about a directive, and it is not really one.** That
+  state is not ended by a command at all — it is ended by *resolving* the
+  directive, which is already something a reply may do from a thread. So choosing
+  to settle or withdraw one settles it, exactly as
+  [`yoyo directive resolve`](../conversation.md#directives-and-the-work-they-pause)
+  would, and the work it stopped picks up from where it stopped. Those two
+  options need your answer after the letter, for the reason the command line
+  needs one — the work resumes on the answer rather than on the act of answering
+  — and a bare letter is refused saying so.
+- **The identity check is the channel's.** An answer from somebody without
+  `direct-work`, or from somebody the ask was not put to, is answered saying it
+  was not acted on. Nothing else in the workspace can reach the record.
+- **Answering, or clearing it yourself, cancels the follow-ups.** A state that is
+  still stopped is said again every `--heartbeat` while it stands. The moment it
+  clears — the hold released, the provider serving, the directive settled by your
+  answer or from the terminal — nothing more is sent, and nothing announces the
+  clearing either: the channel already carries that.
 
 ## Coming back from a long gap
 
@@ -639,6 +766,8 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: not_in_channel` | The app was never invited to the channel. `/invite @yoyodyne` in it. |
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
+| `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
+| `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
@@ -648,7 +777,10 @@ command line whenever the digest is not enough.
 | `slack reporting is not enabled` | The project has not opted in. Set `slack.enabled` and `slack.channel`. |
 | `replies in these threads are acknowledged and not acted on` | Said once when the sink starts: nobody in this project holds `direct-work` with a bound `slack_member_id`, so no reply steers anything. Step 4 is where that is written. |
 | A reply is answered `the reply is from somebody this project has not granted direct-work` | Your member id is not bound to a human with that grant, or is bound to a different one. Your profile → *Copy member ID*, and check it against `operators` in `.yoyodyne/config.yaml`. |
-| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item. Reply inside the item's thread. |
+| A reply gets no answer at all | It was not in a thread this sink opened, or it was not a reply — a message at the top of the channel addresses no work item, and a direct message that is not in the thread under one the harness sent answers nothing. Reply inside the thread. |
+| `nobody can be messaged directly` | The app has no `im:write`, so the states that stop the whole system are not being pushed to anybody. It is said once and not repeated. **The channel is unaffected** and still reporting on time; only the direct-message tier is quiet. If that was deliberate — step 1 offers it — nothing needs doing. If it was not, reinstall from *OAuth & Permissions* and the tier comes back on its own. |
+| `the system is stopped on a person and nobody was told` | Said in the sink's own log when one of the three states above stands and there is nobody to message: no human holds `direct-work` with a bound `slack_member_id`. Step 4 is where that is written. |
+| An answer is refused `say which option you are choosing` | The reply did not start with a letter the ask offered. What is recorded is which option was chosen, so the letter comes first and anything you want to say goes after it. |
 | Nothing is posted at all | Nothing has happened since reporting on this product began that it had not already said. Run something; work that finished before that moment is deliberately not replayed, and the first pass prints which moment it is. |
 
 Every row above is something you saw. What a stopped, stale, or misdirected sink

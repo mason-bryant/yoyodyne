@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
 	"github.com/mason-bryant/yoyodyne/internal/report"
@@ -994,6 +995,64 @@ func TestAWorkspaceThatRefusesAMarkStillGetsEveryMessage(t *testing.T) {
 	wantWearing(t, posts, posts.timestamps[0], notify.StatusBlocked)
 }
 
+// What became of a directive somebody asked for in a thread is the one message
+// the pass posts for a person rather than for the channel, and both halves of
+// that have to survive the pass: the text reaches them by name, and the reply
+// they typed stops wearing the thinking face at the moment the outcome is said.
+func TestAnOutcomeThePassSaysTagsWhoAskedAndSettlesTheMarkOnTheirReply(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	const askTS = "1750000001.000200"
+	posts := &recordedPosts{}
+	feed := &fixedFeed{deliveries: []Delivery{outcome(1, member, askTS)}}
+	if err := newTestSink(t, t.TempDir(), feed, posts).pass(context.Background()); err != nil {
+		t.Fatalf("pass() error = %v", err)
+	}
+
+	if len(posts.requests) != 2 {
+		t.Fatalf("posts = %#v, want the thread opened and the outcome said in it", posts.requests)
+	}
+	said := posts.requests[1]
+	if !strings.HasPrefix(said.Text, "<@"+member+"> ") {
+		t.Fatalf("said %q, want the outcome to reach the person who asked by name", said.Text)
+	}
+	if !strings.Contains(said.Text, "the second one, and the design says so") {
+		t.Fatalf("said %q, want the tag in front of what became of it rather than instead of it", said.Text)
+	}
+	if worn := posts.wearing[askTS]; !worn[notify.ReceiptSettled.Symbol()] || len(worn) != 1 {
+		t.Fatalf("the reply that asked wears %#v, want the settled mark alone once the outcome was said", worn)
+	}
+}
+
+// outcome is what the feed hands the sink when the record says a directive
+// somebody asked for in a thread has been settled: said in their thread, tagged
+// to them, and carrying the reply that asked so its mark can move.
+func outcome(position uint64, member, replyTS string) Delivery {
+	settled := moment
+	recorded := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            "directive-" + strings.Repeat("f", 32),
+		ProductID:     testProduct,
+		Kind:          directive.KindAmbiguous,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    moment,
+		Text:          "ambiguous: which of the two branches did you mean",
+		Unresolved:    "which of the two branches did you mean",
+		Scope:         []string{"yoyodyne-ifd.68.3"},
+		Resolution:    "the second one, and the design says so",
+		ResolvedAt:    &settled,
+	}
+	topic := notify.Topic{Kind: notify.TopicWorkItem, ID: "yoyodyne-ifd.68.3"}
+	return Delivery{
+		Stream:       directiveStream,
+		Cursor:       Cursor{Position: position},
+		Mention:      member,
+		Reply:        replyTS,
+		Notification: acknowledged(topic, notify.KindDirectiveResolved, recorded, settled),
+	}
+}
+
 func wantMarks(t *testing.T, got []mark, want ...mark) {
 	t.Helper()
 	if len(got) != len(want) {
@@ -1066,6 +1125,14 @@ type recordedPosts struct {
 	// transient refusal is retried inside the call.
 	allow int
 	count int
+	// opens is every member a direct-message conversation was asked for, in
+	// order, and refuseOpen is the Slack error every one of those is refused
+	// with — an app installed before the manifest asked for `im:write`, which is
+	// also the configuration the setup document offers to anybody who would
+	// rather not be messaged.
+	opens       []string
+	refuseOpen  string
+	directPosts []postRequest
 }
 
 func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request) {
@@ -1078,6 +1145,20 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
+	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; method == "conversations.open" {
+		var opened directRequest
+		if err := json.Unmarshal(body, &opened); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseOpen != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseOpen})
+			return
+		}
+		r.opens = append(r.opens, opened.Users)
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": "D" + opened.Users}})
+		return
+	}
 	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
 		var reaction reactionRequest
 		if err := json.Unmarshal(body, &reaction); err != nil {
@@ -1126,6 +1207,9 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	r.requests = append(r.requests, decoded)
+	if strings.HasPrefix(decoded.Channel, "D") {
+		r.directPosts = append(r.directPosts, decoded)
+	}
 	ts := "1755.000" + strconv.Itoa(r.count)
 	r.timestamps = append(r.timestamps, ts)
 	writeJSON(writer, map[string]any{"ok": true, "ts": ts})

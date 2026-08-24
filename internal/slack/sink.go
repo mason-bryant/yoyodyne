@@ -182,11 +182,26 @@ type Sink struct {
 	// It is the delivery pass's alone, and nothing on the acknowledgment path
 	// reads or writes it: an acknowledgment is a message rather than a mark.
 	marking string
-	log     func(format string, args ...any)
+	// escalating is the refusal the escalating half is currently getting, empty
+	// when direct messages are working. It is the same discipline `marking`
+	// follows and it is there for a sharper reason: a workspace that will not open
+	// a direct message refuses every pass, and the escalation tier deliberately
+	// has no off switch, so without this the log would carry the same line every
+	// fifteen seconds for as long as the process ran.
+	//
+	// Like `marking` it is the delivery pass's alone.
+	escalating string
+	log        func(format string, args ...any)
 	// steering is the inbound half, nil on a sink that was given nowhere to record
 	// a directive. It is held as well as handed to the connection so the sink can
 	// say at startup whether replies steer anything and who may send them.
-	steering   *steering
+	steering *steering
+	// operators is who is told when the whole system stops on a person, in a
+	// settled order so a sink interrupted halfway through telling them resumes
+	// where it stopped. It is the same allow-list the steering half checks
+	// replies against, kept here because the escalating half walks it rather than
+	// looking anybody up in it.
+	operators  []string
 	connection *connection
 }
 
@@ -233,14 +248,15 @@ func New(options Options) (*Sink, error) {
 			Product: options.Store.Product(),
 			Avatars: options.Avatars,
 		},
-		store:    options.Store,
-		api:      options.API,
-		feed:     options.Feed,
-		titles:   options.Titles,
-		poll:     poll,
-		identity: options.Identity,
-		refusal:  refusalBackoff,
-		now:      options.Now,
+		store:     options.Store,
+		api:       options.API,
+		feed:      options.Feed,
+		titles:    options.Titles,
+		operators: orderedOperators(options.Operators),
+		poll:      poll,
+		identity:  options.Identity,
+		refusal:   refusalBackoff,
+		now:       options.Now,
 		pace: &pacer{
 			every: DefaultPostInterval,
 			now:   time.Now,
@@ -339,12 +355,17 @@ func (s *Sink) Once(ctx context.Context) error {
 // nothing at all for a product that has granted nobody. The refusal an unlisted
 // reply gets is visible in the thread, but only to whoever sent it; this is the
 // same fact where an operator setting the sink up is looking.
+//
+// The same two answers decide whether anybody is told directly when the system
+// stops on a person, so this says that too: it is the same allow-list and the
+// same record, and an operator who reads that nothing steers has also read that
+// nothing will reach them at three in the morning.
 func (s *Sink) steer() string {
 	switch {
 	case s.steering == nil:
-		return "replies in these threads are read and not acted on: this sink was assembled without the directive record"
+		return "replies in these threads are read and not acted on, and nobody is messaged when the system stops on a person: this sink was assembled without the directive record"
 	case len(s.steering.operators) == 0:
-		return "replies in these threads are acknowledged and not acted on: no human in this project holds direct-work with a bound Slack member id"
+		return "replies in these threads are acknowledged and not acted on, and nobody is messaged when the system stops on a person: no human in this project holds direct-work with a bound Slack member id"
 	default:
 		return fmt.Sprintf("replies in these threads steer the work, from the %d Slack member(s) this project granted direct-work", len(s.steering.operators))
 	}
@@ -456,8 +477,21 @@ func (s *Sink) pass(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if notification, say := plan.say(index, delivery); say {
+		if delivery.Direct {
+			// The whole system has stopped on a person, so this one is carried to
+			// them rather than left in the channel to be found. It is never
+			// collapsed into a digest: there is one of it, and the reason it exists
+			// is that nobody is coming to look.
+			if err := s.escalate(ctx, delivery); err != nil {
+				return err
+			}
+		} else if notification, say := plan.say(index, delivery); say {
 			into.reached = false
+			// Almost every delivery is for whoever is reading the channel and carries
+			// nobody. The exception is what became of something one person asked for,
+			// which is said to them by name: it is set per delivery rather than per
+			// poster because the poster is one and the deliveries are many.
+			into.mention = delivery.Mention
 			if err := notification.Notify(ctx, notifier); err != nil {
 				if into.reached {
 					return err
@@ -468,6 +502,13 @@ func (s *Sink) pass(ctx context.Context) error {
 				// stream forever, so it is said once here and read past.
 				s.log("a notification could not be said and was skipped: %v", err)
 			}
+		}
+		// What became of a directive is the disposition of the reply that asked for
+		// it, so the message that asked stops wearing the thinking face at the
+		// moment the outcome is said and not a moment earlier. Every other delivery
+		// carries no reply to mark.
+		if delivery.Reply != "" {
+			s.settle(ctx, delivery.Reply)
 		}
 		if err := s.advance(&cursors, delivery); err != nil {
 			return err
@@ -489,6 +530,218 @@ func (s *Sink) pass(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// escalate carries one stopped state to every operator the project named, as a
+// direct message with the ask underneath it in its own thread.
+//
+// Every operator, rather than one: the system is stopped on whoever gets to it
+// first, and choosing which of them that is would be the harness deciding whose
+// evening this is. What stops it being a flood is upstream — three states reach
+// here at all, one at a time, said again only while it stands.
+//
+// It is idempotent per person rather than per pass. What has already been said to
+// somebody is written down before the next thing is said to them, so a sink
+// killed halfway through the operators comes back and tells the rest rather than
+// telling the first ones twice. A workspace that is merely down is returned to the
+// pass, which leaves the cursor where it was and tries the whole thing again later
+// — that can repeat one message, and a repeated interruption is the right side of
+// that trade against an interruption that never arrived.
+//
+// What is never returned to the pass is a refusal only a person can clear. This
+// tier has no off switch by design, and the setup document offers deleting
+// `im:write` as a supported way of not being messaged, so a workspace that will
+// not open a direct message must cost the escalation tier and nothing else: the
+// tier goes quiet, says so once, and the cursor advances so the channel keeps its
+// pace. Failing the pass instead would make that documented choice a permanently
+// late channel with no way back except a reinstall.
+func (s *Sink) escalate(ctx context.Context, delivery Delivery) error {
+	// Nobody to tell, or nowhere to record what they answer. The second is the
+	// one worth being strict about: the ask says the reply in the thread is the
+	// decision, and a sink that could not record one would be saying something
+	// untrue to somebody it had just woken up.
+	if s.steering == nil {
+		s.log("the system is stopped on a person and nobody was told: this sink was assembled without the directive record, so nothing could be done with what they answered")
+		return nil
+	}
+	if len(s.operators) == 0 {
+		s.log("the system is stopped on a person and nobody was told: no human in this project holds direct-work with a bound Slack member id")
+		return nil
+	}
+	directs, err := s.store.LoadDirects()
+	if err != nil {
+		return err
+	}
+	mark := delivery.Telling
+	for _, member := range s.operators {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		sent, told := directs.Told(mark, member)
+		if told && sent.Asked {
+			continue
+		}
+		if !told {
+			channel, err := s.api.OpenDirect(ctx, member)
+			if err != nil {
+				// A workspace that will not open direct messages at all — the scope
+				// was never granted, or somebody removed it — is the documented
+				// opt-out rather than an outage, so it silences this tier instead of
+				// holding up the channel.
+				if silenced, quiet := s.quieten(ctx, err); silenced {
+					return quiet
+				}
+				return fmt.Errorf("open a direct message with %s: %w", member, err)
+			}
+			ts, reached, err := s.tell(ctx, channel, "", delivery.Notification)
+			if err != nil {
+				if silenced, quiet := s.quieten(ctx, err); silenced {
+					return quiet
+				}
+				if reached {
+					return err
+				}
+				// Nothing could be said about this state at all, which is a record
+				// rather than a workspace. Repeating it every pass would hold up
+				// nothing and help nobody, so it is said here and read past.
+				s.log("a stopped system could not be said and nobody was told about it: %v", err)
+				return nil
+			}
+			sent = Direct{
+				Member:   member,
+				Channel:  channel,
+				ThreadTS: ts,
+				SentAt:   s.clock().UTC(),
+				Options:  delivery.InThread.Event.Detail.Options,
+				Topic:    delivery.Notification.Topic.Key(),
+			}
+			// Written before the ask goes under it, so a sink killed between the two
+			// answers into the thread it opened rather than interrupting somebody a
+			// second time with the same alarm.
+			directs.Record(mark, sent)
+			if err := s.store.SaveDirects(directs); err != nil {
+				return err
+			}
+		}
+		if _, reached, err := s.tell(ctx, sent.Channel, sent.ThreadTS, delivery.InThread); err != nil {
+			if silenced, quiet := s.quieten(ctx, err); silenced {
+				return quiet
+			}
+			if reached {
+				return err
+			}
+			s.log("a stopped system was said but the options under it could not be: %v", err)
+			return nil
+		}
+		sent.Asked = true
+		directs.Record(mark, sent)
+		if err := s.store.SaveDirects(directs); err != nil {
+			return err
+		}
+		// Direct messages are working, so the next refusal is news again.
+		s.escalating = ""
+		s.log("told %s that the system is stopped on them, and what they can decide", member)
+	}
+	return nil
+}
+
+// quieten decides what a refusal of a direct message costs, and reports whether
+// it cost the escalation tier rather than the pass.
+//
+// Only a refusal that will still be a refusal next time is silenced — a missing
+// scope, a revoked token, an app somebody uninstalled — because those are the
+// ones a person has to clear and the ones that would otherwise refuse every pass
+// forever. Everything else is a workspace having a bad minute and is handed back
+// to the caller to retry, which is what keeps a transient outage from quietly
+// turning the tier off.
+//
+// It says so once. The line names the tier that stopped and the tier that did
+// not, because an operator reading it needs to know the channel is still keeping
+// pace — otherwise the safe reading is that reporting has died altogether.
+func (s *Sink) quieten(ctx context.Context, err error) (bool, error) {
+	if ctx.Err() != nil {
+		// A sink being shut down mid-telling is not a workspace refusing anything.
+		return true, ctx.Err()
+	}
+	if !PermanentError(err) {
+		return false, nil
+	}
+	if refusal := err.Error(); refusal != s.escalating {
+		s.escalating = refusal
+		s.log("nobody can be messaged directly, so the states that stop the whole system are not being pushed to anybody; the channel is unaffected and still reporting on time. It is retried quietly, and `im:write` on the Slack app is what grants it: %v", err)
+	}
+	return true, nil
+}
+
+// tell says one message in a direct-message conversation and reports the
+// timestamp Slack gave it, which is what the ask and any reply hang from.
+//
+// It reports whether the message reached the workspace at all, for the reason the
+// delivery pass keeps that apart: a record nothing can be said about is read past,
+// and a workspace that refused is tried again.
+func (s *Sink) tell(ctx context.Context, channel, threadTS string, notification notify.Notification) (string, bool, error) {
+	into := &directPoster{sink: s, channel: channel, threadTS: threadTS}
+	if err := notification.Notify(ctx, notify.New(into, s.appearance)); err != nil {
+		return "", into.reached, err
+	}
+	return into.ts, true, nil
+}
+
+// directPoster carries one rendered message into a direct-message conversation.
+//
+// It is a poster of its own rather than the channel's with a different channel on
+// it, and the difference is a capability: this one has no thread map and cannot
+// open a thread for a topic. A direct message is not addressed to a topic's
+// thread at all — it is addressed to a person — so a poster that could reach the
+// map would be one that could write a work item's thread from the wrong side.
+type directPoster struct {
+	sink     *Sink
+	channel  string
+	threadTS string
+	// ts is the timestamp Slack gave what was posted, which is the thread the ask
+	// and the operator's answer both hang from.
+	ts string
+	// reached records that the message got as far as the workspace, for the reason
+	// the channel's poster records it: a record nothing can be said about and a
+	// workspace that refused are two different things to do next.
+	reached bool
+}
+
+func (d *directPoster) Post(ctx context.Context, message notify.Message) error {
+	d.reached = true
+	emoji, url := icon(message.Identity.Avatar)
+	ts, err := d.sink.post(ctx, Message{
+		Channel:   d.channel,
+		Text:      renderText(message),
+		ThreadTS:  d.threadTS,
+		Username:  message.Identity.Name,
+		IconEmoji: emoji,
+		IconURL:   url,
+	})
+	if err != nil {
+		return err
+	}
+	d.ts = ts
+	return nil
+}
+
+// orderedOperators is the allow-list as the escalating half walks it: trimmed,
+// without repeats, and in one order. The order matters only in that there is one
+// — a sink that was interrupted halfway through telling people resumes where it
+// stopped, and it can only know where that was if the walk is the same every
+// time.
+func orderedOperators(operators []string) []string {
+	ordered := make([]string, 0, len(operators))
+	seen := make(map[string]bool, len(operators))
+	for _, member := range operators {
+		trimmed := strings.TrimSpace(member)
+		if trimmed == "" || seen[trimmed] {
+			continue
+		}
+		seen[trimmed] = true
+		ordered = append(ordered, trimmed)
+	}
+	return ordered
 }
 
 // mark puts each item's current status on the message its thread hangs from, so
@@ -604,6 +857,62 @@ func (s *Sink) remark(ctx context.Context, thread Thread, status notify.Status) 
 	return s.api.React(ctx, thread.Channel, thread.ThreadTS, status.Symbol())
 }
 
+// receipt marks one reply of somebody's with where its directive stands, on
+// their own message. It is the twin of the status a thread's opener wears: the
+// opener says what the item is doing, and this says what became of what they
+// said.
+//
+// The arrival mark goes on alone, because it goes on a message nothing has
+// marked yet and because the acknowledgment behind it is what the operator is
+// actually waiting for — two removals that hit nothing would put the pace's wait
+// between somebody typing and being answered. A disposition sweeps instead, for
+// the reason a status change does: what the message is wearing is the question,
+// and a sink killed between the workspace taking a mark and the disposition
+// landing leaves exactly that, so the sweep is what settles it.
+//
+// It reports its error rather than logging, because its callers are the two
+// halves that already know how to say what a reply could not be told.
+func (s *Sink) receipt(ctx context.Context, messageTS string, receipt notify.Receipt) error {
+	if !receipt.Valid() {
+		return fmt.Errorf("%q is not one of the marks a reply can wear", receipt)
+	}
+	if receipt != notify.ReceiptUnderConsideration {
+		for _, stale := range notify.Receipts() {
+			if stale == receipt {
+				continue
+			}
+			if err := s.pace.wait(ctx); err != nil {
+				return err
+			}
+			if err := s.api.Unreact(ctx, s.channel, messageTS, stale.Symbol()); err != nil {
+				return err
+			}
+		}
+	}
+	if err := s.pace.wait(ctx); err != nil {
+		return err
+	}
+	return s.api.React(ctx, s.channel, messageTS, receipt.Symbol())
+}
+
+// settle moves the mark on the message that asked for a directive now that what
+// became of it has been said in its thread. It is the far end of the receipt the
+// inbound half puts on as a reply arrives, and it is where the thinking face
+// stops being true.
+//
+// It is never a gate, for the reason the status marks are not: the outcome is
+// already in the thread in words, this pass's messages are posted, and failing
+// here would repeat all of them next time in exchange for an emoji.
+func (s *Sink) settle(ctx context.Context, messageTS string) {
+	if err := s.receipt(ctx, messageTS, notify.ReceiptSettled); err != nil {
+		// A sink being shut down mid-mark is not a workspace refusing anything.
+		if ctx.Err() != nil {
+			return
+		}
+		s.log("the reply that asked for this could not be marked as settled, so what became of it is only said in the thread: %v", err)
+	}
+}
+
 // post puts one message in the workspace at the pace the workspace sustains.
 // Every message the sink sends goes through here rather than to the client
 // directly, because what Slack suppresses is an application posting too fast and
@@ -643,6 +952,17 @@ type poster struct {
 	// is the one way this path could damage anything. It cannot, because it is not
 	// given the capability rather than because it never takes it.
 	opens bool
+	// mention is the Slack member id this message is for, empty for the ordinary
+	// message that is for whoever is reading the channel. It is set where a
+	// message answers one person — the acknowledgment of their reply, and what
+	// later became of what they asked for — because a thread they are not looking
+	// at is indistinguishable from silence, and being told is the whole point of
+	// both.
+	//
+	// It is carried here rather than in the envelope because it is Slack's own
+	// shape: who a message is about is the record's, and how a workspace pokes
+	// somebody is this surface's.
+	mention string
 	// reached records that a message got as far as the workspace. It is what lets
 	// the pass tell a record nothing could be said about — which it reads past —
 	// from a workspace that refused it, which it retries. Without it the two are
@@ -692,7 +1012,7 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 	emoji, url := icon(message.Identity.Avatar)
 	if _, err := sink.post(ctx, Message{
 		Channel:   sink.channel,
-		Text:      renderText(message),
+		Text:      tagged(p.mention, renderText(message)),
 		ThreadTS:  threadTS,
 		Broadcast: broadcast(message.Severity),
 		Username:  message.Identity.Name,
@@ -761,6 +1081,21 @@ func (s *Sink) named(ctx context.Context, topic notify.Topic) notify.Topic {
 		return topic
 	}
 	return topic.WithTitle(title)
+}
+
+// tagged puts a Slack mention in front of a message that is for one person, and
+// leaves every other message exactly as it was rendered.
+//
+// The mention is the member id in Slack's own syntax, which is what makes the
+// workspace notify them: a message that named them in words would read the same
+// and reach nobody who was not already looking at the thread. A member id is
+// what the operators mapping binds, so nothing here has to resolve anybody.
+func tagged(member, text string) string {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return text
+	}
+	return "<@" + trimmed + "> " + text
 }
 
 // icon splits one avatar into the two fields Slack takes for it: a shortcode

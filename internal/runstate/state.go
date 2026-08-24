@@ -424,6 +424,42 @@ func (d DirectivePause) Validate() error {
 	return errors.Join(problems...)
 }
 
+// DependencyPause is the unfinished work a run stopped short for: the blocking
+// dependencies its work item carried when the run last read it. It is recorded
+// before the run returns, for the same reason a directive pause is — the pause
+// has to survive the process, so a later invocation can tell a run that is
+// waiting from one that was interrupted, and resume it rather than start a
+// second attempt at the same item.
+//
+// The dependency graph itself lives in the tracker, which is what makes it
+// reachable from every process. What is copied here is only what a reader of
+// this run needs in order to say what the run is waiting for without going and
+// finding it: the items it is waiting on.
+type DependencyPause struct {
+	Blockers []string `json:"blockers"`
+}
+
+// Summary names the work this pause is waiting on, in one line, for a reader who
+// needs to know what to close rather than the whole dependency graph.
+func (d DependencyPause) Summary() string {
+	return strings.Join(d.Blockers, ", ")
+}
+
+// Validate rejects a recorded pause that cannot say what the run is waiting for.
+// A pause nobody can name the blocker of is a pause nobody can lift, which is
+// exactly the state enforcing dependencies exists to prevent.
+func (d DependencyPause) Validate() error {
+	if len(d.Blockers) == 0 {
+		return errors.New("blockers is required")
+	}
+	for _, blocker := range d.Blockers {
+		if strings.TrimSpace(blocker) == "" {
+			return errors.New("every blocker must name the work item it waits on")
+		}
+	}
+	return nil
+}
+
 // MaxRepairContinuations bounds how many granted continuations one run's record
 // may carry. What actually bounds them is the item's per-item grant cap, which
 // refuses long before this; this is the record's own bound, so a budget somebody
@@ -710,6 +746,16 @@ type State struct {
 	// branch, and is picked up again once the directive is resolved. It is cleared
 	// as the run resumes.
 	DirectivePause *DirectivePause `json:"directive_pause,omitempty"`
+	// DependencyPause records that unfinished work this item was made to wait on
+	// stopped the run short of finishing. Like a directive pause it is an
+	// instruction to resume later rather than a failure, so a run carrying one
+	// keeps its claim, its worktree, and its branch, and is picked up again once
+	// the work it waits on is closed. It is cleared as the run resumes.
+	//
+	// It is a separate field from the directive pause rather than a second kind of
+	// one because what lifts them differs: a directive is settled by a person
+	// deciding, and this is lifted by other work finishing.
+	DependencyPause *DependencyPause `json:"dependency_pause,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -979,6 +1025,17 @@ func (s State) Validate() error {
 		// continuation nothing will ever make.
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("directive_pause requires a run that is still in flight"))
+		}
+	}
+	if s.DependencyPause != nil {
+		if err := s.DependencyPause.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("dependency_pause: %w", err))
+		}
+		// A dependency pause is the same kind of instruction as the ones above:
+		// resume this later. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("dependency_pause requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

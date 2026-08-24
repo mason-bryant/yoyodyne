@@ -224,7 +224,18 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// time somebody reads it and silence has to keep meaning nothing to do.
 			Backlog:   readyBacklog{tracker: tracker},
 			Heartbeat: heartbeat,
-			Log:       log,
+			// What became of a directive somebody asked for in a thread, said in
+			// that thread and addressed to them. The same records the inbound half
+			// writes and reads: the product's directives, and the sink's own note of
+			// which of them were said into a thread.
+			//
+			// The directives are read a second time for the state nothing else
+			// brings to the person who has to end it: a directive nobody has settled
+			// stops the work it names, and settling one is the operator's and nobody
+			// else's.
+			Directives: directives,
+			Steers:     store,
+			Log:        log,
 		},
 		// The inbound half. Where a reply is recorded, and whose replies are acted
 		// on: the humans this project granted direct-work who bound a Slack member
@@ -327,6 +338,19 @@ running -- while the tracker still calls work ready says so every --heartbeat,
 naming what stopped it, how long it has stood, and how much is waiting. It stops
 the moment the state clears, and a line that is idle with nothing ready says
 nothing at all: silence has to mean nothing to do rather than waiting on you.
+
+And one thing does not wait to be read. When the whole system has stopped on a
+person -- the brake tripped, capacity gone past the point of waiting it out, or a
+directive nobody has settled -- every human this project granted direct-work with
+a bound Slack member id is messaged directly, with what stopped, why it is theirs,
+and where the record is, and the options and a recommendation in the thread under
+it. The reply in that thread is the decision, recorded against the option it names
+in the same directive record every run consults; where the ask is about a
+directive nobody has settled, answering settles that one and the work it stopped
+picks up. A single blocked item is deliberately not one of these: it has an owner,
+and messaging everybody about each of those is how a channel stops being read.
+It needs the app's im:write scope; without it the channel reports exactly as it
+does now and this one tier stays quiet, saying so once.
 
 It needs both tokens in its own environment and takes them from nowhere else:
 

@@ -2670,6 +2670,12 @@ grants is a list that disagrees with them — silently, and about authority. A
 human granted `direct-work` who has bound no member id simply is not on it: they
 hold the authority, and Slack is not a boundary they can reach it through.
 
+The same derivation decides **who is messaged directly when the whole system has
+stopped on a person** — the brake tripped, capacity gone past the point of waiting
+it out, a directive nobody has settled. All of them are, because the first to pick
+it up is the one who should; and a project that has granted nobody is messaged by
+nobody, which is what the sink says once when it starts.
+
 A reply from somebody on that list is recorded as a directive against the item
 whose thread it was said in, and reaches the work exactly as one typed at a
 terminal does. A reply from anybody else is answered in the thread saying it was

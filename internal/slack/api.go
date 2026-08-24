@@ -180,6 +180,44 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 	return response.TS, nil
 }
 
+// directRequest is the wire shape of conversations.open. It names one member,
+// because the only conversation this app opens is the one between it and a person
+// it has to interrupt: a group it invented would be a channel nobody agreed to.
+type directRequest struct {
+	Users string `json:"users"`
+}
+
+// OpenDirect asks Slack for the direct-message conversation with one member,
+// which is what the sink posts a stopped system into. Slack returns the same
+// conversation every time rather than opening a second one, so this is asked
+// afresh whenever one is needed instead of being remembered: what the sink
+// remembers is which message it hung a thread from, and a channel id it cached
+// would be one more thing that can be stale.
+//
+// It needs the `im:write` scope, which an app installed from an older manifest
+// does not have. That refusal is permanent by the client's own reckoning, and
+// the escalating half reads it as such: the tier goes quiet and says so once,
+// rather than the refusal being retried or held against the delivery pass.
+func (a *API) OpenDirect(ctx context.Context, member string) (string, error) {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return "", errors.New("a member id is required to open a direct message")
+	}
+	var response struct {
+		apiResponse
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := a.call(ctx, "conversations.open", a.botToken, directRequest{Users: trimmed}, &response); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(response.Channel.ID) == "" {
+		return "", errors.New("conversations.open returned no channel, so there is nowhere to say this")
+	}
+	return response.Channel.ID, nil
+}
+
 // reactionRequest is the wire shape of reactions.add and reactions.remove. Both
 // take the same three fields, because both name one reaction on one message.
 type reactionRequest struct {

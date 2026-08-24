@@ -42,6 +42,50 @@ func TestAssembleUsesExplicitDeterministicReferences(t *testing.T) {
 	}
 }
 
+// The context both the developer and the reviewer read the work item from says
+// what the item waits on, and says it either way. A reviewer judging a change
+// against an item that waits on unfinished work has to be able to see that it
+// does, and a line that appeared only when there were dependencies would leave
+// an item nothing blocks indistinguishable from one whose blockers this context
+// happens not to carry.
+func TestAssembleStatesWhatTheWorkItemWaitsOn(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	base := beads.WorkItem{ID: "yoyodyne-1", Title: "Task", Status: "in_progress"}
+
+	unblocked, err := Assemble(Request{RepositoryRoot: root, WorkItem: base})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if !strings.Contains(unblocked.Text, "Depends on: nothing;") {
+		t.Fatalf("bundle does not state an unblocked item as unblocked: %s", unblocked.Text)
+	}
+
+	// Only the relation that blocks, and only while the work it names is
+	// unfinished: a closed blocker is not something anybody is waiting for, and a
+	// parent-child link never was.
+	waiting := base
+	waiting.Dependencies = []beads.Dependency{
+		{ID: "yoyodyne-9", Type: "blocks", Status: "open"},
+		{ID: "yoyodyne-2", Type: "blocks", Status: "open"},
+		{ID: "yoyodyne-7", Type: "blocks", Status: "closed"},
+		{ID: "yoyodyne-8", Type: "parent-child", Status: "open"},
+	}
+	blocked, err := Assemble(Request{RepositoryRoot: root, WorkItem: waiting})
+	if err != nil {
+		t.Fatalf("Assemble() error = %v", err)
+	}
+	if !strings.Contains(blocked.Text, "Depends on: yoyodyne-2, yoyodyne-9 (unfinished work this item waits on)") {
+		t.Fatalf("bundle does not name the unfinished work the item waits on: %s", blocked.Text)
+	}
+	for _, unwanted := range []string{"yoyodyne-7", "yoyodyne-8"} {
+		if strings.Contains(blocked.Text, unwanted) {
+			t.Fatalf("bundle names %s, which is not work this item waits on: %s", unwanted, blocked.Text)
+		}
+	}
+}
+
 func TestAssembleSkipsMissingImplicitMarkdownDeliverables(t *testing.T) {
 	t.Parallel()
 
