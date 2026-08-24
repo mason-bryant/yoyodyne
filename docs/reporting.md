@@ -131,6 +131,14 @@ it. An invocation the provider refused or killed and the harness reissued is
 charged to the attempt it was reissuing, not counted as a repair nobody asked
 for: what an attempt cost is what it took to get it made.
 
+An invocation that ends in a run's log without saying which part of the run it
+served is the one thing none of the three will take. It is counted in the total
+and named in a line under the table instead — how many, and what they cost —
+because charging it to a phase would put somebody else's money in a column the
+operator reads to decide something. That line is absent from a healthy record:
+anything in it is a defect in whatever wrote the log rather than a cost of the
+work.
+
 **waited** is time rather than money — a provider that would not serve the
 account, and the harness parked on the operator's hold — and it is counted apart
 for that reason, since adding it to the money would make a run that waited
@@ -147,12 +155,20 @@ yoyodyne-ifd.1.5: $49.43 across 4 run(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
 ```
 
-The split is read out of the run's event log rather than out of a phase the
-harness wrote down beside each invocation, which is what makes it answer for
-runs that finished long before it existed. A review announces itself and then
-makes exactly one invocation, so the terminal after it is the reviewer's and no
-other terminal is; the rest are the developer's, and they group into attempts by
-how each one ended.
+The split is read out of the run's event log, which is what makes it answer for
+runs that finished long before it existed. Each invocation's terminal names the
+role it was made as, so the reviewer's invocations are the reviewer's because
+they say so, the developer's are the developer's for the same reason, and they
+group into attempts by how each one ended. An invocation naming anything else is
+left unattributed rather than placed.
+
+Runs recorded before the terminal named a role are read the way they were
+written: a review announces itself with a `review.started` and then makes
+exactly one invocation, so the terminal after that announcement is the
+reviewer's and every other terminal is a developer's. That inference was sound
+for those runs — the developer's attempts and the reviewer were the only things
+that ever wrote into a run's log, and the reviewer always announced itself — and
+the role on the terminal is what stops it from having to stay true.
 
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is

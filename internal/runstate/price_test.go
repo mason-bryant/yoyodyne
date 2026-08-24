@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -554,6 +555,92 @@ func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
 	}
 }
 
+// Every invocation says which role made it, so the split reads the phase off
+// the invocation rather than off where its terminal happens to sit. Nothing here
+// announces a review, and the reviewer's money still lands in review: a bracket
+// somebody forgot to open, or a reviewer asked again without re-announcing, no
+// longer moves a review into the developer's columns.
+func TestStoreReadsAnInvocationsPhaseFromTheRoleItRecorded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.172"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	appendRoleCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleReviewer, 2.0)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
+	appendRoleCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, domain.RoleReviewer, 1.5)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
+	}
+	if phases.Review != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
+		t.Fatalf("review = %#v, want both reviewer invocations without an announcement", phases.Review)
+	}
+	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want the second developer attempt", phases.Repair)
+	}
+	if phases.Unattributed != (PhaseCost{}) {
+		t.Fatalf("unattributed = %#v, want nothing left over", phases.Unattributed)
+	}
+	if phases.TotalUSD() != price.TotalUSD {
+		t.Fatalf("split = %v, total = %v", phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
+// A phase bucket is somewhere an invocation is put, never somewhere it lands by
+// default. An invocation from a role the split has no place for -- a summarizer,
+// a second reviewer nobody accounted for, anything a later feature invokes into
+// a run -- is money that stays visible as unplaced: it is in the run's total,
+// because the harness spent it, and in none of the three, because charging it to
+// repair would inflate repair on exactly the runs the figure is read from.
+func TestStoreLeavesAnInvocationThatNamedNoPhaseOutOfEveryPhase(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.172"
+	state.ProviderSessionID = "session-developer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	// An invocation the phase split knows nothing about, sitting exactly where an
+	// unannounced one used to be read as a repair attempt.
+	appendRoleCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleProductManager, 6.0)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Unattributed != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+		t.Fatalf("unattributed = %#v, want the invocation that named no phase", phases.Unattributed)
+	}
+	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
+	}
+	// The developer attempt after it is still the second attempt, and still the
+	// only repair: an invocation nothing placed does not end an attempt either.
+	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want only the developer's second attempt", phases.Repair)
+	}
+	if phases.TotalUSD() != price.TotalUSD || price.TotalUSD != 19.0 {
+		t.Fatalf("split = %v, total = %v, want the unplaced money in both", phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
 // What a run waited comes from its own state rather than from its event log,
 // which is why it survives what the money does not: a run nothing can price
 // still says how long it was held up, and by whom.
@@ -601,6 +688,19 @@ func appendCostEvents(t *testing.T, store *Store, runID string, sequence uint64,
 	t.Helper()
 	appendEvent(t, store, runID, sequence, eventType, map[string]any{
 		"session_id":     "session-developer",
+		"total_cost_usd": cost,
+	})
+}
+
+// appendRoleCostEvents records one invocation's terminal the way a backend
+// records it now: naming the role the invocation was made as beside what the
+// provider said it cost. The helper above deliberately does not, because the
+// runs it stands for are the ones recorded before a terminal said whose it was.
+func appendRoleCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, role domain.AgentRole, cost float64) {
+	t.Helper()
+	appendEvent(t, store, runID, sequence, eventType, map[string]any{
+		"role":           string(role),
+		"session_id":     "session-" + string(role),
 		"total_cost_usd": cost,
 	})
 }

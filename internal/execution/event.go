@@ -12,7 +12,15 @@ const EventSchemaVersion = 1
 type EventType string
 
 const (
-	EventRunStarted       EventType = "run.started"
+	EventRunStarted EventType = "run.started"
+	// One provider invocation's terminal, whichever way it ended, carrying what
+	// the provider said it cost. A log can hold several of them — the developer's
+	// attempts and the reviewer's invocations share one — so each must name the
+	// role it was made as, under the payload key "role", and a backend that omits
+	// it leaves money nothing can attribute. Where a terminal sits relative to the
+	// others is not a substitute: that is a fact about the order the harness
+	// happened to do things in, and anything reading it as a phase is guessing.
+	// internal/runstate's phase split is what reads this.
 	EventRunCompleted     EventType = "run.completed"
 	EventRunFailed        EventType = "run.failed"
 	EventProcessOutput    EventType = "process.output"
