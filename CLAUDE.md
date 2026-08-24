@@ -57,6 +57,66 @@ This protocol applies when ending a Beads implementation workflow. It is subordi
 - If a required sync or push is blocked, stop and report the exact command and error.
 <!-- END BEADS INTEGRATION -->
 
+## Never replace a work item's notes
+
+`bd update <id> --notes=` **replaces** the notes field wholesale. Use
+`bd update <id> --append-notes=` to add to it.
+
+This matters more here than it looks. A work item's goal attribution is one line
+in its notes — `Goal served: <statement>`, written and read back by
+`internal/goal/goal.go` — so the notes are the record, and a writer that
+replaces them takes the attribution with it. Twelve attributions were destroyed
+exactly that way, every one of them from an interactive session; each loss is
+matched to the command that caused it in
+[the diagnosis](docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md).
+
+[`scripts/bd-notes-guard.sh`](scripts/bd-notes-guard.sh) enforces this as a
+`PreToolUse` hook: it refuses a `bd update --notes=` against an item whose notes
+name a goal, unless the replacement carries that same `Goal served:` line
+across. It allows everything else, silently.
+
+**Harness developer runs already run it.** `developerSettings` in
+`internal/backend/claudecode/backend.go` wires this same script, by an absolute
+path into the run's own worktree, and a test holds it to that.
+
+**Interactive sessions need the block below in `.claude/settings.json`, and only
+a person can put it there.** Claude Code refuses an agent's write to a settings
+file: `Write` and `Edit` are both denied on that path whatever else the session
+is permitted, so no harness run can wire its own hooks — not even one given
+explicit permission for the path, which the provider refuses all the same.
+
+<!-- BEGIN NOTES GUARD HOOK -->
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/bd-notes-guard.sh\"",
+            "type": "command"
+          }
+        ],
+        "matcher": "Bash"
+      }
+    ]
+  }
+}
+```
+<!-- END NOTES GUARD HOOK -->
+
+Merge that `PreToolUse` entry into `.claude/settings.json` alongside the
+`SessionStart` hook already there. One script serves both wirings, so the
+refusal is identical rather than merely similar; all that differs is how each
+reaches it, and a checked-in settings file goes through `$CLAUDE_PROJECT_DIR`
+because one file serves every checkout and no absolute path is true in all of
+them.
+
+`internal/cli` holds the block above to parsing and to naming a script that is
+really there, and — once `.claude/settings.json` carries a `PreToolUse` entry —
+holds the two to saying the same thing. What nothing can check is that you
+pasted it: until you do, an interactive `bd update --notes=` here is unguarded,
+and that is the population all twelve losses came from.
 
 ## Build & Test
 
