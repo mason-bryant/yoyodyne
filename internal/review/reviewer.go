@@ -192,8 +192,8 @@ type Request struct {
 	// Repository is what the repository holds at the commit this change was
 	// written against. It is the harness's own reading rather than anything the
 	// developer wrote, and it is the only thing an absence claim may be made from.
-	Repository RepositoryListing
-	Checks     []checks.Result
+	Repository   RepositoryListing
+	Checks       []checks.Result
 	RedactValues []string
 	LastSequence uint64
 	EventSink    func(execution.Event) error
