@@ -438,13 +438,16 @@ func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T)
 		t.Errorf("local main = %q, want the promoted commit %q left where it is", local, outcome.Integration.TargetCommit)
 	}
 	// The blocker is what owns the divergence: where the work is, where each
-	// branch stands, and that neither was chosen over the other.
+	// branch stands, that neither was chosen over the other, and where the steps
+	// for choosing are written down — a blocker that only said a person was
+	// needed is what left the last divergence standing.
 	for _, want := range []string{
 		"promoted onto the local target branch",
 		"The item is deliberately left open rather than closed as integrated",
 		"which history is right is a decision for a person",
 		"onto local main at " + outcome.Integration.TargetCommit,
 		"origin main: " + publishedCommit(t, remote, "main"),
+		"Unwedging a target branch that diverged from the forge",
 	} {
 		if !strings.Contains(tracker.blockReason, want) {
 			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
@@ -609,6 +612,7 @@ func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
 		"which history is right is a decision for a person",
 		"Local main: " + base,
 		"origin main: " + publishedCommit(t, remote, "main"),
+		"Unwedging a target branch that diverged from the forge",
 	} {
 		if !strings.Contains(tracker.blockReason, want) {
 			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
@@ -1216,8 +1220,14 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
-		t.Fatalf("outcome = %#v, want a succeeded, integrated, closed run", outcome)
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want a succeeded, integrated run", outcome)
+	}
+	// The promotion is made, but nothing has merged it anywhere but here. Closing
+	// the item now would record it integrated against a publication the forge may
+	// yet drop, so the closure waits for the forge's answer.
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("a queued merge closed the item as integrated before the forge merged it: reason = %q", tracker.closeReason)
 	}
 	// A queued merge is not an outstanding publication: the forge accepted it.
 	if outcome.PublishFailure != "" {
@@ -1253,8 +1263,10 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	if !state.Outstanding() {
 		t.Error("a run with a queued merge is not outstanding, so nothing would ever settle it")
 	}
-	if !strings.Contains(tracker.notes, "Merge queued") {
-		t.Errorf("tracker notes do not report the queued merge:\n%s", tracker.notes)
+	for _, want := range []string{"Merge queued", "stays open until then"} {
+		if !strings.Contains(tracker.notes, want) {
+			t.Errorf("tracker notes do not report %q:\n%s", want, tracker.notes)
+		}
 	}
 }
 
@@ -1332,6 +1344,17 @@ func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
 	if !strings.Contains(fixture.tracker.notes, "settled the merge this run left queued") {
 		t.Errorf("tracker notes do not report the settled merge:\n%s", fixture.tracker.notes)
 	}
+	// The run left the closure to this answer, so this is where the item closes —
+	// and the reason says what actually happened rather than describing a run
+	// somebody interrupted.
+	if !fixture.tracker.closed {
+		t.Fatal("the confirmed merge did not close the item, so nothing ever will")
+	}
+	for _, want := range []string{"merged by the forge", "Reviewed and integrated"} {
+		if !strings.Contains(fixture.tracker.closeReason, want) {
+			t.Errorf("close reason %q does not name %q", fixture.tracker.closeReason, want)
+		}
+	}
 	// Nothing is left owed, so a second sweep finds nothing at all.
 	if again := fixture.reconcile(t); len(again) != 0 {
 		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
@@ -1377,8 +1400,10 @@ func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
 // A queued merge the forge dropped is a requirement that went unmet, and the
 // harness does not merge past one — not by asking again and not with
 // administrator privileges. The publication is reported as outstanding, on the
-// run and on the work item, and left to a person. The change itself is safe: the
-// local target branch it was integrated into is the authoritative one.
+// run and on the work item, and the item is handed to a person with a blocker
+// rather than closed as integrated: nothing merged the change anywhere but here.
+// The change itself is safe: the local target branch it was integrated into is
+// the authoritative one.
 func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	t.Parallel()
 
@@ -1388,13 +1413,21 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	merges := len(fixture.forge.merges)
 
 	results := fixture.reconcile(t)
-	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
-		t.Fatalf("reconciliation = %#v, want the run settled", results)
+	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run settled on a blocker", results)
 	}
 	for _, want := range []string{"dropped the queued merge", "needs a person"} {
 		if !strings.Contains(results[0].Detail, want) {
 			t.Errorf("detail %q does not name %q", results[0].Detail, want)
 		}
+	}
+	// The forge never merged it, so nothing may record the item as integrated.
+	if fixture.tracker.closed {
+		t.Fatalf("a dropped merge closed the item as integrated: reason = %q", fixture.tracker.closeReason)
+	}
+	if !fixture.tracker.blocked || !strings.Contains(fixture.tracker.blockReason, "dropped the queued merge") {
+		t.Fatalf("blocked = %t, reason = %q; want the dropped merge handed to a person",
+			fixture.tracker.blocked, fixture.tracker.blockReason)
 	}
 	// Reconciliation can only ask the forge, so nothing was merged a second time.
 	if len(fixture.forge.merges) != merges {
