@@ -14,6 +14,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -319,41 +320,315 @@ func TestPipelineReportsAForgeRefusalAsTheUnmetRequirement(t *testing.T) {
 	}
 }
 
-// A forge merging into a target that moved would reconcile that movement
-// itself, which is the conflict nothing in the run ever saw. The drift check
-// the promotion makes locally is therefore made against the remote too, and the
-// merge is never asked for.
-func TestPipelineRefusesToMergeIntoARemoteTargetThatMoved(t *testing.T) {
+// A human push to the target branch during a run is the ordinary way the remote
+// moves underneath one, and it is a cost rather than a wedge. The remote target
+// is settled before the promotion, so the local target takes the push on, the
+// change is replayed onto it, and everything the promotion depends on is
+// re-earned: the checks run again and a second independent review judges the
+// replayed change. What must not happen is what did happen before: a promotion
+// made onto a base the remote had left, an item closed as integrated, and a
+// local target no fast-forward could ever reconcile.
+func TestPipelineReplaysOntoARemoteTargetSomebodyPushedTo(t *testing.T) {
 	t.Parallel()
 
 	repository, remote := publishedRepository(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
 	forge := &fakeForge{remote: remote}
-	// Someone else's work lands on the target after this run published its
+	// Someone else's work lands on the remote target after this run published its
 	// branch, which is the window a merge the harness does not perform opens.
 	forge.onEnsure = func() { driftRemoteTarget(t, remote, "main") }
 	provider := roleBackend(func(request backend.RunRequest) error {
 		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
 	}, approveVerdict)
-	pipeline, _ := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	cut := publishedCommit(t, repository, "main")
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
+		t.Fatalf("outcome = %#v, want the replayed change promoted and the item closed", outcome)
+	}
+	// The promotion was made from where the target actually went rather than from
+	// the base the run was cut at, which is what a replay is for.
+	if outcome.IntegrationRetries != 1 {
+		t.Fatalf("integration retries = %d, want the drift to have re-prepared the change once", outcome.IntegrationRetries)
+	}
+	if outcome.BaseCommit == cut || outcome.Integration.PreviousTargetCommit != outcome.BaseCommit {
+		t.Fatalf("promotion base = %q (run was cut at %q), want the commit the human push left", outcome.BaseCommit, cut)
+	}
+	// The change was re-judged on its new ground: the approval that authorized the
+	// first attempt described a diff on a base the target had left.
+	if reviews := len(provider.requestsForRole(domain.RoleReviewer)); reviews != 2 {
+		t.Errorf("reviews = %d, want the replayed change reviewed again", reviews)
+	}
+	// The whole point of the replay: both branches end up carrying both changes,
+	// and the local target is not left somewhere the remote cannot be reached from.
+	if len(forge.merges) != 1 {
+		t.Fatalf("forge merges = %#v, want the replayed promotion merged", forge.merges)
+	}
+	assertRemoteCarriesPromotion(t, repository, remote, "main", outcome.Integration.TargetCommit)
+	remoteTarget := publishedCommit(t, remote, "main")
+	if local := publishedCommit(t, repository, "main"); local != remoteTarget {
+		t.Errorf("local main = %q, want the merge commit %q the forge left on the remote", local, remoteTarget)
+	}
+	for _, name := range []string{"feature.txt", "elsewhere.txt"} {
+		if _, err := os.Stat(filepath.Join(repository, name)); err != nil {
+			t.Errorf("main is missing %s after the replay: %v", name, err)
+		}
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PublishFailure != "" {
+		t.Errorf("durable publish failure = %q, want a publication that finished", state.PublishFailure)
+	}
+	if state.IntegrationRetries != 1 {
+		t.Errorf("durable integration retries = %d, want 1", state.IntegrationRetries)
+	}
+}
+
+// The check before the promotion narrows the window the remote can move in; it
+// does not close it. A remote that moves between that check and the merge
+// request is found by the check publishIntegration makes, and by then the local
+// target already carries the promotion. That used to be recorded as an
+// outstanding publication and the item closed as integrated, which left a
+// divergence nothing reconciled and nobody owned. It now stops the run instead —
+// which is still before the item closes — and says on the item that the work is
+// on the local branch and only the two branches and the publication need
+// settling.
+func TestPipelineStopsWhenTheRemoteTargetDivergesAfterThePromotion(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	// The one instant nothing else in this harness can express: the world moves
+	// after the local promotion has happened and before the forge is asked.
+	pipeline.Worktrees = remoteMovingWorktrees{
+		WorktreeManager: pipeline.Worktrees,
+		afterIntegrate:  func() { driftRemoteTarget(t, remote, "main") },
+	}
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err == nil || !strings.Contains(err.Error(), "cannot be brought onto origin afterwards") {
+		t.Fatalf("Run() error = %v, want the divergence to stop the run", err)
+	}
+	// The promotion happened and is not taken back, but the item is not closed on
+	// it: that closure is the receipt this whole outcome used to hide behind.
+	if outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want the local promotion recorded", outcome)
+	}
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the item left open over the divergence", outcome.WorkItemClosed, tracker.closed)
+	}
+	if !outcome.Blocked || !tracker.blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the divergence on the item", outcome.Blocked, tracker.blocked)
+	}
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
+	}
+	if local := publishedCommit(t, repository, "main"); local != outcome.Integration.TargetCommit {
+		t.Errorf("local main = %q, want the promoted commit %q left where it is", local, outcome.Integration.TargetCommit)
+	}
+	// The blocker is what owns the divergence: where the work is, where each
+	// branch stands, that neither was chosen over the other, and where the steps
+	// for choosing are written down — a blocker that only said a person was
+	// needed is what left the last divergence standing.
+	for _, want := range []string{
+		"promoted onto the local target branch",
+		"The item is deliberately left open rather than closed as integrated",
+		"which history is right is a decision for a person",
+		"onto local main at " + outcome.Integration.TargetCommit,
+		"origin main: " + publishedCommit(t, remote, "main"),
+		"Unwedging a target branch that diverged from the forge",
+	} {
+		if !strings.Contains(tracker.blockReason, want) {
+			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
+		}
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// Both halves are durable: the promotion the run made, and the outstanding
+	// publication that names the drift it was refused for.
+	if state.Integration == nil || state.Blocker == "" {
+		t.Fatalf("state = %#v, want the promotion and the blocker both recorded", state)
+	}
+	if !strings.Contains(state.PublishFailure, "moved away from the content the promotion was written against") {
+		t.Errorf("durable publish failure = %q, want the drift named", state.PublishFailure)
+	}
+}
+
+// remoteMovingWorktrees is the real worktree manager with one seam: the callback
+// runs the moment a promotion returns, which is inside the window between the
+// remote target check the run makes before it promotes and the one it makes
+// before it asks the forge to merge. That window is a race against another
+// machine, so nothing a test can drive from outside reaches it.
+type remoteMovingWorktrees struct {
+	WorktreeManager
+	afterIntegrate func()
+}
+
+func (w remoteMovingWorktrees) Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error) {
+	integration, err := w.WorktreeManager.Integrate(ctx, worktree, message)
+	if err == nil && w.afterIntegrate != nil {
+		w.afterIntegrate()
+	}
+	return integration, err
+}
+
+// The one path left on which a moved remote target still closes an item as
+// integrated, and the reason it is allowed to: the remote swept the promotion in
+// and carried somebody else's work above it, so the work this item records really
+// is on both branches and only the merge request did not happen. That is an
+// ordinary outstanding publication rather than the wedge — and what separates
+// the two is exactly that the remote contains the promoted commit, which is
+// asserted here rather than assumed from the catch-up having succeeded.
+func TestPipelineClosesTheItemWhenTheRemoteSweptThePromotionIn(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	// The same window as the divergence above — after the promotion, before the
+	// forge is asked — with the remote moving somewhere the local branch can still
+	// be brought onto.
+	pipeline.Worktrees = remoteMovingWorktrees{
+		WorktreeManager: pipeline.Worktrees,
+		afterIntegrate:  func() { sweepRemoteTarget(t, repository, remote, "main") },
+	}
 
 	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
-		t.Fatalf("outcome = %#v, want the local promotion to stand", outcome)
+		t.Fatalf("outcome = %#v, want the promotion to stand", outcome)
 	}
+	if outcome.Blocked || tracker.blocked {
+		t.Fatalf("blocked = %t (tracker %t), want a reconcilable remote to leave the run alone", outcome.Blocked, tracker.blocked)
+	}
+	if !outcome.WorkItemClosed || !tracker.closed {
+		t.Fatalf("work item closed = %t (tracker %t), want the item closed on work that is on both branches", outcome.WorkItemClosed, tracker.closed)
+	}
+	// The whole safety of closing this item: the remote target really does carry
+	// the commit this run promoted. A branch that closed an item against a remote
+	// without it is the defect this test exists to catch.
+	remoteTarget := publishedCommit(t, remote, "main")
+	if remoteTarget == "" {
+		t.Fatal("remote main does not exist")
+	}
+	contained := exec.Command("git", "-C", remote, "merge-base", "--is-ancestor", outcome.Integration.TargetCommit, remoteTarget)
+	if err := contained.Run(); err != nil {
+		t.Errorf("remote main at %q does not contain the promoted commit %q, yet the item was closed as integrated",
+			remoteTarget, outcome.Integration.TargetCommit)
+	}
+	// The local target was brought onto it, so the two branches are together and
+	// nothing is left for a person to reconcile.
+	if local := publishedCommit(t, repository, "main"); local != remoteTarget {
+		t.Errorf("local main = %q, want it fast-forwarded onto the remote %q", local, remoteTarget)
+	}
+	if outcome.Catchup == nil || !outcome.Catchup.Advanced || outcome.Catchup.RemoteCommit != remoteTarget {
+		t.Fatalf("catch-up = %#v, want main advanced onto %q", outcome.Catchup, remoteTarget)
+	}
+	if outcome.Catchup.Held != "" {
+		t.Errorf("catch-up was held: %s", outcome.Catchup.Held)
+	}
+	// What is unfinished is the publication and only the publication: the drift is
+	// named as outstanding, and the merge was never asked for.
 	if len(forge.merges) != 0 {
-		t.Fatalf("the harness asked for a merge into a drifted target: %#v", forge.merges)
+		t.Fatalf("the harness asked for a merge into a moved target: %#v", forge.merges)
 	}
-	for _, want := range []string{"moved away from the content the promotion was written against", "carries content the promotion was not written against"} {
-		if !strings.Contains(outcome.PublishFailure, want) {
-			t.Errorf("publish failure %q does not name %q", outcome.PublishFailure, want)
+	if !strings.Contains(outcome.PublishFailure, "moved away from the content the promotion was written against") {
+		t.Errorf("publish failure = %q, want the drift named", outcome.PublishFailure)
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.PublishFailure != outcome.PublishFailure {
+		t.Errorf("durable publish failure = %q, want the reported one %q", state.PublishFailure, outcome.PublishFailure)
+	}
+	if !strings.Contains(tracker.notes, "Publication outstanding") {
+		t.Errorf("tracker notes do not report the outstanding publication:\n%s", tracker.notes)
+	}
+}
+
+// A remote target the local one cannot be brought onto is the divergence only a
+// person settles, and it stops the run before anything is promoted. Promoting
+// anyway is what used to close an item as integrated against a state nothing
+// resolves: the local target would carry a promotion the remote does not have,
+// no fast-forward could reconcile the two, and the item would say the work
+// landed. Nothing is forced here and nothing is reset — both positions are named
+// on the item, and the change is preserved for whoever settles them.
+func TestPipelineStopsBeforePromotingIntoADivergedRemoteTarget(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := publishedRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	forge := &fakeForge{remote: remote}
+	// A rewritten remote history, which is the movement no fast-forward answers:
+	// the remote target no longer contains the commit this run was cut from.
+	forge.onEnsure = func() { rewriteRemoteTarget(t, remote, "main") }
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, store := newPublishingPipeline(t, repository, tracker, provider, forge, []string{"exit 0"})
+	base := publishedCommit(t, repository, "main")
+
+	outcome, err := pipeline.Run(context.Background(), "yoyodyne-task")
+	if err == nil || !strings.Contains(err.Error(), "cannot be brought onto origin before promoting") {
+		t.Fatalf("Run() error = %v, want the divergence to stop the run", err)
+	}
+	if outcome.Integration != nil || outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("outcome = %#v, closed = %t, want nothing promoted and the item left open", outcome, tracker.closed)
+	}
+	// Nothing was promoted, so nothing was ever asked of the forge either.
+	if len(forge.merges) != 0 {
+		t.Fatalf("the harness asked for a merge into a diverged target: %#v", forge.merges)
+	}
+	if local := publishedCommit(t, repository, "main"); local != base {
+		t.Errorf("local main = %q, want the untouched base %q", local, base)
+	}
+	// The item carries the divergence rather than a closure: both branch
+	// positions, and the statement that neither was chosen over the other.
+	if !outcome.Blocked || !tracker.blocked {
+		t.Fatalf("blocked = %t (tracker %t), want the stoppage on the item", outcome.Blocked, tracker.blocked)
+	}
+	for _, want := range []string{
+		"target branch and the one on the remote have diverged",
+		"which history is right is a decision for a person",
+		"Local main: " + base,
+		"origin main: " + publishedCommit(t, remote, "main"),
+		"Unwedging a target branch that diverged from the forge",
+	} {
+		if !strings.Contains(tracker.blockReason, want) {
+			t.Errorf("blocker does not name %q:\n%s", want, tracker.blockReason)
 		}
 	}
-	if head := publishedCommit(t, remote, "main"); head == outcome.Integration.TargetCommit {
-		t.Error("the drifted remote target was advanced anyway")
+	// The change is preserved for whoever settles the branches, and the run's own
+	// record carries the same words the item does.
+	if _, err := os.Stat(filepath.Join(outcome.WorktreePath, "feature.txt")); err != nil {
+		t.Errorf("worktree was not preserved: %v", err)
+	}
+	state, err := store.Load(pipelineRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if state.Integration != nil || state.Blocker == "" {
+		t.Fatalf("state = %#v, want a blocked run with nothing integrated", state)
 	}
 }
 
@@ -550,6 +825,51 @@ func driftRemoteTarget(t *testing.T, remote, branch string) {
 	}
 	runPipelineGit(t, clone, "add", ".")
 	runPipelineGit(t, clone, "commit", "-m", "someone else's work")
+	runPipelineGit(t, clone, "push", "origin", "HEAD:refs/heads/"+branch)
+}
+
+// rewriteRemoteTarget replaces the remote target branch with a history that does
+// not contain the one this repository has. It is the movement driftRemoteTarget
+// is not: a fast-forward answers a target that grew, and nothing answers a
+// target somebody rewrote.
+func rewriteRemoteTarget(t *testing.T, remote, branch string) {
+	t.Helper()
+	clone := filepath.Join(t.TempDir(), "rewritten")
+	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
+	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
+	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	disablePipelineMaintenance(t, clone)
+	runPipelineGit(t, clone, "checkout", "--orphan", "rewritten")
+	runPipelineGit(t, clone, "rm", "-r", "-f", "-q", ".")
+	if err := os.WriteFile(filepath.Join(clone, "rewritten.txt"), []byte("a history of its own\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, clone, "add", ".")
+	runPipelineGit(t, clone, "commit", "-m", "a rewritten history")
+	runPipelineGit(t, clone, "push", "--force", "origin", "HEAD:refs/heads/"+branch)
+}
+
+// sweepRemoteTarget is the third thing a remote target can do to a promotion
+// that has already happened, and the only one that leaves the two branches
+// reconcilable: it takes the promotion in and carries somebody else's work above
+// it. That is what another machine merging this very pull request looks like, or
+// a person pushing the local target on and then committing further — the local
+// branch's tip goes to the remote, and a commit lands on top of it.
+func sweepRemoteTarget(t *testing.T, repository, remote, branch string) {
+	t.Helper()
+	// The promotion itself reaches the remote first, which is what makes this a
+	// sweep rather than the drift the local branch cannot be brought onto.
+	runPipelineGit(t, repository, "push", "origin", "refs/heads/"+branch+":refs/heads/"+branch)
+	clone := filepath.Join(t.TempDir(), "swept")
+	runPipelineGit(t, filepath.Dir(clone), "clone", remote, clone)
+	runPipelineGit(t, clone, "config", "user.name", "Someone Else")
+	runPipelineGit(t, clone, "config", "user.email", "someone@example.invalid")
+	disablePipelineMaintenance(t, clone)
+	if err := os.WriteFile(filepath.Join(clone, "elsewhere.txt"), []byte("someone else's work\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	runPipelineGit(t, clone, "add", ".")
+	runPipelineGit(t, clone, "commit", "-m", "someone else's work above the promotion")
 	runPipelineGit(t, clone, "push", "origin", "HEAD:refs/heads/"+branch)
 }
 
@@ -900,8 +1220,14 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil || !outcome.WorkItemClosed {
-		t.Fatalf("outcome = %#v, want a succeeded, integrated, closed run", outcome)
+	if outcome.Status != runstate.StatusSucceeded || outcome.Integration == nil {
+		t.Fatalf("outcome = %#v, want a succeeded, integrated run", outcome)
+	}
+	// The promotion is made, but nothing has merged it anywhere but here. Closing
+	// the item now would record it integrated against a publication the forge may
+	// yet drop, so the closure waits for the forge's answer.
+	if outcome.WorkItemClosed || tracker.closed {
+		t.Fatalf("a queued merge closed the item as integrated before the forge merged it: reason = %q", tracker.closeReason)
 	}
 	// A queued merge is not an outstanding publication: the forge accepted it.
 	if outcome.PublishFailure != "" {
@@ -937,8 +1263,10 @@ func TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt(t *testing.T) {
 	if !state.Outstanding() {
 		t.Error("a run with a queued merge is not outstanding, so nothing would ever settle it")
 	}
-	if !strings.Contains(tracker.notes, "Merge queued") {
-		t.Errorf("tracker notes do not report the queued merge:\n%s", tracker.notes)
+	for _, want := range []string{"Merge queued", "stays open until then"} {
+		if !strings.Contains(tracker.notes, want) {
+			t.Errorf("tracker notes do not report %q:\n%s", want, tracker.notes)
+		}
 	}
 }
 
@@ -1016,6 +1344,17 @@ func TestReconcileFinishesAQueuedMergeTheForgePerformed(t *testing.T) {
 	if !strings.Contains(fixture.tracker.notes, "settled the merge this run left queued") {
 		t.Errorf("tracker notes do not report the settled merge:\n%s", fixture.tracker.notes)
 	}
+	// The run left the closure to this answer, so this is where the item closes —
+	// and the reason says what actually happened rather than describing a run
+	// somebody interrupted.
+	if !fixture.tracker.closed {
+		t.Fatal("the confirmed merge did not close the item, so nothing ever will")
+	}
+	for _, want := range []string{"merged by the forge", "Reviewed and integrated"} {
+		if !strings.Contains(fixture.tracker.closeReason, want) {
+			t.Errorf("close reason %q does not name %q", fixture.tracker.closeReason, want)
+		}
+	}
 	// Nothing is left owed, so a second sweep finds nothing at all.
 	if again := fixture.reconcile(t); len(again) != 0 {
 		t.Fatalf("second reconciliation = %#v, want nothing outstanding", again)
@@ -1061,8 +1400,10 @@ func TestReconcileLeavesAQueuedMergeThatIsStillWaiting(t *testing.T) {
 // A queued merge the forge dropped is a requirement that went unmet, and the
 // harness does not merge past one — not by asking again and not with
 // administrator privileges. The publication is reported as outstanding, on the
-// run and on the work item, and left to a person. The change itself is safe: the
-// local target branch it was integrated into is the authoritative one.
+// run and on the work item, and the item is handed to a person with a blocker
+// rather than closed as integrated: nothing merged the change anywhere but here.
+// The change itself is safe: the local target branch it was integrated into is
+// the authoritative one.
 func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	t.Parallel()
 
@@ -1072,13 +1413,21 @@ func TestReconcileReportsAQueuedMergeTheForgeDropped(t *testing.T) {
 	merges := len(fixture.forge.merges)
 
 	results := fixture.reconcile(t)
-	if len(results) != 1 || results[0].Action != ActionCompleted || results[0].Failure != "" {
-		t.Fatalf("reconciliation = %#v, want the run settled", results)
+	if len(results) != 1 || results[0].Action != ActionBlocked || results[0].Failure != "" {
+		t.Fatalf("reconciliation = %#v, want the run settled on a blocker", results)
 	}
 	for _, want := range []string{"dropped the queued merge", "needs a person"} {
 		if !strings.Contains(results[0].Detail, want) {
 			t.Errorf("detail %q does not name %q", results[0].Detail, want)
 		}
+	}
+	// The forge never merged it, so nothing may record the item as integrated.
+	if fixture.tracker.closed {
+		t.Fatalf("a dropped merge closed the item as integrated: reason = %q", fixture.tracker.closeReason)
+	}
+	if !fixture.tracker.blocked || !strings.Contains(fixture.tracker.blockReason, "dropped the queued merge") {
+		t.Fatalf("blocked = %t, reason = %q; want the dropped merge handed to a person",
+			fixture.tracker.blocked, fixture.tracker.blockReason)
 	}
 	// Reconciliation can only ask the forge, so nothing was merged a second time.
 	if len(fixture.forge.merges) != merges {

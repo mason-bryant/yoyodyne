@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -58,6 +59,92 @@ func TestRunInitWritesAProjectThatOwnsItsConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "checks") {
 		t.Errorf("stdout = %q, want it to name the checks that still have to be written", stdout.String())
+	}
+}
+
+// A newcomer's first question in a directory of somebody else's documents is
+// whose they are and whether they may touch one, and init is where that gets
+// answered: every artifact home the configuration names gets an index saying
+// what is filed there, who owns it, and the hand-edit policy.
+func TestRunInitWritesAnIndexAtTheDoorOfEveryArtifactHome(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--product", "example"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	cfg, err := config.Load(filepath.Join(project, config.DirectoryName, config.FileName))
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	homes := artifacthome.Homes(cfg)
+	if len(homes) == 0 {
+		t.Fatal("a generated configuration names no artifact home")
+	}
+	// The invariants directory is named rather than left to the loop, because it
+	// is the home a reader doubts: it carries its own identity scheme instead of
+	// artifact frontmatter, and it still gets an index like every other home.
+	invariants := false
+	for _, home := range homes {
+		invariants = invariants || home.Directory == cfg.Product.Invariants
+	}
+	if !invariants {
+		t.Fatalf("homes = %#v, want the invariants home %q among the ones init writes an index for", homes, cfg.Product.Invariants)
+	}
+	for _, home := range homes {
+		path := filepath.Join(project, filepath.FromSlash(home.Path()))
+		content, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("init wrote no index for %s: %v", home.Directory, err)
+		}
+		for _, answer := range []string{"**Purpose.**", "**Owner.**", "**Editing by hand.**"} {
+			if !strings.Contains(string(content), answer) {
+				t.Errorf("%s does not state %s", home.Path(), answer)
+			}
+		}
+		if !strings.Contains(stdout.String(), home.Path()) {
+			t.Errorf("stdout = %q, want it to name %s among what it wrote", stdout.String(), home.Path())
+		}
+	}
+}
+
+// An index that is already there is the project's own prose, so init leaves it
+// alone rather than refusing the whole initialization over it -- a repository
+// that already has a word of its own at the door of `docs/` must still be
+// initializable.
+func TestRunInitLeavesAnIndexSomebodyAlreadyWroteAlone(t *testing.T) {
+	t.Parallel()
+
+	project := t.TempDir()
+	existing := filepath.Join(project, "docs", "designs", "README.md")
+	if err := os.MkdirAll(filepath.Dir(existing), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	written := "# Designs\n\nOurs, written by hand.\n"
+	if err := os.WriteFile(existing, []byte(written), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--product", "example", "--force"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	content, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(content) != written {
+		t.Errorf("init replaced an index somebody wrote:\n%s", content)
+	}
+	// The homes that had none still got one, so one file left alone does not
+	// leave the rest of the repository undocumented.
+	if _, err := os.Stat(filepath.Join(project, "docs", "product", "README.md")); err != nil {
+		t.Errorf("init wrote no index for the specifications home: %v", err)
 	}
 }
 

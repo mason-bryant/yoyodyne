@@ -85,6 +85,44 @@ is asked to support anything. The
 [configuration guide](configuration.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
+### Where a defect in one of these documents fails
+
+Reported everywhere and refused nowhere leaves one question: what actually goes
+red when you leave one of these documents malformed. The answer is one command,
+and it is the one you run:
+
+```sh
+./bin/yoyo artifact check
+```
+
+It reads every governed document — the artifacts, the goals stated in them, the
+invariants, the index at the door of each home, and the Markdown links written in
+any file a developer's change may not touch — and exits non-zero on a defect in
+any: a goal hard-wrapped across two physical lines, a `supports` entry naming a
+document nobody wrote, an artifact reaching no brief, a revision recorded by a
+role that does not own the file, an index that has stopped saying what is filed
+there, a link that resolves to nothing. Each one is named with the role that owns
+it and the command that reaches that role.
+
+A broken link written anywhere else in the repository is not this command's. It
+is a developer's to fix and it fails in the check that found it, which is the
+same rule the whole arrangement runs on: whether the change in hand may edit the
+file the defect is written in decides whose it is.
+
+**Nothing else goes red on what you wrote, and that is deliberate.** These
+documents live in directories every developer's change is refused in, so a
+malformed one used to stop every run in the project over a file no developer
+could open, with the only route out an amendment proposal made while every run
+stayed red. The checks a run makes still read these documents and still report
+what they find in full — they escalate it to the owning role instead of failing,
+naming the role and the route. This command is where the same defect fails, run
+by whoever can put it right.
+
+The index each home carries is meant to say this at the door, and the generator
+that writes one now does. The committed indexes do not yet: they live inside the
+homes, so nothing but `yoyo setup` — or your own editor — puts the sentence
+there. Run `yoyo setup` and the doors say it.
+
 ## Goals, and what work serves them
 
 Identity ends at the document. The last link of the chain is the goal a work
@@ -96,7 +134,8 @@ of them in the words that document states it in.
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
 ./bin/yoyo goals attribution   # what each admitted work item says it is for
-./bin/yoyo goals witness       # witness the goals already recorded on admitted work
+./bin/yoyo goals witness       # witness the goals already recorded on work items
+./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 Nothing there writes an attribution, for the same reason nothing writes an
@@ -111,8 +150,9 @@ wrong, and it is what `yoyo goals attribution` exits non-zero for.
 There is a third way to record no goal, and it is reported apart from both.
 `yoyo` only ever appends to an item's notes, but anything else with the tracker's
 command line can replace them, and a replacement that does not carry the goal
-forward destroys it — which has happened, to six items at once, and read
-afterwards exactly like work admitted before the check existed. So every write
+forward destroys it — which has happened twice, to six items at once and then to
+twelve more, and read afterwards exactly like work admitted before the check
+existed. So every write
 that puts a goal into an item's notes also records that goal in the tracker's
 metadata, where replacing the notes cannot reach it. An item carrying that
 witness and no goal has lost one rather than never had one: it is reported as
@@ -124,10 +164,42 @@ while the item stayed empty.
 
 The witness covers a goal from the moment it is written and no earlier, so an
 attribution made before it existed is protected by nothing. `yoyo goals witness`
-sweeps that up: it records, on every admitted item whose notes already state a
-goal and which carries no witness, the goal those notes state. It decides
-nothing — the statement is the item's own — and it is worth running once over an
-existing backlog.
+sweeps that up: it records, on every work item whose notes already state a goal
+and which carries no witness, the goal those notes state. It decides nothing —
+the statement is the item's own — and it is worth running once over an existing
+backlog. It walks every status the tracker holds rather than the queue, because
+the command that destroys an attribution reaches a claimed or closed item just
+as easily, and most of the losses on record were on items that had closed.
+
+The witness is what survives a loss; `yoyo goals guard` stops the write that
+causes one. It reads a tool call an agent session is about to make and
+refuses a shell command running `bd update <id> --notes`, which is where every
+recorded loss came from. A replacement carrying a `Goal served:` line through is
+allowed, because that one destroys nothing — and it is the way past a refusal
+when the notes genuinely have to be rewritten. It decides from the command line
+alone and never reads the item, which is what keeps it from waiting on a locked
+tracker in front of every command an agent runs; the price is that it checks such
+a line is present and not that it is the item's own, so a statement invented in
+the replacement passes and the witness is what catches it. The harness gives the
+guard to every developer run it makes on the Claude Code backend, which is where
+the hook is passed; an interactive session in your own repository gets it by
+wiring the same command as a `PreToolUse` hook on `Bash` in
+`.claude/settings.json`:
+
+```json
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
+```
+
+The two halves are not interchangeable, and neither of them covers everything.
+The guard covers the sessions it is wired into and says nothing about a command
+typed anywhere else; it is also passed to the provider rather than enforced by
+the harness, so a session where the hook does not fire runs the command exactly
+as it did before and nothing reports that it did. The witness reaches every item
+the sweep walked, but what it buys depends on where that item is: on work the
+audit reads — `open` and `blocked` — a loss becomes a `lost` state that `yoyo
+goals attribution` reports and exits non-zero for, and on claimed and closed
+work, which the audit does not read, it keeps the words so a destroyed
+attribution can be put back rather than judged again.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking

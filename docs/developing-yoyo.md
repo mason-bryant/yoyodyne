@@ -22,20 +22,77 @@ runs.
 ## What `test` checks besides the code
 
 Some of what `make test` runs is not about the Go code at all: it reads this
-repository's own documents, so a mechanical defect in them fails a check instead
-of costing a reviewer a paragraph. Each one exists because a reviewer wrote that
-paragraph, more than once, and because the thing being checked is one nobody can
-verify by eye — a relative path resolves only against the directory layout, and a
-`#fragment` names a heading through a slug nothing writes down.
+repository's own documents, and it executes the part of the build that is shell,
+so a mechanical defect in either fails a check instead of costing a reviewer a
+paragraph or waiting for the day it matters. Each one exists because a reviewer
+wrote that paragraph, more than once, and because the thing being checked is one
+nobody can verify by eye — a relative path resolves only against the directory
+layout, a `#fragment` names a heading through a slug nothing writes down, and no
+Go check has ever run a line of bash.
 
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
-| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. |
-| A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
-| A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
+| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. A link written in a file no developer's diff may touch is escalated rather than failed — see the note below. |
+| The harness being unable to read this repository's governed documents at all — no artifact recorded, no goal in force, a load that errored, a statement that will not resolve against the set it came from | `internal/cli` (`goals_repository_test.go`, `artifact_repository_test.go`) | That is the reader rather than any one document: a tightened loader, a moved home, or two code paths disagreeing. It is a developer's to fix, so it fails here. |
+| The goal this repository's attributed work items name no longer resolving | `internal/cli` (`goals_repository_test.go`) | A goal was reworded. Re-attribute the items with the tracker's `attribute` action, check the rest with `yoyo goals attribution`, and bring `backlogAttribution` in that file into line. It fails here rather than being escalated because nothing in a protected path has to change to put it right. |
+| A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |
+| A claim in the notes writer's own suite, [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/release-notes.sh` or `scripts/release-body.sh`. The same argument as the row above, for the other half of the release path: what a release page publishes would otherwise first execute during a publication. |
+| The release verb committing a derived export that a run does not declare as churn the primary checkout may acquire | `internal/cli` (`release_repository_test.go`) | Either declare the path in `AllowedPrimaryChanges` as well, or take it back out of `derived_exports`. The containment is one-way on purpose: a run may come to tolerate a path the cut has no business committing on the operator's behalf, so widening the run's list alone is fine and widening the cut's alone is not. |
 
 Fixtures written to be malformed on purpose are not walked: anything under a
 `testdata` directory is skipped, along with `.git`, `.dolt`, and `dist`.
+
+### What these checks report and do not fail
+
+The same checks read this repository's governed documents — the brief, the
+goals, the designs, the decision records, and the invariants — and what they find
+wrong with one of *those* is escalated rather than failed. A goal hard-wrapped
+across two lines, a `supports` entry naming a document nobody wrote, an artifact
+reaching no brief, a home whose index has stopped answering, a broken link in a
+file no developer's diff may touch: each is named in full on stderr, with the
+role that owns the file and the command that reaches them, and `make test` stays
+green. Every one of them opens with `governed-document defect (escalated;`, so
+they are one grep away in the output of a build that passed — which they have to
+be, since a report nobody sees is the silence a red build was traded for.
+
+That is not the check going soft. Those documents live in directories every
+developer's diff refuses
+([`internal/protectedpath`](../internal/protectedpath/protectedpath.go)), so a
+red build over one stopped every run in the project on a defect no developer
+could fix, with the only way out an amendment proposal made while every run
+stayed red. The rule is in
+[`internal/governeddoc`](../internal/governeddoc/governeddoc.go), and it is drawn
+by whether the change in hand may edit the file rather than by what is wrong with
+it: a defect in a protected path is somebody else's, and one anywhere else is
+still yours and still fails. The two rows above that still fail are there because
+neither is put right by editing a protected file.
+
+Where the escalated ones do fail is `yoyo artifact check`, and the two sets are
+deliberately one set: it reads the artifacts, the goals stated in them, the
+invariants, the index at the door of each artifact home, and every Markdown link
+written in a document the escalation would cover — which is the artifact homes
+and `.yoyodyne`, since that is protected too and holds the personas. It exits
+non-zero on any of it. Nothing escalated above is missing from it: a class
+escalated in every gate and failed in none would be a defect nobody catches,
+which is worse than the red build this replaced. It decides which links are its
+own by asking `governeddoc.Protected`, which is the same question `Route` decides
+the escalation by rather than a second copy of it, so the two cannot drift.
+
+The line has one known edge: a loader tightened until a governed document stops
+parsing is reported as that document being malformed and escalated, which is why
+"the harness could not read them at all" is asked as its own question in the
+table above and still fails here.
+
+One thing this does not yet demonstrate. The index each artifact home carries is
+generated by [`internal/artifacthome`](../internal/artifacthome/artifacthome.go),
+and its hand-edit answer now names `yoyo artifact check` as what an owner runs
+after editing there. The committed indexes under `docs/product`,
+`docs/designs`, and `docs/decisions` do **not** carry that sentence yet: those
+paths are refused in a developer's diff, so nothing here could write them.
+`yoyo setup` rewrites an index from the generator, and until somebody runs it the
+files at those doors say less than the generator does. `yoyo artifact check`
+reads whether an index still answers its three questions, which the current ones
+do, so it will not catch this — nothing does.
 
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the
@@ -49,14 +106,16 @@ time when a failure would mean a botched or missing release.
 ## Cutting a release
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once
+[this tag's notes are on `main`](#every-cut-writes-its-notes):
 
 ```sh
 make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](../scripts/walk-adoption.sh), runs
+It gates on [this release's notes](releases/README.md), walks [the documented
+adoption path](../scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
@@ -65,7 +124,91 @@ that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
 over it.
 
+The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl` — do not count as a dirty tree. They are derived from a
+store that is authoritative elsewhere, nothing a release ships is built from
+them, and the walkthrough this gate runs rewrites them itself, so refusing on
+them would stall most days of a daily cadence. The cut commits them instead,
+as their own housekeeping commit placed after the last gate is green and before
+the tag, which keeps the tag naming a tree with nothing uncommitted in it
+rather than a clean tree with a footnote. On a day it had to make that commit
+it prints `git push --atomic origin main <tag>` as the publishing command,
+because origin does not have that commit and the branch has to carry it.
+
+That commit is made with hooks turned off, since a tracker installs a hook that
+exports after every commit and it would rewrite the very files the commit
+exists to clean. Turning them off is `core.hooksPath`, which git honours from
+2.9, so 2.9 is the verb's floor and its header says so: older git ignores the
+option rather than refusing it, and the hook would run.
+
 It stops at the tag. Publishing is the `git push`, which is the irreversible
 half and what the release workflow acts on, so it stays something you do
 deliberately. [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh)
-executes every one of those refusals against fabricated repositories.
+executes every one of those refusals against fabricated repositories, and
+`make test` runs it, so changing the verb is checked by the same command as
+changing anything else.
+
+## Every cut writes its notes
+
+A release nobody can read is a release nobody adopts, so
+[`docs/releases/<tag>.md`](releases/README.md) is a gate rather than a courtesy.
+The cut checks for it before it spends the walkthrough, and a tag with no notes
+is the one refusal that leaves something behind: it drafts them and stops.
+
+```sh
+make release VERSION=v0.3.1        # drafts docs/releases/v0.3.1.md and refuses
+$EDITOR docs/releases/v0.3.1.md    # place each item; the judgement is yours
+git add docs/releases/v0.3.1.md    # the draft is a new file, so -a will not do
+git commit -m "v0.3.1 release notes"
+git push origin main               # or a pull request, where main is protected
+make release VERSION=v0.3.1        # green, and the tag carries its own notes
+git push origin v0.3.1
+```
+
+The `git add` is not a flourish: the drafted notes are a file git has never seen,
+so `git commit -a` stages nothing and stops with "no changes added to commit".
+
+**The push is not optional, and it is not the tag push.** The cut
+refuses a `HEAD` that is not where `origin/main` is, so a notes commit that
+exists only in your checkout stops the *second* `make release` rather than the
+first — and it stops it before the notes gate, so the message you get names the
+remote rather than the notes. This repository protects `main` against direct
+pushes, so its own notes commit reaches `main` the way every other change does,
+through a branch and a merged pull request; the direct push above is the short
+form for a repository that permits one. Either way the cut runs once
+`origin/main` carries the notes. Only a checkout whose origin is unreachable
+skips this, and the cut says that went unchecked rather than passing over it.
+[`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh) executes this
+loop against a scratch repository with a real remote, unpushed notes and all.
+
+The draft comes from the tracker rather than the commit log:
+[`scripts/release-notes.sh`](../scripts/release-notes.sh) reads the work items
+closed between the previous tag and this one and carries their titles, their
+types, and the goals they served. A commit message says what one change did; the
+item behind it says what somebody wanted, which is the difference between notes
+and a changelog. `make release-notes VERSION=<tag>` drafts one on its own, and
+`bash scripts/release-notes.sh <tag> --print` shows one without writing it.
+
+Only what the tracker calls **closed** reaches the notes. An id in a commit
+message says work touched that item, not that the item is done — a parent epic
+is named by every child's commit, and a multi-part item by each part as it lands
+— so publishing either as shipped is the one lie this is careful about. Items
+dropped for not being closed are counted in the output, alongside the tokens
+that looked like ids and are not in the tracker at all, so neither exclusion is
+silent.
+
+Where the draft puts each item is placed from its type, and **that placement is
+a starting point rather than an answer**: which work is key functionality, which
+is an enhancement, and which fix is critical enough to go up to the top is the
+product manager's judgement until the post-v1 release-manager role exists. The
+three sections and their order are the operator's and are not the draft's to
+change. [`scripts/release-notes-test.sh`](../scripts/release-notes-test.sh)
+executes the placement rule, the section order, and the refusals against a
+fabricated repository and a stub tracker, and `make test` runs it.
+
+The release workflow publishes that same file as the release page's body, with
+the install preamble under it, so the release page and the repository tell one
+story rather than two. [`scripts/release-body.sh`](../scripts/release-body.sh)
+is the composition, kept as a script rather than inline in the workflow because
+workflow YAML on a tag trigger first executes during a real publication; the
+test above covers it, including what a tag with no notes file publishes.

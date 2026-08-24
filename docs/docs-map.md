@@ -48,6 +48,12 @@ for review, not a target to write to: a run that lands a document materially
 larger than its budget has found content the map misplaced, and should say so
 rather than pad or trim to fit.
 
+One document is reachable from the index below and is deliberately not a row
+here: [`docs/releases/README.md`](releases/README.md), which explains the notes
+home one file per tag lives in. It carries none of the content this map moves,
+so it has no budget and no destination — it is registered in the further-reading
+index so the split does not land a README that cannot reach it.
+
 ## The moved-anchor policy
 
 Stated once, up front, so no execution run discovers it. Three tiers, and the
@@ -65,10 +71,12 @@ repository cannot rewrite:
     by `internal/cli/init_test.go:214`. Every `.yoyodyne/config.yaml` that
     `yoyo init` has ever generated points at it, in a file its owner edits.
   - `README.md#getting-started` — `.github/release-notes-preamble.md:28`, as the
-    repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`,
-    which `.github/workflows/release.yml:55` passes to `gh release create
-    --notes-file`. It is in the notes of every release already published, and
-    published release notes cannot be corrected by a change to this repository.
+    repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`.
+    `scripts/release-body.sh` appends that preamble to the tag's own
+    `docs/releases/<tag>.md`, and `.github/workflows/release.yml` passes the
+    result to `gh release create --notes-file`. It is in the notes of every
+    release already published, and published release notes cannot be corrected
+    by a change to this repository.
 - **Tracked work items.** The backlog is upstream: the product manager owns it,
   and no developer rewrites an item to chase a link. Today that is
   `docs/configuration.md#product-specifications`, cited by yoyodyne-ifd.20.2 and
@@ -276,6 +284,8 @@ prose the README split writes:
   the artifact and agent models, and the Git model.
 - [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
   reporting in threads.
+- [Release notes](docs/releases/README.md) — one file per tag, what each section
+  is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the brief and goals the product manager reads.
 - [Working on yoyo itself](docs/developing-yoyo.md) — the checks, the build, and
   what a release is.

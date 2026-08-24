@@ -8,11 +8,17 @@
 # The verb's whole value is that it refuses, so the refusals are what needs
 # testing, and testing them against this repository would mean a real
 # walkthrough and a real cross-compile for each one. What cut-release.sh needs
-# is a git repository with a walkthrough and a Makefile beside it, so each case
-# builds one: a scratch repository holding a copy of the script, a stub
-# walkthrough that is green or red on request, and a stub Makefile whose
-# `check` and `dist-verify` targets do the same. Everything the script does to
-# a repository -- reading it, tagging it -- then happens to the scratch one.
+# is a git repository with a walkthrough, a notes writer, and a Makefile beside
+# it, so each case builds one: a scratch repository holding a copy of the
+# script, a stub walkthrough that is green or red on request, a stub notes
+# writer, and a stub Makefile whose `check` and `dist-verify` targets do the
+# same. Everything the script does to a repository -- reading it, drafting a
+# release's notes into it, tagging it -- then happens to the scratch one.
+#
+# The real scripts/release-notes.sh is stubbed rather than copied, because what
+# cut-release.sh is gated on is a file being there and a writer that can say it
+# failed; what that writer puts in the file is
+# scripts/release-notes-test.sh's claim.
 #
 # Everything lives under one temporary root that is removed on exit. No tag is
 # written anywhere but there, and nothing is pushed.
@@ -46,27 +52,77 @@ missing() {
   case "$1" in (*"$2"*) fail "$3 -- got: $1" ;; (*) pass "$3" ;; esac
 }
 
-# fabricate builds one scratch repository: $1 names it, $2 is "green" or "red"
-# for the walkthrough, $3 is "green", "check-red", or "build-red" for make.
+# fabricate builds one scratch repository: $1 names it, $2 is "green", "red", or
+# "dirty-exports" for the walkthrough, $3 is "green", "check-red", or
+# "build-red" for make, $4 is "present" (the default), "absent", or "draft-red"
+# for this release's notes, and $5 is "export-hook" for a repository whose
+# tracker installs a commit hook. Most cases want notes already committed and no
+# hooks at all, because the gate they are about is further down.
 fabricate() {
-  local name="$1" walk="$2" mk="$3"
+  local name="$1" walk="$2" mk="$3" notes="${4:-present}" hook="${5:-none}"
   local project="$scratch/$name"
 
   mkdir -p "$project/scripts"
   cp "$repository/scripts/cut-release.sh" "$project/scripts/cut-release.sh"
 
-  if [ "$walk" = "green" ]; then
-    cat > "$project/scripts/walk-adoption.sh" <<'SH'
+  # A stub notes writer, so the notes gate is exercised without a tracker. The
+  # real scripts/release-notes.sh reads bd and renders with python3; what
+  # cut-release.sh needs from it is that it writes docs/releases/<tag>.md under
+  # its own repository and says whether it could, and that is what this does.
+  if [ "$notes" = "draft-red" ]; then
+    cat > "$project/scripts/release-notes.sh" <<'SH'
+#!/usr/bin/env bash
+echo "release-notes: bd is not installed" >&2
+exit 1
+SH
+  else
+    cat > "$project/scripts/release-notes.sh" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+mkdir -p "$repository/docs/releases"
+printf '# %s\n\n## Key functionality\n\n- **The scratch release** (`stub-1`)\n' "$1" \
+  > "$repository/docs/releases/$1.md"
+echo "wrote docs/releases/$1.md from 1 closed work item(s)"
+SH
+  fi
+  chmod +x "$project/scripts/release-notes.sh"
+
+  # The notes a cut is gated on are committed with the commit the tag names, so
+  # a repository that has them has them in its history rather than beside it.
+  if [ "$notes" = "present" ]; then
+    mkdir -p "$project/docs/releases"
+    printf '# v0.3.0\n\n## Key functionality\n\n- **The scratch release** (`stub-1`)\n' \
+      > "$project/docs/releases/v0.3.0.md"
+  fi
+
+  case "$walk" in
+    green)
+      cat > "$project/scripts/walk-adoption.sh" <<'SH'
 #!/usr/bin/env bash
 echo "  ok: the documented adoption path works as written"
 SH
-  else
-    cat > "$project/scripts/walk-adoption.sh" <<'SH'
+      ;;
+    dirty-exports)
+      # What the real walkthrough does to the tracker on its way through: it
+      # exercises bd, which rewrites the passive export beside it. The path is
+      # resolved from the script rather than the caller's directory, because
+      # the cut is run from wherever the operator happens to be.
+      cat > "$project/scripts/walk-adoption.sh" <<'SH'
+#!/usr/bin/env bash
+echo "  ok: the documented adoption path works as written"
+project="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+printf 'the walkthrough touched the tracker\n' >> "$project/.beads/issues.jsonl"
+SH
+      ;;
+    *)
+      cat > "$project/scripts/walk-adoption.sh" <<'SH'
 #!/usr/bin/env bash
 echo "  FAIL: README says Go 1.24 or newer, go.mod declares 1.9"
 exit 1
 SH
-  fi
+      ;;
+  esac
   chmod +x "$project/scripts/walk-adoption.sh" "$project/scripts/cut-release.sh"
 
   # Tabs matter here, so the recipe lines are written with printf rather than a
@@ -94,12 +150,37 @@ SH
 
   printf '/dist/\n' > "$project/.gitignore"
 
+  # The tracker's derived exports, tracked and clean, the way they are in a
+  # repository that has adopted yoyo. Churn in them is what the cut housekeeps.
+  mkdir -p "$project/.beads"
+  printf 'exported\n' > "$project/.beads/issues.jsonl"
+  printf 'exported\n' > "$project/.beads/interactions.jsonl"
+
   git init -q "$project"
   # git init's default branch name varies by version; name it the way the
   # script expects to find a release being cut from.
   git -C "$project" symbolic-ref HEAD refs/heads/main
   git -C "$project" add -A
   git -C "$project" commit -qm "the commit a release would name"
+
+  # Installed after that commit rather than before it, so the fixture's own
+  # setup is not the thing that fires the hook.
+  if [ "$hook" = "export-hook" ]; then
+    # Pinned absolutely, so a machine whose global config points core.hooksPath
+    # somewhere else does not quietly turn this fixture into no fixture. The
+    # cut's own `-c core.hooksPath=...` is on the command line and still wins.
+    git -C "$project" config core.hooksPath "$project/.git/hooks"
+    # What a tracker installs in a repository that has adopted it: a hook that
+    # exports after every commit. Left to run, it would dirty the tree the
+    # housekeeping commit exists to clean, which is the whole reason the cut
+    # turns hooks off for that one commit. The path is fixed at fabrication
+    # time, so the hook needs nothing of the environment git runs it in.
+    cat > "$project/.git/hooks/post-commit" <<SH
+#!/usr/bin/env bash
+printf 'the tracker exported after the commit\n' >> "$project/.beads/issues.jsonl"
+SH
+    chmod +x "$project/.git/hooks/post-commit"
+  fi
 
   printf '%s' "$project"
 }
@@ -142,13 +223,117 @@ contains "$output" "latest tag: v0.3.0" "the refusal names where the tags are up
 step "the archives have to be the commit the tag names"
 project="$(fabricate dirty-tree green green)"
 printf 'uncommitted\n' > "$project/stray.txt"
+# The exports are dirty too, so this is also the case that shows what the cut
+# housekeeps for them does not extend to the file beside them.
+printf 'churn\n' >> "$project/.beads/issues.jsonl"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "uncommitted changes" "refuses a dirty working tree"
 contains "$output" "stray.txt" "the refusal names the file"
+missing "$output" "issues.jsonl" "the refusal names what stands in the way, not the derived exports"
 if [ -z "$(tags "$project")" ]; then
   pass "no tag was written"
 else
   fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
+step "a tree dirty only in the tracker's derived exports is cut, not refused"
+# These are derived from a store that is authoritative elsewhere and nothing a
+# release ships is built from them, so under a daily cadence refusing on them
+# would stall most days. They are committed rather than excepted, which is what
+# keeps the tag naming a tree with nothing uncommitted in it.
+project="$(fabricate dirty-exports-only green green)"
+printf 'churn\n' >> "$project/.beads/issues.jsonl"
+printf 'churn\n' >> "$project/.beads/interactions.jsonl"
+started_at="$(git -C "$project" rev-parse HEAD)"
+output="$(cut "$project" "v0.3.0")"
+missing "$output" "uncommitted changes" "does not refuse a tree dirty only in the exports"
+contains "$output" "derived exports have changed" "it says up front what it is going to commit"
+contains "$output" ".beads/interactions.jsonl" "the housekeeping names the exports it committed"
+contains "$output" ".beads/issues.jsonl" "both of them"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the cut proceeded and the tag was written"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+if [ -z "$(git -C "$project" status --porcelain)" ]; then
+  pass "the tag names a tree with nothing uncommitted in it"
+else
+  fail "the cut left the tree dirty: $(git -C "$project" status --porcelain)"
+fi
+head_after="$(git -C "$project" rev-parse HEAD)"
+if [ "$(git -C "$project" rev-parse 'v0.3.0^{commit}')" = "$head_after" ] &&
+   [ "$head_after" != "$started_at" ]; then
+  pass "the tag names the housekeeping commit rather than the commit the cut started from"
+else
+  fail "the tag does not name the housekeeping commit"
+fi
+if [ "$(git -C "$project" log -1 --format=%s)" = "record the tracker's derived exports for v0.3.0" ]; then
+  pass "the housekeeping is its own commit, named for what it is"
+else
+  fail "the last commit is: $(git -C "$project" log -1 --format=%s)"
+fi
+committed="$(git -C "$project" diff-tree --no-commit-id --name-only -r HEAD | sort | tr '\n' ' ')"
+if [ "$committed" = ".beads/interactions.jsonl .beads/issues.jsonl " ]; then
+  pass "the housekeeping commit holds the exports and nothing else"
+else
+  fail "the housekeeping commit holds: $committed"
+fi
+# The refusal used to send the operator to `git stash`, and the stash-pop after
+# a successful cut then conflicted with the exports the cut itself rewrote.
+# Nothing is stashed now, so there is no pop to conflict.
+if [ -z "$(git -C "$project" stash list)" ]; then
+  pass "nothing was stashed, so there is no stash to pop"
+else
+  fail "the cut stashed something: $(git -C "$project" stash list)"
+fi
+contains "$output" "git push --atomic origin main v0.3.0" "publishing pushes the branch with the tag, since origin does not have the housekeeping commit"
+
+step "the exports the gate dirties on its own way through are housekept too"
+# The walkthrough exercises the tracker, so the tree it was asked to find clean
+# is dirty again by the time the tag is placed. Committing at the end rather
+# than the beginning is what makes that the same case as the one above.
+project="$(fabricate walk-dirties-exports dirty-exports green)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "committed .beads/issues.jsonl" "the export the walkthrough wrote is committed"
+missing "$output" "derived exports have changed" "the tree it was asked to find clean was clean"
+missing "$output" "interactions.jsonl" "only the export that actually changed is committed"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the cut proceeded and the tag was written"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+if [ -z "$(git -C "$project" status --porcelain)" ]; then
+  pass "the tag names a clean tree even though the gate itself dirtied one"
+else
+  fail "the cut left the tree dirty: $(git -C "$project" status --porcelain)"
+fi
+
+step "the tracker's own commit hook does not undo the housekeeping commit"
+# A repository that has adopted a tracker has its commit hooks installed, and
+# the one that exports would rewrite these very files the moment the
+# housekeeping commit landed -- leaving the tag naming a tree that was dirty
+# again a millisecond after it was cleaned. The cut turns hooks off for that
+# commit, and this is what executes that.
+project="$(fabricate hooked-export green green present export-hook)"
+printf 'churn\n' >> "$project/.beads/issues.jsonl"
+output="$(cut "$project" "v0.3.0")"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the cut proceeded and the tag was written"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+if [ -z "$(git -C "$project" status --porcelain)" ]; then
+  pass "the export hook did not run, so the tag still names a clean tree"
+else
+  fail "the export hook re-dirtied the tree: $(git -C "$project" status --porcelain)"
+fi
+# And the fixture is real: a commit that does not turn hooks off fires it, so
+# the claim above is about the cut rather than about a hook that never worked.
+git -C "$project" commit -q --allow-empty -m "a commit made with hooks left on"
+if [ -n "$(git -C "$project" status --porcelain)" ]; then
+  pass "the hook does fire when it is not turned off"
+else
+  fail "the fixture's hook never fires, so the case above proved nothing"
 fi
 
 step "a release comes off the branch integration lands on"
@@ -199,6 +384,85 @@ else
   fail "the cut pushed a tag to origin: $(git -C "$origin" tag --list)"
 fi
 
+step "a release with no notes drafts them and refuses, and cuts once they are committed"
+project="$(fabricate no-notes green green absent)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "has no notes yet" "says the notes are missing"
+contains "$output" "drafted docs/releases/v0.3.0.md" "names the file it drafted"
+contains "$output" "commit it, then cut v0.3.0 again" "names what to do with it"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+missing "$output" "stub built" "refuses before building anything"
+if [ -f "$project/docs/releases/v0.3.0.md" ]; then
+  pass "the draft is really on disk, which is the one thing the refusal left behind"
+else
+  fail "the refusal claimed a draft that is not there"
+fi
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+# The second half of the same story: the operator reads the draft, places each
+# item, commits it, and the cut goes through. This is the daily loop, and these
+# are the commands docs/developing-yoyo.md tells them to run, spelled the same
+# way on purpose -- the draft is a file git has never seen, so `git commit -a`
+# would stage nothing and stop with "no changes added to commit". A test that
+# staged it some easier way would leave that hole in the documentation.
+git -C "$project" add docs/releases/v0.3.0.md
+git -C "$project" commit -qm "v0.3.0 release notes"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "docs/releases/v0.3.0.md is present" "the gate passes once the notes are committed"
+contains "$output" "documented adoption path works" "and the walkthrough runs after it"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag was written, and it names a commit carrying its own notes"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+
+step "the notes commit has to reach origin before the cut goes through"
+# The documented loop's push, executed. Every other case here has an origin it
+# cannot reach and asserts the SKIPPED path, so this is the only place the
+# remote gate runs for real -- and committing the notes without pushing them is
+# exactly the state the loop puts an operator in halfway through.
+project="$(fabricate notes-not-pushed green green absent)"
+origin="$scratch/notes-origin.git"
+git init -q --bare "$origin"
+git -C "$project" remote add origin "$origin"
+git -C "$project" push -q origin main
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "drafted docs/releases/v0.3.0.md" "the first cut drafts the notes"
+git -C "$project" add docs/releases/v0.3.0.md
+git -C "$project" commit -qm "v0.3.0 release notes"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "HEAD is not where origin/main is" "committing the notes is not enough on its own"
+missing "$output" "is present and committed" "it refuses before the notes gate, so nothing further is spent"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+git -C "$project" push -q origin main
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "origin/main agrees" "pushing them satisfies the remote gate"
+contains "$output" "docs/releases/v0.3.0.md is present" "and the notes gate passes behind it"
+if [ "$(tags "$project")" = "v0.3.0" ]; then
+  pass "the tag was written, and origin has the commit carrying its notes"
+else
+  fail "expected v0.3.0 to be the only tag, got: $(tags "$project")"
+fi
+
+step "a cut whose notes cannot be drafted refuses rather than cutting without them"
+project="$(fabricate undraftable-notes green green draft-red)"
+output="$(cut "$project" "v0.3.0")"
+contains "$output" "notes could not be drafted" "refuses the cut"
+contains "$output" "bd is not installed" "the drafting failure is shown rather than swallowed"
+missing "$output" "documented adoption path works" "refuses before spending the walkthrough"
+if [ -z "$(tags "$project")" ]; then
+  pass "no tag was written"
+else
+  fail "the refused cut left tags behind: $(tags "$project")"
+fi
+
 step "a red walkthrough refuses the cut and names the failure"
 project="$(fabricate red-walk red green)"
 output="$(cut "$project" "v0.3.0")"
@@ -238,10 +502,12 @@ step "green all the way through: one invocation, a tagged build with checksums"
 project="$(fabricate green green green)"
 output="$(cut "$project" "v0.3.0")"
 contains "$output" "SKIPPED: origin is unreachable" "an origin it cannot reach is named as unchecked rather than passed over"
+contains "$output" "docs/releases/v0.3.0.md is present" "the notes gate ran"
 contains "$output" "documented adoption path works" "the walkthrough ran"
 contains "$output" "stub check passed" "the checks ran"
 contains "$output" "stub built v0.3.0" "the archives were built for the tag"
 contains "$output" "yoyo_v0.3.0_stub.tar.gz" "the checksums are reported"
+contains "$output" "nothing to commit" "a tree that was already clean gets no housekeeping commit"
 contains "$output" "git push origin v0.3.0" "publishing is named as the operator's own next command"
 if [ "$(tags "$project")" = "v0.3.0" ]; then
   pass "the tag was written"
@@ -290,6 +556,10 @@ wiring="$(make -C "$repository" -n release VERSION=v9.9.9 2>&1 || true)"
 contains "$wiring" "scripts/cut-release.sh v9.9.9" "make release VERSION=<tag> reaches the verb with the tag"
 wiring="$(make -C "$repository" -n release 2>&1 || true)"
 missing "$wiring" "cut-release.sh v" "make release with no VERSION passes no tag, so the verb asks for one"
+wiring="$(make -C "$repository" -n release-notes VERSION=v9.9.9 2>&1 || true)"
+contains "$wiring" "scripts/release-notes.sh v9.9.9" "make release-notes VERSION=<tag> reaches the notes writer with the tag"
+wiring="$(make -C "$repository" -n release-notes 2>&1 || true)"
+missing "$wiring" "release-notes.sh v" "make release-notes with no VERSION passes no tag either"
 
 printf '\n=== result\n'
 if [ "$failures" = "0" ]; then
