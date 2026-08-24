@@ -219,6 +219,9 @@ func TestDoctorSeparatesWhatItCouldNotDoFromTheDiagnosis(t *testing.T) {
 	if code := Run([]string{"doctor", "--json"}, unwritable{}, &stderr, "v1.2.3"); code != 2 {
 		t.Fatalf("code = %d for a report that could not be written, want 2", code)
 	}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Error("doctor gave up on the report without saying why on standard error")
+	}
 
 	// And the case that looks like a misuse and is not. A configuration that is
 	// not there is the first thing this command exists to say, so it is a finding

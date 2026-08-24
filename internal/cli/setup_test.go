@@ -639,66 +639,85 @@ func TestSetupJSONAsksNothingAndChangesNothing(t *testing.T) {
 	// actually has rather than a runner a test wrote.
 	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
 
-	project := filepath.Join(t.TempDir(), "calc")
-	if err := os.MkdirAll(project, 0o755); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
-	// A configured project rather than a blank directory, because a blank one
-	// leaves nothing setup could have written anyway. This is the state where it
-	// has a write to decline: a project configured before the artifact-home
-	// indexes existed, whose homes setup would fill in if it were allowed to ask.
-	if _, _, err := initializeProject(project, "calc", false); err != nil {
-		t.Fatalf("initializeProject() error = %v", err)
-	}
-	if err := os.RemoveAll(filepath.Join(project, "docs")); err != nil {
-		t.Fatalf("RemoveAll() error = %v", err)
-	}
-	before := projectTree(t, project)
+	// Both states a repository is in when somebody points this at it, because the
+	// write each of them leaves setup to decline is a different step. The blank
+	// one is where a newcomer's agent runs the command first, and the write it
+	// declines there -- the project's own configuration -- is the largest one
+	// setup makes.
+	for name, tc := range map[string]struct {
+		arrange func(*testing.T, string)
+		// declined is the step this state gives setup something to write, which
+		// has to be reported as left undone rather than never reached: the
+		// filesystem shows the write did not happen, and this shows the report
+		// an agent is the one reading said so.
+		declined string
+	}{
+		"a repository with nothing configured in it yet": {
+			arrange:  func(*testing.T, string) {},
+			declined: stepConfiguration,
+		},
+		"a project configured before the artifact-home indexes existed": {
+			arrange: func(t *testing.T, project string) {
+				if _, _, err := initializeProject(project, "calc", false); err != nil {
+					t.Fatalf("initializeProject() error = %v", err)
+				}
+				if err := os.RemoveAll(filepath.Join(project, "docs")); err != nil {
+					t.Fatalf("RemoveAll() error = %v", err)
+				}
+			},
+			declined: stepArtifactReadmes,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			project := filepath.Join(t.TempDir(), "calc")
+			if err := os.MkdirAll(project, 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			tc.arrange(t, project)
+			before := projectTree(t, project)
 
-	stdin := &unreadInput{}
-	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"--directory", project, "--json"}, stdin, &stdout, &stderr, "test")
+			stdin := &unreadInput{}
+			var stdout, stderr bytes.Buffer
+			code := runSetup(context.Background(), []string{"--directory", project, "--json"}, stdin, &stdout, &stderr, "test")
 
-	if stdin.wasRead() {
-		t.Fatal("setup --json read the operator's input, so an agent that ran it against a terminal would wait there forever")
-	}
-	if changed := describeTreeChange(before, projectTree(t, project)); changed != "" {
-		t.Fatalf("setup --json changed the project it was only asked about:\n%s", changed)
-	}
-	if strings.Contains(stdout.String(), "[Y/n]") || strings.Contains(stdout.String(), "[y/N]") {
-		t.Fatalf("a question reached the machine-readable report: %q", stdout.String())
-	}
+			if stdin.wasRead() {
+				t.Fatal("setup --json read the operator's input, so an agent that ran it against a terminal would wait there forever")
+			}
+			if changed := describeTreeChange(before, projectTree(t, project)); changed != "" {
+				t.Fatalf("setup --json changed the project it was only asked about:\n%s", changed)
+			}
+			if strings.Contains(stdout.String(), "[Y/n]") || strings.Contains(stdout.String(), "[y/N]") {
+				t.Fatalf("a question reached the machine-readable report: %q", stdout.String())
+			}
 
-	// And the exit status is the other half of the same claim: 1 is the
-	// diagnosis, so the report is on stdout to be read rather than a failure to
-	// retry the command over.
-	if code != 1 {
-		t.Fatalf("code = %d, want 1 from the diagnosis of a project that cannot run work; stdout = %q", code, stdout.String())
-	}
-	var report setupReport
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
-		t.Fatalf("setup exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
-	}
-	if report.SchemaVersion != setupSchemaVersion || len(report.Steps) == 0 || len(report.Diagnosis.Findings) == 0 {
-		t.Fatalf("the report on exit 1 is not one an agent could act on: %#v", report)
-	}
-	// The step this project was arranged to leave setup a write to decline. What
-	// it reports does not depend on the tools this machine has: the indexes were
-	// missing, nothing could be asked about writing them, and they are still
-	// missing -- which is the filesystem's account of the same thing, said in the
-	// report an agent is the one reading.
-	var indexes setupStep
-	for _, step := range report.Steps {
-		if step.Step == stepArtifactReadmes {
-			indexes = step
-		}
-	}
-	if indexes.Status != setupSkipped {
-		t.Errorf("artifact-readmes step = %s (%s), want the write it could not ask about left undone",
-			indexes.Status, indexes.Summary)
-	}
-	if indexes.Remedy == "" {
-		t.Error("the step nobody was asked about says nothing about what would do it")
+			// And the exit status is the other half of the same claim: 1 is the
+			// diagnosis, so the report is on stdout to be read rather than a
+			// failure to retry the command over.
+			if code != 1 {
+				t.Fatalf("code = %d, want 1 from the diagnosis of a project that cannot run work; stdout = %q", code, stdout.String())
+			}
+			var report setupReport
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+				t.Fatalf("setup exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+			}
+			if report.SchemaVersion != setupSchemaVersion || len(report.Steps) == 0 || len(report.Diagnosis.Findings) == 0 {
+				t.Fatalf("the report on exit 1 is not one an agent could act on: %#v", report)
+			}
+
+			var declined setupStep
+			for _, step := range report.Steps {
+				if step.Step == tc.declined {
+					declined = step
+				}
+			}
+			if declined.Status != setupSkipped {
+				t.Errorf("%s step = %s (%s), want the write it could not ask about left undone",
+					tc.declined, declined.Status, declined.Summary)
+			}
+			if declined.Remedy == "" {
+				t.Errorf("the %s step nobody was asked about says nothing about what would do it", tc.declined)
+			}
+		})
 	}
 }
 
@@ -741,6 +760,9 @@ func TestSetupExitsTwoWhenItCouldNotDoWhatItWasAsked(t *testing.T) {
 	code = runSetup(context.Background(), []string{"--directory", t.TempDir(), "--json"}, strings.NewReader(""), unwritable{}, &stderr, "test")
 	if code != 2 {
 		t.Fatalf("code = %d for a report that could not be written, want 2", code)
+	}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Error("setup gave up on the report without saying why on standard error")
 	}
 }
 
