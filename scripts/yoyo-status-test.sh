@@ -227,6 +227,40 @@ cat > "$chatty/exchanges/$asked_exchange.json" <<JSON
 }
 JSON
 
+# A third product, whose roles have only ever asked each other things: one
+# exchange that can be read and one record that cannot. A record nobody can
+# parse did not cost nothing, so what the report must not do is leave it out
+# quietly and print a total that reads as complete.
+asking="$YOYODYNE_STATE_HOME/products/asking"
+readable_exchange="exchange-cccccccccccccccccccccccccccccccc"
+unreadable_exchange="exchange-dddddddddddddddddddddddddddddddd"
+mkdir -p "$asking/exchanges"
+cat > "$asking/exchanges/$readable_exchange.json" <<JSON
+{
+  "schema_version": 1,
+  "id": "$readable_exchange",
+  "product_id": "asking",
+  "asker": {"role": "architect", "agent": "architect"},
+  "answerer": {"role": "product-manager", "agent": "product-manager"},
+  "question": "is that trade-off one a user would accept?",
+  "max_rounds": 10,
+  "rounds": [
+    {
+      "number": 1,
+      "question": "is that trade-off one a user would accept?",
+      "answer": "Not at that price.",
+      "cost_usd": 0.30,
+      "asked_at": "$(stamp_days_ago 0 1)",
+      "answered_at": "$(stamp_days_ago 0 2)"
+    }
+  ],
+  "opened_at": "$(stamp_days_ago 0 0)",
+  "updated_at": "$(stamp_days_ago 0 2)"
+}
+JSON
+printf '{ this was an exchange and is no longer readable\n' \
+  > "$asking/exchanges/$unreadable_exchange.json"
+
 # Newest last, so the listing order is decided rather than left to the order the
 # files happened to be written in. This is when each log was last written, not
 # when its work began: the cost report groups by the moment recorded inside the
@@ -505,6 +539,25 @@ else
       chats_only="$("$status" --product chatty -c --chats 2>&1 || true)"
       contains "$chats_only" "cost: \$1.50" "--chats prices conversations alone"
       missing "$chats_only" "$asked_exchange" "and leaves the exchanges out"
+
+      step "an exchange record that cannot be read is counted, not dropped"
+      # A product whose roles have only ever asked each other things, one of
+      # whose records is unreadable. The readable one is still priced, and the
+      # total says it is short rather than reading as complete -- which is the
+      # answer `yoyo cost` gives for the same records, and the two surfaces must
+      # not differ about what an unknown figure is.
+      unread="$("$status" --product asking -c 2>&1 || true)"
+      printf '%s\n' "$unread"
+      contains "$unread" "$readable_exchange" "the readable exchange is still priced beside it"
+      contains "$unread" "1 exchange record(s) could not be read" \
+        "an unreadable record is counted rather than passed over in silence"
+      contains "$unread" "$unreadable_exchange" "and is named, so somebody can go and look at it"
+      contains "$unread" "cost: ≥ \$0.30" \
+        "the total it is missing from is marked as a floor rather than a price"
+      # A product with nothing but exchanges is also a product with no recorded
+      # token usage, which is said rather than divided by.
+      contains "$unread" "no token usage is recorded" \
+        "and a report of nothing but asking still says why it reports no tokens"
       ;;
   esac
 fi

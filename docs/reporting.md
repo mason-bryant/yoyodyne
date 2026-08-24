@@ -47,8 +47,10 @@ item* is runs: the conversations that steer them cost money too and are recorded
 just as durably, but attributing a conversation that discussed five items to any
 one of them is a judgement rather than a join, so it is left out here and said
 to be left out. The same holds for an
-[exchange](conversation.md#roles-asking-each-other-things), which is a question
-one role put to another and names no work item at all. Neither is left out of
+[exchange](conversation.md#roles-asking-each-other-things): its record names the
+product, the repository, the two roles in it, and the conversation the asker
+spoke from, and nothing that identifies a piece of work, so there is nothing to
+attribute it to rather than a judgement declined. Neither is left out of
 what the harness has spent altogether —
 [`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
 conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
@@ -100,11 +102,15 @@ TOTAL                                     176         1   ≥ $1764.42    ≥ $2
 every recorded exchange. It is a row rather than a note under the table because
 the total has to add up: an ask is a provider invocation the harness made and it
 belongs in what the harness spent, and a figure visible only in the total would
-be a difference the reader has to take on trust. It belongs to no item, so the
-columns that split a run's price are left empty rather than filled with zeros —
-an ask is not development, review, or repair. Exchanges that cannot be read are
-counted as unknown rather than as nothing, exactly as an unpriced run is, and the
-total says so with the same `≥`.
+be a difference the reader has to take on trust. It is one row for the product
+rather than a figure per item because the record names no item — and because the
+channel runs between the roles that own documents and queues, with the developer
+and the reviewer, the two that work inside a run, off it. If an exchange ever
+records the work it was taken for, it belongs in that item's price beside the
+runs instead. The columns that split a run's price are left empty rather than
+filled with zeros — an ask is not development, review, or repair. Exchanges that
+cannot be read are counted as unknown rather than as nothing, exactly as an
+unpriced run is, and the total says so with the same `≥`.
 
 **develop** is each run's first developer attempt, **review** is every reviewer
 invocation it made, and **repair** is every developer attempt after the first —

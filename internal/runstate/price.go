@@ -190,12 +190,26 @@ func (i ItemPrice) Priced() bool { return i.UnknownRuns == 0 }
 func (i ItemPrice) Recorded() bool { return len(i.Runs) > 0 }
 
 // ExchangeSpend is what this product's roles have spent asking each other
-// things, summed over every exchange recorded for it. It is not part of any
-// item's price and it is not a run: an exchange is a conversation between two
-// roles, and the invocation that answers a round is money the harness spent on
-// the operator's behalf like any other. Leaving it out of what the harness has
-// spent altogether would understate that total by exactly as much as the ask
-// channel is used.
+// things, summed over every exchange recorded for it. The invocation that
+// answers a round is money the harness spent on the operator's behalf like any
+// other, so leaving it out of what the harness has spent altogether would
+// understate that total by exactly as much as the ask channel is used.
+//
+// It is summed per product rather than per work item because that is as far as
+// the record goes. An exchange names a product, a repository, the two roles in
+// it, and the conversation the asker spoke from, and nothing that identifies a
+// piece of work: not a work item and not a run. The conversation it does name is
+// no substitute — a role's conversation is long-lived and discusses whatever it
+// is discussing that day, which is the same reason a conversation turn is left
+// unattributed rather than charged to whichever item it last mentioned.
+//
+// The membership of the channel is why that is not an oversight waiting to be
+// fixed here: the roles on it own documents and queues, and the two roles that
+// work inside a run — the developer and the reviewer — are not on it, so there
+// is no exchange today taken in the course of one item. If that changes, the
+// join belongs on ItemPrice beside the runs rather than in this figure, and
+// TestAnExchangeRecordNamesNoWorkItemToAttributeItsSpendTo fails the moment the
+// record can carry one.
 type ExchangeSpend struct {
 	// Exchanges is how many threads the figure covers and Rounds how many
 	// provider invocations they came to between them. The two travel together for

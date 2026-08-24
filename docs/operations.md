@@ -750,7 +750,12 @@ another something are each a provider invocation like any other, and leaving any
 of them out understated every total it belonged in. An exchange counts each round
 on the day it was answered, so a thread that ran over two days lands in both of
 their totals; its record keeps what the provider charged and not what it used, so
-its rows say nothing in the token columns rather than saying none.
+its rows say nothing in the token columns rather than saying none. An exchange
+record that cannot be read is counted and named under the report rather than
+dropped, and the total it is missing from is marked `≥` — the same answer
+[`yoyo cost`](reporting.md#what-the-work-cost) gives for the same record, because
+two surfaces disagreeing about what an unknown figure is would be a disagreement
+only you could settle.
 
 The rows are grouped by the local-timezone day the money was spent on, each
 day's group closing with that day's spend and today's group coming last: what an

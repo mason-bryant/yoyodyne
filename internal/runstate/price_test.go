@@ -3,6 +3,7 @@ package runstate
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -61,14 +62,52 @@ func TestExchangeSpendSumsWhatTheRolesSpentAskingEachOther(t *testing.T) {
 	if spend.CostUSD != 1.25 {
 		t.Fatalf("ExchangeSpend() total = %v, want 1.25", spend.CostUSD)
 	}
-	// None of it reaches an item's price: an exchange names no work item, and
-	// charging one to an item would be attributing money that belongs to nobody.
+	// None of it reaches an item's price, because the record holds nothing to
+	// join an item on. The test below is what holds that to the record rather
+	// than to this comment.
 	prices, err := store.Prices()
 	if err != nil {
 		t.Fatalf("Prices() error = %v", err)
 	}
 	if len(prices) != 0 {
 		t.Fatalf("Prices() = %#v, want no item priced by an exchange", prices)
+	}
+}
+
+// The aggregate is product-wide rather than per item because the exchange
+// record names no item to be per. That is a fact about the recorded shape, and
+// this is where it is checked: the moment an exchange can name a work item — or
+// name a run, which names one — the join belongs in ItemPrice beside the runs
+// rather than on a row of its own, and the report reading it is short until it
+// is written.
+//
+// It is asserted over the type instead of over an instance so that a field
+// added to the record fails here, at the join that would have to change, rather
+// than passing silently and leaving the money unattributed.
+func TestAnExchangeRecordNamesNoWorkItemToAttributeItsSpendTo(t *testing.T) {
+	t.Parallel()
+
+	attributable := func(field reflect.StructField) bool {
+		name := strings.ToLower(field.Name + " " + field.Tag.Get("json"))
+		return strings.Contains(name, "workitem") || strings.Contains(name, "work_item") ||
+			strings.Contains(name, "runid") || strings.Contains(name, "run_id")
+	}
+	for _, recorded := range []reflect.Type{
+		reflect.TypeOf(exchange.Exchange{}),
+		// The parties are checked too: what an exchange names about each side is
+		// a role, an agent, and the conversation it spoke from, and a conversation
+		// is not a work item — the same conversation asks about whatever it is
+		// discussing that day.
+		reflect.TypeOf(exchange.Party{}),
+		reflect.TypeOf(exchange.Round{}),
+	} {
+		for i := 0; i < recorded.NumField(); i++ {
+			if attributable(recorded.Field(i)) {
+				t.Fatalf("%s.%s names work an exchange's spend could be attributed to; "+
+					"Store.ExchangeSpend sums the product's exchanges into one figure and must now join them onto the item instead",
+					recorded.Name(), recorded.Field(i).Name)
+			}
+		}
 	}
 }
 

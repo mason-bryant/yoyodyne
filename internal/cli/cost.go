@@ -15,9 +15,11 @@ import (
 type costOutput struct {
 	Prices []runstate.ItemPrice `json:"prices,omitempty"`
 	// Exchanges is what the roles spent asking each other things. It is beside
-	// the item prices rather than in one of them because an exchange is nobody's
-	// run, and it is here at all because it is money the harness spent: a total
-	// that skipped it would be wrong rather than merely unattributed.
+	// the item prices rather than in one of them because the exchange record
+	// carries nothing to join an item on -- a product, a repository, the two
+	// roles, and the asker's conversation -- and it is here at all because it is
+	// money the harness spent: a total that skipped it would be wrong rather than
+	// merely unattributed.
 	Exchanges *runstate.ExchangeSpend `json:"exchanges,omitempty"`
 	// Recorded is what was written onto the tracker, and is absent from a report
 	// that only read the records.
@@ -236,7 +238,7 @@ func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
 	}
 	fmt.Fprintf(writer, "asks between roles is %d exchange(s) over %d round(s): a question one role put to another,\n",
 		exchanges.Exchanges, exchanges.Rounds)
-	fmt.Fprintln(writer, "which is nobody's run and so no item's price, and is in the total because the harness spent it")
+	fmt.Fprintln(writer, "recorded naming no work item to charge it to, and in the total because the harness spent it")
 }
 
 // ledgerRow is the shape of every line of the ledger, header and total
@@ -422,9 +424,10 @@ making the change, reviewing it, and repairing it -- with the time the work
 spent waiting on a provider or on the operator beside it. Naming an item breaks
 its price down by run.
 
-What the roles spent asking each other is a row of its own above the total. An
-exchange is nobody's run, so it is no item's price; it is a provider invocation
-the harness made, so a total without it would be wrong rather than unattributed.
+What the roles spent asking each other is a row of its own above the total. The
+exchange record names no piece of work to charge it to, so it reaches no item's
+price; it is a provider invocation the harness made, so a total without it would
+be wrong rather than unattributed.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
