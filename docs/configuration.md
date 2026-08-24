@@ -110,6 +110,13 @@ tracks — one repository, one permission model, and nothing to stand up.
   either way, so `init` still exits 0 and `init --json` reports the outcome
   under `tracker` — `configured`, `unchanged`, `skipped`, or `failed`.
 
+A synced tracker is one operator's backlog surviving their machine, and not yet a
+team sharing one: two people each running their own harness against one
+repository is
+[not supported](team-mode-scope.md#what-v1-supports-meanwhile), because the
+coordination around the backlog — claims, reports, directives, and the budgets
+below — stays on the machine that made it.
+
 Two consequences of the tracker riding your repository are worth knowing before
 you adopt the default. Its history counts against the repository's size like any
 other history, and grows with the backlog rather than with the code. And a push
