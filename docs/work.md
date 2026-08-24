@@ -31,6 +31,18 @@ export refused, is told it has no current view at all. Either way the developer
 is told to report an answer taken from a stale file as unverified rather than as
 a sweep of the tracker.
 
+That path is outside the worktree, so it depends on a developer run's reading
+tools being unscoped — `Read`, `Glob`, and `Grep` are granted without a path
+scope, while `Edit` and `Write` are confined to the worktree, and a check holds
+that split so it cannot be reversed by accident. Its shell is confined
+separately, by an OS-level sandbox, and may refuse the path. What the harness
+cannot prove from its own side is that the provider permits the read at the
+moment it is tried, so the developer is told that a read it cannot make is a
+finding to report rather than a reason to fall back to the worktree's committed
+copy. **A run that could not look says so**; that is the part that holds whatever
+the sandbox does, and it is the difference from the silent wrong answer this
+exists to prevent.
+
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round
 of the gate, and once more before the promotion — rather than trusted from

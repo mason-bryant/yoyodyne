@@ -151,6 +151,58 @@ func TestADeveloperRunIsSandboxedAndCarriesTheAttributionGuard(t *testing.T) {
 	}
 }
 
+// The developer's tool posture, split the way it is actually load-bearing:
+// writes confined to the worktree, reads not confined at all.
+//
+// The argument comparison above already pins the list byte for byte, and that is
+// exactly why this is a separate test. That one fails on any edit to the list and
+// says nothing about which edits matter; a reader repairing it has a diff and no
+// statement of what was being protected, and "scope Read to the project root"
+// looks like a tightening rather than a revocation. This says which half is which
+// and why, so the day somebody scopes the reading tools they are told what they
+// are taking away rather than which literal to update.
+//
+// What it protects: since yoyodyne-ifd.158 a run is handed the tracker's dump by
+// absolute path in the primary checkout, because the tracker's store cannot be
+// opened from inside a run and the worktree's committed copy is as old as the
+// last commit that carried one. Reading that path is what makes a traceability
+// sweep answer from current data instead of from a four-day-old file.
+//
+// What it does not prove is that Claude Code's sandbox permits the read when it
+// is tried. That is the provider's behaviour rather than the harness's wiring,
+// and this asserts only what the harness controls — which is the same boundary
+// the settings test above draws.
+func TestADeveloperRunReadsOutsideItsWorktreeAndWritesOnlyInside(t *testing.T) {
+	t.Parallel()
+
+	scopes := make(map[string]string, len(developerTools))
+	for _, tool := range developerTools {
+		name, scope, scoped := strings.Cut(tool, "(")
+		if scoped {
+			scopes[name] = "(" + scope
+			continue
+		}
+		scopes[name] = ""
+	}
+	for _, name := range []string{"Read", "Glob", "Grep"} {
+		scope, granted := scopes[name]
+		if !granted {
+			t.Fatalf("a developer run has no %s tool, so it cannot read the tracker dump the harness names for it: %#v", name, developerTools)
+		}
+		if scope != "" {
+			t.Fatalf("%s is scoped to %q, which revokes a developer run's read of the tracker dump outside its worktree: %#v", name, scope, developerTools)
+		}
+	}
+	// The other half, asserted here too so neither can be relaxed under cover of
+	// the other: a change that leaves the worktree is the thing the scope exists
+	// to prevent, and it is not weakened by anything above.
+	for _, name := range []string{"Edit", "Write"} {
+		if scopes[name] != "(/**)" {
+			t.Fatalf("%s is scoped to %q, want the worktree project root: %#v", name, scopes[name], developerTools)
+		}
+	}
+}
+
 func TestRunPassesTheRequestedModelAndReportsWhatServedIt(t *testing.T) {
 	t.Parallel()
 

@@ -4035,6 +4035,17 @@ func developerPrompt(persona, invariants, bundle, tracker string) string {
 // It never fails a run and never returns nothing. A run whose view is old still
 // has that view, and what made the old one dangerous was never its age — it was
 // that the run had no way to know. Both answers below are that sentence.
+//
+// The path named is outside the worktree, which rests on the developer's reading
+// tools being unscoped. That is the harness's own posture rather than an
+// assumption about the provider — internal/backend/claudecode grants Read, Glob,
+// and Grep without a path scope while confining Edit and Write to the worktree,
+// and TestADeveloperRunReadsOutsideItsWorktreeAndWritesOnlyInside holds it there
+// so a later change cannot revoke it quietly. What the harness cannot prove from
+// here is that the provider's own sandbox permits the read when it is tried, so
+// the section tells the developer to report a refused read and treat the sweep as
+// unmade. That is the difference from ifd.117 that survives even the bad case:
+// the wrong answer there was silent, and this one cannot be.
 func (p Pipeline) trackerView(ctx context.Context) string {
 	if err := p.Tracker.Export(ctx); err != nil {
 		return staleTrackerSection(fmt.Sprintf("it could not be refreshed for this run (%s)", singleLineCause(err)))
@@ -4043,6 +4054,14 @@ func (p Pipeline) trackerView(ctx context.Context) string {
 	if err != nil {
 		return staleTrackerSection(fmt.Sprintf("the export was asked for, but where it would be written could not be resolved (%s)", singleLineCause(err)))
 	}
+	// Where the dump is, is inferred from the repository this pipeline runs over
+	// rather than asked of the tracker, because WorkTracker has no way to ask: the
+	// client writes wherever its own working directory is, and nothing in the
+	// interface reports it. The two are the same in every wiring the harness makes
+	// — internal/cli builds the client with Dir set to this same repository — so
+	// this is a coupling to record rather than a bug. A wiring that broke it would
+	// stat a path the export never lands at and report no readable dump while a
+	// current one sat elsewhere, which is the safe direction to be wrong in.
 	path := filepath.Join(root, beads.ExportPath)
 	// The dump is proved to be there rather than assumed. A project that keeps no
 	// JSONL export, or has moved it in its own Beads configuration, has nothing at
@@ -4083,10 +4102,20 @@ is a dump the refresh did not actually rewrite — beads keeps this file only wh
 a project asks it to — so treat what you take from it as unverified and say so,
 rather than reporting it as a sweep of the tracker.
 
-It is outside your worktree, read-only, and no part of your change; nothing you
-write to it would be kept. The copy at %s inside your worktree is older still: it
-is the last one anybody committed, which can be days old and can be missing work
-admitted since, so it is never the file to search.
+That path is outside your worktree, so open it with Read, Grep, or Glob, which
+are granted to you unscoped for exactly this. Your shell is confined by an
+OS-level sandbox and may refuse a path outside the worktree; that is a limit on
+Bash rather than on you.
+
+**If you cannot read it at all, that is a finding, not an inconvenience.** Say so
+in your summary, report it, and treat any question about which work items cite
+something as unanswered. Do not fall back to the copy at %s inside your worktree:
+it is the last one anybody committed, which can be days old and can be missing
+work admitted since — answering from it is the silent wrong answer this section
+exists to prevent, and it is worse than saying you could not look.
+
+The file is read-only and no part of your change either way; nothing you wrote to
+it would be kept.
 `, path, trackerDumpAge(writtenAt, now), writtenAt.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339), beads.ExportPath)
 }
 

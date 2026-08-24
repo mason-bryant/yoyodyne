@@ -72,6 +72,26 @@ func TestARunReadsATrackerExportRefreshedAfterItsOwnClaim(t *testing.T) {
 	if !strings.Contains(prompt, beads.ExportPath+" inside your worktree") {
 		t.Fatalf("the stale copy in the worktree was not distinguished from the current one:\n%s", prompt)
 	}
+	// The path is outside the worktree, so it is reached with the reading tools
+	// the harness grants unscoped rather than with the OS-sandboxed shell. Naming
+	// them is what stops a developer concluding from one refused `cat` that the
+	// file is unreachable.
+	if !strings.Contains(prompt, "open it with Read, Grep, or Glob") {
+		t.Fatalf("the developer was not told which tools reach a path outside the worktree:\n%s", prompt)
+	}
+	// The half that holds whatever the provider's sandbox does. If the read is
+	// refused the run must say so; falling back to the worktree's committed copy
+	// is the ifd.117 answer again, and this is the only instruction standing
+	// between the two.
+	for _, want := range []string{
+		"If you cannot read it at all, that is a finding",
+		"Do not fall back to the copy at",
+		"worse than saying you could not look",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("a refused read would be silent — the prompt is missing %q:\n%s", want, prompt)
+		}
+	}
 	// The section names a path this machine has, so it must stay behind the work
 	// item: everything in front of the item is the prefix a provider charges the
 	// cached rate for, and no two checkouts share an absolute path.

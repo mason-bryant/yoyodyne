@@ -45,8 +45,25 @@ const defaultIdleTimeout = 5 * time.Minute
 const developerSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},` +
 	`"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}`
 
-// developerTools scopes built-in writes to the worktree project root. Bash is
-// separately confined by Claude Code's OS-level sandbox settings below.
+// developerTools scopes built-in writes to the worktree project root and
+// deliberately leaves the reading tools unscoped. Bash is separately confined by
+// Claude Code's OS-level sandbox settings above.
+//
+// The asymmetry is load-bearing rather than an oversight, and something now
+// depends on it. A developer's change must land inside its worktree and nowhere
+// else, which is what the scope on Edit and Write says; but a run has to be able
+// to read things the worktree does not contain, and since yoyodyne-ifd.158 the
+// tracker's own dump is one of them — the harness names it by absolute path in
+// the primary checkout, because the tracker's store cannot be opened from inside
+// a run and the worktree's committed copy is as old as the last commit that
+// carried one. Scoping Read, Glob, or Grep to the project root would revoke that
+// silently and put every traceability sweep back on a stale file.
+//
+// TestADeveloperRunReadsOutsideItsWorktreeAndWritesOnlyInside is what stops that
+// being silent. What neither it nor anything else here proves is that Claude
+// Code's own sandbox permits the read at the moment it is attempted; that is an
+// end-to-end fact about the provider, so the prompt tells the developer to report
+// a refused read rather than work around it.
 var developerTools = []string{"Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 
 // readOnlyPermissionMode is the only Claude Code mode that leaves a toolless

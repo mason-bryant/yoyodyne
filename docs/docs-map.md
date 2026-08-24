@@ -159,6 +159,13 @@ current view at all, means the sweep cannot be made — report it unmade rather
 than sweeping the stale copy, because an anchor wrongly ruled Tier 3 is exactly
 the silently-dangling fragment this policy exists to prevent.
 
+The same holds if the file cannot be opened. It sits outside the worktree and is
+reached with `Read`, `Grep`, or `Glob` rather than the shell; a run that is
+refused the read has no tracker state at all, and **the sweep is then unmade, not
+approximate**. Say so, and leave the anchors at the tier the last run established
+rather than re-deriving them from the worktree's committed copy — a Tier 1 anchor
+demoted on stale evidence is unrecoverable in a way an unmade sweep is not.
+
 ### Citations of `docs/configuration.md` anchors
 
 With the document each moves to and its tier. **Re-derived on 2026-08-24** for
