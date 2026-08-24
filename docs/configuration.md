@@ -859,6 +859,53 @@ grant goes into the item, which is not a developer's to write. Which role
 maintains an item's text is a question about the fixed set of roles rather than
 about this gate, and this document does not answer it.
 
+### Guarding a work item's attribution
+
+The gate above protects the documents a change is measured against. A second,
+narrower one protects the record of *why* the work was done, which lives
+somewhere a diff never shows: an item's notes.
+
+An attribution is a single `Goal served:` line in those notes, read from there
+and nowhere else. `bd update <id> --notes=…` replaces that field wholesale
+rather than appending to it, so one such command destroys the attribution
+without touching a file, failing a check, or appearing in anything a reviewer
+reads. That is not a hypothetical — twelve items lost a recorded goal exactly
+this way, each matched to the command that did it in
+`docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md`.
+
+The harness's own writer never does this: it passes `--append-notes`, and the
+one place it passes `--notes` is creation, where there is nothing to replace.
+Every loss came from a raw `bd update` typed in an agent's shell. So the guard
+sits at the shell rather than in the tracker client: a Claude Code `PreToolUse`
+hook on `Bash`, `scripts/bd-notes-guard.sh`, which refuses a `bd update`
+carrying `--notes` and names `--append-notes` in the refusal.
+
+Two populations get a shell, and **only one of them is guarded today.** Harness
+developer runs are: the hook travels in the settings the backend hands each run,
+so every developer run the harness starts carries it. Interactive sessions in this
+repository are **not** — that wiring belongs in `.claude/settings.json`, and the
+stanza is not there yet. Until it is, the guard does nothing for a person or an
+agent working in a checkout by hand, which is the population the twelve recorded
+losses actually came from.
+
+Both are meant to resolve the same script out of the checkout, so that no
+session is guarded by a copy that has drifted. One consequence of resolving it
+there: the hook travels with the harness while the script travels with the
+branch, so a developer run on a branch predating the script finds nothing to
+run. It exits quietly and that run is unguarded, which is deliberate — the
+alternative is a hook error on every Bash call the run ever makes.
+
+An earlier attempt at this guard was closed against work that never reached the
+tree and was never built;
+`docs/diagnoses/yoyodyne-ifd-180-guard-absent-from-tree.md` records what it
+implemented and what remains unresolved about how it closed.
+
+It errs toward refusing: it matches the flag in the raw hook payload, so a
+command that merely *mentions* `bd update --notes` — grepping for it in these
+docs, for instance — is refused too. That trade is deliberate. Over-refusing
+costs a sentence and a rephrase; letting one through loses a record that nothing
+downstream can tell was ever there.
+
 ### Proposing a change to a document you do not own
 
 A role that may not edit a document and has no way to say it is wrong has two

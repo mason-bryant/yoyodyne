@@ -387,6 +387,38 @@ func TestManagerVerifyRemoteTargetRefusesARemoteThatMoved(t *testing.T) {
 	}
 }
 
+// The cross-machine case: a second harness promoted into the same target and
+// the forge merged its pull request, so the remote target is a merge commit
+// sitting directly above the base commit both runs were written against. That
+// has the same shape as this repository's own forge merge — a commit it does
+// not have, above a commit it does — and containment cannot tell them apart.
+// Only the content can, and it has to, because the merge this run would
+// otherwise ask for is the forge reconciling work no check and no reviewer here
+// ever saw.
+func TestManagerVerifyRemoteTargetRefusesAnotherMachinesForgeMerge(t *testing.T) {
+	t.Parallel()
+
+	repository, remote := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	integration := publishAndIntegrate(t, manager, "yoyodyne-this-machine", "feature.txt", "this machine's work\n")
+
+	// The other machine publishes its own branch and the forge merges it into the
+	// target, exactly as this run's own merge would have been performed.
+	elsewhere := pushUnrelatedCommit(t, remote, "yoyodyne-elsewhere")
+	merged := mergeInRemote(t, remote, "main", elsewhere)
+
+	// The remote target does carry the commit this promotion was made from, so
+	// containment passes and the refusal below is the content check's alone.
+	runGit(t, remote, "merge-base", "--is-ancestor", integration.PreviousTargetCommit, merged)
+	err := manager.VerifyRemoteTarget(context.Background(), integration)
+	if !errors.Is(err, ErrRemoteTargetDrift) {
+		t.Fatalf("VerifyRemoteTarget() after another machine's merge = %v, want ErrRemoteTargetDrift", err)
+	}
+	if !strings.Contains(err.Error(), merged) || !strings.Contains(err.Error(), "carries content the promotion was not written against") {
+		t.Errorf("drift error does not name the merge commit %q as content drift: %v", merged, err)
+	}
+}
+
 // pushUnrelatedCommit puts work on a remote branch that the harness's
 // repository has never seen, which is what someone else's merge looks like from
 // inside a run.
