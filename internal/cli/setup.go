@@ -130,14 +130,19 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return 2
 	}
 
+	// Exit 1 belongs to the diagnosis and to nothing else, which is what lets
+	// anything reading this exit 1 read the report on stdout rather than work out
+	// which kind of 1 it got. Being pointed at a directory that is not there is
+	// the command being used wrongly, like the positional argument above it, so it
+	// says so on stderr and exits the way that does.
 	root, err := filepath.Abs(*directory)
 	if err != nil {
 		fmt.Fprintf(stderr, "resolve project directory %q: %v\n", *directory, err)
-		return 1
+		return 2
 	}
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		fmt.Fprintf(stderr, "%s is not a directory to set up\n", root)
-		return 1
+		return 2
 	}
 
 	walk := &setup{
@@ -1287,6 +1292,9 @@ It ends by running `+"`yoyo doctor`"+`, which is what decides whether the instal
 actually works: every step setup could not carry out itself is left as a finding
 with the command that fixes it, and this command's exit status is the
 diagnosis's. It exits 1 when something would stop work running, and 0 otherwise.
+Exit 1 is that diagnosis and never anything else, so it comes with the report:
+a command used wrongly exits 2 instead, says why on standard error, and reports
+nothing.
 
 Options:
   --directory <path>        project directory to set up (default: here)

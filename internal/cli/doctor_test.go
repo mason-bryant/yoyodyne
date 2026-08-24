@@ -130,6 +130,58 @@ func TestDoctorJSONCarriesTheSameFindingsWithRemedies(t *testing.T) {
 	}
 }
 
+// TestDoctorExitsOneAsAReportAndLeavesTheRepositoryAlone holds the other claim
+// skills/yoyo-setup/SKILL.md makes about this command: its exit 1 is the report
+// rather than a failure to retry, and running it is read-only against the
+// operator's repository. An agent told to read the JSON either way and told not
+// to retry on 1 is acting on both, and neither is visible in the report itself.
+func TestDoctorExitsOneAsAReportAndLeavesTheRepositoryAlone(t *testing.T) {
+	// The one thing a diagnosis writes is the harness's own state root, which is
+	// outside the repository and pointed somewhere disposable here.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	repository := t.TempDir()
+	t.Chdir(repository)
+	before := projectTree(t, repository)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"doctor", "--json"}, &stdout, &stderr, "v1.2.3")
+
+	if code != 1 {
+		t.Fatalf("Run() code = %d, want 1 for an installation that cannot run work; stderr = %q", code, stderr.String())
+	}
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+	}
+	if report.Healthy() {
+		t.Fatalf("doctor exited 1 over a report it calls healthy: %#v", report)
+	}
+	if changed := describeTreeChange(before, projectTree(t, repository)); changed != "" {
+		t.Fatalf("diagnosing an installation changed the repository:\n%s", changed)
+	}
+
+	// A second run of the same command reaches the same verdict on the same
+	// checks, which is what makes "do not retry a command because it exited 1"
+	// advice rather than a gamble.
+	var again bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, &again, &stderr, "v1.2.3"); code != 1 {
+		t.Fatalf("Run() code = %d on a second diagnosis of the same installation, want 1", code)
+	}
+	var retried doctor.Report
+	if err := json.Unmarshal(again.Bytes(), &retried); err != nil {
+		t.Fatalf("Unmarshal() error = %v, output = %q", err, again.String())
+	}
+	if retried.Status != report.Status || len(retried.Findings) != len(report.Findings) {
+		t.Fatalf("retrying doctor reached a different verdict: %s over %d findings, was %s over %d",
+			retried.Status, len(retried.Findings), report.Status, len(report.Findings))
+	}
+	for index, finding := range retried.Findings {
+		if was := report.Findings[index]; finding.Check != was.Check || finding.Status != was.Status {
+			t.Errorf("retrying doctor made %s of %s, was %s of %s", finding.Status, finding.Check, was.Status, was.Check)
+		}
+	}
+}
+
 // TestDoctorReadsThisExecutablesOwnVersionOutput ties the drift check to the
 // bytes it actually compares. `yoyo version` prints the bare version, and the
 // check is exact string equality against that, so nothing but this holds the two

@@ -45,16 +45,19 @@ in this task requires writing code.
    profile; or a per-platform binary from
    <https://github.com/mason-bryant/yoyodyne/releases>.
 3. **Say what you are about to change.** Everything up to and including
-   `yoyo setup --json` is read-only. Name the first command that is not, and get
-   an answer before running it.
+   `yoyo setup --json` is read-only against their repository: it asks nothing,
+   waits for no input, and writes nothing there. Name the first command that is
+   not, and get an answer before running it.
 
 ## The two reports you act on
 
 Both print JSON to stdout, and **both exit 1 when something would stop work
 running**. That exit status is the report rather than a failure of the command:
-read the JSON either way, and do not retry a command because it exited 1. Never
-key on the human-readable output — the prose is written for a person and both
-commands have a `--json` that carries the same findings structurally.
+read the JSON either way, and do not retry a command because it exited 1. Exit 2
+is the other thing entirely — the command was used wrongly, it said why on
+stderr, and there is no report on stdout to read. Never key on the
+human-readable output — the prose is written for a person and both commands have
+a `--json` that carries the same findings structurally.
 
 **`yoyo setup --json`** is the walk from a binary on `PATH` to a working
 installation, as a report. On its own it asks nothing and changes nothing: it

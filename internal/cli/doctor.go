@@ -145,11 +145,14 @@ It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is read: whether a secret is stored is asked in
 the form that answers without producing the value.
 
-It exits 1 when something would stop work running, and 0 otherwise. A warning is
-not a small problem: it is something about an installation that works. Every
-reporting finding is one, because reporting is an observation and never a gate --
-a sink nobody started leaves every run exactly as it was. It is still named in
-full, with the command that ends it.
+It exits 1 when something would stop work running, and 0 otherwise. That 1 is the
+diagnosis rather than a failure of the command, so it comes with the report and
+is not worth retrying: a command used wrongly exits 2 instead, says why on
+standard error, and reports nothing. A warning is not a small problem: it is
+something about an installation that works. Every reporting finding is one,
+because reporting is an observation and never a gate -- a sink nobody started
+leaves every run exactly as it was. It is still named in full, with the command
+that ends it.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)
