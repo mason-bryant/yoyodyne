@@ -79,6 +79,11 @@ type BranchChange struct {
 	// losses: a patch can be complete while the history that produced it is not.
 	CommitsOmitted int        `json:"commits_omitted,omitempty"`
 	Changes        ChangeDiff `json:"changes"`
+	// Listing is what the repository holds at the branch's head. A reviewer of an
+	// accumulated change reads absence out of a diff exactly as readily as a
+	// reviewer of one work item's, and the range diff says no more about a file the
+	// branch left alone than a worktree diff does.
+	Listing CommitListing `json:"listing"`
 }
 
 // BranchChanges reports what a branch accumulated over a base commit as one
@@ -119,14 +124,31 @@ func (m *Manager) BranchChanges(ctx context.Context, request BranchRequest, limi
 	if !commitPattern.MatchString(baseCommit) {
 		return BranchChange{}, fmt.Errorf("resolved base commit %q is invalid", baseCommit)
 	}
+	// A branch that has already been integrated into the base is the case worth
+	// naming rather than refusing flatly. Base and head are then the same commit,
+	// or the head is contained in the base, and either way the range is empty
+	// because the work landed — not because the branch never did anything. A run
+	// was once handed that emptiness as "no change to review" and refused over
+	// code that was already on main, so what it says now is which of the two
+	// happened and that the base to review against is the commit the branch grew
+	// from rather than where it ended up.
 	if baseCommit == headCommit {
-		return BranchChange{}, ErrNoAccumulatedChange
+		return BranchChange{}, fmt.Errorf("%w: %s and %s are the same commit, so this branch is already integrated into its base; review it against the commit it was grown from",
+			ErrNoAccumulatedChange, request.Branch, request.BaseRef)
 	}
 	ancestor, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", baseCommit, headCommit)
 	if err != nil {
 		return BranchChange{}, err
 	}
 	if ancestor.Status != execution.ProcessSucceeded {
+		merged, err := m.run(ctx, "-C", m.repositoryRoot, "merge-base", "--is-ancestor", headCommit, baseCommit)
+		if err != nil {
+			return BranchChange{}, err
+		}
+		if merged.Status == execution.ProcessSucceeded {
+			return BranchChange{}, fmt.Errorf("%w: %s is already contained in %s, so there is nothing it adds over that base; review it against the commit it was grown from",
+				ErrNoAccumulatedChange, request.Branch, request.BaseRef)
+		}
 		return BranchChange{}, fmt.Errorf("base commit %s is not an ancestor of branch %s; name the commit the branch was grown from", baseCommit, request.Branch)
 	}
 
@@ -161,6 +183,10 @@ func (m *Manager) BranchChanges(ctx context.Context, request BranchRequest, limi
 		changes.Truncated = true
 	}
 	change.Changes = changes
+	change.Listing, err = m.listCommit(ctx, m.repositoryRoot, headCommit, limits.MaxListedFiles)
+	if err != nil {
+		return BranchChange{}, err
+	}
 	return change, nil
 }
 

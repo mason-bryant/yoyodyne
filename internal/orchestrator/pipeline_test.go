@@ -2547,6 +2547,10 @@ func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree
 	return nil, nil
 }
 
+func (partialWorktreeManager) FilesAtHead(context.Context, gitworktree.Worktree, int) (gitworktree.CommitListing, error) {
+	return gitworktree.CommitListing{}, nil
+}
+
 func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {
 	return gitworktree.Integration{}, errors.New("partial worktree cannot be integrated")
 }

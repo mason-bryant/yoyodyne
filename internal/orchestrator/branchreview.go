@@ -205,6 +205,12 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		// change it judges is the patch it was handed.
 		WorktreePath: b.Repository,
 		Changes:      change.Changes,
+		// A reviewer of an accumulated change reads absence out of a range diff as
+		// readily as a reviewer of one worktree's does, and a range diff says no
+		// more about a file the branch left alone. There is no developer summary
+		// beside it: a branch is many developers, each of whose accounts belongs to
+		// a change that was reviewed and integrated on its own.
+		Repository:   branchListing(change.Listing),
 		RedactValues: b.RedactValues,
 		// A branch review is a provider invocation like any other the harness
 		// makes, so it records one like any other: this is what lets it be
@@ -308,6 +314,22 @@ func (b BranchReviewer) deliveredInvariants(change gitworktree.BranchChange) (in
 		evidence = append(evidence, commit.Subject)
 	}
 	return set.Select(evidence...), nil
+}
+
+// branchListing carries what the repository holds at the branch's head into the
+// reviewer's evidence. A change reader that described the range and named no
+// listing is reported as one that could not be taken rather than as an empty
+// repository, because a review told the repository is empty would conclude every
+// path is missing — which is the failure this evidence exists to end, inverted.
+func branchListing(listing gitworktree.CommitListing) review.RepositoryListing {
+	if strings.TrimSpace(listing.Commit) == "" {
+		return review.RepositoryListing{Unavailable: "the described branch change carried no listing of the repository"}
+	}
+	return review.RepositoryListing{
+		Commit:  listing.Commit,
+		Files:   listing.Files,
+		Omitted: listing.Omitted,
+	}
 }
 
 func branchScope(change gitworktree.BranchChange) review.BranchScope {

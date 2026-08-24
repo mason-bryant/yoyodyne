@@ -63,6 +63,11 @@ type WorktreeManager interface {
 	// patch above: those are bounded for a reader, and a gate that saw a bounded
 	// listing would pass whatever the bound had cut.
 	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
+	// FilesAtHead names every path the repository holds at the commit the change
+	// was written against. It is the reviewer's evidence for whether a file is
+	// there at all, which the patch above cannot answer: a file the change left
+	// alone is absent from a diff whatever the repository holds.
+	FilesAtHead(ctx context.Context, worktree gitworktree.Worktree, maxFiles int) (gitworktree.CommitListing, error)
 	Integrate(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Integration, error)
 	// RebaseOntoTarget re-prepares a change whose promotion lost a race, by
 	// replaying it onto wherever the target branch went. It is the only thing
@@ -1106,6 +1111,33 @@ func (a *activeRun) reviewedInvariants(changes gitworktree.ChangeDiff) invariant
 	return delivery
 }
 
+// reviewedRepository is the listing of what the repository holds that the
+// reviewer decides an absence from. It is the harness's own reading of the
+// worktree's committed tree and nothing an agent wrote.
+//
+// A repository that will not answer costs the review the listing rather than
+// costing the change its review: the reviewer is told it could not be taken, and
+// the contract then refuses it a finding that asserts anything is missing. That
+// is the safe direction of the two — the failure this exists to end is a reviewer
+// concluding absence from evidence it never had, and a reviewer told it cannot
+// check concludes nothing.
+func (a *activeRun) reviewedRepository(ctx context.Context) review.RepositoryListing {
+	listing, err := a.pipeline.Worktrees.FilesAtHead(ctx, a.worktree, 0)
+	if err != nil {
+		return review.RepositoryListing{Unavailable: singleLine(err.Error(), maxUnavailableListingBytes)}
+	}
+	return review.RepositoryListing{
+		Commit:  listing.Commit,
+		Files:   listing.Files,
+		Omitted: listing.Omitted,
+	}
+}
+
+// maxUnavailableListingBytes bounds the reason a listing could not be taken. It
+// is stated inside the reviewer's own input bound, so a Git failure that printed
+// a repository's worth of stderr cannot crowd out the change being judged.
+const maxUnavailableListingBytes = 300
+
 // workItemEvidence is what the harness knows about the code a work item concerns
 // before any of it exists: the item's own prose. Scope selection is textual over
 // this, so an item that names the package it is about pulls in the invariants
@@ -1473,6 +1505,15 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		if decision == review.DecisionApprove {
 			return nil
 		}
+		// An upheld refusal ends the loop rather than going round it. The reviewer
+		// has said the developer stopped correctly, and what the change is waiting
+		// for is upstream of this run: another attempt would be the same refusal
+		// again at best, and at worst the developer inventing the decision nobody
+		// has made. It is recorded as a blocker rather than an approval because
+		// there is nothing to integrate and somebody has to decide the upstream.
+		if decision == review.DecisionRefusalUpheld {
+			return a.blockOnUpheldRefusal()
+		}
 		if a.state.RepairAttempts >= limit {
 			return a.blockOnUnresolvedFindings(limit)
 		}
@@ -1545,6 +1586,18 @@ func (a *activeRun) blockOnUnresolvedFindings(limit int) error {
 		a.state.RepairAttempts, limit, a.outcome.ReviewSummary)
 	if err := a.block(renderBlockerNotes(a.outcome, limit)); err != nil {
 		return errors.Join(cause, fmt.Errorf("record unresolved review findings as a blocker: %w", err))
+	}
+	return cause
+}
+
+// blockOnUpheldRefusal ends a run the reviewer agreed had stopped correctly. It
+// spends no repair attempt and reports no budget, because nothing about the
+// change is what stopped it: the item is recorded as waiting on the upstream
+// decision the refusal named, which is a person's or an owning role's to make.
+func (a *activeRun) blockOnUpheldRefusal() error {
+	cause := fmt.Errorf("the developer refused to implement this item and the independent review upheld the refusal: %s", a.outcome.ReviewSummary)
+	if err := a.block(renderUpheldRefusalNotes(a.outcome)); err != nil {
+		return errors.Join(cause, fmt.Errorf("record the upheld refusal as a blocker: %w", err))
 	}
 	return cause
 }
@@ -1836,6 +1889,9 @@ func (a *activeRun) recordDevelopment(ctx context.Context, providerResult backen
 	// summary stays the account of the work and the report reaches the operator
 	// instead of sitting in prose nothing surfaces.
 	a.outcome.Summary = a.collectFromReply(domain.RoleDeveloper, providerResult.FinalText)
+	// The same account is made durable, because the reviewer is shown it and the
+	// process that reviews a change is routinely not the one that developed it.
+	a.state.DeveloperSummary = a.outcome.Summary
 	if err := p.Store.Save(a.state); err != nil {
 		return fmt.Errorf("save developer outcome state: %w", err)
 	}
@@ -3610,10 +3666,15 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		Invariants:   a.reviewedInvariants(changes).Text(),
 		WorktreePath: a.worktree.Path,
 		Changes:      changes,
-		Checks:       a.outcome.Checks,
-		RedactValues: p.RedactValues,
-		LastSequence: a.state.LastSequence,
-		EventSink:    a.sink,
+		// The developer's own account is read from durable state rather than from
+		// this process's outcome, because the process that reviews a change is
+		// routinely not the one that developed it.
+		DeveloperSummary: a.state.DeveloperSummary,
+		Repository:       a.reviewedRepository(ctx),
+		Checks:           a.outcome.Checks,
+		RedactValues:     p.RedactValues,
+		LastSequence:     a.state.LastSequence,
+		EventSink:        a.sink,
 	})
 	if result.LastSequence > a.state.LastSequence {
 		a.state.LastSequence = result.LastSequence
@@ -3638,7 +3699,7 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		a.outcome.ReviewSummary = result.Verdict.Summary
 		a.outcome.ReviewFindings = result.Verdict.Findings
 	}
-	if result.Decision == review.DecisionApprove || result.Decision == review.DecisionRepair {
+	if result.Decision.Valid() {
 		a.state.ReviewDecision = string(result.Decision)
 		a.outcome.ReviewDecision = result.Decision
 		// One round with a reviewer is a verdict, whichever way it went, and the
@@ -4100,6 +4161,27 @@ func renderBlockerNotes(outcome Outcome, limit int) string {
 		"Branch: " + outcome.Branch,
 		"Worktree: " + outcome.WorktreePath,
 		"The branch and worktree are preserved; the unresolved findings below need a replan or a reassignment.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderUpheldRefusalNotes describes a run the reviewer agreed had stopped
+// correctly. Like the refused-path blocker it names a decision somebody has to
+// take rather than a defect somebody has to fix, and unlike every other blocker
+// here it is not about a budget: nothing was spent that another attempt would
+// spend better, and saying how many attempts were left would invite exactly the
+// attempt the verdict says is wrong.
+func renderUpheldRefusalNotes(outcome Outcome) string {
+	lines := []string{
+		"Yoyodyne stopped this item: the developer refused to implement it, and the independent reviewer upheld the refusal.",
+		"This is not a defect in the change. The work waits on something upstream that nobody has decided, and the developer said so rather than guessing at it.",
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"The branch and worktree are preserved. Deciding the upstream is what unblocks this; another developer attempt would produce the same refusal or an unauthorized design.",
+	}
+	if outcome.Summary != "" {
+		lines = append(lines, "The developer's reasoning:\n"+outcome.Summary)
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }

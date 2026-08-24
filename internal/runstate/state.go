@@ -98,6 +98,12 @@ const (
 const (
 	ReviewApprove = "approve"
 	ReviewRepair  = "repair"
+	// ReviewRefusalUpheld is a review that agreed the developer was right not to
+	// implement the item, because it waits on something upstream nobody has
+	// decided. It approves nothing: every gate here asks whether the decision is
+	// ReviewApprove, so a run carrying this one integrates exactly as little as a
+	// run carrying a repair does.
+	ReviewRefusalUpheld = "refusal_upheld"
 )
 
 const (
@@ -613,7 +619,19 @@ type State struct {
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
 	// when the run is picked up again.
-	TargetBranch        string `json:"target_branch,omitempty"`
+	TargetBranch string `json:"target_branch,omitempty"`
+	// DeveloperSummary is the developer's own account of its last attempt: what it
+	// changed, what it verified, and where it refused to implement something, why.
+	// It is durable because the reviewer is shown it and a run is routinely
+	// reviewed by a later process than the one that developed it — a resumed run
+	// holding the account only in memory would hand the reviewer the same silence
+	// that had three consecutive reviews judging against a summary they never saw.
+	//
+	// It is replaced by each attempt rather than accumulated, for the reason the
+	// review evidence beside it is cleared: what the reviewer is judging is the
+	// change now in the worktree, and an earlier attempt's account describes one
+	// that is gone.
+	DeveloperSummary    string `json:"developer_summary,omitempty"`
 	ReviewSessionID     string `json:"review_session_id,omitempty"`
 	ReviewModel         string `json:"review_model,omitempty"`
 	ReviewResolvedModel string `json:"review_resolved_model,omitempty"`

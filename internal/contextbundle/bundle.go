@@ -636,18 +636,35 @@ const blocksDependency = "blocks"
 // A dependency whose own item is closed is not something anybody is waiting for,
 // and it is left out rather than listed as satisfied: what this line is for is
 // what is still outstanding.
+// The state each blocker is in is carried beside the identifiers, and so is what
+// waiting means for a reader judging the change. An identifier on its own says
+// an item waits and says nothing a reviewer can act on, which is how a reviewer
+// judging work that was correctly refused for an undecided upstream came to issue
+// findings telling the developer to implement it anyway.
 func renderDependencies(item beads.WorkItem) string {
 	var waiting []string
+	states := make(map[string]string, len(item.Dependencies))
 	for _, dependency := range item.Dependencies {
 		if dependency.Type == blocksDependency && dependency.Status != "closed" {
 			waiting = append(waiting, dependency.ID)
+			states[dependency.ID] = dependency.Status
 		}
 	}
 	if len(waiting) == 0 {
 		return "nothing; no unfinished work blocks this item"
 	}
 	sort.Strings(waiting)
-	return strings.Join(waiting, ", ") + " (unfinished work this item waits on)"
+	described := make([]string, 0, len(waiting))
+	for _, id := range waiting {
+		state := states[id]
+		if strings.TrimSpace(state) == "" {
+			state = "in a state the tracker did not name"
+		}
+		described = append(described, id+" is "+state)
+	}
+	return strings.Join(waiting, ", ") + " (unfinished work this item waits on)" +
+		"\nAs the tracker holds them: " + strings.Join(described, ", ") + "." +
+		"\nWork this item waits on is work that is not settled. A change written as though it were is judged differently from one written after it was, and a change that stopped short because of it may be right to have stopped rather than incomplete."
 }
 
 func emptyFallback(value string) string {

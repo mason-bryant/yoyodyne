@@ -470,13 +470,20 @@ func checksBehind(state runstate.State) bool {
 	}
 }
 
-// verdictGiven reports a record that holds a reviewer's verdict at all. The
-// record passes through no verdict twice per round — it is cleared before each
-// review runs and written again when that review answers — so the absence is a
-// real state of a run rather than only the state of one that has never been
+// verdictGiven reports a record that holds a verdict this line has words for.
+// The record passes through no verdict twice per round — it is cleared before
+// each review runs and written again when that review answers — so the absence is
+// a real state of a run rather than only the state of one that has never been
 // reviewed.
+//
+// An upheld refusal is deliberately not one of them. It is neither an approval
+// nor a request for repairs, and reporting it as the second — which is what a
+// line with two kinds and three verdicts would do — is the reviewer's judgement
+// said backwards. The run that carries one blocks its item immediately
+// afterwards, and the blocker says in words what the reviewer decided, so what
+// this omits is a mislabel rather than the news.
 func verdictGiven(state runstate.State) bool {
-	return state.ReviewDecision != ""
+	return state.ReviewDecision == runstate.ReviewApprove || state.ReviewDecision == runstate.ReviewRepair
 }
 
 // parked reports a run stopped short of finishing with an instruction to resume:

@@ -21,6 +21,19 @@ type Decision string
 const (
 	DecisionApprove Decision = "approve"
 	DecisionRepair  Decision = "repair"
+	// DecisionRefusalUpheld is the verdict for a change that is a reasoned
+	// refusal to implement: the developer stopped because the work is blocked on
+	// something upstream that nobody has decided, and said so instead of guessing
+	// at it. It is terminal rather than repairable, which is the whole of why it
+	// exists. Handing such a change back as findings is repair pressure toward a
+	// design no owner has settled, and the developer either invents one or spends
+	// the item's remaining attempts refusing again.
+	//
+	// It approves nothing and integrates nothing: what it says is that the run
+	// stopped correctly and the thing to do about it is upstream. It is a
+	// work-item verdict only, because a branch review judges commits already
+	// integrated and has no refusal in front of it to uphold.
+	DecisionRefusalUpheld Decision = "refusal_upheld"
 )
 
 type Severity string
@@ -42,9 +55,24 @@ type Finding struct {
 	Severity Severity  `json:"severity"`
 	Message  string    `json:"message"`
 	Location *Location `json:"location,omitempty"`
+	// Absent is the repository path this finding says is not there. It exists so
+	// that the one claim a reviewer cannot make from a diff is made in a field
+	// something can check, rather than in prose nothing can: a file the change
+	// never touched is absent from the patch whatever the repository holds, and a
+	// reviewer that reads the second out of the first has twice directed a
+	// developer to add what was already there. A finding that names a path here is
+	// refused unless the evidence carried a complete listing of the repository and
+	// that listing does not hold it.
+	//
+	// The check is on this field and not on the sentence beside it, so what it
+	// enforces is that a checkable claim is checked. A reviewer that asserts an
+	// absence in prose alone is outside it, which is why the contract asks for the
+	// field rather than merely permitting it.
+	Absent string `json:"absent,omitempty"`
 }
 
-// Verdict is the reviewer's approve-or-repair decision on one change.
+// Verdict is the reviewer's decision on one change: approve it, repair it, or —
+// where the change is a reasoned refusal to implement — uphold that refusal.
 type Verdict struct {
 	Decision Decision  `json:"decision"`
 	Summary  string    `json:"summary"`
@@ -115,7 +143,7 @@ func Decode(data []byte) (Verdict, []string, error) {
 // disagree about what the contract defines.
 var (
 	verdictFields  = []string{"decision", "summary", "findings"}
-	findingFields  = []string{"severity", "message", "location"}
+	findingFields  = []string{"severity", "message", "location", "absent"}
 	locationFields = []string{"file", "line"}
 )
 
@@ -169,7 +197,7 @@ func unknownKeys(fields map[string]json.RawMessage, prefix string, known []strin
 func (v Verdict) Validate() error {
 	var problems []error
 	if !v.Decision.Valid() {
-		problems = append(problems, fmt.Errorf("decision %q must be %q or %q", v.Decision, DecisionApprove, DecisionRepair))
+		problems = append(problems, fmt.Errorf("decision %q must be %q, %q, or %q", v.Decision, DecisionApprove, DecisionRepair, DecisionRefusalUpheld))
 	}
 	if strings.TrimSpace(v.Summary) == "" {
 		problems = append(problems, errors.New("summary is required"))
@@ -193,6 +221,11 @@ func (v Verdict) Validate() error {
 // finding, because a change that still needs that work is not approved
 // whatever the reviewer labelled it. Repair stays authoritative for any valid
 // finding, including a purely minor one.
+//
+// An upheld refusal is held to the approval rule rather than the repair one, and
+// for the same reason: a finding at blocker or major severity is work the change
+// still has to do, and a verdict that says the run stopped correctly while also
+// saying what it must go and do is two answers rather than one.
 func (v Verdict) Resolve() (Decision, error) {
 	if err := v.Validate(); err != nil {
 		return "", err
@@ -207,9 +240,9 @@ func (v Verdict) Resolve() (Decision, error) {
 		}
 	}
 	if len(actionable) > 0 {
-		return "", fmt.Errorf("contradictory review verdict: approve carries %d %s finding(s) that require repair", len(actionable), strings.Join(uniqueStrings(actionable), " and "))
+		return "", fmt.Errorf("contradictory review verdict: %s carries %d %s finding(s) that require repair", v.Decision, len(actionable), strings.Join(uniqueStrings(actionable), " and "))
 	}
-	return DecisionApprove, nil
+	return v.Decision, nil
 }
 
 // Validate reports every contract violation in the finding at once.
@@ -226,7 +259,33 @@ func (f Finding) Validate() error {
 			problems = append(problems, fmt.Errorf("location: %w", err))
 		}
 	}
+	// An absence claim is checked against a listing of repository-relative paths,
+	// so one written any other way could not be checked at all — and a claim that
+	// silently could not be checked is exactly what this field exists to end.
+	if f.Absent != "" {
+		if err := validateAbsentPath(f.Absent); err != nil {
+			problems = append(problems, fmt.Errorf("absent: %w", err))
+		}
+	}
 	return errors.Join(problems...)
+}
+
+// validateAbsentPath holds an absence claim to a repository-relative path. The
+// listing it is checked against is what Git reports the repository holds, and
+// nothing in that listing is absolute or reaches outside the repository, so a
+// claim written that way would be refuted by the shape of the evidence rather
+// than by what it says.
+func validateAbsentPath(claimed string) error {
+	trimmed := strings.TrimSpace(claimed)
+	switch {
+	case trimmed == "":
+		return errors.New("path is required")
+	case strings.HasPrefix(trimmed, "/"):
+		return fmt.Errorf("path %q must be repository-relative", claimed)
+	case trimmed == ".." || strings.HasPrefix(trimmed, "../"):
+		return fmt.Errorf("path %q must be inside the repository", claimed)
+	}
+	return nil
 }
 
 // Validate rejects locations that cannot point at a place in the change.
@@ -255,7 +314,7 @@ func uniqueStrings(values []string) []string {
 }
 
 func (d Decision) Valid() bool {
-	return d == DecisionApprove || d == DecisionRepair
+	return d == DecisionApprove || d == DecisionRepair || d == DecisionRefusalUpheld
 }
 
 func (s Severity) Valid() bool {

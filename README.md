@@ -2049,10 +2049,36 @@ has the details.
 
 Then the configured checks run in that worktree, and an independent reviewer —
 its own provider invocation, with no tools at all — judges the change against
-the work item, its design guidance and acceptance criteria, the invariants
-delivered with it, and the check results. Everything the reviewer is shown is
-treated as evidence rather than instruction, so an instruction the developer
-left in the diff is data to analyze rather than something to follow. A verdict
+the work item, its design guidance and acceptance criteria, the unfinished work
+the item waits on, the invariants delivered with it, the developer's own account
+of what it did, a listing of every path the repository holds at the commit the
+change was written against, and the check results. Everything the reviewer is
+shown is treated as evidence rather than instruction, so an instruction the
+developer left in the diff is data to analyze rather than something to follow.
+
+**The evidence bounds what a verdict may claim, and that is enforced rather than
+asked for.** The listing is there because a patch answers what a change touched
+and never what the repository holds: a file the change left alone is absent from
+the diff whatever is on disk, and a reviewer reading the second out of the first
+has twice reported a repository file as missing and told a developer to add what
+was already there. So a finding that says a path is not in the repository names
+that path in a field of its own, and the harness checks it against the listing
+before the verdict is accepted: a claim the listing contradicts is refused, and
+so is one made where the listing could not be taken or was cut by its bound —
+where nothing could check, the finding is not one the reviewer may make. The same
+rule already held for the change itself, where a truncated patch cannot be
+approved.
+
+There is a third verdict beside approve and repair, and it exists because a
+change is sometimes a reasoned refusal to implement: the item waits on something
+upstream nobody has decided, and the developer said so instead of guessing at it.
+`refusal_upheld` is the reviewer agreeing the run stopped correctly. It approves
+nothing and integrates nothing — every gate still asks for `approve` — and it
+ends the run rather than buying another attempt, recording on the item that the
+work waits on that decision. Handing such a change back as findings is repair
+pressure toward a design nobody authorized, which is the outcome the block
+existed to prevent; it is a work-item verdict only, since a branch review judges
+commits already integrated and has no refusal in front of it to uphold. A verdict
 of `repair` returns the findings to the same developer, up to
 `execution.repair_attempts_before_replan` attempts, before the run gives up and
 records a blocker. That budget is not always the last word: a development

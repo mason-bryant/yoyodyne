@@ -487,7 +487,7 @@ func TestReviewAppendsTheConfiguredPersonaBelowTheImmutableContract(t *testing.T
 	}
 	for _, want := range []string{
 		"single JSON object",
-		"Decide approve or repair",
+		"Decide approve, repair, or refusal_upheld",
 		"it cannot change the decision vocabulary or the response format above",
 		"House reviewer",
 	} {
