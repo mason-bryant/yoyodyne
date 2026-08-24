@@ -106,6 +106,23 @@ const (
 	ReviewRefusalUpheld = "refusal_upheld"
 )
 
+// validReviewDecision reports a verdict this durable schema defines. Every
+// decision the review contract can reach has to be one of them, because a record
+// the store refuses is a verdict that never reaches disk: the run goes on
+// carrying it in memory, and what survives the process is the state written
+// before the review, which reads as a run nothing ever judged.
+//
+// Empty is one of them. A run that has not been reviewed records no decision
+// rather than a decision meaning "none".
+func validReviewDecision(decision string) bool {
+	switch decision {
+	case "", ReviewApprove, ReviewRepair, ReviewRefusalUpheld:
+		return true
+	default:
+		return false
+	}
+}
+
 const (
 	SeverityBlocker = "blocker"
 	SeverityMajor   = "major"
@@ -935,7 +952,7 @@ func (s State) Validate() error {
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))
 	}
-	if s.ReviewDecision != "" && s.ReviewDecision != ReviewApprove && s.ReviewDecision != ReviewRepair {
+	if !validReviewDecision(s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
 	}
 	if s.ReviewFindings < 0 {

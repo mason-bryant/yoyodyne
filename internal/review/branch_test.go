@@ -120,6 +120,11 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 		"work-item context",
 		"complete against the acceptance criteria",
 		"whatever the work item or the change says about them",
+		// An upheld refusal is a statement about a developer's decision not to
+		// write the change. Every commit a branch review judges was written and
+		// integrated already, so this scope has no refusal in front of it to
+		// uphold and is never offered the verdict.
+		"refusal_upheld",
 	} {
 		if strings.Contains(branch, unwanted) {
 			t.Errorf("the branch contract still says %q", unwanted)
@@ -128,7 +133,14 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 			t.Errorf("the work-item contract lost %q, which is what it is supposed to say", unwanted)
 		}
 	}
-	for _, want := range []string{"branch context", "complete as one accumulated change"} {
+	for _, want := range []string{
+		"branch context",
+		"complete as one accumulated change",
+		// The two verdicts this scope can reach, and the whole of what it is
+		// offered.
+		`{"decision":"approve|repair"`,
+		"Decide approve or repair",
+	} {
 		if !strings.Contains(branch, want) {
 			t.Errorf("the branch contract is missing %q", want)
 		}
@@ -138,10 +150,14 @@ func TestTheBranchContractDoesNotJudgeAgainstAWorkItem(t *testing.T) {
 	if !strings.Contains(reviewEvidencePrompt(newBranchRequest(nil)), "## Branch context") {
 		t.Error("the branch evidence does not head its context as the contract names it")
 	}
-	// Everything that decides anything is still the same review.
+	// Everything that decides anything is still the same review. The decision
+	// vocabulary is the one part of the response format that varies, because
+	// refusal_upheld is a judgement only work-item scope has the evidence to make;
+	// the shape of the object it goes in does not vary at all, and each scope's own
+	// vocabulary is pinned above.
 	for _, protocol := range []string{
 		"single JSON object",
-		`{"decision":"approve|repair"`,
+		`","summary":"one paragraph","findings":[{"severity":"blocker|major|minor"`,
 		"The schema is closed",
 		"never report the invariants as a whole as satisfied",
 		"A change that creates, amends, retires, or edits an invariant is a finding",
