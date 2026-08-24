@@ -387,6 +387,30 @@ branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
 
+The same sweep bounds what the repository's worktree bookkeeping carries, which
+is hygiene of a different kind: every registration is a path an agent's sandbox
+profile carries on **every command it spawns**, so bookkeeping that grows with
+the harness's history eventually stops a developer running anything at all —
+`make check`, `go test`, `bd`, a bare `echo`. That failure looks like a broken
+machine rather than like a worktree nobody removed, which is why the bound is
+here rather than in a habit. Two steps hold it. Registrations whose checkout is
+already gone are **pruned**, which is the only step that reaches bookkeeping no
+run record knows about — a checkout somebody deleted by hand leaves nothing for
+a removal to be pointed at. And a settled run's preserved checkout is
+**retired**, on either of two claims: a later run of the same work item has
+landed the work it was holding, or it has fallen past the tail of the eight most
+recent settled checkouts, which are the ones somebody looking into a stoppage
+still opens.
+
+Neither can lose work, and the difference between them is worth knowing. A
+checkout holding **uncommitted work** is kept whatever the tail says, because
+nothing else records it. **No branch is deleted** by either step: what a retired
+registration leaves behind is commits on a branch that only the ordinary sweep
+above removes, and only on proof the target already carries them. And what was
+removed is written onto that run's own record under the run's own lease, so
+`yoyo status` and the triage docket stop naming a directory that is gone rather
+than sending somebody to open it.
+
 Repeating the whole thing is safe — a settled run is no longer outstanding, a
 branch already level with the remote has nothing to catch up to, and cleanup
 over artifacts that are already gone does nothing. A run another process still holds

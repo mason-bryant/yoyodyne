@@ -443,6 +443,21 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if !inspection.Registered || inspection.Branch != branch {
 		return worktree, errors.New("created worktree is not registered with the expected branch")
 	}
+	// A checkout of a commit holds that commit's tracked files and nothing else,
+	// so an untracked file in it at this moment came from somewhere other than the
+	// commit it was created from. A developer cannot tell that from its own work:
+	// what it reads through a file listing looks exactly like its branch, and it
+	// has no way to ask Git which half is which if its shell is unavailable. That
+	// is not hypothetical — another effort's outputs sitting untracked in a run's
+	// worktree had a developer building against files its branch did not have,
+	// while two reviewers correctly reported them absent from the change.
+	stray, err := m.untrackedFiles(ctx, path)
+	if err != nil {
+		return worktree, fmt.Errorf("inspect the created worktree for files that are not its branch's: %w", err)
+	}
+	if len(stray) > 0 {
+		return worktree, fmt.Errorf("created worktree %s holds %d untracked file(s) that are not its branch's, starting with %s; it has to be inspected by hand", path, len(stray), stray[0])
+	}
 	return worktree, nil
 }
 

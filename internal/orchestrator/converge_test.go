@@ -1,11 +1,19 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // The seam the operator drew a line under: a merge the forge performs after its
@@ -224,6 +232,210 @@ func TestACatchupHeldDuringSettleIsFinishedByALaterSweep(t *testing.T) {
 	remote := publishedCommit(t, fixture.remote, "main")
 	if local := publishedCommit(t, fixture.repository, "main"); local != remote {
 		t.Errorf("local main = %q, want the remote tip %q after the sweep", local, remote)
+	}
+}
+
+// The failure this bound exists for: registrations that accumulate with the
+// harness's history until an agent's sandbox profile is too large to spawn a
+// command with. A settled run keeps its checkout while it is recent, and a run a
+// later one has already landed the work of gives its checkout up whenever it
+// stopped.
+func TestRetirableCheckoutsKeepATailAndTakeWhatASuccessorLanded(t *testing.T) {
+	t.Parallel()
+
+	opened := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC)
+	recorded := make([]runstate.State, 0, retainedSettledCheckouts+2)
+	for index := 0; index <= retainedSettledCheckouts; index++ {
+		recorded = append(recorded, settledCheckout(
+			fmt.Sprintf("run-%032d", index),
+			fmt.Sprintf("yoyodyne-item-%d", index),
+			opened.Add(time.Duration(index)*time.Hour)))
+	}
+	oldest := recorded[0]
+	newest := recorded[len(recorded)-1]
+	// A later run of the newest item's work reached the target branch, which is
+	// what answers what that checkout was holding.
+	landed := settledCheckout("run-ffffffffffffffffffffffffffffffff", newest.WorkItemID, newest.StartedAt.Add(time.Hour))
+	landed.WorktreeRemoved = true
+	landed.Integration = &runstate.Integration{TargetBranch: "main"}
+	recorded = append(recorded, landed)
+
+	candidates := retirableCheckouts(recorded)
+	if len(candidates) != 2 {
+		t.Fatalf("candidates = %#v, want the oldest past the tail and the superseded one", candidates)
+	}
+	retirable := map[string]string{}
+	for _, candidate := range candidates {
+		retirable[candidate.state.RunID] = candidate.superseded
+	}
+	superseded, taken := retirable[newest.RunID]
+	if !taken || superseded != landed.RunID {
+		t.Errorf("the superseded checkout = %q, taken = %t, want it retired naming run %s", superseded, taken, landed.RunID)
+	}
+	if reason, taken := retirable[oldest.RunID]; !taken || reason != "" {
+		t.Errorf("the oldest checkout = %q, taken = %t, want it retired for being past the tail", reason, taken)
+	}
+}
+
+// A run that still owes a step is never a candidate, for the reason its branch
+// is not: settling it may yet need what it left behind.
+func TestRetirableCheckoutsLeaveARunThatStillOwesAStepAlone(t *testing.T) {
+	t.Parallel()
+
+	opened := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC)
+	inFlight := settledCheckout("run-0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e", "yoyodyne-in-flight", opened)
+	inFlight.Status = runstate.StatusRunning
+	inFlight.CompletedAt = nil
+	landed := settledCheckout("run-0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d", inFlight.WorkItemID, opened.Add(time.Hour))
+	landed.WorktreeRemoved = true
+	landed.Integration = &runstate.Integration{TargetBranch: "main"}
+
+	if candidates := retirableCheckouts([]runstate.State{inFlight, landed}); len(candidates) != 0 {
+		t.Fatalf("candidates = %#v, want a run that owes a step left alone", candidates)
+	}
+}
+
+// settledCheckout is a terminal run that left a checkout behind and nothing else
+// to do.
+func settledCheckout(runID, workItemID string, startedAt time.Time) runstate.State {
+	completed := startedAt
+	return runstate.State{
+		RunID:        runID,
+		WorkItemID:   workItemID,
+		Status:       runstate.StatusFailed,
+		StartedAt:    startedAt,
+		UpdatedAt:    startedAt,
+		CompletedAt:  &completed,
+		WorktreePath: "/checkouts/" + runID,
+	}
+}
+
+// The scope addition the publication sweep deliberately left open: it retires
+// remote branches only, because a preserved checkout may hold work nothing else
+// records. A run a later one has landed the work of is the case where something
+// else does record it, so the checkout goes — and the run's own record says so,
+// because `yoyo status` and the triage docket both read that record as the
+// answer to whether the directory is still there.
+func TestConvergeRetiresTheCheckoutASupersededRunPreserved(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:                execution.OSProcessRunner{},
+		RepositoryRoot:        repository,
+		WorktreeRoot:          worktreeRoot,
+		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+	})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	stoppedRunID := "run-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+	landedRunID := "run-11112222333344445555666677778888"
+	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
+		RunID:        stoppedRunID,
+		WorkItemID:   tracker.item.ID,
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Deliberately in the past: the sweep stamps UpdatedAt from the real clock as
+	// it records the removal, and a record whose update predates its own start is
+	// one the store refuses.
+	stoppedAt := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC)
+	stopped := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         stoppedRunID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    tracker.item.ID,
+		Backend:       "claude-code",
+		Status:        runstate.StatusFailed,
+		Phase:         runstate.PhaseDeveloping,
+		StartedAt:     stoppedAt,
+		UpdatedAt:     stoppedAt,
+		CompletedAt:   &stoppedAt,
+		WorktreePath:  worktree.Path,
+		Branch:        worktree.Branch,
+		BaseCommit:    worktree.BaseCommit,
+		TargetBranch:  "main",
+	}
+	if err := store.Create(stopped); err != nil {
+		t.Fatalf("Create() stopped run error = %v", err)
+	}
+	landedAt := stoppedAt.Add(time.Hour)
+	promoted := strings.Repeat("a", 40)
+	landed := runstate.State{
+		SchemaVersion:     runstate.StateSchemaVersion,
+		RunID:             landedRunID,
+		ProductID:         "yoyodyne",
+		RepositoryID:      "yoyodyne",
+		WorkItemID:        tracker.item.ID,
+		Backend:           "claude-code",
+		Status:            runstate.StatusSucceeded,
+		Phase:             runstate.PhaseComplete,
+		StartedAt:         landedAt,
+		UpdatedAt:         landedAt,
+		CompletedAt:       &landedAt,
+		WorktreePath:      filepath.Join(worktreeRoot, "yoyodyne-task-11112222"),
+		Branch:            "yoyodyne/yoyodyne-task/11112222",
+		BaseCommit:        worktree.BaseCommit,
+		TargetBranch:      "main",
+		ProviderSessionID: "developer-session",
+		ProviderModel:     "opus",
+		ReviewSessionID:   "reviewer-session",
+		ReviewModel:       "opus",
+		ReviewDecision:    runstate.ReviewApprove,
+		WorktreeRemoved:   true,
+		BranchRemoved:     true,
+		Integration: &runstate.Integration{
+			TargetBranch:         "main",
+			SourceCommit:         promoted,
+			TargetCommit:         promoted,
+			PreviousTargetCommit: worktree.BaseCommit,
+		},
+	}
+	if err := store.Create(landed); err != nil {
+		t.Fatalf("Create() landed run error = %v", err)
+	}
+
+	convergence, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge() error = %v", err)
+	}
+	if len(convergence.Checkouts) != 1 {
+		t.Fatalf("checkouts = %#v, want the superseded run's checkout swept", convergence.Checkouts)
+	}
+	swept := convergence.Checkouts[0]
+	if !swept.Removed || swept.Failure != "" || swept.Kept != "" {
+		t.Fatalf("sweep = %#v, want the checkout retired", swept)
+	}
+	if swept.RunID != stoppedRunID || swept.Superseded != landedRunID || swept.Path != worktree.Path {
+		t.Errorf("sweep = %#v, want run %s retired because run %s landed", swept, stoppedRunID, landedRunID)
+	}
+	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+		t.Errorf("the checkout is still on disk: %v", err)
+	}
+	// The record is the half every other reader asks. A removal nobody wrote down
+	// sends `yoyo status` and the docket after a directory that is gone.
+	recorded, err := store.Load(stoppedRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.WorktreeRemoved || recorded.ArtifactsRetiredBy != landedRunID {
+		t.Errorf("recorded = %#v, want the removal recorded against the run that superseded it", recorded)
+	}
+	// Sweeping again is what every later reconcile does, and a checkout already
+	// retired is not swept twice.
+	repeated, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("second Converge() error = %v", err)
+	}
+	if len(repeated.Checkouts) != 0 {
+		t.Fatalf("second convergence = %#v, want nothing left to retire", repeated.Checkouts)
 	}
 }
 

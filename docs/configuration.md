@@ -1728,7 +1728,14 @@ own check of the remote target then refuses rather than force-resolves.
 supported and does exactly half of the above: the harness pushes and opens the
 pull request, and then stops. **It merges nothing.** You get an open pull
 request, a run branch that stays on the remote, and a preserved worktree; you
-merge, and the harness never touches any of the three afterwards.
+merge, and the harness promotes, merges, and deletes none of the three
+afterwards. The one thing it does eventually do to them is bounded and is not a
+promotion: `yoyo reconcile` retires the *checkout* of a settled run once a later
+run has landed that work or once it falls past the tail of recent ones kept —
+never the branch, never a checkout holding uncommitted work, and never anything
+that would change what you are being asked to merge. See
+[recovering interrupted runs](operations.md#recovering-interrupted-runs) for why
+that bound exists.
 
 That is deliberate rather than a gap. Merging is a promotion, promotion is what
 `approvals.integration` governs, and a harness that merged under a `human`

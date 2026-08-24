@@ -32,6 +32,71 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
+// Prune is what one pass over the repository's worktree bookkeeping removed:
+// the registrations whose checkout is no longer on disk, and how many
+// registrations the repository is left carrying.
+//
+// The count is reported rather than left for a caller to work out, because it is
+// the number that matters. Every registration is a path an agent's sandbox
+// profile carries on every command it spawns, so bookkeeping that grows with the
+// harness's history eventually stops a developer running anything at all — which
+// is a failure that looks like a broken machine rather than like a worktree
+// nobody removed.
+type Prune struct {
+	Pruned     []string `json:"pruned,omitempty"`
+	Registered int      `json:"registered"`
+}
+
+// PruneRegistrations removes the registrations Git judges stale — the ones whose
+// checkout directory is gone — and reports what went and what is left.
+//
+// It is the one removal here that reaches a registration no run record knows
+// about: a checkout somebody deleted by hand leaves bookkeeping the run's own
+// path-by-name removal can no longer act on, because there is no directory left
+// for `git worktree remove` to be pointed at.
+//
+// It queues on the registry lease for the reason every other write to that
+// bookkeeping does, and for one more: a prune reaching a registration another
+// run is still filling in deletes it out from under that run, which is exactly
+// the loss the lease exists to prevent.
+func (m *Manager) PruneRegistrations(ctx context.Context) (Prune, error) {
+	lease, err := m.leaseRegistry(ctx)
+	if err != nil {
+		return Prune{}, err
+	}
+	defer func() { _ = lease.release() }()
+
+	before, err := m.listWorktrees(ctx)
+	if err != nil {
+		return Prune{}, err
+	}
+	pruned, err := m.run(ctx, "-C", m.repositoryRoot, "worktree", "prune")
+	if err != nil {
+		return Prune{}, err
+	}
+	if pruned.Status != execution.ProcessSucceeded {
+		return Prune{}, fmt.Errorf("prune stale worktree registrations failed with exit code %d: %s", pruned.ExitCode, strings.TrimSpace(pruned.Stderr))
+	}
+	after, err := m.listWorktrees(ctx)
+	if err != nil {
+		return Prune{}, err
+	}
+	// What went is worked out from the two listings rather than from what the
+	// prune printed. That output is Git's own to word and to change; the listing
+	// is the same bookkeeping every other decision here is made from.
+	kept := make(map[string]struct{}, len(after))
+	for _, entry := range after {
+		kept[entry.path] = struct{}{}
+	}
+	prune := Prune{Registered: len(after)}
+	for _, entry := range before {
+		if _, survived := kept[entry.path]; !survived {
+			prune.Pruned = append(prune.Pruned, entry.path)
+		}
+	}
+	return prune, nil
+}
+
 // WorktreeRemoval is what one attempt to retire a preserved worktree found.
 // Kept is why it was left where it is, and is empty both when the worktree was
 // removed and when there was nothing there to remove — Removed is what tells

@@ -36,6 +36,13 @@ type ReconcileWorktrees interface {
 	// once the target is proven to carry its work.
 	CatchUpTarget(ctx context.Context, targetBranch string) (gitworktree.Catchup, error)
 	RemoveMergedBranch(ctx context.Context, branch, targetBranch string) (gitworktree.Removal, error)
+	// The two convergence uses to bound what the repository's worktree
+	// bookkeeping accumulates. Neither can lose work: a checkout holding anything
+	// uncommitted is kept, a registration is only ever removed by the name the run
+	// recorded or because its directory is already gone, and no branch is touched
+	// by either.
+	RemovePreservedWorktree(ctx context.Context, worktree gitworktree.Worktree) (gitworktree.WorktreeRemoval, error)
+	PruneRegistrations(ctx context.Context) (gitworktree.Prune, error)
 }
 
 // ReconcilePullRequests is the forge access reconciliation needs: what the

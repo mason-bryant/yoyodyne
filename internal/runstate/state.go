@@ -52,7 +52,10 @@ import (
 // further repair attempts triage has continued a stopped run on are the newest
 // and behave identically: absent means nothing ever continued this run, which is
 // what every run written before triage could meant, and the configured budget is
-// then the whole of what bounded its repairs.
+// then the whole of what bounded its repairs. The checkout the convergence sweep
+// retired is the newest and behaves the same way: absent means no sweep ever
+// removed this run's preserved checkout, which is what every run written before
+// the registrations were bounded meant.
 const StateSchemaVersion = 1
 
 // The shape of the two things a run records about how it was configured. They
@@ -609,6 +612,18 @@ type State struct {
 	// Absent is every run whose artifacts it removed itself, which is all of them
 	// until triage retires one.
 	ArtifactsRetiredBy string `json:"artifacts_retired_by,omitempty"`
+	// CheckoutRetired records that the convergence sweep removed this settled
+	// run's preserved checkout to keep the repository's worktree registrations
+	// bounded. It is the third way a removal is earned, beside a promotion of the
+	// run's own and a successor that superseded it, and it is deliberately the
+	// weakest of the three: it earns the removal of a registration and never of a
+	// branch, because a registration whose directory held nothing uncommitted
+	// loses nothing while every commit it carried is still on a branch the sweep
+	// only ever deletes on proof the target already carries it.
+	//
+	// Absent is every run whose checkout nothing swept, which is all of them until
+	// the tail of kept checkouts moves past one.
+	CheckoutRetired bool `json:"checkout_retired,omitempty"`
 	// TargetBranch is the integration target fixed when the worktree was
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
@@ -1098,12 +1113,22 @@ func (s State) Validate() error {
 		}
 	}
 	// A removal is only ever recorded with the evidence that earned it. There are
-	// two kinds: the run promoted its own work and cleaned up after it, or triage
-	// retired what it preserved once another run superseded it. A record carrying
-	// neither describes cleanup nothing authorized.
+	// three kinds: the run promoted its own work and cleaned up after it, triage
+	// retired what it preserved once another run superseded it, or the convergence
+	// sweep retired a settled run's checkout to keep the registrations bounded. A
+	// record carrying none of them describes cleanup nothing authorized.
 	retiredBy := strings.TrimSpace(s.ArtifactsRetiredBy)
-	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
+	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" && !s.CheckoutRetired {
 		problems = append(problems, errors.New("removed artifacts require recorded integration, or the run that superseded this one and retired them"))
+	}
+	if s.CheckoutRetired {
+		// The sweep names what it removed, and it removes one thing.
+		if !s.WorktreeRemoved {
+			problems = append(problems, errors.New("a retired checkout names the worktree it removed, and this one removed neither artifact"))
+		}
+		if s.BranchRemoved && s.Integration == nil && retiredBy == "" {
+			problems = append(problems, errors.New("retiring a checkout removes its registration and never its branch"))
+		}
 	}
 	if retiredBy != "" {
 		if !ValidRunID(retiredBy) {
