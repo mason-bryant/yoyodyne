@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -187,6 +188,70 @@ func (i ItemPrice) Priced() bool { return i.UnknownRuns == 0 }
 // ever run for it, or the runs that were are no longer recorded, and neither is
 // a thing to charge somebody nothing for.
 func (i ItemPrice) Recorded() bool { return len(i.Runs) > 0 }
+
+// ExchangeSpend is what this product's roles have spent asking each other
+// things, summed over every exchange recorded for it. It is not part of any
+// item's price and it is not a run: an exchange is a conversation between two
+// roles, and the invocation that answers a round is money the harness spent on
+// the operator's behalf like any other. Leaving it out of what the harness has
+// spent altogether would understate that total by exactly as much as the ask
+// channel is used.
+type ExchangeSpend struct {
+	// Exchanges is how many threads the figure covers and Rounds how many
+	// provider invocations they came to between them. The two travel together for
+	// the reason a phase's invocation count travels with its money: one long
+	// thread and ten short ones are different things to be looking at.
+	Exchanges int     `json:"exchanges,omitempty"`
+	Rounds    int     `json:"rounds,omitempty"`
+	CostUSD   float64 `json:"cost_usd"`
+	// Unknown says why the exchanges could not be read, and is empty when they
+	// were. Exchanges nobody can read are not a product whose roles never asked
+	// each other anything: those are two different facts and only one of them is
+	// worth nothing.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// Known reports exchanges the recorded evidence could actually price.
+func (e ExchangeSpend) Known() bool { return e.Unknown == "" }
+
+// Recorded reports that there is something here to say: exchanges to price, or
+// a reason there is no figure for them. A product whose roles have never asked
+// each other anything has neither, and reporting it would be reporting the
+// absence of something nobody did.
+func (e ExchangeSpend) Recorded() bool { return e.Exchanges > 0 || !e.Known() }
+
+// ExchangeSpend reports what conducting this product's inter-role exchanges has
+// cost, as the provider reported each round. Every round carries the provider's
+// own figure, so this is a sum rather than an estimate, exactly as a run's price
+// is.
+//
+// It never fails, for the reason pricing a run never fails: exchanges that
+// cannot be read are a price nobody knows rather than an error, and reporting
+// one would take the runs beside them down with it. What it will not do is call
+// them free — a caller that finds no figure here has a total that is a floor.
+func (s *Store) ExchangeSpend() ExchangeSpend {
+	recorded, err := s.exchanges().List()
+	if err != nil {
+		return ExchangeSpend{Unknown: err.Error()}
+	}
+	spend := ExchangeSpend{Exchanges: len(recorded)}
+	for _, one := range recorded {
+		spend.Rounds += one.Spent()
+		spend.CostUSD += one.CostUSD()
+	}
+	return spend
+}
+
+// exchanges is this product's exchange store. Exchanges sit beside the runs
+// rather than inside them, so the store is reached from the run store's own root
+// rather than from a state root every caller of the read model would otherwise
+// have to carry a second time.
+func (s *Store) exchanges() *ExchangeStore {
+	return &ExchangeStore{
+		root:      filepath.Join(filepath.Dir(s.root), "exchanges"),
+		productID: s.productID,
+	}
+}
 
 // Price reports what every recorded run of one work item cost. Reading the
 // record decides nothing about the runs, so a run another process is executing

@@ -807,6 +807,14 @@ read. Rounds alone say how long a conversation went on and cost alone says what
 it came to; the question you actually have — was that worth it — is answerable
 only from the two together.
 
+It is also in what the harness spent altogether, rather than only beside its own
+rounds. [`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+counts each round on the day it was answered, alongside the runs, conversations,
+and branch reviews of that day, and [`yoyo cost`](reporting.md#what-the-work-cost)
+carries the exchanges into its total on a row of their own. An exchange names no
+work item, so it reaches no item's price — but it is money the harness spent, and
+a total that skipped it would be wrong rather than merely unattributed.
+
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you

@@ -2,11 +2,107 @@ package runstate
 
 import (
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
+
+// An exchange is a provider invocation the harness made and nobody's run, so
+// nothing that reads runs finds it. Reading it here is what keeps it out of the
+// item prices and in what the harness has spent altogether.
+func TestExchangeSpendSumsWhatTheRolesSpentAskingEachOther(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	// A product whose roles have never asked each other anything has no exchange
+	// directory at all, which is not a failure to read.
+	if spend := store.ExchangeSpend(); spend.Recorded() || spend.CostUSD != 0 || !spend.Known() {
+		t.Fatalf("ExchangeSpend() = %#v, want nothing recorded", spend)
+	}
+
+	// The exchange store is built the way the harness builds it, from the state
+	// root, so this is also the claim that the read model finds the same
+	// directory the conductor writes to.
+	exchanges := newTestExchangeStore(t, root)
+	if err := exchanges.Save(testExchange("a")); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	second := testExchange("b")
+	answered := second.UpdatedAt.Add(time.Minute)
+	second.Rounds = append(second.Rounds, exchange.Round{
+		Number:     2,
+		Question:   "and what does it cost to leave it until later?",
+		Answer:     "More again, and the difference is the interest.",
+		CostUSD:    0.75,
+		AskedAt:    second.UpdatedAt,
+		AnsweredAt: &answered,
+	})
+	second.UpdatedAt = answered
+	if err := exchanges.Save(second); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+
+	spend := store.ExchangeSpend()
+	if !spend.Known() || !spend.Recorded() {
+		t.Fatalf("ExchangeSpend() = %#v, want a known recorded figure", spend)
+	}
+	if spend.Exchanges != 2 || spend.Rounds != 3 {
+		t.Fatalf("ExchangeSpend() = %#v, want 2 exchanges over 3 rounds", spend)
+	}
+	// Every round the provider charged for, whichever thread it belonged to.
+	if spend.CostUSD != 1.25 {
+		t.Fatalf("ExchangeSpend() total = %v, want 1.25", spend.CostUSD)
+	}
+	// None of it reaches an item's price: an exchange names no work item, and
+	// charging one to an item would be attributing money that belongs to nobody.
+	prices, err := store.Prices()
+	if err != nil {
+		t.Fatalf("Prices() error = %v", err)
+	}
+	if len(prices) != 0 {
+		t.Fatalf("Prices() = %#v, want no item priced by an exchange", prices)
+	}
+}
+
+// Exchanges nobody can read are not exchanges that cost nothing. The reason is
+// carried instead of a figure, so every total it touches is a floor rather than
+// a number that reads as complete.
+func TestExchangeSpendIsUnknownRatherThanZeroWhenTheRecordsCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	store, err := NewStore(root, "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	exchanges := newTestExchangeStore(t, root)
+	if err := exchanges.Save(testExchange("c")); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	broken := filepath.Join(exchanges.Root(), "exchange-"+strings.Repeat("d", 32)+".json")
+	if err := os.WriteFile(broken, []byte("{not an exchange"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	spend := store.ExchangeSpend()
+	if spend.Known() {
+		t.Fatalf("ExchangeSpend() = %#v, want the reason there is no figure", spend)
+	}
+	if !spend.Recorded() {
+		t.Fatalf("ExchangeSpend() = %#v, want an unreadable store to be worth reporting", spend)
+	}
+	if spend.CostUSD != 0 || spend.Exchanges != 0 {
+		t.Fatalf("ExchangeSpend() = %#v, want no figure claimed at all", spend)
+	}
+}
 
 // An item's price is what every run made for it cost, which is the whole reason
 // it is not answerable per run: the rejected attempt and the successful one are

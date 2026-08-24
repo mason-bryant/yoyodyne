@@ -6,6 +6,9 @@
 # among them, but it is the same question being asked of all three - is this
 # alive, what is it doing, and what did it cost - so every mode here covers all
 # of them and the default never asks which kind you meant.
+# An inter-role exchange is recorded beside all three and has no event stream to
+# follow, so it appears in the cost report and nowhere else: what two roles spent
+# asking each other is money the harness spent, and a total without it is short.
 # The state directory is resolved the same way the harness resolves it, so this
 # keeps working when YOYODYNE_STATE_HOME or XDG_STATE_HOME is set, and on Linux
 # and Windows checkouts as well as macOS.
@@ -16,7 +19,7 @@
 #   yoyo-status -l               list recent runs and conversations and exit
 #   yoyo-status -c               report the last 7 days of spend, by day and in total
 #   yoyo-status -c 30            report that many days instead of 7
-#   yoyo-status -c 40b68275      report spend for one run or conversation, any day
+#   yoyo-status -c 40b68275      report spend for one run, conversation, or exchange, any day
 #   yoyo-status -n 200           replay the last 200 events before following
 #   yoyo-status --runs           runs only
 #   yoyo-status --chats          conversations only
@@ -48,6 +51,10 @@ include_all=0
 want_runs=1
 want_chats=1
 want_reviews=1
+# Exchanges are priced by default and never followed, so narrowing to any one of
+# the followable kinds narrows them out too: somebody who asked for runs alone is
+# asking what the runs cost.
+want_exchanges=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -56,9 +63,9 @@ while [ $# -gt 0 ]; do
     -c|--cost) cost_only=1; shift ;;
     -L|--follow-latest) follow_latest=1; shift ;;
     -n|--lines) lines="${2:?-n needs a value}"; shift 2 ;;
-    --runs) want_chats=0; want_reviews=0; shift ;;
-    --chats|--conversations) want_runs=0; want_reviews=0; shift ;;
-    --reviews|--branch-reviews) want_runs=0; want_chats=0; shift ;;
+    --runs) want_chats=0; want_reviews=0; want_exchanges=0; shift ;;
+    --chats|--conversations) want_runs=0; want_reviews=0; want_exchanges=0; shift ;;
+    --reviews|--branch-reviews) want_runs=0; want_chats=0; want_exchanges=0; shift ;;
     --raw) raw=1; shift ;;
     --all) include_all=1; shift ;;
     --no-follow) follow=0; shift ;;
@@ -143,20 +150,23 @@ announce_intake_hold
 runs="$products/$product/runs"
 conversations="$products/$product/conversations"
 reviews="$products/$product/branch-reviews"
+exchanges="$products/$product/exchanges"
 
 # A product that has only ever chatted has no runs directory, one that has only
-# ever run has no conversations directory, and one whose branches have never
-# been reviewed has no branch-reviews directory. Any one on its own is enough to
+# ever run has no conversations directory, one whose branches have never been
+# reviewed has no branch-reviews directory, and one whose roles have never asked
+# each other anything has no exchanges directory. Any one on its own is enough to
 # work with, so only having none of the selected kinds is a refusal.
 have_kind() {
   case "$1" in
     runs) [ "$want_runs" = "1" ] && [ -d "$runs" ] ;;
     chats) [ "$want_chats" = "1" ] && [ -d "$conversations" ] ;;
     reviews) [ "$want_reviews" = "1" ] && [ -d "$reviews" ] ;;
+    exchanges) [ "$want_exchanges" = "1" ] && [ -d "$exchanges" ] ;;
   esac
 }
-if ! have_kind runs && ! have_kind chats && ! have_kind reviews; then
-  echo "no runs, conversations, or branch reviews under $products/$product" >&2
+if ! have_kind runs && ! have_kind chats && ! have_kind reviews && ! have_kind exchanges; then
+  echo "no runs, conversations, branch reviews, or exchanges under $products/$product" >&2
   exit 1
 fi
 
@@ -175,6 +185,23 @@ event_logs() {
 }
 
 newest() { event_logs | head -1; }
+
+# Every recorded exchange, narrowed the way the event logs are. An exchange is
+# one revised record rather than a stream of events, so it is never followed and
+# never listed beside the three kinds that are: it is here for the cost report,
+# which is the one question it can answer.
+exchange_records() {
+  local pattern="${1:-}" order="${2:--t}"
+  have_kind exchanges || return 0
+  set -- "$exchanges"/*"$pattern"*.json
+  ls "$order" "$@" 2>/dev/null || true
+}
+
+# What an exchange is, in the one word `yoyo exchange` says it in: open while it
+# is still being conducted, and otherwise how it ended.
+exchange_state() {
+  jq -r 'if ((.outcome // "") == "") then "open" else .outcome end' "$1" 2>/dev/null || echo "?"
+}
 
 # The three kinds are told apart by their id, which is the same thing their
 # records are named for.
@@ -313,8 +340,11 @@ fi
 # developer, plus a reviewer once automatic integration is enabled, plus one
 # more per repair attempt. For a conversation it is the sum over its turns,
 # which are provider invocations like any other and are recorded the same way,
-# so leaving them out understated every total they belonged in. Cost is what the
-# provider reported, not an estimate.
+# so leaving them out understated every total they belonged in. An inter-role
+# exchange is the same argument once more: the answering half of each round is an
+# invocation the harness made, recorded in the exchange rather than in an event
+# log, and a total that read only the logs was short by exactly what the roles
+# spent asking each other. Cost is what the provider reported, not an estimate.
 #
 # The rows are grouped by the local-timezone day the money was spent on and each
 # group closes with that day's spend, because "what did today cost" is the axis
@@ -328,9 +358,10 @@ fi
 # A log that spans days therefore contributes one row to each day it spent on.
 cost_report() {
   command -v jq >/dev/null 2>&1 || { echo "cost reporting needs jq" >&2; exit 1; }
-  local pattern="${1:-}" days="${2:-}" files
+  local pattern="${1:-}" days="${2:-}" files asks
   files=$(event_logs "$pattern" -tr)
-  [ -n "$files" ] || { echo "no runs, conversations, or branch reviews found" >&2; exit 1; }
+  asks=$(exchange_records "$pattern" -tr)
+  [ -n "$files$asks" ] || { echo "no runs, conversations, branch reviews, or exchanges found" >&2; exit 1; }
 
   local today oldest=""
   today="$(today_local)"
@@ -384,6 +415,41 @@ cost_report() {
         }'
   done > "$tmp"
 
+  # An exchange is not an event log. It is one record per thread, revised as it
+  # goes, and each round in it is a provider invocation the harness made to carry
+  # one role's question to another. The money is recorded per round beside the
+  # moment the answer came in, so a round counts on the day it was answered
+  # exactly as an invocation counts on the day it was made, and a thread that ran
+  # over two days contributes a row to each of them as a conversation does.
+  #
+  # What the record does not keep is the provider's token usage, so those columns
+  # are "-" rather than 0: an exchange did not use no tokens, and a zero there
+  # would be added into a day's token total as though it had.
+  printf '%s\n' "$asks" | while read -r f; do
+    [ -n "$f" ] || continue
+    # A record that cannot be read costs the report that exchange rather than the
+    # whole report, which is the same bargain a log that cannot be read gets.
+    { jq -r '(.rounds // [])[]
+             | ((.answered_at // .asked_at // "") | sub("\\.[0-9]+";"") | try fromdateiso8601 catch null) as $moment
+             | [ (if $moment == null then "undated" else ($moment | strflocaltime("%Y-%m-%d")) end),
+                 ($moment // 0),
+                 (if $moment == null then "-" else ($moment | strflocaltime("%m %d %Y %H:%M")) end),
+                 (.cost_usd // 0) ]
+             | @tsv' "$f" 2>/dev/null || true; } \
+    | awk -F'\t' -v id="$(basename "$f" .json)" -v st="$(exchange_state "$f")" -v oldest="$oldest" '
+        { day=$1;
+          if (!(day in n)) { order[++days]=day; first_epoch[day]=$2; first_ts[day]=$3 }
+          n[day]++; cost[day]+=$4 }
+        END {
+          for (i = 1; i <= days; i++) {
+            day=order[i];
+            if (oldest != "" && day != "undated" && day < oldest) continue;
+            printf "%s\t%s\t%s\t%s\t%d\t%s\t%s\t%s\t%s\t%.10f\t%s\n",
+                   day, first_epoch[day], id, first_ts[day], n[day], "-", "-", "-", "-", cost[day], st;
+          }
+        }'
+  done >> "$tmp"
+
   # An empty report says which of the two empties it is: nothing has been spent
   # at all, or nothing was spent in the days asked about, which a wider window
   # would answer differently.
@@ -396,13 +462,16 @@ cost_report() {
     return 0
   fi
 
-  printf '%-39s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
+  # The id column is as wide as the widest id there is, which is an exchange's:
+  # a column sized to a run's id would be shoved two characters right by every
+  # exchange row and take the rest of the table with it.
+  printf '%-41s %-17s %6s %8s %9s %10s %11s %9s  %s\n' id started calls in out cache_w cache_r USD status
   # Ordered by when the work started rather than by when its log was last
   # written, which is what makes a day's rows contiguous and puts today last.
   sort -t$'\t' -k2,2n -k3,3 "$tmp" | awk -F'\t' -v today="$today" '
     function close_day() {
       if (day == "") return;
-      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", day " total", "", dn, din, dout, dcw, dcr, dcost;
+      printf "%-41s %-17s %6d %8d %9d %10d %11d %9.2f\n", day " total", "", dn, din, dout, dcw, dcr, dcost;
       print "";
     }
     $1 != day {
@@ -410,31 +479,43 @@ cost_report() {
       day=$1; dn=din=dout=dcw=dcr=dcost=0;
       printf "%s%s\n", day, (day==today ? "  (today)" : "");
     }
-    { printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f  %s\n", $3,$4,$5,$6,$7,$8,$9,$10,$11;
+    # The token columns are printed as they arrived rather than as numbers, so a
+    # row that records no usage says "-" where it has nothing to say. Adding it
+    # into the day is arithmetic on a string, which is nothing, and that is
+    # exactly what it should contribute.
+    { printf "%-41s %-17s %6d %8s %9s %10s %11s %9.2f  %s\n", $3,$4,$5,$6,$7,$8,$9,$10,$11;
       dn+=$5; din+=$6; dout+=$7; dcw+=$8; dcr+=$9; dcost+=$10 }
     END { close_day() }'
   awk -F'\t' -v window="${days:+ (last $days days)}" '
     { n+=$5; in_+=$6; out+=$7; cw+=$8; cr+=$9; cost+=$10;
       if ($3 ~ /^chat-/) { chats+=$5; chat_cost+=$10 }
       else if ($3 ~ /^review-/) { revs+=$5; rev_cost+=$10 }
+      else if ($3 ~ /^exchange-/) { asks+=$5; ask_cost+=$10 }
       else { plain+=$5; run_cost+=$10 } }
     END {
-      print  "----------------------------------------------------------------------------------------------------------------";
-      printf "%-39s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL" window, "", n, in_, out, cw, cr, cost;
+      print  "------------------------------------------------------------------------------------------------------------------";
+      printf "%-41s %-17s %6d %8d %9d %10d %11d %9.2f\n", "TOTAL" window, "", n, in_, out, cw, cr, cost;
       t=in_+out+cw+cr;
-      printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
+      # An exchange records what the provider charged and not what it used, so a
+      # report of nothing but exchanges has money and no tokens. Saying so beats
+      # dividing by a total of none of them.
+      if (t>0) printf "\ntokens: %'"'"'d total (%.1f%% cache reads)   cost: $%.2f\n", t, (cr*100.0)/t, cost
+      else     printf "\ncost: $%.2f; no token usage is recorded for what this covers\n", cost
       # Split the total only when it is actually mixed, so the one number is
       # never left ambiguous about which kinds of work went into it. A branch
-      # review is a provider invocation like the others and is priced beside
-      # them: a total that skipped it would be wrong rather than unattributed.
-      kinds=(chats>0)+(plain>0)+(revs>0);
+      # review and an inter-role exchange are provider invocations like the
+      # others and are priced beside them: a total that skipped either would be
+      # wrong rather than unattributed.
+      kinds=(chats>0)+(plain>0)+(revs>0)+(asks>0);
       if (kinds>1) {
         line="";
         if (plain>0) line=line sprintf("runs: $%.2f from %d invocation(s)", run_cost, plain);
         if (chats>0) line=line (line==""?"":"   ") sprintf("conversations: $%.2f from %d turn(s)", chat_cost, chats);
         if (revs>0)  line=line (line==""?"":"   ") sprintf("branch reviews: $%.2f from %d invocation(s)", rev_cost, revs);
+        if (asks>0)  line=line (line==""?"":"   ") sprintf("exchanges: $%.2f from %d round(s)", ask_cost, asks);
         print line;
       }
+      if (asks>0) print "an exchange records what the provider charged and not what it used, so its rows carry no tokens";
     }' "$tmp"
 }
 
@@ -443,7 +524,8 @@ if [ "$cost_only" = "1" ]; then
   # to price, and a purely numeric one is the count, because an operator asking
   # for a fortnight would not otherwise have a way to say so. An id prefix can
   # be all digits too -- ids are hex -- so one that is must be given with its
-  # run-, chat-, or review- prefix to be read as an id rather than as days.
+  # run-, chat-, review-, or exchange- prefix to be read as an id rather than as
+  # days.
   # Naming one prices it whatever day it ran on: the window is for the report
   # that chooses what to show, and an id has already chosen.
   case "$run_arg" in

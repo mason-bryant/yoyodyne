@@ -721,6 +721,12 @@ mode covers all of them and the default never asks which kind you meant.
 Selecting one by id or by a unique id prefix works the same for each. `--runs`,
 `--chats`, and `--reviews` narrow it to one kind when that is what you want.
 
+An [exchange](conversation.md#roles-asking-each-other-things) is the fourth thing
+priced and the only one that is never followed: its record is the thread itself,
+revised as it goes, rather than a stream of events, so it appears in the cost
+report and in no other mode. Naming one by id prices it like anything else, and
+each of the three flags above narrows it out along with the kinds they exclude.
+
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
 actually asking: `answering` while an agent is working on a turn, `waiting`
@@ -737,10 +743,14 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is every run, every conversation, and
-every branch review, and a mixed total says how much of it was each — a
-conversation turn and a branch review are each a provider invocation like any
-other, and leaving either out understated every total it belonged in.
+reporting requires it. What it prices is every run, every conversation, every
+branch review, and every exchange, and a mixed total says how much of it was
+each — a conversation turn, a branch review, and a round of one role asking
+another something are each a provider invocation like any other, and leaving any
+of them out understated every total it belonged in. An exchange counts each round
+on the day it was answered, so a thread that ran over two days lands in both of
+their totals; its record keeps what the provider charged and not what it used, so
+its rows say nothing in the token columns rather than saying none.
 
 The rows are grouped by the local-timezone day the money was spent on, each
 day's group closing with that day's spend and today's group coming last: what an
@@ -751,20 +761,22 @@ appears under today for the turn it was asked this morning and under each
 earlier day it spent on — one row per day it spent, each with the shape a row
 has always had. A report covers the last seven such days, today counting as the
 first of them. A number asks for a different count — `-c 30` — and naming a run,
-a conversation, or a review prices that one whatever day it ran on, because an
-id has already chosen what to show; an id prefix that is all digits has to carry
-its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
-count of days. A window with nothing in it says so and says since when, rather
-than reading like a machine that spent nothing.
+a conversation, a review, or an exchange prices that one whatever day it ran on,
+because an id has already chosen what to show; an id prefix that is all digits
+has to carry its `run-`, `chat-`, `review-`, or `exchange-` prefix to be read as
+an id rather than as a count of days. A window with nothing in it says so and
+says since when, rather than reading like a machine that spent nothing.
 
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
-cost"; it leaves conversations and branch reviews out, deliberately and for the
-same reason — a conversation that discussed five items, and a review of a branch
-that carried a dozen, cannot be attributed to any one of them.
+cost"; it leaves conversations and branch reviews out of the *items*, deliberately
+and for the same reason — a conversation that discussed five items, and a review
+of a branch that carried a dozen, cannot be attributed to any one of them. What it
+does not leave out of its total is what the roles spent asking each other, which
+sits on a row of its own above it.
 
 [`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
-against a fabricated state directory holding runs, conversations, and branch
-reviews, without a provider or a repository and without reading your real
+against a fabricated state directory holding runs, conversations, branch reviews,
+and exchanges, without a provider or a repository and without reading your real
 state. `make test` runs it, so the tool is held to them by the same command as
 everything else in the repository rather than by one somebody remembers.

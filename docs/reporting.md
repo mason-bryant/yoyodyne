@@ -46,10 +46,14 @@ carries no price at all rather than a price of nothing. And what is priced *per
 item* is runs: the conversations that steer them cost money too and are recorded
 just as durably, but attributing a conversation that discussed five items to any
 one of them is a judgement rather than a join, so it is left out here and said
-to be left out. It is not left out of what the harness has spent altogether —
+to be left out. The same holds for an
+[exchange](conversation.md#roles-asking-each-other-things), which is a question
+one role put to another and names no work item at all. Neither is left out of
+what the harness has spent altogether —
 [`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
-conversations and branch reviews beside runs, because a total that skipped
-either would be wrong rather than merely unattributed.
+conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
+the exchanges into its total on a row of their own, because a total that skipped
+any of them would be wrong rather than merely unattributed.
 
 `/show` breaks one item's price down by attempt, which is what a single total
 invites:
@@ -88,15 +92,26 @@ item, and across everything the harness has run:
 ```text
 item                                     runs  unpriced      develop       review       repair         cost    waited
 yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43     3h37m
-TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2731.57    21h01m
+ASKS BETWEEN ROLES                          -         -            -            -            -        $4.12
+TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69    21h01m
 ```
+
+**ASKS BETWEEN ROLES** is what the roles spent asking each other, summed over
+every recorded exchange. It is a row rather than a note under the table because
+the total has to add up: an ask is a provider invocation the harness made and it
+belongs in what the harness spent, and a figure visible only in the total would
+be a difference the reader has to take on trust. It belongs to no item, so the
+columns that split a run's price are left empty rather than filled with zeros —
+an ask is not development, review, or repair. Exchanges that cannot be read are
+counted as unknown rather than as nothing, exactly as an unpriced run is, and the
+total says so with the same `≥`.
 
 **develop** is each run's first developer attempt, **review** is every reviewer
 invocation it made, and **repair** is every developer attempt after the first —
 the failing check, the refused path, and the reviewer's findings handed back are
 all repair, because from the money's point of view each is the same thing: the
 change being made again because it was not right the first time. Every priced
-invocation lands in exactly one of the three, so nothing is missing from them
+run invocation lands in exactly one of the three, so nothing is missing from them
 and the split is a decomposition of the price rather than a second opinion about
 it. An invocation the provider refused or killed and the harness reissued is
 charged to the attempt it was reissuing, not counted as a repair nobody asked

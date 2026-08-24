@@ -72,7 +72,7 @@ func TestCostLedgerCountsUnpricedRunsRatherThanChargingNothingForThem(t *testing
 	}
 
 	var out bytes.Buffer
-	printPrices(&out, prices, false)
+	printPrices(&out, prices, nil, false)
 	rendered := out.String()
 	for _, required := range []string{
 		"yoyodyne-ifd.2.7",
@@ -90,7 +90,7 @@ func TestCostLedgerCountsUnpricedRunsRatherThanChargingNothingForThem(t *testing
 		"$6.10",
 		"$3.81",
 		"2h39m",
-		"develop, review and repair account for every priced invocation",
+		"develop, review and repair account for every priced run invocation",
 		"counted as unpriced and left out of the total",
 		"conversation turns are recorded but not attributed",
 	} {
@@ -100,6 +100,70 @@ func TestCostLedgerCountsUnpricedRunsRatherThanChargingNothingForThem(t *testing
 	}
 	if strings.Contains(rendered, "yoyodyne-ifd.99") {
 		t.Fatalf("an item with no recorded run was priced: %q", rendered)
+	}
+	// A product whose roles have never asked each other anything says nothing
+	// about asks: reporting a row of nothing would be reporting the absence of
+	// something nobody did.
+	if strings.Contains(rendered, askLedgerLabel) {
+		t.Fatalf("a ledger with no exchanges carried an ask row: %q", rendered)
+	}
+}
+
+// What one role spent asking another is a provider invocation the harness made,
+// so it belongs in the total beside the runs. It belongs to no work item, which
+// is why it is a row of its own rather than money folded into somebody's item.
+func TestCostLedgerCarriesWhatTheRolesSpentAskingEachOtherIntoTheTotal(t *testing.T) {
+	t.Parallel()
+
+	prices := []runstate.ItemPrice{{
+		WorkItemID: "yoyodyne-ifd.2.7",
+		Runs:       []runstate.RunPrice{{RunID: "run-1", Status: runstate.StatusSucceeded, CostUSD: 10.00, Invocations: 1}},
+		TotalUSD:   10.00,
+		Phases:     runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 10.00, Invocations: 1}},
+	}}
+
+	var out bytes.Buffer
+	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 2, Rounds: 3, CostUSD: 1.50}, false)
+	rendered := out.String()
+	for _, required := range []string{
+		askLedgerLabel,
+		"$1.50",
+		// Ten dollars of runs and a dollar fifty of asks: a total that skipped the
+		// asks would read as complete while being short by exactly them.
+		"$11.50",
+		"asks between roles is 2 exchange(s) over 3 round(s)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered ledger = %q, want it to contain %q", rendered, required)
+		}
+	}
+	// The phase columns split a run's price, and an ask is none of the three, so
+	// the row leaves them empty rather than claiming an ask cost nothing to
+	// develop.
+	askRow := ""
+	for _, line := range strings.Split(rendered, "\n") {
+		if strings.HasPrefix(line, askLedgerLabel) {
+			askRow = line
+		}
+	}
+	if askRow == "" || strings.Contains(askRow, "$0.00") {
+		t.Fatalf("ask row = %q, want the run phases left as unstated rather than zero", askRow)
+	}
+
+	// Exchanges nobody can read are not exchanges that cost nothing. The figure
+	// is withheld, the total says so, and the reason is printed.
+	out.Reset()
+	printPrices(&out, prices, &runstate.ExchangeSpend{Unknown: "read exchange directory: permission denied"}, false)
+	rendered = out.String()
+	for _, required := range []string{
+		"unknown",
+		"≥ $10.00",
+		"permission denied",
+		"left out of the total rather than counted as nothing",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered ledger = %q, want it to contain %q", rendered, required)
+		}
 	}
 }
 
@@ -142,7 +206,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			Repair:      runstate.PhaseCost{CostUSD: 3.81, Invocations: 2},
 			Waits:       runstate.Waits{UsageLimitSeconds: 3600, OperatorHoldSeconds: 900},
 		},
-	}}, true)
+	}}, nil, true)
 	rendered := out.String()
 	for _, required := range []string{
 		"yoyodyne-ifd.2.7: $27.93 across 2 run(s)",
@@ -162,7 +226,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	}
 
 	out.Reset()
-	printPrices(&out, []runstate.ItemPrice{{WorkItemID: "yoyodyne-ifd.99"}}, true)
+	printPrices(&out, []runstate.ItemPrice{{WorkItemID: "yoyodyne-ifd.99"}}, nil, true)
 	if !strings.Contains(out.String(), "no price rather than a price of nothing") {
 		t.Fatalf("rendered breakdown = %q", out.String())
 	}
@@ -176,7 +240,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			RunID: "run-4", Status: runstate.StatusRunning, Outcome: runstate.RunOutcome(runstate.StatusRunning),
 			Phase: runstate.PhaseDeveloping, StartedAt: started,
 		}},
-	}}, true)
+	}}, nil, true)
 	if !strings.Contains(out.String(), "$0.00 so far from 0 invocation(s)") {
 		t.Fatalf("rendered breakdown = %q", out.String())
 	}
@@ -193,7 +257,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 			Phases:  runstate.PhaseSpend{Waits: runstate.Waits{UsageLimitSeconds: 1800}},
 		}},
 		UnknownRuns: 1,
-	}}, true)
+	}}, nil, true)
 	rendered = out.String()
 	if !strings.Contains(rendered, "waited 30m00s for the provider") {
 		t.Fatalf("rendered breakdown = %q, want the unpriceable run's wait", rendered)
