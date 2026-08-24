@@ -136,6 +136,33 @@ func TestAProtectedPathThatIsNobodysDocumentRoutesToTheOperator(t *testing.T) {
 	}
 }
 
+// Governed is the same lookup Route makes, asked on its own by a caller that has
+// to decide which documents are its to answer for before it reads them. The two
+// have to agree, or a defect would be escalated by one gate and answered for by
+// neither.
+func TestGovernedAgreesWithWhatRouteEscalates(t *testing.T) {
+	t.Parallel()
+
+	for _, candidate := range []string{
+		"docs/product/brief.md",
+		"docs/product/goals/v1-goals.md",
+		"docs/designs/v1-harness.md",
+		"docs/decisions/invariants/one-promotion.md",
+		"README.md",
+		"docs/developing-yoyo.md",
+		"docs/products/notes.md",
+	} {
+		routed := Route(defaults(), Defect{Path: candidate, Detail: "something is wrong with it"})
+		// A path a home claims is exactly a path the change may not fix. The one
+		// place the two part is a protected path no home claims, which is checked on
+		// its own above.
+		if governed := Governed(defaults(), candidate); governed == routed[0].Yours {
+			t.Errorf("%s: Governed() = %t, and Route() reported it as the change's to fix = %t",
+				candidate, governed, routed[0].Yours)
+		}
+	}
+}
+
 // Report is what every gate calls, and the whole of what it decides is which of
 // two reporters a defect goes to. Both are exercised in one pass, because a
 // version that sent everything to one of them would pass either half alone.

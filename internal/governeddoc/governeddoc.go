@@ -116,6 +116,21 @@ func Route(cfg config.Config, defects ...Defect) []Routed {
 	return routed
 }
 
+// Governed reports whether a document is filed in one of the artifact homes,
+// which is what makes a defect in it its owner's rather than the change's.
+//
+// It is exported for the caller that has to decide which documents are governed
+// before it reads them rather than after: `yoyo artifact check` walks the whole
+// repository for links — resolving one needs the document at its other end — and
+// answers only for the ones written inside a home. Asking here rather than
+// comparing paths of its own is what keeps one answer to "is this governed", so
+// the gate that escalates a defect and the gate that fails on it cannot come to
+// disagree about which defects those are.
+func Governed(cfg config.Config, candidate string) bool {
+	_, found := homeOf(artifacthome.Homes(cfg), normalize(candidate))
+	return found
+}
+
 // Report hands each defect to whichever reporter it belongs to: fail for one the
 // change in hand may put right, and escalate for one only an owner may. They are
 // passed in rather than decided here because what "fail" means belongs to the

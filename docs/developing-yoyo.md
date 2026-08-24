@@ -65,13 +65,21 @@ by where the document lives rather than by what is wrong with it: a defect in a
 protected home is the owner's, and one anywhere else is still yours and still
 fails.
 
-Where it does fail is `yoyo artifact check`, which reads the same documents and
-exits non-zero on any of it. That is the command an owner runs after editing one,
-and the index at the door of every artifact home says so. The line has one known
-edge: a loader tightened until a governed document stops parsing is reported as
-that document being malformed and escalated, which is why "the harness could not
-read them at all" is asked as its own question in the table above and still
-fails here.
+Where it does fail is `yoyo artifact check`, and the two sets are deliberately
+the same one: it reads the artifacts, the goals stated in them, the invariants,
+and the Markdown links written inside an artifact home, and exits non-zero on any
+of it. Nothing escalated above is missing from it — a class escalated in every
+gate and failed in none would be a defect nobody catches, which is worse than the
+red build this replaced. It decides which links are its own by asking
+`governeddoc.Governed`, the same lookup the escalation is routed by, so the two
+cannot drift into disagreeing about which documents are governed. That is the
+command an owner runs after editing one, and the index at the door of every
+artifact home says so.
+
+The line has one known edge: a loader tightened until a governed document stops
+parsing is reported as that document being malformed and escalated, which is why
+"the harness could not read them at all" is asked as its own question in the
+table above and still fails here.
 
 `make dist VERSION=<tag>` builds the release archives and their checksums into
 `dist/`, and `make dist-verify VERSION=<tag>` does that and then unpacks the

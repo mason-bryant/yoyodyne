@@ -126,6 +126,70 @@ func TestCheckCarriesTheOwnerAndTheRouteInItsJSON(t *testing.T) {
 	}
 }
 
+// The class the escalation would otherwise leave with no gate at all: the
+// doclink gate escalates a broken link written inside an artifact home, so this
+// command has to be where it fails. And it has to stop there — a link written
+// anywhere else is a developer's, and it already fails in the check that found
+// it.
+func TestCheckFailsOnABrokenLinkInsideAnArtifactHomeAndNotOnOneOutside(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md",
+		artifactDocument("brief", "brief", "Product brief", nil)+briefStatingOneGoal+
+			"\nSee [the harness design](../designs/never-written.md).\n")
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md",
+		artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"})+oneGoalOnOneLine)
+	writeArtifact(t, project, "docs/notes.md", "# Notes\n\nSee [what happened](gone.md).\n")
+
+	_, stderr, code := runCLI(t, "artifact", "check", "--config", configPath)
+	if code != 1 {
+		t.Fatalf("check code = %d, want 1; stderr = %q", code, stderr)
+	}
+	for _, want := range []string{
+		"docs/product/brief.md",
+		"a link resolves to nothing",
+		"product manager",
+		"yoyo chat",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("check stderr never says %q:\n%s", want, stderr)
+		}
+	}
+	if strings.Contains(stderr, "docs/notes.md") {
+		t.Errorf("check answered for a broken link outside the artifact homes:\n%s", stderr)
+	}
+}
+
+// An invariants home that could not be read is a gap in what was checked rather
+// than a clean bill over it. This command says it reads the invariants, so
+// reporting the documents it never opened as well-formed would be the one green
+// nobody could act on.
+func TestCheckReportsAnInvariantsHomeItCouldNotRead(t *testing.T) {
+	t.Parallel()
+
+	configPath := writeConfig(t, validConfig)
+	project := filepath.Dir(configPath)
+	writeArtifact(t, project, "docs/product/brief.md", artifactDocument("brief", "brief", "Product brief", nil)+briefStatingOneGoal)
+	writeArtifact(t, project, "docs/product/goals/v1-goals.md",
+		artifactDocument("v1-goals", "goals", "V1 goals", []string{"brief"})+oneGoalOnOneLine)
+	// The configured invariants home is a file rather than a directory, so nothing
+	// in it can be read at all.
+	writeArtifact(t, project, "docs/decisions/invariants", "this is not a directory\n")
+
+	stdout, stderr, code := runCLI(t, "artifact", "check", "--config", configPath)
+	if code != 1 {
+		t.Fatalf("check code = %d, want 1; stdout = %q, stderr = %q", code, stdout, stderr)
+	}
+	if strings.Contains(stdout, "well-formed") {
+		t.Errorf("check reported a clean bill over an invariants home it could not read:\n%s", stdout)
+	}
+	if !strings.Contains(stderr, "docs/decisions/invariants") {
+		t.Errorf("check does not name the home it could not read:\n%s", stderr)
+	}
+}
+
 func TestCheckTakesNoPositionalArgument(t *testing.T) {
 	t.Parallel()
 

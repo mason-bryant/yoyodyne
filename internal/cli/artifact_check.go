@@ -26,6 +26,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/artifact"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/doclink"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
 	"github.com/mason-bryant/yoyodyne/internal/governeddoc"
 	"github.com/mason-bryant/yoyodyne/internal/invariant"
@@ -56,10 +57,13 @@ type governedDefect struct {
 // checkGovernedDocuments reads every governed document and reports what is
 // wrong with each, routed to the role that owns it.
 //
-// It reads all four kinds of finding in one pass rather than leaving three of
-// them to three other commands: an owner who has just edited a goals document
-// wants one answer about what they wrote, and a check they have to run four
-// times is a check they run none of.
+// Every kind of finding is read in one pass rather than left to a command each:
+// an owner who has just edited a goals document wants one answer about what they
+// wrote, and a check they have to run five times is a check they run none of.
+// The set is the same one the gates during a run escalate — the artifacts, the
+// goals stated in them, the invariants, and the links written inside an artifact
+// home — because a class escalated there and failed nowhere here would leave a
+// defect no gate at all catches.
 func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	flags := flag.NewFlagSet("artifact check", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -88,14 +92,22 @@ func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportGovernedCheckError(stdout, stderr, *jsonOutput, err)
 	}
+	invariants, err := invariantProblems(repository, product)
+	if err != nil {
+		return reportGovernedCheckError(stdout, stderr, *jsonOutput, err)
+	}
+	links, err := governedLinkProblems(repository, resolved.Config)
+	if err != nil {
+		return reportGovernedCheckError(stdout, stderr, *jsonOutput, err)
+	}
 
 	defects := governedDefects(artifacts.Problems, artifacts.ReferenceProblems,
-		goal.Collect(repository, artifacts),
-		invariantProblems(repository, product))
+		goal.Collect(repository, artifacts), invariants, links)
 	routed := governeddoc.Route(resolved.Config, defects...)
 
+	read := readHomes(artifacts.Homes, product)
 	if *jsonOutput {
-		report := governedCheck{Homes: artifacts.Homes}
+		report := governedCheck{Homes: read}
 		for _, entry := range routed {
 			report.Defects = append(report.Defects, governedDefect{
 				Path:   entry.Path,
@@ -115,7 +127,7 @@ func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if len(routed) == 0 {
-		fmt.Fprintf(stdout, "every governed document in %s is well-formed\n", strings.Join(artifacts.Homes, ", "))
+		fmt.Fprintf(stdout, "every governed document in %s is well-formed\n", strings.Join(read, ", "))
 		return 0
 	}
 	// One defect to an entry, with the route under it: what somebody has to do is
@@ -133,11 +145,16 @@ func checkGovernedDocuments(args []string, stdout, stderr io.Writer) int {
 // wrote it in and prefixed with what kind of finding it is, because "not read as
 // an artifact" and "read, and its place in the chain is wrong" are two different
 // things to do about the same file.
+//
+// Every finding here names a file. That is not decoration: what a defect is
+// routed to its owner by is the document it is written in, so one arriving with
+// no path would be attributed to nobody and reported as somebody else's.
 func governedDefects(
 	refused []artifact.Problem,
 	references []artifact.ReferenceProblem,
 	goals goal.Set,
 	invariants []invariant.Problem,
+	links []doclink.Problem,
 ) []governeddoc.Defect {
 	var defects []governeddoc.Defect
 	add := func(path, detail string) {
@@ -153,7 +170,12 @@ func governedDefects(
 		add(problem.Path, "its goals could not be read: "+problem.Reason)
 	}
 	for _, problem := range goals.LinkProblems {
-		add(problem.Path, "a goal is not linked to the brief: "+problem.Reason)
+		// A problem about the brief rather than about any one goal carries no path
+		// of its own: it is the root of the chain missing, reported once instead of
+		// against every goal below it. The brief is the file to open, and the set
+		// carries where that is — without this the finding would name no document
+		// and route to nobody.
+		add(pathOr(problem.Path, goals.BriefPath), "a goal is not linked to the brief: "+problem.Reason)
 	}
 	for _, problem := range goals.WrapProblems {
 		add(problem.Path, fmt.Sprintf("line %d: a goal is not written on one line: %s", problem.Line, problem.Reason))
@@ -161,22 +183,75 @@ func governedDefects(
 	for _, problem := range invariants {
 		add(problem.Path, "it is not read as an invariant: "+problem.Reason)
 	}
+	for _, problem := range links {
+		add(problem.Path, fmt.Sprintf("line %d: a link resolves to nothing: %s", problem.Line, problem.Reason))
+	}
 	return defects
 }
 
+// readHomes is every directory this check actually looked in: the artifact homes
+// and the invariants home beside them. The invariants carry an identity scheme of
+// their own and are excluded from the artifact set, so a clean report naming only
+// the artifact homes would claim less than the check covered — and one naming
+// more than it read would be worse.
+func readHomes(homes []string, product config.Product) []string {
+	invariants := strings.TrimSpace(product.Invariants)
+	if invariants == "" {
+		return homes
+	}
+	return append(append([]string(nil), homes...), invariants)
+}
+
+// pathOr is the file a finding sends somebody to, and the file to fall back on
+// where the finding names none.
+func pathOr(path, fallback string) string {
+	if strings.TrimSpace(path) == "" {
+		return fallback
+	}
+	return path
+}
+
 // invariantProblems is the invariants home read for the same question. A
-// directory that could not be opened at all reports nothing here rather than
-// failing the check: a project with no invariants yet simply has none, and the
-// missing-directory case is `yoyo doctor`'s to describe.
-func invariantProblems(repository string, product config.Product) []invariant.Problem {
+// directory that is not configured, or that does not exist, records no
+// invariants and is not a defect; anything else that stopped it being read is
+// returned, because an invariants home this command could not open and reported
+// as clean is a false green over documents it says it reads.
+func invariantProblems(repository string, product config.Product) ([]invariant.Problem, error) {
 	if strings.TrimSpace(product.Invariants) == "" {
-		return nil
+		return nil, nil
 	}
 	set, err := (invariant.Store{RepositoryRoot: repository, Directory: product.Invariants}).Load()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read the invariants in %s: %w", product.Invariants, err)
 	}
-	return set.Problems
+	return set.Problems, nil
+}
+
+// governedLinkProblems is every broken link written inside an artifact home.
+//
+// The links are read here because the gates that read these documents during a
+// run escalate a broken one written in a governed document — and a class
+// escalated in every gate and failed in none would be exactly the reporting this
+// command exists to be the other half of.
+//
+// The walk is the whole repository rather than the homes alone, because
+// resolving a link needs the document at its other end and that document is
+// usually not in a home. Which of the results this command answers for is then
+// decided by where the document making the link lives, asked of the one place
+// that answers it. A broken link outside the homes is a developer's, and it
+// fails in the check that found it rather than here.
+func governedLinkProblems(repository string, cfg config.Config) ([]doclink.Problem, error) {
+	problems, err := doclink.Check(repository)
+	if err != nil {
+		return nil, fmt.Errorf("read the links this repository's documents make: %w", err)
+	}
+	governed := make([]doclink.Problem, 0, len(problems))
+	for _, problem := range problems {
+		if governeddoc.Governed(cfg, problem.Path) {
+			governed = append(governed, problem)
+		}
+	}
+	return governed, nil
 }
 
 func reportGovernedCheckError(stdout, stderr io.Writer, jsonOutput bool, err error) int {

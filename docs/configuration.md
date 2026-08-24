@@ -1059,13 +1059,15 @@ kinds, and a listing narrowed to the goals would otherwise hide the design that
 names one of them and resolves to nothing.
 
 `check` is the one of the three that refuses. It reads every governed document —
-the artifacts, the goals stated in them, and the invariants — and exits 1 on a
-defect in any of them, naming the file, the role that owns it, and the command
-that reaches that role. It exists because these documents live in directories
-every developer's diff refuses, so a defect in one is nobody's to fix but the
-owner's: the checks that read them during a run escalate what they find instead
-of failing, and this is where it fails. Run it after you edit one of these
-documents; nothing else you run will go red on what you wrote.
+the artifacts, the goals stated in them, the invariants, and the Markdown links
+written inside an artifact home — and exits 1 on a defect in any of them, naming
+the file, the role that owns it, and the command that reaches that role. It
+exists because these documents live in directories every developer's diff
+refuses, so a defect in one is nobody's to fix but the owner's: the checks that
+read them during a run escalate what they find instead of failing, and this is
+where it fails. Run it after you edit one of these documents; nothing else you
+run will go red on what you wrote. A broken link written anywhere else is a
+developer's, and it fails in the check that found it rather than here.
 
 ### Goals, and the work attributed to them
 

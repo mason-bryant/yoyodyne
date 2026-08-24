@@ -95,12 +95,18 @@ and it is the one you run:
 ./bin/yoyo artifact check
 ```
 
-It reads every governed document — the artifacts, the goals stated in them, and
-the invariants — and exits non-zero on a defect in any: a goal hard-wrapped
-across two physical lines, a `supports` entry naming a document nobody wrote, an
-artifact reaching no brief, a revision recorded by a role that does not own the
-file. Each one is named with the role that owns it and the command that reaches
-that role.
+It reads every governed document — the artifacts, the goals stated in them, the
+invariants, and the Markdown links written inside an artifact home — and exits
+non-zero on a defect in any: a goal hard-wrapped across two physical lines, a
+`supports` entry naming a document nobody wrote, an artifact reaching no brief, a
+revision recorded by a role that does not own the file, a link that resolves to
+nothing. Each one is named with the role that owns it and the command that
+reaches that role.
+
+A broken link written anywhere else in the repository is not this command's. It
+is a developer's to fix and it fails in the check that found it, which is the
+same rule the whole arrangement runs on: the file the defect is written in
+decides whose it is.
 
 **Nothing else goes red on what you wrote, and that is deliberate.** These
 documents live in directories every developer's change is refused in, so a
