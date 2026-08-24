@@ -12,13 +12,18 @@
 # `bd update` typed in an agent session. This guard is what stands where that
 # discipline was being asked for rather than enforced.
 #
-# It runs as a Claude Code PreToolUse hook on Bash, in both populations that get
-# a shell: harness developer runs, wired in internal/backend/claudecode
-# (developerSandboxSettings), and interactive sessions in this repository, wired
-# in .claude/settings.json. Exit 2 is what blocks a tool call and puts this
-# script's stderr in front of the model; any other non-zero exit would be
-# reported and then ignored, which is the failure mode this guard exists to
-# avoid, so nothing here exits non-zero for any other reason.
+# It runs as a Claude Code PreToolUse hook on Bash. Two populations get a shell
+# and only one is wired to it today: harness developer runs, through
+# internal/backend/claudecode (developerSandboxSettings). Interactive sessions in
+# a checkout are wired in .claude/settings.json, which carries no such stanza, so
+# that population -- the one every recorded loss actually came from -- is still
+# unguarded. docs/configuration.md says the same; keep the two in step rather
+# than letting this comment claim coverage that does not exist.
+#
+# Exit 2 is what blocks a tool call and puts this script's stderr in front of the
+# model; any other non-zero exit would be reported and then ignored, which is the
+# failure mode this guard exists to avoid, so nothing here exits non-zero for any
+# other reason.
 set -uo pipefail
 
 payload=$(cat)

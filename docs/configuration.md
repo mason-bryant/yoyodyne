@@ -882,14 +882,18 @@ carrying `--notes` and names `--append-notes` in the refusal.
 
 Two populations get a shell, and **only one of them is guarded today.** Harness
 developer runs are: the hook travels in the settings the backend hands each run,
-so every developer the harness starts has it. Interactive sessions in this
+so every developer run the harness starts carries it. Interactive sessions in this
 repository are **not** — that wiring belongs in `.claude/settings.json`, and the
 stanza is not there yet. Until it is, the guard does nothing for a person or an
 agent working in a checkout by hand, which is the population the twelve recorded
 losses actually came from.
 
 Both are meant to resolve the same script out of the checkout, so that no
-session is guarded by a copy that has drifted.
+session is guarded by a copy that has drifted. One consequence of resolving it
+there: the hook travels with the harness while the script travels with the
+branch, so a developer run on a branch predating the script finds nothing to
+run. It exits quietly and that run is unguarded, which is deliberate — the
+alternative is a hook error on every Bash call the run ever makes.
 
 It errs toward refusing: it matches the flag in the raw hook payload, so a
 command that merely *mentions* `bd update --notes` — grepping for it in these

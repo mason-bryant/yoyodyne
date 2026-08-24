@@ -42,7 +42,7 @@ const defaultIdleTimeout = 5 * time.Minute
 // The hook command is embedded as JSON text, so its inner quoting is escaped by
 // hand; TestDeveloperSettingsWireInTheNotesGuard decodes this and pins the
 // command to notesguard.HookCommand rather than leaving that escaping trusted.
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash \"${CLAUDE_PROJECT_DIR:-.}/scripts/bd-notes-guard.sh\""}]}]}}`
+const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"guard=\"${CLAUDE_PROJECT_DIR:-.}/scripts/bd-notes-guard.sh\"; [ -f \"$guard\" ] || exit 0; bash \"$guard\""}]}]}}`
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
