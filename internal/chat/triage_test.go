@@ -570,9 +570,17 @@ func triageSend(t *testing.T, options Options) Reply {
 }
 
 // fakeStoppedRuns is the harness's record of which run was made for which work
-// item, which is the only thing a decision is checked against.
+// item, which is what a decision is checked against, and of where each item's
+// own change is, which is what a decomposition under it is gated on.
 type fakeStoppedRuns struct {
 	items map[string]string
+	// unlanded is the change each work item's own runs left off the integration
+	// target, keyed by item. An item missing from it has nothing unlanded, which
+	// is every item in every test that is not about the substrate gate.
+	unlanded map[string]UnlandedChange
+	// unreadable is the item whose records will not be read, so a gate that
+	// cannot establish anything is a state a test can produce.
+	unreadable string
 }
 
 func (f fakeStoppedRuns) WorkItemOf(_ context.Context, runID string) (string, error) {
@@ -581,6 +589,14 @@ func (f fakeStoppedRuns) WorkItemOf(_ context.Context, runID string) (string, er
 		return "", fmt.Errorf("no run %s is recorded", runID)
 	}
 	return workItemID, nil
+}
+
+func (f fakeStoppedRuns) UnlandedChange(_ context.Context, workItemID string) (UnlandedChange, bool, error) {
+	if f.unreadable != "" && f.unreadable == workItemID {
+		return UnlandedChange{}, false, fmt.Errorf("the run records of %s could not be read", workItemID)
+	}
+	unlanded, found := f.unlanded[workItemID]
+	return unlanded, found, nil
 }
 
 // testTriageBudgets is the real durable budget over a temporary state root,

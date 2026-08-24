@@ -1228,6 +1228,10 @@ type fakeTracker struct {
 	// than a claim about prose.
 	blocked [][2]string
 	err     error
+	// linkErr fails a link and nothing else, which is what a tracker that will
+	// not record a dependency looks like from here: the item was created, and the
+	// thing that would hold it back was refused.
+	linkErr error
 }
 
 // trackerUpdate is one edit the fake was asked to apply.
@@ -1284,6 +1288,9 @@ func (f *fakeTracker) Block(_ context.Context, id, reason string) (beads.WorkIte
 func (f *fakeTracker) AddBlocker(_ context.Context, id, blockerID string) error {
 	if f.err != nil {
 		return f.err
+	}
+	if f.linkErr != nil {
+		return f.linkErr
 	}
 	f.links = append(f.links, [2]string{id, blockerID})
 	return nil

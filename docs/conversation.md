@@ -714,6 +714,23 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
+Work carved out of a run that failed is the one decomposition the harness adds
+a dependency to. Such a child is written against the change that run made, and
+that change is on the branch the run preserved rather than on the branch a fresh
+worktree is cut from — so an item assuming files that exist only there is not
+ready, however clean it reads, and the run that pulled it would start in a
+worktree without them. Where the harness's own run records say the parent's
+change never reached the integration target, a creation under it is linked to
+wait for the parent, the child's notes say which run made that change, which
+branch it is on and which pull request published it, and the result of the
+creation says so to you and to the development manager. The child comes free
+however the change lands: the preserved branch cherry-picked, the pull request
+revived, or the substrate rebuilt from nothing. Which of those is cheapest is
+your decision and the product manager's — the development manager says what it
+thinks and records none of it as scope. Decomposition of work whose change is on
+the target branch is untouched, and so is the dependency structure the
+development manager records itself.
+
 The architect owns the designs, the decision records, and the invariants, and it
 cannot edit any of them from a conversation, because no conversation has tools.
 Decide the change with it and then record it yourself — `yoyo invariant` for an

@@ -131,10 +131,10 @@ func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workIte
 }
 
 // conversationStoppages wires the durable run records a triage decision is
-// checked against, for the role that records one and for no other. It is the
-// same store the docket was built from, so what a decision says it is about and
-// what the entry it came from said can never be two different accounts of one
-// run.
+// checked against, and that a decomposition's substrate gate is decided from,
+// for the role that does both and for no other. It is the same store the docket
+// was built from, so what a decision says it is about and what the entry it came
+// from said can never be two different accounts of one run.
 func conversationStoppages(parts components, role domain.AgentRole) chat.Stoppages {
 	if role != domain.RoleDevelopmentManager {
 		return nil
@@ -142,10 +142,10 @@ func conversationStoppages(parts components, role domain.AgentRole) chat.Stoppag
 	return conversationStoppedRuns{store: parts.store}
 }
 
-// conversationStoppedRuns answers one question about a run: which work item it
-// was made for. The run record is the harness's own, written when the run was
-// reserved, so it is evidence about the stoppage rather than anything the
-// conversation asserted about it.
+// conversationStoppedRuns answers two questions from the run records: which
+// work item a run was made for, and where a work item's own change actually is.
+// The records are the harness's own, written as the run went, so both are
+// evidence rather than anything the conversation asserted.
 type conversationStoppedRuns struct {
 	store *runstate.Store
 }
@@ -156,6 +156,49 @@ func (r conversationStoppedRuns) WorkItemOf(_ context.Context, runID string) (st
 		return "", err
 	}
 	return state.WorkItemID, nil
+}
+
+// UnlandedChange reports the change an item's own work produced that never
+// reached the integration target, which is the substrate a child decomposed out
+// of that item would be written against.
+//
+// It asks the item's latest run and no earlier one, because that run is what the
+// harness last did to the work and therefore where the work now is: a run that
+// landed leaves the files on the target branch whatever the run before it did,
+// and a re-run that stopped leaves them on its own branch whatever the run
+// before it landed. Three questions decide it. A run still going has not failed
+// to land anything yet, and holding a decomposition against work in flight would
+// hold it against a state that resolves itself either way. A recorded
+// integration is the promotion itself, so there is nothing missing. And no
+// recorded change and no commit is a run that produced nothing, so there is
+// nothing to be missing — which is every run that stopped before the developer
+// wrote anything, and every item whose execution is a conversation rather than a
+// run at all.
+func (r conversationStoppedRuns) UnlandedChange(_ context.Context, workItemID string) (chat.UnlandedChange, bool, error) {
+	state, err := r.store.Latest(workItemID)
+	if errors.Is(err, runstate.ErrNoRecordedRun) {
+		// Work the harness has never run has made no change, which is a plain
+		// answer about the item rather than a failure to look.
+		return chat.UnlandedChange{}, false, nil
+	}
+	if err != nil {
+		return chat.UnlandedChange{}, false, err
+	}
+	if !state.Status.Terminal() || state.Integration != nil || (state.Changes == nil && state.HarnessCommit == "") {
+		return chat.UnlandedChange{}, false, nil
+	}
+	// The branch is named whether or not the harness has since removed it. A
+	// removed branch does not make the change any more findable, and a reader
+	// deciding which vehicle lands it is owed the name either way.
+	unlanded := chat.UnlandedChange{
+		RunID:        state.RunID,
+		Branch:       state.Branch,
+		TargetBranch: state.TargetBranch,
+	}
+	if state.PullRequest != nil {
+		unlanded.PullRequest = state.PullRequest.Number
+	}
+	return unlanded, true, nil
 }
 
 // roleDocumentSets names the documents a role reads beyond the specifications.
