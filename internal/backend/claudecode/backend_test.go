@@ -17,6 +17,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/notesguard"
 )
 
 const testRunID = "run-0123456789abcdef0123456789abcdef"
@@ -110,6 +111,58 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+	}
+}
+
+// The shape of the settings a developer run is handed, named rather than
+// anonymous so each field sits beside one of its own kind.
+type guardedHook struct {
+	Type    string `json:"type"`
+	Command string `json:"command"`
+}
+
+type guardedHookMatcher struct {
+	Matcher string        `json:"matcher"`
+	Hooks   []guardedHook `json:"hooks"`
+}
+
+type guardedDeveloperSettings struct {
+	Sandbox struct {
+		Enabled                  bool `json:"enabled"`
+		AllowUnsandboxedCommands bool `json:"allowUnsandboxedCommands"`
+	} `json:"sandbox"`
+	Hooks struct {
+		PreToolUse []guardedHookMatcher `json:"PreToolUse"`
+	} `json:"hooks"`
+}
+
+// TestDeveloperSettingsWireInTheNotesGuard covers the half of the guard that
+// running the script cannot: whether a developer run is actually handed it.
+// The settings are JSON assembled as text with hand-escaped quoting, so this
+// decodes them rather than reading them -- a broken escape would otherwise ship
+// as settings Claude Code rejects, leaving the run unguarded and saying nothing.
+func TestDeveloperSettingsWireInTheNotesGuard(t *testing.T) {
+	t.Parallel()
+
+	var settings guardedDeveloperSettings
+	if err := json.Unmarshal([]byte(developerSandboxSettings), &settings); err != nil {
+		t.Fatalf("developer settings are not valid JSON: %v", err)
+	}
+	if !settings.Sandbox.Enabled || settings.Sandbox.AllowUnsandboxedCommands {
+		t.Fatalf("developer settings no longer confine Bash: %s", developerSandboxSettings)
+	}
+	if len(settings.Hooks.PreToolUse) != 1 || len(settings.Hooks.PreToolUse[0].Hooks) != 1 {
+		t.Fatalf("developer settings carry no single PreToolUse hook: %s", developerSandboxSettings)
+	}
+	if matcher := settings.Hooks.PreToolUse[0].Matcher; matcher != "Bash" {
+		t.Fatalf("PreToolUse matcher = %q, want %q: the guard only matters where a shell is", matcher, "Bash")
+	}
+	hook := settings.Hooks.PreToolUse[0].Hooks[0]
+	if hook.Type != "command" {
+		t.Fatalf("PreToolUse hook type = %q, want %q", hook.Type, "command")
+	}
+	if hook.Command != notesguard.HookCommand {
+		t.Fatalf("PreToolUse command = %q, want %q", hook.Command, notesguard.HookCommand)
 	}
 }
 

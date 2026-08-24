@@ -30,7 +30,19 @@ const defaultTimeout = 4 * time.Hour
 // than the total budget for exactly that reason.
 const defaultIdleTimeout = 5 * time.Minute
 
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
+// developerSandboxSettings is the settings payload a developer run carries. It
+// confines Bash to an OS-level sandbox, and it wires the one PreToolUse hook
+// that stands between a developer's shell and the tracker command that destroys
+// a work item's attribution -- `bd update <id> --notes`, which replaces an
+// item's notes rather than appending to them and takes its `Goal served:` line
+// with them. The harness's own writer cannot do this (internal/beads passes
+// `--append-notes`), so the developer's shell is the only way it happens, which
+// is why the guard belongs here rather than in the tracker client.
+//
+// The hook command is embedded as JSON text, so its inner quoting is escaped by
+// hand; TestDeveloperSettingsWireInTheNotesGuard decodes this and pins the
+// command to notesguard.HookCommand rather than leaving that escaping trusted.
+const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"bash \"${CLAUDE_PROJECT_DIR:-.}/scripts/bd-notes-guard.sh\""}]}]}}`
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
