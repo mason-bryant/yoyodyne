@@ -751,4 +751,5 @@ that carried a dozen, cannot be attributed to any one of them.
 [`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
 against a fabricated state directory holding runs, conversations, and branch
 reviews, without a provider or a repository and without reading your real
-state.
+state. `make test` runs it, so the tool is held to them by the same command as
+everything else in the repository rather than by one somebody remembers.
