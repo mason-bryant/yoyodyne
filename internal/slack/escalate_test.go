@@ -112,26 +112,35 @@ func TestAMissingDirectMessageScopeCostsTheTierAndNotTheChannel(t *testing.T) {
 		t.Fatalf("Once() error = %v, want a missing scope to cost the tier rather than the pass", err)
 	}
 
-	// The channel keeps its pace: the ordinary milestone is posted and its cursor
-	// is written, which is the whole of what "reporting is unaffected" means.
-	if len(posts.requests) != 1 {
-		t.Fatalf("posted %d channel messages, want the channel unaffected by a tier it does not use", len(posts.requests))
+	// The channel keeps its pace: the ordinary milestone opened its thread and was
+	// said in it, and both cursors were written. That is the whole of what
+	// "reporting is unaffected" means, and none of it used to happen.
+	if len(posts.directPosts) != 0 {
+		t.Fatalf("said %d direct messages, want none where the workspace will not open one", len(posts.directPosts))
+	}
+	if len(posts.requests) == 0 {
+		t.Fatal("nothing was posted in the channel, want the tier's refusal to cost the channel nothing")
 	}
 	cursors, err := sink.store.LoadCursors()
 	if err != nil {
 		t.Fatalf("LoadCursors() error = %v", err)
 	}
+	if got := cursors.Streams["run:run-a"].Position; got != 1 {
+		t.Fatalf("the milestone's cursor is at %d, want the channel's own stream to have moved on", got)
+	}
 	if cursors.Streams[escalationStream].Standing == "" {
 		t.Fatal("the escalation cursor did not advance, so the pass would meet the same refusal forever")
 	}
-	if len(said) != 1 {
+
+	refusals := refusalsAmong(said)
+	if len(refusals) != 1 {
 		t.Fatalf("said %q, want the refusal said exactly once", said)
 	}
-	if !strings.Contains(said[0], "im:write") {
-		t.Fatalf("said %q, want the line to name the scope that grants it", said[0])
+	if !strings.Contains(refusals[0], "im:write") {
+		t.Fatalf("said %q, want the line to name the scope that grants it", refusals[0])
 	}
-	if !strings.Contains(said[0], "channel is unaffected") {
-		t.Fatalf("said %q, want the line to say the channel is still reporting", said[0])
+	if !strings.Contains(refusals[0], "channel is unaffected") {
+		t.Fatalf("said %q, want the line to say the channel is still reporting", refusals[0])
 	}
 }
 
@@ -149,17 +158,39 @@ func TestAStandingDirectMessageRefusalIsSaidOnce(t *testing.T) {
 
 	for pass := 0; pass < 3; pass++ {
 		// Every pass has the state to say again, so only the standing refusal
-		// stops the line being repeated.
-		if err := sink.store.SaveCursors(Cursors{SchemaVersion: CursorsSchemaVersion, Streams: map[string]Cursor{}}); err != nil {
+		// stops the line being repeated. The watermark is kept as the first pass
+		// took it, because re-taking it is a different thing to say and not what
+		// this is counting.
+		cursors, err := sink.store.LoadCursors()
+		if err != nil {
+			t.Fatalf("LoadCursors() error = %v", err)
+		}
+		delete(cursors.Streams, escalationStream)
+		if err := sink.store.SaveCursors(cursors); err != nil {
 			t.Fatalf("SaveCursors() error = %v", err)
 		}
 		if err := sink.Once(context.Background()); err != nil {
 			t.Fatalf("Once() error = %v", err)
 		}
 	}
-	if len(said) != 1 {
+	if refusals := refusalsAmong(said); len(refusals) != 1 {
 		t.Fatalf("said %q over three passes, want a standing refusal said once", said)
 	}
+}
+
+// refusalsAmong picks the lines about direct messages being refused out of
+// everything the sink said. A pass says other things — which moment it is
+// reporting from, what it posted — and counting those as repetitions would make
+// this test about the sink's whole log rather than about the one line that must
+// not repeat.
+func refusalsAmong(said []string) []string {
+	var refusals []string
+	for _, line := range said {
+		if strings.Contains(line, "nobody can be messaged directly") {
+			refusals = append(refusals, line)
+		}
+	}
+	return refusals
 }
 
 // A workspace having a bad minute is not the documented opt-out, so it is handed
