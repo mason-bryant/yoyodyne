@@ -55,6 +55,18 @@ package orchestrator
 // passes the same HEAD-state ownership check every read of a worktree's change
 // already passes, and refuses to a person where it does not.
 //
+// # Why the change has to be in it
+//
+// That check says the checkout is untouched; it does not say anything is there.
+// A handback seeded from the target branch rather than from the preserved one is
+// a worktree the harness would call its own and that holds none of the work the
+// findings are about — and a developer handed the findings and an empty
+// directory delivers an empty repair or reinvents the change, with nothing in
+// the run's record afterwards to tell either from a repair that went well. Four
+// same-day rounds were lost that way before anything asked. So the change is
+// asked for as well as the checkout, before the grant is spent, and the resumed
+// run asks again where it would invoke the developer.
+//
 // # What the developer is given
 //
 // Nothing here assembles it. The repair input the run recorded — the reviewer's
@@ -104,13 +116,28 @@ type RepairItems interface {
 }
 
 // RepairWorktrees proves the stopped run's worktree is still the one the harness
-// left. It is the architect's condition on re-entry and it is deliberately the
-// existing gate rather than a second one: anything touched since the blocker
-// refuses, and a refusal is a person's to decide about.
+// left, and that it still holds the change the repair is about. The first is the
+// architect's condition on re-entry and it is deliberately the existing gate
+// rather than a second one: anything touched since the blocker refuses, and a
+// refusal is a person's to decide about. The second is the same question asked
+// of the change rather than of the checkout — a worktree that is exactly as the
+// harness left it and empty passes the first and fails this one.
 //
 // It is satisfied by gitworktree.Manager.
 type RepairWorktrees interface {
 	VerifyOwnedHead(ctx context.Context, worktree gitworktree.Worktree) error
+	PreservedChanges
+}
+
+// PreservedChanges reads what a preserved worktree holds. It is the whole of
+// what proving a handback carries its change needs, and it is stated apart from
+// the gate above so the pipeline's own worktree manager satisfies it too: what
+// this action asks before it spends and what the resumed run enforces before it
+// invokes a developer are one question rather than two.
+//
+// It is satisfied by gitworktree.Manager.
+type PreservedChanges interface {
+	ChangedPaths(ctx context.Context, worktree gitworktree.Worktree) ([]string, error)
 }
 
 // RepairContinueStarter re-enters the harness on one work item. For a run
@@ -138,8 +165,9 @@ type RepairContinuer struct {
 	// Items is the work item the stopped run blocked. Required: the run cannot be
 	// resumed while its item says it is waiting on a person.
 	Items RepairItems
-	// Worktrees proves the preserved worktree is still as the harness left it.
-	// Required: the change handed back is whatever is in it.
+	// Worktrees proves the preserved worktree is still as the harness left it and
+	// still holds the change. Required: the change handed back is whatever is in
+	// it, and a handback carrying nothing is a repair of nothing.
 	Worktrees RepairWorktrees
 	// ConfiguredAttempts is `execution.repair_attempts_before_replan`, which is
 	// the budget the continued run's loop adds its grants to. It is read here
@@ -227,6 +255,56 @@ func (e WorktreeSurgeryError) Error() string {
 
 func (e WorktreeSurgeryError) Unwrap() error { return ErrWorktreeNotAsLeft }
 
+// ErrPreservedChangeMissing is what a handback refused for a worktree holding
+// none of the change it is a repair of unwraps to, so a caller can tell that
+// apart from a worktree somebody has been operating in without matching on the
+// words of either.
+var ErrPreservedChangeMissing = errors.New("the preserved worktree holds none of the change the repair is about")
+
+// MissingPreservedChangeError refuses a continuation whose preserved worktree no
+// longer holds the change the reviewer's findings are about. Nothing was spent
+// and nothing was superseded: the item is still blocked, which is the durable
+// state an escalation would have made anyway.
+type MissingPreservedChangeError struct {
+	RunID        string
+	WorktreePath string
+	Cause        error
+}
+
+func (e MissingPreservedChangeError) Error() string {
+	return fmt.Sprintf(
+		"the worktree run %s preserved at %s holds none of the change it was handed back to repair, so its repair loop was not re-entered and nothing was spent: %v; a repair continues a change that already exists, and re-entering here would hand a developer the findings about that change and an empty worktree — which is delivered as an empty repair or as the same change reinvented, and neither is something the run says afterwards. This is a person's to look at: the item stays blocked, and re-entry is refused until somebody says what became of the change",
+		e.RunID, e.WorktreePath, e.Cause)
+}
+
+func (e MissingPreservedChangeError) Unwrap() error { return ErrPreservedChangeMissing }
+
+// preservedChangeHeld proves the worktree a handback would re-enter still holds
+// the change that handback is about, and says what it found where it does not.
+//
+// It is the one question this whole item turns on. What a continued developer is
+// handed is whatever is in that worktree, and the prompt handed with it is a
+// failure about a change the run already made; the two agree only while the
+// change is there. A handback that arrives on a clean worktree reads to a
+// developer as work to derive from the reviewer's findings, and it has been
+// delivered as exactly that — an empty repair, or ten files reconstructed by
+// hand against a base that had moved — with nothing in the run's own record
+// afterwards to tell it from a repair that went well.
+//
+// A worktree that cannot be read at all is the same answer rather than a
+// different one: the change is not there to hand anybody, and which of the two
+// happened is a person's to find out.
+func preservedChangeHeld(ctx context.Context, worktrees PreservedChanges, state runstate.State) error {
+	changed, err := worktrees.ChangedPaths(ctx, worktreeOf(state))
+	if err != nil {
+		return fmt.Errorf("what %s holds could not be read: %w", state.WorktreePath, err)
+	}
+	if len(changed) == 0 {
+		return fmt.Errorf("%s holds no change at all against the base commit %s the run recorded", state.WorktreePath, state.BaseCommit)
+	}
+	return nil
+}
+
 // Continue carries out one repair-continue decision.
 //
 // The order is the order the guarantees need. Everything that can refuse is
@@ -280,6 +358,14 @@ func (c RepairContinuer) Continue(ctx context.Context, request RepairContinueReq
 	// continued developer is handed back is whatever is in that worktree.
 	if err := c.Worktrees.VerifyOwnedHead(ctx, worktreeOf(prior)); err != nil {
 		return result, WorktreeSurgeryError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
+	}
+	// And that the change is in it, which the gate above does not ask: a worktree
+	// exactly as the harness left it and holding nothing passes that one. The
+	// resumed run asks this again where it would invoke a developer, which is the
+	// enforcement; asking it here is what keeps a handback that cannot work from
+	// spending the item's grant to find out.
+	if err := preservedChangeHeld(ctx, c.Worktrees, prior); err != nil {
+		return result, MissingPreservedChangeError{RunID: prior.RunID, WorktreePath: prior.WorktreePath, Cause: err}
 	}
 	if err := noRunInFlight(c.Runs, entry.WorkItemID); err != nil {
 		return result, err
@@ -441,7 +527,7 @@ func continuableRepair(prior runstate.State) error {
 	if prior.ProviderSessionID == "" {
 		return fmt.Errorf("run %s recorded no developer session, so a continuation could not be the same developer carrying on with the change it made", prior.RunID)
 	}
-	if prior.PathRefusal == nil && prior.CheckFailure == nil && len(prior.ReviewFindingDetails) == 0 {
+	if !handedBackRepair(prior) {
 		return fmt.Errorf("run %s recorded no reviewer findings, failing check, or refused paths, so no failure was ever returned to its developer and there is no repair loop to re-enter: %s stopped for something a repair budget does not answer",
 			prior.RunID, prior.RunID)
 	}

@@ -169,6 +169,12 @@ func reportRepair(stdout, stderr io.Writer, jsonOutput bool, result orchestrator
 		if errors.Is(err, orchestrator.ErrWorktreeNotAsLeft) {
 			fmt.Fprintln(stderr, "nothing was spent and the item is still blocked: say what became of that worktree before the run is continued")
 		}
+		// The twin refusal, and the one an operator can most easily act on: the
+		// worktree is the harness's own and empty, so the change is on the branch
+		// the run recorded if it survived at all.
+		if errors.Is(err, orchestrator.ErrPreservedChangeMissing) {
+			fmt.Fprintln(stderr, "nothing was spent and the item is still blocked: the run's branch is where the preserved change is, so put that worktree back on the change before the run is continued")
+		}
 		return 1
 	}
 	fmt.Fprint(stdout, result.Render())
@@ -287,8 +293,9 @@ may start on, which for a run that stopped on a blocker means putting the item
 back first. A repair needs no such reopening: it supersedes the blocker itself,
 on the item and on the run's own record. It is refused once the item's repair
 grant is spent or the review-round cap has no room left, and refused to a person
-if the preserved worktree is not as the harness left it -- what is in that
-worktree is what a continued developer would be handed back.
+if the preserved worktree is not as the harness left it, or holds none of the
+change it is a repair of -- what is in that worktree is what a continued
+developer would be handed back, and an empty one buys an empty repair.
 
 The intake hold applies to both, because the harness is the one spending here.
 

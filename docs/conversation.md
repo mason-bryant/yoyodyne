@@ -939,16 +939,22 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Five things refuse it, and every one of them is asked before either of those
+Six things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
 run has to be really over. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
-to be there and not already carried out. And **the preserved worktree has to be
+to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so.
+committed — refuses to a person, leaves the item blocked, and says so. And **the
+change has to still be in it**: a worktree the harness would call its own and that
+holds nothing passes the check above and fails this one, and a developer handed
+the reviewer's findings and an empty directory delivers an empty repair or
+reinvents the change from them. The run asks the same question again at the
+moment it would invoke the developer, so a handback that lost its change anywhere
+along the way stops there too, naming the branch as where the work is.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

@@ -2265,17 +2265,32 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Three more things refuse it. The stopped run has to be really over, terminal with
+Four more things refuse it. The stopped run has to be really over, terminal with
 its blocker standing, read from the run's own record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, or whose replay conflicted, never had a failure returned to its
-developer, so there is no repair loop to re-enter. And the preserved worktree has
+developer, so there is no repair loop to re-enter. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
-item blocked and says so. The intake hold applies for the reason it applies to a
+item blocked and says so. And that worktree has to still hold the change: a
+checkout the harness would call its own and that holds nothing passes the gate
+above and fails this one, and a developer handed the reviewer's findings and an
+empty directory delivers an empty repair or reinvents the change from them, with
+nothing in the run's record afterwards to tell either from a repair that went
+well. The intake hold applies for the reason it applies to a
 re-run: this spends on a provider, and the development manager naming the item is
 not the operator naming it.
+
+**The resumed run asks the same question again**, at the moment it would invoke
+the developer, and blocks rather than developing where the answer has changed.
+That is the enforcement rather than a second opinion: it binds every route into a
+repair loop — this action, an interrupted process a later invocation picks up,
+and whatever re-entry is built next — because a handback given a worktree seeded
+from the target branch looks exactly like a valid one and is caught by nothing
+else. The blocker it records names the run's branch as where the preserved work
+is, and says plainly that no developer ran, because the empty diff behind it is
+not a verdict on the change.
 
 **A repair supersedes the blocker rather than needing somebody to remember to.**
 The run that stopped blocked its item and recorded the blocker on its own state,

@@ -842,6 +842,13 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
+		// A handback carries the preserved change, not a clean worktree. The prompt
+		// built below is a failure about a change this run already made, so a
+		// worktree that no longer holds it would put a developer to work deriving
+		// that change from the findings against it.
+		if err := run.verifyHandback(ctx); err != nil {
+			return run.stop(ctx, err)
+		}
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
 			protectedpath.Protect(p.Config), run.repairBudget())
 		if err != nil {
@@ -875,6 +882,17 @@ func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle st
 	default:
 		return developerPrompt(persona, invariants, bundle), nil
 	}
+}
+
+// handedBackRepair reports a resumed run whose next developer invocation is a
+// repair of a change the run already made. The refused paths, the failing check,
+// and the reviewer's findings are each a failure returned about a change that
+// exists, and the presence of any of them is what says the worktree is supposed
+// to hold one. A run that recorded none of the three is owed its first attempt
+// instead — it paused before or during it — and an empty worktree is exactly
+// what that attempt starts from.
+func handedBackRepair(state runstate.State) bool {
+	return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
 }
 
 // activeRun is one work item's run in progress: the durable state, the reported
@@ -1410,6 +1428,46 @@ func (a *activeRun) blockOnFailingCheck(limit int) error {
 		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
 	}
 	return cause
+}
+
+// verifyHandback proves the worktree a repair is re-entered in still holds the
+// change that repair is about, before a developer is handed the failure
+// describing it.
+//
+// This is the enforcement rather than the courtesy. The triage action that
+// carries out a handback asks the same question before it spends the item's
+// grant, and asking it here is what makes the answer bind every other way a run
+// re-enters its repair loop — an interrupted process picked up by a later
+// invocation, and whatever re-entry is built next, neither of which will mention
+// this. The failure it catches is silent by construction: a worktree seeded
+// clean looks exactly like a valid one, so a developer given it delivers an
+// empty repair or reinvents the change, and the run's own record afterwards says
+// neither.
+//
+// It refuses to a person rather than starting over. Whether the change was never
+// seeded or somebody removed it is not something this can tell, and both are
+// decisions about work that may still exist on the preserved branch.
+func (a *activeRun) verifyHandback(ctx context.Context) error {
+	if !handedBackRepair(a.state) {
+		return nil
+	}
+	if err := preservedChangeHeld(ctx, a.pipeline.Worktrees, a.state); err != nil {
+		return a.blockOnMissingPreservedChange(err)
+	}
+	return nil
+}
+
+// blockOnMissingPreservedChange ends a run handed back for a repair of a change
+// its worktree does not hold. It is the handback-side twin of the repair
+// blockers: nothing here says the change was wrong, and the branch the run
+// recorded may still carry every line of it, so what this hands a person is
+// where to go looking rather than a verdict.
+func (a *activeRun) blockOnMissingPreservedChange(cause error) error {
+	blocked := fmt.Errorf("%w: run %s was re-entered for repair and %v", ErrPreservedChangeMissing, a.state.RunID, cause)
+	if err := a.block(renderMissingPreservedChangeNotes(a.outcome, blocked.Error())); err != nil {
+		return errors.Join(blocked, fmt.Errorf("record the missing preserved change as a blocker: %w", err))
+	}
+	return blocked
 }
 
 // blockOnRefusedPaths ends a run whose repair budget was spent still touching
@@ -3533,7 +3591,7 @@ func resumableRepair(state runstate.State) bool {
 	}
 	switch state.Phase {
 	case runstate.PhaseDeveloping:
-		return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+		return handedBackRepair(state)
 	case runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:
@@ -4024,6 +4082,26 @@ func relaunchBlockerVerdict(outcome Outcome, checkFailure *runstate.CheckFailure
 		return "What stopped this run is the provider rather than a verdict on the change. The repair evidence recorded with this note is what the run was already carrying, and it is unresolved rather than dismissed. The branch, worktree, and developer session are preserved."
 	}
 	return "No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider."
+}
+
+// renderMissingPreservedChangeNotes describes a handback that arrived without
+// the change it is a repair of. It names the branch first and says plainly that
+// nothing was developed, because the two things a reader has to be stopped from
+// concluding are that the work is gone and that the empty diff behind this is a
+// developer's verdict on it: the change may be on the recorded branch in full,
+// and no developer was ever invoked.
+func renderMissingPreservedChangeNotes(outcome Outcome, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: it was handed back for a repair, and the worktree it was re-entered in holds none of the change that repair is about.",
+		"No developer was invoked and nothing was developed from scratch; a repair continues a change that already exists, and starting one from an empty worktree is how an empty repair or a reinvented change gets delivered.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"Base commit: " + outcome.BaseCommit,
+		"Nothing here says the change was wrong, and nothing was deleted: the branch above is where the preserved work is if it survived. What this needs is somebody to say whether the worktree was seeded from that branch, and to re-enter the repair once it carries the change again.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
 
 // renderRebaseConflictNotes describes a change that cannot be replayed onto what
