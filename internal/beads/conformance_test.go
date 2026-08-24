@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -154,16 +155,23 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	}
 }
 
-// TestExportConformance checks the two assumptions the run-start refresh rests
-// on and a scripted runner can only restate: that `bd export` is a command bd
-// has, and that it writes the dump at ExportPath carrying the items the tracker
-// holds right now.
+// TestExportConformance checks what the run-start refresh may assume about bd
+// and a scripted runner can only restate: that `export` is a command bd has and
+// completes, and that where it does produce the dump at ExportPath, the dump
+// carries what the tracker holds right now.
 //
-// It is here rather than only in the fake because what the refresh buys is
-// entirely freshness. A `bd export` that quietly did nothing, or wrote somewhere
-// else, would leave every run reading the same stale file it read before while
-// the harness told it the file was current — which is worse than the silence
-// this replaced, and is exactly the failure no fake can show.
+// The second half is conditional because the first version of this test asserted
+// it outright and bd refuted it: in a project freshly `bd init`ed, `bd export`
+// exits zero and no file appears at ExportPath. The JSONL dump is optional in
+// beads — `.beads/config.yaml` ships it commented out and calls it "Disabled by
+// default" — so a project that has not enabled it has no dump for an export to
+// rewrite, and bd is under no obligation to invent one.
+//
+// That refutation is the reason the harness stats the file and reports how old
+// it is rather than treating a clean export as proof of freshness. This test is
+// what would tell us the world had changed: if bd starts writing the dump
+// unasked, the branch below stops being skipped and starts holding the stronger
+// claim.
 //
 // It is skipped where bd is not installed, which is a statement about the
 // machine running the tests rather than about the check being optional.
@@ -191,10 +199,17 @@ func TestExportConformance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
+	// The command itself is unconditional: a run asks for this on every start, and
+	// a bd that refused it would put every run on the no-current-view path.
 	if err := client.Export(ctx); err != nil {
 		t.Fatalf("Export() error = %v", err)
 	}
+
 	dump, err := os.ReadFile(filepath.Join(project, ExportPath))
+	if errors.Is(err, os.ErrNotExist) {
+		t.Logf("bd export wrote no dump at %s in a default project, so the harness is right not to assume one", ExportPath)
+		return
+	}
 	if err != nil {
 		t.Fatalf("read %s after an export: %v", ExportPath, err)
 	}

@@ -15,15 +15,21 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
-Once the item is claimed the run rewrites the tracker's passive export in your
-primary checkout — `bd export`, one of the two files a run is allowed to churn
-there — and tells the developer to read the tracker at that path. It has to,
-because the tracker's own store is a database the developer's sandbox cannot
-open, and the copy of the export inside the isolated worktree is whatever the
-last commit carrying one held, which can be days old and can be missing the very
-item the run is executing. A run whose export could not be refreshed is told that
-in the same place, so an answer taken from the stale copy is reported as
-unverified rather than as a sweep of the tracker.
+Once the item is claimed the run asks the tracker to write out its passive export
+in your primary checkout — `bd export`, one of the two files a run is allowed to
+churn there — and tells the developer where that file is, **when it was last
+written**, and when the run asked. It has to, because the tracker's own store is
+a database the developer's sandbox cannot open, and the copy of the export inside
+the isolated worktree is whatever the last commit carrying one held, which can be
+days old and can be missing the very item the run is executing.
+
+The age travels with the path because a clean export does not prove freshness:
+beads keeps `.beads/issues.jsonl` only where a project turns it on — this
+repository does, in `.beads/config.yaml` — and in a project that keeps none,
+`bd export` succeeds and writes nothing. A run that finds no dump, or whose
+export refused, is told it has no current view at all. Either way the developer
+is told to report an answer taken from a stale file as unverified rather than as
+a sweep of the tracker.
 
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round

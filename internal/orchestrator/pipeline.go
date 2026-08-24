@@ -39,11 +39,12 @@ const maxCommitSubjectBytes = 72
 type WorkTracker interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
 	Claim(ctx context.Context, id string) (beads.WorkItem, error)
-	// Export rewrites the tracker's passive dump of the work items, which is the
-	// only view of the tracker a run has: the store itself is a database outside
-	// the worktree that takes locks even to read. Nothing a run does depends on
-	// the refresh succeeding, so a refusal is carried into what the run is told
-	// about its own view rather than failing the work.
+	// Export asks the tracker to write out its passive dump of the work items,
+	// which is the only view of the tracker a run has: the store itself is a
+	// database outside the worktree that takes locks even to read. Nothing a run
+	// does depends on it, so a refusal is carried into what the run is told about
+	// its own view rather than failing the work — and neither does a nil return
+	// prove a dump exists, which is why the caller goes on to look.
 	Export(ctx context.Context) error
 	RecordOutcome(ctx context.Context, id, notes string) (beads.WorkItem, error)
 	// Block records a durable blocker. The harness uses it when a run stops on
@@ -4019,57 +4020,96 @@ func developerPrompt(persona, invariants, bundle, tracker string) string {
 	return prompt.String()
 }
 
-// trackerView refreshes the tracker's passive export and renders what this run
-// may read of the tracker: where the current export is, or why what is reachable
-// is not current.
+// trackerView asks the tracker to refresh its passive export and renders what
+// this run may read of the tracker: where the dump is and how old it is, or why
+// there is nothing current to read at all.
 //
-// It never fails a run and never returns nothing. A run whose export could not
-// be refreshed still has the stale copy its worktree was checked out with, and
-// what made that dangerous was never its age — it was that the run had no way to
-// know. Both answers below are that sentence, in the two shapes it comes in.
+// The age is reported rather than judged, and that is the whole design. A clean
+// `bd export` is not proof of freshness: the JSONL dump is optional in beads, so
+// in a project that keeps none the export completes and writes nothing, and
+// treating the command's exit code as evidence would tell a run its four-day-old
+// file was current — the ifd.117 failure with a harness voice behind it. What the
+// filesystem can actually prove is when the file was last written, so that is
+// what the run is given, beside the moment it asked.
+//
+// It never fails a run and never returns nothing. A run whose view is old still
+// has that view, and what made the old one dangerous was never its age — it was
+// that the run had no way to know. Both answers below are that sentence.
 func (p Pipeline) trackerView(ctx context.Context) string {
 	if err := p.Tracker.Export(ctx); err != nil {
 		return staleTrackerSection(fmt.Sprintf("it could not be refreshed for this run (%s)", singleLineCause(err)))
 	}
 	root, err := filepath.Abs(p.Repository)
 	if err != nil {
-		return staleTrackerSection(fmt.Sprintf("it was refreshed, but where it was written could not be resolved (%s)", singleLineCause(err)))
+		return staleTrackerSection(fmt.Sprintf("the export was asked for, but where it would be written could not be resolved (%s)", singleLineCause(err)))
 	}
 	path := filepath.Join(root, beads.ExportPath)
-	// The export is proved to be there rather than assumed: a project that has
-	// moved the dump in its own Beads configuration has moved it out from under
-	// the path above, and naming a file that is not there would be exactly the
-	// confident wrong answer this exists to stop.
+	// The dump is proved to be there rather than assumed. A project that keeps no
+	// JSONL export, or has moved it in its own Beads configuration, has nothing at
+	// the path above however cleanly the export ran, and naming a file that is not
+	// there would be exactly the confident wrong answer this exists to stop.
 	info, err := os.Stat(path)
 	if err != nil {
-		return staleTrackerSection(fmt.Sprintf("it was refreshed, but %s is not readable (%s)", path, singleLineCause(err)))
+		return staleTrackerSection(fmt.Sprintf("this project keeps no readable tracker dump at %s (%s)", path, singleLineCause(err)))
 	}
 	if !info.Mode().IsRegular() {
-		return staleTrackerSection(fmt.Sprintf("it was refreshed, but %s is not a regular file", path))
+		return staleTrackerSection(fmt.Sprintf("%s is not a regular file", path))
 	}
-	return currentTrackerSection(path)
+	return currentTrackerSection(path, info.ModTime(), p.clock().Now())
 }
 
-// currentTrackerSection says where the tracker's current export is and what the
-// copy in the worktree is instead, because the worktree copy is the one a
-// developer finds by looking and the one this repository's own documentation
-// cites by path.
-func currentTrackerSection(path string) string {
+// currentTrackerSection says where the tracker's dump is, when it was last
+// written, and what the copy in the worktree is instead — the worktree copy
+// being the one a developer finds by looking and the one this repository's own
+// documentation cites by path.
+//
+// The age is stated before the path is used rather than after, because it is
+// what decides whether the answer to "which work items cite this" is worth
+// having at all.
+func currentTrackerSection(path string, writtenAt, now time.Time) string {
 	return fmt.Sprintf(`# The work tracker as this run started
 
 The tracker's own store is a database outside your worktree that takes a lock
 even to read, so nothing inside this run can open it. What a run reads instead is
-the passive export beside it, and that export was rewritten as this run started —
-after the work item you were given was claimed, so it holds that item too.
+the passive export beside it, which this run asked the tracker to refresh once
+the work item you were given had been claimed.
 
 Read it at %s.
+It was last written %s (%s), and this run asked for it at %s.
+
+Weigh those two before you rely on it. A dump written within this run's lifetime
+is the tracker as it stands, including your own item. One written well before it
+is a dump the refresh did not actually rewrite — beads keeps this file only where
+a project asks it to — so treat what you take from it as unverified and say so,
+rather than reporting it as a sweep of the tracker.
 
 It is outside your worktree, read-only, and no part of your change; nothing you
-write to it would be kept. The copy at %s inside your worktree is the last one
-anybody committed, which can be days old and can be missing work admitted since —
-so when you need to know which work items cite something, search the file named
-above rather than that one.
-`, path, beads.ExportPath)
+write to it would be kept. The copy at %s inside your worktree is older still: it
+is the last one anybody committed, which can be days old and can be missing work
+admitted since, so it is never the file to search.
+`, path, trackerDumpAge(writtenAt, now), writtenAt.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339), beads.ExportPath)
+}
+
+// trackerDumpAge renders how long before now a dump was written, in the coarsest
+// unit that still answers the only question being asked of it: whether this is
+// the tracker as it stands or the tracker as it stood days ago.
+func trackerDumpAge(writtenAt, now time.Time) string {
+	elapsed := now.Sub(writtenAt)
+	switch {
+	case elapsed < 0:
+		// A file dated in the future says the clock moved, not that the dump is
+		// fresh, and reading it as "0 minutes old" would be the friendliest
+		// possible lie.
+		return "at a time later than now, so this machine's clock disagrees with itself about it"
+	case elapsed < time.Minute:
+		return "less than a minute ago"
+	case elapsed < time.Hour:
+		return fmt.Sprintf("about %d minute(s) ago", int(elapsed.Minutes()))
+	case elapsed < 24*time.Hour:
+		return fmt.Sprintf("about %d hour(s) ago", int(elapsed.Hours()))
+	default:
+		return fmt.Sprintf("about %d day(s) ago", int(elapsed.Hours()/24))
+	}
 }
 
 // staleTrackerSection says the run has no current view of the tracker and what

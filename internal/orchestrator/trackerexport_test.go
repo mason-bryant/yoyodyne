@@ -11,8 +11,15 @@ package orchestrator
 // was one.
 //
 // Both halves of the fix are pinned here, because either alone still produces
-// that answer: the export is refreshed after the item is claimed, and a refresh
-// that did not land is said out loud rather than left to be discovered.
+// that answer: the export is asked for after the item is claimed, and what the
+// run is then told is the evidence rather than the intention — where the dump is
+// and when it was last written, or that there is no current view at all.
+//
+// The age is not decoration. `bd export` completing proves nothing: beads keeps
+// the JSONL dump only where a project turns it on, so an export can succeed and
+// leave a four-day-old file exactly where it was. A prompt naming that file with
+// no age beside it would be the ifd.117 answer again, with the harness vouching
+// for it.
 
 import (
 	"context"
@@ -48,6 +55,16 @@ func TestARunReadsATrackerExportRefreshedAfterItsOwnClaim(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "Read it at "+export+".") {
 		t.Fatalf("the developer was not told where the current export is:\n%s", prompt)
+	}
+	// How old the dump is travels with the path, and it is the half that matters:
+	// a clean export is not evidence of freshness, because beads keeps this file
+	// only where a project asks it to. A path with no age beside it is exactly the
+	// confident wrong answer this work item exists to stop.
+	if !strings.Contains(prompt, "It was last written less than a minute ago (") {
+		t.Fatalf("the developer was given a path with no age beside it:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "this run asked for it at ") {
+		t.Fatalf("the developer cannot weigh the dump's age against this run:\n%s", prompt)
 	}
 	// The worktree's own copy is named as the one not to sweep, because it is the
 	// one a developer finds by looking and the one this repository's documentation
@@ -87,11 +104,13 @@ func TestARunWithNoCurrentTrackerExportIsToldWhyRatherThanLeftToTrustAStaleOne(t
 			onExport: func() error { return errors.New("bd export failed: the tracker database is locked") },
 			cause:    "the tracker database is locked",
 		},
-		// The export succeeded and wrote nothing where the harness looks, which is
-		// the shape of a project that has moved its dump in .beads/config.yaml.
+		// The export succeeded and wrote nothing where the harness looks. This is
+		// not a corner: beads keeps the JSONL dump only where a project turns it on,
+		// so `bd export` completing and leaving no file is the shipped default —
+		// TestExportConformance in internal/beads holds that against bd itself.
 		// Naming a file that is not there would be the same confident wrong answer
 		// in a different costume.
-		"the export landed elsewhere": {onExport: nil, cause: "is not readable"},
+		"the project keeps no dump": {onExport: nil, cause: "keeps no readable tracker dump"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

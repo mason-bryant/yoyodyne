@@ -880,6 +880,11 @@ func TestDeveloperPromptKeepsTheHarnessContractAboveAnyPersona(t *testing.T) {
 	}
 }
 
+// promptFixtureInstant is a fixed moment for prompt sections that would
+// otherwise carry the clock, so a test comparing two assembled prompts is
+// comparing what it meant to.
+var promptFixtureInstant = time.Date(2026, 8, 24, 9, 0, 0, 0, time.UTC)
+
 // TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic pins both
 // halves of yoyodyne-ifd.84. A provider only charges the cheaper cached rate for
 // a prefix it has seen byte for byte before, so the harness contract, the
@@ -925,9 +930,12 @@ func TestDeveloperPromptsShareAStablePrefixAndStillCarryWhatIsDynamic(t *testing
 		}
 		// The tracker view is rendered as it would be for a run in this repository,
 		// because the claim being pinned here is that it stays behind the item: a
-		// section carrying an absolute path must not reach the shared prefix.
+		// section carrying an absolute path and a timestamp must not reach the
+		// shared prefix. The instants are fixed so the section is identical between
+		// the two prompts, which is what makes reaching the prefix the only thing
+		// that could put it there.
 		prompts = append(prompts, developerPrompt(persona, set.Select(workItemEvidence(item)...).Text(), bundle.Text,
-			currentTrackerSection(filepath.Join(repository, beads.ExportPath))))
+			currentTrackerSection(filepath.Join(repository, beads.ExportPath), promptFixtureInstant, promptFixtureInstant)))
 	}
 
 	shared := commonPrefix(prompts[0], prompts[1])
