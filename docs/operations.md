@@ -281,6 +281,19 @@ attached, because there is no condition to wait out: a dropped connection is
 already gone, and the provider's own retries are spent before the harness sees
 the terminal.
 
+The provider contradicting itself is in the same class. A stream that ends one
+invocation twice — two terminal results, where there was only ever one ending —
+judges nothing either, and the second of them is quite often the real one: a
+subagent's completion carrying a terminal's marks is read as the invocation's,
+so the run's own ending arrives looking like the duplicate. Because neither
+ending can be told apart from the other, the invocation is not trusted to have
+produced an answer at all, and it is asked again in the same session rather than
+published. That used to fail the run outright as a malformed stream, which is
+how a change that was all but finished came to be recovered by a triage rerun.
+Both endings stay in the run's event log, so what the provider's dialect drifted
+into is diagnosable afterwards. A stream the harness genuinely cannot read still
+fails the run.
+
 One budget covers both provider invocations a run makes. A review the provider
 killed is asked for again on the same count, without redeveloping the change,
 because what the budget bounds is how much of the provider's weather one run
@@ -308,7 +321,9 @@ A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
 provider is enforcing — would earn the identical answer on the next attempt, so
 it fails the run exactly as it always did. So does a 529, which is
 [a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
-any terminal the API did not report at all.
+any terminal the API did not report at all. The invocation ended twice is the one
+thing outside the API's own errors that still relaunches, because it is not a
+verdict on anything — it is the provider failing to say what its verdict was.
 
 ## When a provider stalls or runs out of budget
 
