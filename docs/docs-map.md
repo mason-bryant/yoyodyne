@@ -85,8 +85,9 @@ repository cannot rewrite:
 
 - **Shipped artifacts**, which are on disks we do not control or in text already
   published. Two today:
-  - `docs/configuration.md#checks` — `internal/config/scaffold.go:360`, asserted
-    by `internal/cli/init_test.go:214`. Every `.yoyodyne/config.yaml` that
+  - `docs/configuration.md#checks` — `internal/config/scaffold.go:378`, asserted
+    by `internal/cli/init_test.go:301` and pinned by
+    `internal/doclink/repository_test.go`. Every `.yoyodyne/config.yaml` that
     `yoyo init` has ever generated points at it, in a file its owner edits.
   - `README.md#getting-started` — `.github/release-notes-preamble.md:28`, as the
     repo-root URL `https://github.com/mason-bryant/yoyodyne#getting-started`.
@@ -121,7 +122,11 @@ that resolves to nothing.** A moved anchor is either frozen or re-cited, and
 "the link still opens the right file, just at the top of it" does not count —
 GitHub ignores an unknown fragment silently, so a reader lands on an index with
 no sign anything went wrong. That is the failure mode this policy exists to
-prevent, and it is invisible to exactly the reviewer who would catch a 404.
+prevent, and it is invisible to exactly the reviewer who would catch a 404. It is
+no longer invisible to the checks: `make links` resolves every fragment in the
+repository, so a tranche that leaves one dangling fails before a reviewer sees
+it. The policy above is still what decides which answer is right — freeze,
+re-cite, or move freely — and the check only holds that some answer was given.
 
 **Uniqueness is not required across documents.** `## What a change upstream
 leaves stale` and `## Architectural invariants` each exist today in both the
@@ -543,6 +548,12 @@ URL, so a citation of this repository written as a forge URL is held separately
 by name — `internal/doclink/repository_test.go` carries the list, which today is
 the `docs/configuration.md#checks` that `yoyo init` writes into every generated
 project. A tranche that moves `## Checks` has to repoint that constant too.
+
+Earlier drafts of this section named that checker as work to admit rather than
+work queued, because at the time it was neither. It is neither of those now: it
+was admitted as yoyodyne-ifd.159 and it is built, so nothing here is asking for
+it and no execution run should carry it as a prerequisite. What a tranche owes
+this section is running the check, not writing it.
 
 ## What the architect is being asked
 
