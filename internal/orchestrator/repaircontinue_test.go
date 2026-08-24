@@ -31,16 +31,35 @@ var continueCaps = runstate.TriageCaps{ReviewRounds: 6, RepairGrants: 1, Reruns:
 // in these tests, which is what the development manager's decision spends.
 const continueGrantRounds = 2
 
-// fakeOwnership stands in for the worktree HEAD-state ownership gate: what it
-// was asked about, and what it says.
+// fakeOwnership stands in for the two questions a re-entry asks of the preserved
+// worktree: whether it is as the harness left it, and whether the change is
+// still in it. What each was asked about, and what each says.
 type fakeOwnership struct {
 	err   error
 	asked []gitworktree.Worktree
+	// changed is what the preserved worktree holds. A nil value is the ordinary
+	// case — the change is still there — so a test about anything else is the only
+	// one that has to say so; an empty non-nil slice is the worktree a handback
+	// must refuse. readErr is what stopped the reading where nothing could be read.
+	changed []string
+	readErr error
+	read    []gitworktree.Worktree
 }
 
 func (f *fakeOwnership) VerifyOwnedHead(_ context.Context, worktree gitworktree.Worktree) error {
 	f.asked = append(f.asked, worktree)
 	return f.err
+}
+
+func (f *fakeOwnership) ChangedPaths(_ context.Context, worktree gitworktree.Worktree) ([]string, error) {
+	f.read = append(f.read, worktree)
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	if f.changed == nil {
+		return []string{"internal/orchestrator/repaircontinue.go"}, nil
+	}
+	return f.changed, nil
 }
 
 // continueHarness is the durable state a repair-continue acts on, held together
@@ -513,6 +532,65 @@ func TestARepairRefusesAWorktreeThatIsNotAsTheHarnessLeftIt(t *testing.T) {
 	// rather than from the docket entry that describes it.
 	if len(harness.ownership.asked) != 1 || harness.ownership.asked[0].RunID != docketedRunID {
 		t.Fatalf("ownership asked about %#v, want the stopped run's own worktree", harness.ownership.asked)
+	}
+}
+
+// The failure this item was filed for: a handback that arrives on a worktree
+// holding none of the change it is a repair of. It is refused rather than
+// carried out, because what a continued developer would be given is the
+// reviewer's findings about a change that is not in front of it — which is
+// delivered as an empty repair or as the same change reinvented by hand.
+func TestARepairRefusesAWorktreeThatHoldsNoneOfThePreservedChange(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, continuableState())
+	// As the harness left it, and empty: the ownership gate passes and this is the
+	// only thing that catches it.
+	harness.ownership.changed = []string{}
+
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Continue() error = %v, want the handback refused for holding no change", err)
+	}
+	// The refusal names what it is escalating and why, because a worktree that
+	// looks valid is what made this silent in the first place.
+	if !strings.Contains(err.Error(), "a person's to look at") {
+		t.Fatalf("refusal = %v, want it to say whose decision this now is", err)
+	}
+	if len(harness.started) != 0 {
+		t.Fatalf("started = %#v, want nothing continued", harness.started)
+	}
+	if carried := harness.carried(t); carried != 0 {
+		t.Fatalf("carried out = %d, want a refused re-entry to have spent nothing of the grant", carried)
+	}
+	if harness.tracker.claimed || harness.tracker.item.Status != "blocked" {
+		t.Fatalf("item status = %q, claimed = %t, want it left waiting on a person", harness.tracker.item.Status, harness.tracker.claimed)
+	}
+	if state := harness.reload(t); state.Blocker == "" || !state.Status.Terminal() {
+		t.Fatalf("a refused repair superseded the blocker anyway: %#v", state)
+	}
+	// The change was read from the stopped run's own worktree, from the run's
+	// record rather than from the docket entry that describes it.
+	if len(harness.ownership.read) != 1 || harness.ownership.read[0].RunID != docketedRunID {
+		t.Fatalf("the change was read from %#v, want the stopped run's own worktree", harness.ownership.read)
+	}
+}
+
+// A preserved worktree nobody can read at all is the same answer as an empty
+// one: there is no change to hand a developer, and which of the two happened is
+// a person's to find out.
+func TestARepairRefusesAPreservedWorktreeItCannotRead(t *testing.T) {
+	t.Parallel()
+
+	harness := newContinueHarness(t, continuableState())
+	harness.ownership.readErr = errors.New("worktree is not registered with the expected branch")
+
+	_, err := harness.continuer().Continue(context.Background(), continueRequest())
+	if !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Continue() error = %v, want the handback refused for a change it could not read", err)
+	}
+	if len(harness.started) != 0 || harness.carried(t) != 0 {
+		t.Fatalf("started = %#v, carried = %d, want nothing continued and nothing spent", harness.started, harness.carried(t))
 	}
 }
 

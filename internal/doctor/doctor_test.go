@@ -10,8 +10,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
@@ -98,6 +100,12 @@ func brokenInstallations() map[string]func(*world) {
 		},
 		"a configured check names a program this machine does not have": func(w *world) {
 			w.configuration = strings.Replace(healthyConfig, "go test ./...", "cargo test --all", 1)
+		},
+		"an artifact home has no index at its door": func(w *world) {
+			w.undocument("docs/designs")
+		},
+		"an artifact home's index has stopped answering": func(w *world) {
+			w.rewriteIndex("docs/decisions", "# docs/decisions\n\nWhatever anybody felt like writing.\n")
 		},
 		"the provider is not installed": func(w *world) {
 			w.absent("claude")
@@ -188,12 +196,45 @@ func TestAHealthyInstallationSaysSo(t *testing.T) {
 	if _, warnings, problems := report.Counts(); warnings != 0 || problems != 0 {
 		t.Fatalf("Diagnose() = %d warnings, %d problems: %s", warnings, problems, render(report))
 	}
-	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "provider:claude-code", "forge", "slack"} {
+	for _, want := range []string{"path", "binary", "git", "repository", "tracker", "state", "checks", "artifact-readmes", "provider:claude-code", "forge", "slack"} {
 		if finding, found := findingFor(report, want); !found {
 			t.Fatalf("Diagnose() never checked %q: %s", want, render(report))
 		} else if finding.Status != StatusOK {
 			t.Fatalf("check %q = %s on a healthy installation", want, finding.Status)
 		}
+	}
+}
+
+// An undocumented artifact home is a warning and never a problem: nothing about
+// it stops a run, refuses an invocation, or fails a check. What it costs is paid
+// by the next person to open the directory, which is what a warning is for.
+func TestAnUndocumentedArtifactHomeIsAWarningWithTheFileNamed(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	world.undocument("docs/product/goals")
+	report := world.diagnose()
+
+	finding, found := findingFor(report, "artifact-readmes")
+	if !found {
+		t.Fatalf("Diagnose() never checked the artifact homes: %s", render(report))
+	}
+	if finding.Status != StatusWarning {
+		t.Fatalf("artifact-readmes = %s, want a warning: an undocumented directory stops no work", finding.Status)
+	}
+	if !report.Healthy() {
+		t.Fatalf("Diagnose() = %s, want an installation that still runs work: %s", report.Status, render(report))
+	}
+	if !strings.Contains(finding.Detail, "docs/product/goals/README.md") {
+		t.Fatalf("detail = %q, want the index that is not there named", finding.Detail)
+	}
+	if !strings.Contains(finding.Remedy, "yoyo setup") {
+		t.Fatalf("remedy = %q, want the command that writes it", finding.Remedy)
+	}
+	// Only the one that is missing is named: a report that listed every home
+	// would be one nobody reads to the end of.
+	if strings.Contains(finding.Detail, "docs/designs/README.md") {
+		t.Fatalf("detail = %q, want the homes that are documented left out of it", finding.Detail)
 	}
 }
 
@@ -656,6 +697,9 @@ func newWorld(t *testing.T) *world {
 	w.runner.reply("gh auth status", succeeded("Logged in to github.com"))
 	w.runner.reply("remote get-url", succeeded("git@github.com:example/thing.git"))
 	w.runner.reply("find-generic-password", succeeded("keychain item"))
+	// A project `yoyo init` configured has an index at the door of every artifact
+	// home, so a machine where everything answers has them too.
+	w.documentArtifactHomes()
 	t.Cleanup(func() {
 		for _, held := range w.leases {
 			held.release()
@@ -665,6 +709,46 @@ func newWorld(t *testing.T) *world {
 }
 
 func (w *world) absent(program string) { w.missing[program] = true }
+
+// documentArtifactHomes writes the index every artifact home gets, which is what
+// `yoyo init` leaves behind and what a project configured before these existed
+// does not have.
+func (w *world) documentArtifactHomes() {
+	w.t.Helper()
+	root, err := repowrite.NewRoot(w.project)
+	if err != nil {
+		w.t.Fatalf("NewRoot() error = %v", err)
+	}
+	resolved, err := w.load()
+	if err != nil {
+		w.t.Fatalf("load() error = %v", err)
+	}
+	for _, home := range artifacthome.Homes(resolved.Config) {
+		if _, err := artifacthome.Write(root, home); err != nil {
+			w.t.Fatalf("Write(%s) error = %v", home.Path(), err)
+		}
+	}
+}
+
+// undocument deletes one home's index, which is the state a project configured
+// before these existed is actually in.
+func (w *world) undocument(directory string) {
+	w.t.Helper()
+	path := filepath.Join(w.project, filepath.FromSlash(directory), artifacthome.FileName)
+	if err := os.Remove(path); err != nil {
+		w.t.Fatalf("Remove() error = %v", err)
+	}
+}
+
+// rewriteIndex replaces one home's index with prose that no longer answers the
+// three questions, which is the other way a home stops being documented.
+func (w *world) rewriteIndex(directory, content string) {
+	w.t.Helper()
+	path := filepath.Join(w.project, filepath.FromSlash(directory), artifacthome.FileName)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		w.t.Fatalf("WriteFile() error = %v", err)
+	}
+}
 
 // sinkRecorded leaves the record a sink writes, without a process behind it.
 func (w *world) sinkRecorded(presence slack.Presence) {

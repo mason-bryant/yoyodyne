@@ -281,6 +281,13 @@ type RunReport struct {
 	// is a matter of waiting. It is the one pause that can appear without a run
 	// behind it, on work a directive stopped before it was ever claimed.
 	DirectivePause string `json:"directive_pause,omitempty"`
+	// DependencyPause is set instead of any of the others when what paused the
+	// work was unfinished work the item was made to wait on. It names that work,
+	// because closing it or unlinking it is what makes this continuable — nothing
+	// about it is a matter of waiting on a provider. Like a directive pause it can
+	// appear without a run behind it, on work a dependency stopped before it was
+	// ever claimed.
+	DependencyPause string `json:"dependency_pause,omitempty"`
 	// IntakeHeldSince and IntakeHoldReason are set instead of any of the others
 	// when the work was never started because the operator is holding what the
 	// harness chooses for itself. It never appears on a run: nothing was claimed
@@ -841,6 +848,12 @@ func (r RunReport) Headline() string {
 		// is in flight: a directive can stop work before anything was claimed.
 		return fmt.Sprintf("%s is paused for an unresolved directive and nothing is working on it: %s; /resolve releases it and /work %s carries on",
 			item, r.DirectivePause, item)
+	case r.Paused && r.DependencyPause != "":
+		// A dependency pause is lifted by other work finishing rather than by time,
+		// so this says what to close rather than what to wait for. It never claims a
+		// run is in flight: a dependency can stop work before anything was claimed.
+		return fmt.Sprintf("%s is paused waiting on unfinished work it depends on: %s; closing that work, or unlinking it, is what releases %s and /work %s carries on after that",
+			item, r.DependencyPause, item, item)
 	case r.Paused && r.ProviderStop != "":
 		stopped := "its provider stopped emitting events and was stopped"
 		if r.ProviderStop == ProviderStopBudgetExhausted {

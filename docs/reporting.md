@@ -119,6 +119,33 @@ makes exactly one invocation, so the terminal after it is the reviewer's and no
 other terminal is; the rest are the developer's, and they group into attempts by
 how each one ended.
 
+### Every provider spend, one line
+
+Beside all of that there is an append-only cost log, one line per provider
+invocation, written the moment the provider says what that invocation cost. It
+lives at `<state root>/products/<product id>/spend.jsonl`, and every process the
+harness runs appends to it: the developer's first attempt and every repair after
+it, every review including a branch review, every management-conversation turn,
+and every round of an inter-role exchange.
+
+Each line carries the role and the configured agent that spent it, the phase, the
+amount and its classification, the account alias and the configuration revision
+in force, the run, conversation, or exchange the invocation belonged to — and the
+work item, where the invocation was made for one — the backend, the requested and
+resolved models, and when it happened.
+
+Two things it does deliberately. An invocation the provider ended without pricing
+is classified `unknown` rather than recorded as zero or left out, because a zero
+meaning "nobody was told" understates every total it enters by however much was
+really spent. And nothing here aggregates: adding the lines up is yours, and any
+later query builds on the same lines rather than on a rollup something decided
+for you in advance — which is also what makes the log evidence about what each
+model charges rather than only about what they charge together.
+
+None of the prices above change with it. `yoyo cost` still reads a run's event
+log, which is what lets it answer for runs that finished long before this log
+existed; this is the record that does not have to be reassembled from one.
+
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is
 cleaned up once it integrates, its worktree removed and its branch deleted, so
@@ -428,7 +455,11 @@ Replies go the other way. A reply in a work item's thread, from somebody this
 project granted `direct-work` with a bound Slack member id, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
-and the same resolution, so a run meets it whichever way it arrived. Every reply is answered in its own thread with
-what was recorded or why nothing was, and a project that has granted nobody is
-steered by nobody. What a reply may say is in
+and the same resolution, so a run meets it whichever way it arrived. Every reply
+is answered in its own thread, tagging whoever wrote it, with what was recorded
+or why nothing was; the reply itself is marked with where its directive stands,
+recorded and open or settled; and when the record later says the directive was
+settled, that is said in the same thread, tagged the same way, and the mark on
+the reply moves with it. A project that has granted nobody is steered by nobody.
+What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).

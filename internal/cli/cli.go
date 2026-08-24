@@ -53,7 +53,9 @@ func RunContext(ctx context.Context, args []string, stdout, stderr io.Writer, ve
 	case "evaluation":
 		return runEvaluation(args[1:], stdout, stderr)
 	case "goals":
-		return runGoals(ctx, args[1:], stdout, stderr)
+		// `goals guard` is handed the tool call it decides on stdin, so this is
+		// where the process's own input is bound to it.
+		return runGoals(ctx, args[1:], os.Stdin, stdout, stderr)
 	case "stale":
 		return reportStaleness(ctx, args[1:], stdout, stderr)
 	case "invariant":
@@ -351,7 +353,7 @@ Commands:
   artifact          read the canonical artifacts, and record your approval of one
   amendment         read changes proposed to artifacts, and decide them
   evaluation        read what the product manager made of the ideas you brought it
-  goals             read the recorded goals and what work serves, and witness it
+  goals             read the goals and what work serves, and witness and guard it
   stale             read what a change upstream left unanswered downstream
   invariant         record, amend, retire, and read architectural invariants
   directive         record, resolve, and read durable user directives

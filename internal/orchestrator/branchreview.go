@@ -212,6 +212,10 @@ func (b BranchReviewer) Review(ctx context.Context, request BranchReviewRequest)
 		// zero because this review is the whole of its own event stream rather
 		// than a step inside a longer one.
 		EventSink: b.sink,
+		// And it spends like any other, so it lands in the cost log like any
+		// other: the review is what it belongs to, since there is no run and no
+		// work item behind it.
+		Spend: b.spendAttribution(reviewID),
 	})
 	outcome.SessionID = result.SessionID
 	outcome.Model = result.RequestedModel

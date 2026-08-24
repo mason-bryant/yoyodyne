@@ -491,14 +491,21 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 			// the harness deciding anything.
 			Exempt: cfg.Approvals.WorkItemExemptions,
 		},
-		Model:        agent.Model,
-		Persona:      agent.Persona.Text,
-		Agent:        name,
-		Provider:     domain.BackendClaudeCode,
-		Repository:   repository,
-		ProductID:    cfg.Product.ID,
-		RepositoryID: string(cfg.Product.RepositoryID),
-		Briefing:     briefing,
+		// What every turn of this conversation spends, recorded where a run's spend
+		// is recorded. A conversation costs money and the record has to say so:
+		// what an operator asked to see is what the harness spends on their behalf,
+		// and the management conversation is part of that rather than beside it.
+		Spend:          parts.spend,
+		AccountAlias:   cfg.AccountAlias(),
+		ConfigRevision: cfg.Revision(),
+		Model:          agent.Model,
+		Persona:        agent.Persona.Text,
+		Agent:          name,
+		Provider:       domain.BackendClaudeCode,
+		Repository:     repository,
+		ProductID:      cfg.Product.ID,
+		RepositoryID:   string(cfg.Product.RepositoryID),
+		Briefing:       briefing,
 		// The repository and the tracker are kept reachable so the conversation
 		// can say how old its picture is and take a new one when the operator
 		// asks. The product manager reaches neither: this is the harness's hand,
