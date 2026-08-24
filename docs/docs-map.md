@@ -143,6 +143,17 @@ documents makes into itself. Nothing is scoped out. The method that produced
 them is stated with each set so the executing run can re-derive rather than
 trust, because anything landed between drafting and execution adds rows.
 
+**Which tracker file to sweep.** The Tier 1 rule above turns on which work items
+cite an anchor, so the sweep is only as good as the tracker state it reads — and
+the copy of `.beads/issues.jsonl` inside a run's worktree is whatever the last
+commit carrying one held, which on yoyodyne-ifd.117 was four days old and did not
+contain the item that run was executing. A run is now told, at the end of its own
+prompt, the absolute path of an export rewritten as it started; that is the file
+to search, and the worktree's copy is not. A run told instead that its view could
+not be refreshed has no current tracker state at all, and should report the sweep
+as unmade rather than sweep the stale copy — an anchor wrongly ruled Tier 3 is
+exactly the silently-dangling fragment this policy exists to prevent.
+
 ### Citations of `docs/configuration.md` anchors
 
 With the document each moves to and its tier. **Re-derived on 2026-08-24** for

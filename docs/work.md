@@ -15,6 +15,16 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+Once the item is claimed the run rewrites the tracker's passive export in your
+primary checkout — `bd export`, one of the two files a run is allowed to churn
+there — and tells the developer to read the tracker at that path. It has to,
+because the tracker's own store is a database the developer's sandbox cannot
+open, and the copy of the export inside the isolated worktree is whatever the
+last commit carrying one held, which can be days old and can be missing the very
+item the run is executing. A run whose export could not be refreshed is told that
+in the same place, so an answer taken from the stale copy is reported as
+unverified rather than as a sweep of the tracker.
+
 What the item waits on is read from the tracker at every point the run is about
 to commit to work — before it is claimed or resumed, at the start of each round
 of the gate, and once more before the promotion — rather than trusted from

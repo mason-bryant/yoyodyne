@@ -2,6 +2,7 @@ package beads
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -150,6 +151,57 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	}
 	if marked.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Update() executor = %q, want bd to echo the marker it set", marked.Executor)
+	}
+}
+
+// TestExportConformance checks the two assumptions the run-start refresh rests
+// on and a scripted runner can only restate: that `bd export` is a command bd
+// has, and that it writes the dump at ExportPath carrying the items the tracker
+// holds right now.
+//
+// It is here rather than only in the fake because what the refresh buys is
+// entirely freshness. A `bd export` that quietly did nothing, or wrote somewhere
+// else, would leave every run reading the same stale file it read before while
+// the harness told it the file was current — which is worse than the silence
+// this replaced, and is exactly the failure no fake can show.
+//
+// It is skipped where bd is not installed, which is a statement about the
+// machine running the tests rather than about the check being optional.
+func TestExportConformance(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skipf("bd is not installed: %v", err)
+	}
+
+	project := filepath.Join(t.TempDir(), "tracker")
+	runCommand(t, t.TempDir(), "git", "init", "-q", "-b", "main", project)
+	runCommand(t, project, "git", "config", "user.email", "yoyodyne@example.invalid")
+	runCommand(t, project, "git", "config", "user.name", "Yoyodyne Test")
+	runCommand(t, project, "bd", "init")
+
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	admitted, err := client.Create(ctx, NewWorkItem{
+		Title:       "Read a fresh export",
+		Description: "The item must be in the dump the export writes.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if err := client.Export(ctx); err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	dump, err := os.ReadFile(filepath.Join(project, ExportPath))
+	if err != nil {
+		t.Fatalf("read %s after an export: %v", ExportPath, err)
+	}
+	// The item was admitted after bd init and before the export, so a dump without
+	// it is one written from something other than what the tracker holds now.
+	if !strings.Contains(string(dump), admitted.ID) {
+		t.Fatalf("the export does not carry %s, so it is not the tracker as it stands: %s", admitted.ID, dump)
 	}
 }
 

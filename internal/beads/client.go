@@ -25,6 +25,14 @@ const defaultTimeout = 30 * time.Second
 // problem as a bd failure.
 const MaxPriority = 4
 
+// ExportPath is where Beads writes the passive dump Export refreshes, relative
+// to the repository the tracker lives in. It is Beads' own default rather than
+// anything the harness picks, and a project that has moved it in
+// .beads/config.yaml has moved it out from under this constant — which is why
+// every caller proves the file is there rather than trusting that an export put
+// it there.
+const ExportPath = ".beads/issues.jsonl"
+
 type WorkItem struct {
 	ID                 string
 	Title              string
@@ -423,6 +431,21 @@ func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
 		return WorkItem{}, err
 	}
 	return decodeSingleWorkItem(data)
+}
+
+// Export rewrites the tracker's passive JSONL dump of the work items from the
+// store it is derived from. It is the one call here made for a reader other
+// than this client: the store is a database that takes locks even to read, so a
+// process that cannot open it — a run inside its sandbox is the one this exists
+// for — reads the dump instead, and between exports the dump says whatever it
+// said last.
+//
+// It changes no work item and admits nothing. What it writes is what the
+// tracker already holds, which is why it is safe to ask for at the start of a
+// run that is about to read it.
+func (c Client) Export(ctx context.Context) error {
+	_, err := c.run(ctx, "export")
+	return err
 }
 
 func (c Client) RecordOutcome(ctx context.Context, id, notes string) (WorkItem, error) {
