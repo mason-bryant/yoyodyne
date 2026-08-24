@@ -197,9 +197,9 @@ type RunResult struct {
 	// an amount, whatever the amount was and however the invocation ended.
 	CostReported bool
 	Usage        []byte
-	Process       execution.ProcessResult
-	LastEvent     uint64
-	StopReason    string
+	Process      execution.ProcessResult
+	LastEvent    uint64
+	StopReason   string
 	// UsageLimit is set when the provider reported an exhausted usage limit
 	// during this invocation. It is separate from IsError because the two call
 	// for opposite responses: a failure ends the run, an exhausted limit asks
