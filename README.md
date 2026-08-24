@@ -210,7 +210,8 @@ and personas.
 
 **Or have step 2 walked for you.** `yoyo setup` is that step and everything
 around it as questions — the tracker, the configuration, the checks read from
-what your repository already declares, the tracker's sync remote, and then the
+what your repository already declares, the tracker's sync remote, the index at
+the door of each artifact home, and then the
 optional offer of [reporting into Slack](#reporting-into-slack) — ending with
 `yoyo doctor`, which is what decides whether the installation actually works:
 
@@ -298,6 +299,19 @@ unless you pass `--product`. Nothing already there is overwritten without
 `--force`, and the refusal happens before any file is written, so a project is
 never left half-configured. See [Configuring a project](#configuring-a-project)
 for what is in the file.
+
+**It also puts a `README.md` at the door of every artifact home** — the
+specifications directory and the goals under it, the designs, the decision
+records, and the invariants — saying three things about that directory: what is
+filed there, which agent owns it, and whether you may edit one of those documents
+by hand. The answers are the ones the harness already enforces rather than a
+policy the file invents: a role that is not the owner proposes an amendment, your
+own edit is reported rather than refused, and what a change leaves stale
+downstream is what `yoyo stale` reports. An index that is already there is left
+exactly as it is, `--force` included, because it is your prose rather than
+something `init` generated. [`yoyo doctor`](#checking-the-installation) reports
+one that is missing or has stopped answering, and `yoyo setup` offers to write
+it, which is how a project configured before these existed gets them.
 
 **It also points the tracker at your Git remote**, so the backlog is shared
 rather than one per machine. Beads moves its data over an ordinary Git remote
@@ -441,7 +455,10 @@ A tiny arithmetic library, kept small enough that a change to it is obvious.
 and it is what the conversation is for. An empty or missing specifications
 directory is reported as "product intent is not written down", which is a true
 statement about the repository rather than an error, and the product manager
-says exactly that rather than inferring what your product must be about. Tell it
+says exactly that rather than inferring what your product must be about. The
+`README.md` that `yoyo init` writes there does not change that answer: an index
+says what would be filed in a directory and states no intent, so it is carried
+under a heading of its own and never counted as a specification. Tell it
 what you are building and it will draft the brief and the goals with you.
 
 It cannot save them. The product manager runs with no tools at all — it manages
@@ -522,11 +539,14 @@ make build
 ./bin/yoyo chat
 ```
 
-`make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs. Some of what `test` runs reads this repository's own documents rather than
-its code: a documentation link that resolves to nothing, a goal written across
-more than one physical line, and a governed document whose place in the chain is
-wrong each fail a check rather than costing a reviewer a paragraph.
+`make check` is `fmtcheck`, `links`, `test`, `race`, and `vet`, and it is the
+gate CI runs. Much of it is not about the Go code at all: `links` resolves every
+link and `#fragment` this repository's Markdown makes to itself, and `test` reads
+this repository's own documents and executes the part of the build that is shell,
+so a documentation link that resolves to nothing, a goal written across more than
+one physical line, a governed document whose place in the chain is wrong, and a
+claim in the release scripts' own suites that no longer holds each fail a check
+rather than costing a reviewer a paragraph.
 [Working on yoyo itself](docs/developing-yoyo.md#what-test-checks-besides-the-code)
 says what each one holds and why.
 
@@ -540,25 +560,44 @@ reruns a path that is already exercised rather than executing it for the first
 time when a failure would mean a botched or missing release.
 
 `make release VERSION=<tag>` is that build with its gate in front, so a daily
-cadence costs two commands rather than a procedure:
+cadence costs two commands rather than a procedure once this tag's notes are on
+`main`:
 
 ```sh
 make release VERSION=v0.3.0
 git push origin v0.3.0
 ```
 
-It walks [the documented adoption path](scripts/walk-adoption.sh), runs
+It gates on [this release's notes](docs/releases/README.md), walks [the
+documented adoption path](scripts/walk-adoption.sh), runs
 `check`, builds and verifies the archives for `<tag>`, then tags the commit
 they were built from — in that order, so a red gate refuses the cut, names what
 was red, and leaves nothing to undo. It also refuses a tag that is not
 `vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
 that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
+over it. The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl`, which the walkthrough rewrites on its way through — do
+not count as a dirty tree: the cut commits them as their own housekeeping
+commit once every gate is green, so the tag still names a tree with nothing
+uncommitted in it, and on a day it had to it prints
+`git push --atomic origin main <tag>` instead, because the branch has to carry
+that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
+
+A tag whose notes are missing is the one refusal that leaves something behind:
+the cut drafts `docs/releases/<tag>.md` from the work items closed since the
+last tag and stops, so you read it, place each item under **key functionality**,
+**enhancements**, or **bug fixes**, and land it on `main` — the cut refuses a
+`HEAD` that `origin/main` does not have, so notes committed only in your
+checkout stop the next cut rather than that one. Cut again once `origin/main`
+carries them: the tag then names a commit carrying its own notes, and the
+release workflow publishes that file as the release page's body.
+[`scripts/release-notes-test.sh`](scripts/release-notes-test.sh) executes the
+drafting, the section shape, and that composition, and `make test` runs it too.
 
 ## The conversation
 
@@ -611,7 +650,13 @@ introduction before them, or an empty goals section is named on stderr when the
 conversation opens and listed for the product manager alongside the
 specifications themselves — and still read, because refusing to load it would
 silently lose intent somebody wrote down. A directory with nothing in it is
-reported the same way rather than treated as a product with no intent.
+reported the same way rather than treated as a product with no intent. A
+`README.md` is the one file the shape is not asked of: a directory index says
+what is filed beside it and states no intent of its own, which is the same reason
+artifact identity skips it, so there is no introduction for goals to serve and no
+goals to state. It is carried into the conversation under a heading of its own
+and is not counted as a specification, so a directory holding nothing but the
+indexes `yoyo init` wrote is still a repository that has recorded no intent.
 
 The context also says outright what those specifications record of the two
 documents intent is written in — the brief saying what the product is and who it
@@ -922,7 +967,7 @@ everything else is said to the product manager:
 /intake                  whether the harness may start work on its own, and why not
 /stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
-/directives              what you have directed, and what is still unresolved
+/directives              what you have directed, and what is still in force
 /directive <what you have decided>
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
@@ -1124,10 +1169,16 @@ invites:
 
 ```text
 cost: at least $27.93 across 3 run(s)
-  run-0123…  started 2026-08-10T09:14:02Z [failed, reviewing] $8.91 from 3 invocation(s)
+  run-0123…  started 2026-08-10T09:14:02Z [stopped, reviewing] $8.91 from 3 invocation(s)
   run-89ab…  started 2026-08-10T11:02:41Z [succeeded, complete, integrated] $19.02 from 2 invocation(s)
   run-cdef…  started 2026-08-09T18:30:00Z [failed, developing] unknown: the run's event log is no longer recorded
 ```
+
+The word in the brackets is the same fixed vocabulary
+[`yoyo status`](#what-became-of-the-runs-and-what-remains-of-them) uses, read from
+the same records: `stopped` ended on a blocker somebody has to decide about and
+left its change intact, `failed` left nobody anything to act on, and a run met in
+both places is described the same way in both.
 
 From the command line, `yoyo cost` prices items from the same recorded runs —
 one line per item, or a run-by-run breakdown when you name one — and
@@ -1255,8 +1306,17 @@ unresolved.
 `/resolve <id> <how it was settled>` lifts the pause. The release is the record
 changing rather than anything done to a run: the next time the item is started,
 in whichever process, the same run continues from the gate it stopped at.
-`/directives` lists what is recorded and what is still unresolved. An identifier
-may be shortened to any prefix that names exactly one directive.
+`/directives` lists what is recorded, in force first and no longer in force
+after it. An identifier may be shortened to any prefix that names exactly one
+directive.
+
+An operational directive has nothing to resolve, so what settles one is somebody
+carrying it out — usually the product manager admitting the work you asked for,
+naming your directive as it admits the item so the directive's own record is told
+which item it became. That records what it produced and does not withdraw it: a
+standing instruction stays in force, and stays in the listing, with the account
+of what it became under it. See
+[`docs/conversation.md`](docs/conversation.md#directives-and-the-work-they-pause).
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:
@@ -1614,16 +1674,31 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Five things refuse it, and every one of them is asked before either of those
+Six things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
 run has to be really over. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
-to be there and not already carried out. And **the preserved worktree has to be
+to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so.
+committed — refuses to a person, leaves the item blocked, and says so. And **the
+change has to still be in it**: a worktree the harness would call its own and that
+holds nothing passes the check above and fails this one, and a developer handed
+the reviewer's findings and an empty directory delivers an empty repair or
+reinvents the change from them.
+
+The run asks that last question again itself, on every resume whose worktree is
+supposed to hold a change already — one picked up inside its repair loop, and one
+picked up at the checks or the review, which has a developer attempt behind it
+and nothing else for those steps to judge. Only the run owed its first attempt is
+exempt. And a **fresh run is refused where a repair is owed**: an item whose last
+run stopped with its change preserved on a branch does not get started over from
+nothing, because a clean worktree off the target branch looks perfectly valid and
+is caught by nothing downstream. The refusal names the branch and both ways out,
+and `yoyo triage rerun` is the one that starts over deliberately — a claimed
+re-run is exactly what lets a fresh run through.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull
@@ -2332,11 +2407,13 @@ when it is off and nothing is holding the pull request back the harness just
 merges, so only a repository that has something to wait for and no way to wait
 for it is reported as unpublishable, naming the setting. Administrator override
 is never used to get past a protection rule. A run whose merge is queued that
-way reports the pull request as queued and finishes;
+way reports the pull request as queued and finishes, leaving the work item open
+because nothing has yet merged the change anywhere but locally;
 [`yoyo reconcile`](#recovering-interrupted-runs) settles it once the forge has
-merged, or reports an outstanding publication if the forge dropped the queued
-merge. A repository with no configured remote publishes nothing and behaves
-exactly as a purely local project does.
+merged — closing the item then — or, if the forge dropped the queued merge,
+records an outstanding publication and hands the item back with a blocker. A
+repository with no configured remote publishes nothing and behaves exactly as a
+purely local project does.
 
 Merging belongs to `approvals.integration`, so the two settings compose rather
 than imply one another. Publishing with `integration: human` opens the pull
@@ -2367,7 +2444,9 @@ repository id follow from it. Editing a field is the whole of what changes the
 harness's behavior. `init` also points the tracker at a remote so the backlog is
 shared rather than per-machine — this project's Git remote by default, or the
 URL `--tracker-remote` names; see
-[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs).
+[Where the tracker syncs](docs/configuration.md#where-the-tracker-syncs) — and
+writes the `README.md` each artifact home gets, which says what is filed there,
+who owns it, and whether you may edit one by hand.
 
 ```yaml
 # .yoyodyne/config.yaml, abbreviated
@@ -2460,10 +2539,30 @@ Excluding it is load-bearing rather than tidiness. A run refuses to start while
 the primary checkout holds anything uncommitted that the project did not
 declare, untracked files included, and an untracked `.yoyodyne/` is exactly
 that — so without the exclude line the first `yoyo run` names the six files
-`init` just wrote and stops. The tracker is worth the same treatment if you are
-keeping the whole adoption local: `bd init` writes `.beads/` and a set of agent
-instruction files, and each of those is another untracked path a run would
-refuse over.
+`init` wrote there and stops.
+
+**The exclude line does not cover everything `init` writes.** It also puts a
+`README.md` at the door of each of the five artifact homes — `docs/product`,
+`docs/product/goals`, `docs/designs`, `docs/decisions`, and
+`docs/decisions/invariants` — and in a repository you are a guest in those are
+five more untracked paths, in somebody else's `docs/` tree rather than in a tool
+directory of your own. They need the same decision `.yoyodyne/` just got, and it
+is a decision rather than a default: commit them where an index saying what is
+filed in each directory is worth having in the project, and where it is not,
+exclude or delete them:
+
+```sh
+printf '%s\n' docs/product/README.md docs/product/goals/README.md \
+  docs/designs/README.md docs/decisions/README.md \
+  docs/decisions/invariants/README.md >> .git/info/exclude
+```
+
+Deleting them instead is safe, and it is noticed rather than silent: `yoyo
+doctor` reports each home that has no index, as a warning rather than a problem,
+so an installation without them runs work exactly as one with them does. The
+tracker is worth the same treatment if you are keeping the whole adoption local:
+`bd init` writes `.beads/` and a set of agent instruction files, and each of
+those is another untracked path a run would refuse over.
 
 **Or keep it outside the repository entirely.** Every command that reads a
 configuration takes `--config`, which names the configuration *file* rather than
@@ -2482,7 +2581,10 @@ the checkout — relative paths in the file resolve against the parent of
 `.yoyodyne`, which is no longer the project — and pass `--config` on every
 command thereafter. The artifact directories are unaffected: `specifications`,
 `designs`, `decisions`, and `invariants` resolve against `product.repository`
-and go on naming directories inside the repository being worked on.
+and go on naming directories inside the repository being worked on. So moving
+`.yoyodyne/` out does not move the five indexes with it — they were written into
+that repository's `docs/` tree by the `init` above and are still there, and the
+paragraph above is the same decision to make about them.
 
 Two things are true of both, and the second is the point rather than a cost:
 
@@ -2593,7 +2695,8 @@ of them in the words that document states it in.
 ```sh
 ./bin/yoyo goals list          # the goals work can be attributed to, and where each is stated
 ./bin/yoyo goals attribution   # what each admitted work item says it is for
-./bin/yoyo goals witness       # witness the goals already recorded on admitted work
+./bin/yoyo goals witness       # witness the goals already recorded on work items
+./bin/yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 Nothing there writes an attribution, for the same reason nothing writes an
@@ -2608,8 +2711,9 @@ wrong, and it is what `yoyo goals attribution` exits non-zero for.
 There is a third way to record no goal, and it is reported apart from both.
 `yoyo` only ever appends to an item's notes, but anything else with the tracker's
 command line can replace them, and a replacement that does not carry the goal
-forward destroys it — which has happened, to six items at once, and read
-afterwards exactly like work admitted before the check existed. So every write
+forward destroys it — which has happened twice, to six items at once and then to
+twelve more, and read afterwards exactly like work admitted before the check
+existed. So every write
 that puts a goal into an item's notes also records that goal in the tracker's
 metadata, where replacing the notes cannot reach it. An item carrying that
 witness and no goal has lost one rather than never had one: it is reported as
@@ -2621,10 +2725,42 @@ while the item stayed empty.
 
 The witness covers a goal from the moment it is written and no earlier, so an
 attribution made before it existed is protected by nothing. `yoyo goals witness`
-sweeps that up: it records, on every admitted item whose notes already state a
-goal and which carries no witness, the goal those notes state. It decides
-nothing — the statement is the item's own — and it is worth running once over an
-existing backlog.
+sweeps that up: it records, on every work item whose notes already state a goal
+and which carries no witness, the goal those notes state. It decides nothing —
+the statement is the item's own — and it is worth running once over an existing
+backlog. It walks every status the tracker holds rather than the queue, because
+the command that destroys an attribution reaches a claimed or closed item just
+as easily, and most of the losses on record were on items that had closed.
+
+The witness is what survives a loss; `yoyo goals guard` stops the write that
+causes one. It reads a tool call an agent session is about to make and
+refuses a shell command running `bd update <id> --notes`, which is where every
+recorded loss came from. A replacement carrying a `Goal served:` line through is
+allowed, because that one destroys nothing — and it is the way past a refusal
+when the notes genuinely have to be rewritten. It decides from the command line
+alone and never reads the item, which is what keeps it from waiting on a locked
+tracker in front of every command an agent runs; the price is that it checks such
+a line is present and not that it is the item's own, so a statement invented in
+the replacement passes and the witness is what catches it. The harness gives the
+guard to every developer run it makes on the Claude Code backend, which is where
+the hook is passed; an interactive session in your own repository gets it by
+wiring the same command as a `PreToolUse` hook on `Bash` in
+`.claude/settings.json`:
+
+```json
+{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}
+```
+
+The two halves are not interchangeable, and neither of them covers everything.
+The guard covers the sessions it is wired into and says nothing about a command
+typed anywhere else; it is also passed to the provider rather than enforced by
+the harness, so a session where the hook does not fire runs the command exactly
+as it did before and nothing reports that it did. The witness reaches every item
+the sweep walked, but what it buys depends on where that item is: on work the
+audit reads — `open` and `blocked` — a loss becomes a `lost` state that `yoyo
+goals attribution` reports and exits non-zero for, and on claimed and closed
+work, which the audit does not read, it keeps the words so a destroyed
+attribution can be put back rather than judged again.
 
 A goals document nobody can read goals out of — one with no `Goals` heading, or
 with nothing stated under it — is named on stderr rather than quietly shrinking
@@ -2784,7 +2920,8 @@ yoyo doctor --json     # the same findings, for something automating the repair
 It looks at the `yoyo` on your `PATH` and whether it is the build you think it
 is, Git and whether this project is a repository with something to branch from,
 the tracker and whether it answers *here*, the configuration, the deterministic
-checks and whether this machine can run the programs they name, each provider
+checks and whether this machine can run the programs they name, whether each
+artifact home still says what is filed there and who owns it, each provider
 your agents name — installed always, and authenticated where the harness has an
 adapter that can ask, which today is Claude Code — forge access when the project
 publishes, and, when reporting is on, this project's own Slack secrets and the
@@ -2834,8 +2971,12 @@ What *does* change things is [`yoyo setup`](#getting-started), which is this
 command's other half: it walks the steps that reach the state described here,
 asking first, and then runs this diagnosis and takes its exit status from it. So
 a finding here is either something setup can offer to do — the tracker, the
-configuration, this project's Slack secrets — or something it deliberately
-leaves to you, which it hands over with the same command you see above.
+configuration, the index at the door of each artifact home, this project's Slack
+secrets — or something it deliberately
+leaves to you, which it hands over with the same command you see above. An index
+that is there and has stopped saying what is filed there is the one setup asks
+about twice: writing one that is missing loses nothing, and replacing one you
+wrote loses your prose, so that question defaults to no.
 
 The two checks worth calling out are the ones that catch an installation that
 was working and stopped. **A long-running sink is started from a binary that
@@ -3055,6 +3196,19 @@ attached, because there is no condition to wait out: a dropped connection is
 already gone, and the provider's own retries are spent before the harness sees
 the terminal.
 
+The provider contradicting itself is in the same class. A stream that ends one
+invocation twice — two terminal results, where there was only ever one ending —
+judges nothing either, and the second of them is quite often the real one: a
+subagent's completion carrying a terminal's marks is read as the invocation's,
+so the run's own ending arrives looking like the duplicate. Because neither
+ending can be told apart from the other, the invocation is not trusted to have
+produced an answer at all, and it is asked again in the same session rather than
+published. That used to fail the run outright as a malformed stream, which is
+how a change that was all but finished came to be recovered by a triage rerun.
+Both endings stay in the run's event log, so what the provider's dialect drifted
+into is diagnosable afterwards. A stream the harness genuinely cannot read still
+fails the run.
+
 One budget covers both provider invocations a run makes. A review the provider
 killed is asked for again on the same count, without redeveloping the change,
 because what the budget bounds is how much of the provider's weather one run
@@ -3082,7 +3236,9 @@ A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
 provider is enforcing — would earn the identical answer on the next attempt, so
 it fails the run exactly as it always did. So does a 529, which is
 [a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
-any terminal the API did not report at all.
+any terminal the API did not report at all. The invocation ended twice is the one
+thing outside the API's own errors that still relaunches, because it is not a
+verdict on anything — it is the provider failing to say what its verdict was.
 
 ### When a provider stalls or runs out of budget
 
@@ -3127,14 +3283,19 @@ earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded, remote branch deleted, and your local
-target branch caught up onto the merge commit the forge made. Settling a merge
+target branch caught up onto the merge commit the forge made — and closes the
+work item, which the run deliberately left open because a queued merge is a
+publication nothing has confirmed. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
 
 Two settle-path outcomes leave a publication outstanding for a person, each
 with its own line on the work item. A merge the forge **dropped** is the
 first: something the base branch required went unmet, the harness does not
-merge past a requirement, and nothing about that publication is confirmed. A
+merge past a requirement, and nothing about that publication is confirmed — so
+the item is handed back to you with a blocker rather than closed as integrated,
+which is also what puts it where a bounded re-arm of the dropped merge can be
+decided. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
 promotion, recording the merge commit, retiring the consumed branch — failed,
@@ -3149,6 +3310,23 @@ exercise judgement: it reports and leaves the decision where it belongs.
 Reconcile never invokes a provider either: a lost process handle is not a
 reason to start a second developer for an item.
 
+Every other publication is re-asked about on the same sweep. A run that ended
+without its publication settled — one that failed before it integrated
+anything, or one whose request the forge merged after the harness had stopped
+watching — used to keep whatever the forge last said at the moment the run
+ended, for good: a pull request somebody merged days later stayed recorded open
+and unmerged, and the triage docket and the status surfaces read that rather
+than the truth. Reconcile now asks the forge about each of those and records
+the answer — merged, closed, or still open. It only writes the record: nothing
+is merged, nothing is closed, no branch moves, and the work item is not
+touched, so a request that turns out to have merged outside the harness leaves
+its publication outstanding for triage rather than being finished behind your
+back. A record the forge agrees with is left exactly as it is, and a merged one
+is never asked about again — merged is the one answer a forge does not take
+back. A record left alone for a reason, such as a branch the forge answers
+about with some other request, is reported and is not a failure; a forge that
+could not be reached is, and the next sweep asks the same question again.
+
 Once the runs are settled it converges local state, which is the rest of the
 post-merge hygiene you would otherwise do by hand. Every target branch the
 harness knows about is caught up onto its remote counterpart — the same
@@ -3156,7 +3334,9 @@ fast-forward the settle paths make, for a target left behind by something no run
 is going to finish, or a catch-up that was held at the time — and every settled
 run's leftover branch whose work the target already carries is deleted. Both
 refuse on evidence rather than on a record: a remote that has diverged from
-your local branch is reported for you to decide rather than reconciled, a
+your local branch is reported for you to decide rather than reconciled — the
+steps for deciding it are
+[here](#unwedging-a-target-branch-that-diverged-from-the-forge) — a
 branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
@@ -3171,11 +3351,110 @@ directive](#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
 
-### What became of the runs, and why one failed
+### Unwedging a target branch that diverged from the forge
+
+Every catch-up and every promotion here is fast-forward-or-nothing, so a local
+target branch and the remote's having both moved is the one repository state the
+harness will not decide. You see it as the same line on every sweep:
+
+```
+main not caught up: main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right
+```
+
+and until it is resolved every run that reaches integration for that target
+stops with both branch positions named rather than promoting into it. That
+refusal is deliberate — the alternative is a promotion nobody can publish and an
+item closed as integrated against it — but it does mean the branch does no more
+work until you say which history is right. Nothing sweeps it away in the
+meantime, and no later `yoyo reconcile` resolves it.
+
+Runs that predate the fix in `yoyodyne-ifd.177` could produce this by losing a
+cross-machine race after promoting, and a repository still standing in that state
+is what this section is for. A run today cannot produce it that way: it settles
+where the remote target stands before promoting, and stops without closing
+anything if the remote moves afterwards. Reaching it now takes somebody pushing
+to the target directly, or the window a queued merge leaves open. The recovery is
+the same either way, and it is yours to run.
+
+**Which side is which.** The remote is the shared truth: the forge has it, and so
+does every other checkout of the project. The commits your local branch has that
+the remote does not are promotions this repository made and never published —
+reviewed and integrated here, and nowhere else. Keeping the remote's history and
+preserving those commits on a branch of their own is the only resolution that
+discards nothing, and it is the one below. Do not resolve it the other way by
+force-pushing your local branch over the remote: that throws away whatever the
+remote gained, which is by definition work this repository has never seen.
+
+1. **Stop the harness spending, and check nothing is mid-promotion.**
+
+   ```sh
+   ./bin/yoyo pause
+   ./bin/yoyo status
+   ```
+
+   `pause` keeps new attempts from starting. `status` is what tells you no run is
+   in the `integrating` phase: a promotion already under way holds that target's
+   promotion lease, and moving the branch underneath it is exactly the race the
+   lease exists to prevent. Wait for anything integrating to finish.
+
+2. **See what each side has that the other does not**, so you are deciding about
+   named commits rather than two hashes:
+
+   ```sh
+   git -C <repository> fetch origin main
+   git -C <repository> log --oneline origin/main..main   # promotions the remote never received
+   git -C <repository> log --oneline main..origin/main   # what the remote gained meanwhile
+   ```
+
+3. **Preserve the local-only commits on their own branch**, so nothing you are
+   about to move away from becomes unreachable. Naming it after the commit makes
+   the step safe to repeat:
+
+   ```sh
+   git -C <repository> branch diverged/main-$(git -C <repository> rev-parse --short main) main
+   ```
+
+4. **Put the target back onto the shared truth.** When the primary checkout is not
+   on the branch, move the ref as a compare-and-swap on the commit you read in
+   step 2, so a branch that moved since loses the race rather than being
+   overwritten:
+
+   ```sh
+   git -C <repository> update-ref refs/heads/main <remote-commit> <local-commit>
+   ```
+
+   When the checkout is on the branch, confirm there is nothing uncommitted first,
+   because the move discards changes to tracked files:
+
+   ```sh
+   git -C <repository> status --porcelain    # empty, or only your declared exports
+   git -C <repository> reset --hard origin/main
+   ```
+
+5. **Let the harness go again, and confirm the wedge is gone.**
+
+   ```sh
+   ./bin/yoyo resume
+   ./bin/yoyo reconcile
+   ```
+
+   The held catch-up should be absent from the sweep, and runs for that target
+   promote again. That is the state this recovery is for: resolvable, and back
+   under the harness.
+
+6. **Decide what happens to the preserved branch.** Its commits carry work a
+   reviewer approved and this repository integrated, which the shared remote never
+   received; the work items behind them carry a `Publication outstanding` line
+   naming the pull request that was never merged. Open a pull request from the
+   branch yourself, or file work to redo it, and delete the branch once you have.
+   Nothing sweeps it for you: it is preserved work, and the convergence sweep only
+   ever removes a branch whose work the target provably carries.
+
+### What became of the runs, and what remains of them
 
 `yoyo status` reads back what the runs themselves recorded — newest first, the
-work item, the status and the phase the run reached, what it cost, why the item
-was chosen, and the reasons its record kept:
+work item, the outcome and the phase the run reached, what remains of it, what it
+cost, why the item was chosen, and the reasons its record kept:
 
 ```sh
 ./bin/yoyo status                    # the twenty most recent runs
@@ -3188,18 +3467,57 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
-run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved] $4.62
   selected by the operator: the operator ran this item by name from the command line
   ran under default, configuration cfg-9f2c41ab7e05
-  reason: developer reported failure: api_error: API Error: 529 Overloaded.
-run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  reason: the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)
+  preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
+  preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
+  preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
   ran under an account the record does not name, configuration a configuration the record does not name
-  reason: verification failed: make test exited with 2
-  failing check: make test exited 2
+  reason: create isolated worktree: primary checkout is not ready for integration
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
 each reason is shown as one line; --json carries what the record holds in full
 ```
+
+The word in the brackets is what became of the *work*, not of the attempt, and it
+comes from a small fixed set:
+
+| word | what it means |
+| --- | --- |
+| `succeeded` | the work landed |
+| `stopped` | it ended on a durable blocker: the item carries it, a person decides what happens next, and nothing was discarded |
+| `cancelled` | something stopped it rather than judged it — the operator, or a killed process |
+| `timed out` | the harness stopped it on time, leaving nobody anything to act on |
+| `failed` | it ended without succeeding and without leaving anybody a blocker |
+| `pending`, `running` | it has not finished |
+
+`stopped` covers every ending the harness hands to somebody: an unrepaired
+review, a check that kept failing, refused protected paths, a replay the target
+branch outran, and a provider that would not carry the run. The phase beside the
+word says where it stopped and the `reason` under it says what stopped it, so the
+one word never has to carry all five. This used to be one word — `failed` — for
+all of them and for the two below it, which is how three preserved runs came to
+read as three discarded ones.
+
+Beside it, every run that did not succeed says what remains: `work preserved`,
+`work removed` where the harness recorded removing the artifacts, or `no
+artifacts recorded` where the record names neither. The preserved branch,
+worktree, and developer session are then named under the run, so looking at the
+change is not a trip through the run's JSON for a path. A successful run removes
+what it made by design, so it says nothing about preservation at all; a run still
+in flight holds everything it has.
+
+The third phrase states an absence rather than claiming the run made nothing —
+the same discipline as the `selected: no reason recorded` and `an account the
+record does not name` lines below, and for the same reason: a listing that turns
+an empty field into a reassurance is the failure this one exists to remove. In
+practice it is a run that broke before it got a worktree, which is also why the
+second run above has no phase between the two words: the phase is only recorded
+once the worktree exists, so any run carrying one has a branch and a worktree and
+reports `work preserved` or `work removed` with the paths underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
@@ -3218,9 +3536,9 @@ configuration was edited under it is distinguishable from one that was not;
 carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
-what it is, because the records keep them apart deliberately. Only `reason` says
-the work itself failed. An `outstanding publication`, an `outstanding cleanup`, a
-`failing check`, and a `completion recorded late` are recorded around the work,
+what it is, because the records keep them apart deliberately. Only `reason` is the
+run's own account of why it ended. An `outstanding publication`, an `outstanding
+cleanup`, a `failing check`, and a `completion recorded late` are recorded around the work,
 and a run can carry one of them with its change already promoted. The last of
 those is the class whose work-item note is itself unreliable — recording that
 note is part of what was failing — so the run record this verb reads is its
@@ -3363,7 +3681,8 @@ that carried a dozen, cannot be attributed to any one of them.
 [`scripts/yoyo-status-test.sh`](scripts/yoyo-status-test.sh) checks these claims
 against a fabricated state directory holding runs, conversations, and branch
 reviews, without a provider or a repository and without reading your real
-state.
+state. `make test` runs it, so the tool is held to them by the same command as
+everything else in the repository rather than by one somebody remembers.
 
 ### Reporting into Slack
 
@@ -3484,5 +3803,7 @@ is steered by nobody, which is what a workspace gets until you add yourself.
   inheritance, and inspection.
 - [Reporting into Slack](docs/slack/setup.md) — an empty workspace to live
   reporting in threads, with the app manifest checked in beside it.
+- [Release notes](docs/releases/README.md) — one file per tag, what each section
+  is for, and how a cut drafts one from the work that landed.
 - [`docs/product/`](docs/product) — the product brief and goals, which are what
   the product manager reads.

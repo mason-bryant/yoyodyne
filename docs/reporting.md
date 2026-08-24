@@ -56,10 +56,16 @@ invites:
 
 ```text
 cost: at least $27.93 across 3 run(s)
-  run-0123…  started 2026-08-10T09:14:02Z [failed, reviewing] $8.91 from 3 invocation(s)
+  run-0123…  started 2026-08-10T09:14:02Z [stopped, reviewing] $8.91 from 3 invocation(s)
   run-89ab…  started 2026-08-10T11:02:41Z [succeeded, complete, integrated] $19.02 from 2 invocation(s)
   run-cdef…  started 2026-08-09T18:30:00Z [failed, developing] unknown: the run's event log is no longer recorded
 ```
+
+The word in the brackets is the same fixed vocabulary
+[`yoyo status`](operations.md#what-became-of-the-runs-and-what-remains-of-them) uses,
+read from the same records: `stopped` ended on a blocker somebody has to decide
+about and left its change intact, `failed` left nobody anything to act on, and a
+run met in both places is described the same way in both.
 
 From the command line, `yoyo cost` prices items from the same recorded runs —
 one line per item, or a run-by-run breakdown when you name one — and
@@ -428,7 +434,11 @@ Replies go the other way. A reply in a work item's thread, from somebody this
 project granted `direct-work` with a bound Slack member id, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
-and the same resolution, so a run meets it whichever way it arrived. Every reply is answered in its own thread with
-what was recorded or why nothing was, and a project that has granted nobody is
-steered by nobody. What a reply may say is in
+and the same resolution, so a run meets it whichever way it arrived. Every reply
+is answered in its own thread, tagging whoever wrote it, with what was recorded
+or why nothing was; the reply itself is marked with where its directive stands,
+recorded and open or settled; and when the record later says the directive was
+settled, that is said in the same thread, tagged the same way, and the mark on
+the reply moves with it. A project that has granted nobody is steered by nobody.
+What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).

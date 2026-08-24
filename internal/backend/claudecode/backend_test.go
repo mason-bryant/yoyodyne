@@ -107,9 +107,47 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	if runner.prompts[0] != "implement the task" {
 		t.Fatalf("prompt = %q", runner.prompts[0])
 	}
-	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSandboxSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
+	wantArgs := []string{"-p", "--output-format", "stream-json", "--verbose", "--permission-mode", "acceptEdits", "--name", "yoyodyne-01234567", "--settings", developerSettings, "--allowedTools", "Bash", "Read", "Edit(/**)", "Write(/**)", "Glob", "Grep"}
 	if !reflect.DeepEqual(runner.commands[0].Args, wantArgs) {
 		t.Fatalf("args = %#v, want %#v", runner.commands[0].Args, wantArgs)
+	}
+}
+
+// What a developer run is given beyond its tools, asserted from the settings
+// themselves rather than against the constant that produced them.
+//
+// The argument comparison above proves developerSettings is what reached the CLI
+// and says nothing whatever about what is inside it: written against the same
+// constant, it goes on passing on the day either clause is edited out. Both
+// clauses are load-bearing and neither is visible in an argument list -- the
+// sandbox is what confines Bash, and the PreToolUse hook is what stops
+// `bd update --notes` in a developer run destroying a recorded attribution.
+//
+// Each is matched whole rather than by its words in any order, so what passes is
+// the hook nested on the Bash matcher and not three strings that happen to be
+// present. That makes this sensitive to how the constant is punctuated, which is
+// the intended trade: it is a literal in the same file, and reformatting it is
+// something somebody does deliberately and can re-read here.
+//
+// What it does not prove is that Claude Code accepts the block, that the hook
+// fires, or that `yoyo` resolves on the run's PATH. That is an end-to-end fact
+// about the provider, and this asserts only what the harness controls: the wiring
+// it hands over. The path fails open by design, so a mistake there is silent --
+// which is why the witness, not this, is what makes a destroyed attribution
+// recoverable.
+func TestADeveloperRunIsSandboxedAndCarriesTheAttributionGuard(t *testing.T) {
+	t.Parallel()
+
+	if !json.Valid([]byte(developerSettings)) {
+		t.Fatalf("developer settings are not valid JSON, so Claude Code would refuse them: %s", developerSettings)
+	}
+	sandbox := `"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}`
+	if !strings.Contains(developerSettings, sandbox) {
+		t.Fatalf("a developer run's Bash is not confined: %s", developerSettings)
+	}
+	guard := `"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]`
+	if !strings.Contains(developerSettings, guard) {
+		t.Fatalf("a developer run carries no PreToolUse guard on Bash, so a `bd update <id> --notes` in one would destroy an attribution unremarked: %s", developerSettings)
 	}
 }
 
@@ -263,6 +301,199 @@ func TestRunHonorsTheParentTerminalWhenANestedAgentFinishesFirst(t *testing.T) {
 	}
 }
 
+// duplicateTerminalStream replays what killed run-e2b8d016, developing
+// yoyodyne-ifd.117.1 on 2026-08-23: the provider ended one invocation twice, and
+// the parser of the day rejected the second as a malformed stream, which failed
+// a run whose change was all but finished. Recovering it took a triage rerun at
+// triage-grant price.
+//
+// The envelopes are written rather than recorded. The provider's raw stdout is
+// deliberately not retained (see Backend.Run), and the parse error ended the
+// invocation before anything past the first terminal reached the event log, so
+// what the record holds of the duplicate is its existence. It is therefore
+// written in the shape a genuine terminal has.
+//
+// That is not the only shape that reaches this path. What the guard passes on is
+// any result envelope after the first that carries a terminal reason or result
+// text — one with neither is a nested agent's and is recorded as stream noise
+// before the guard sees it — so a subagent whose completion carries result text
+// reaches it too, and spends one relaunch on an invocation that had in fact
+// finished. That is the same trade the nested-agent discrimination makes, with a
+// consequence one relaunch cheaper than the one it replaces: the run used to end.
+func duplicateTerminalStream() string {
+	terminal := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"Reconciled the disposition table.","total_cost_usd":7.5,"usage":{"input_tokens":10},"terminal_reason":"completed"}`
+	return strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-opus-5"}`,
+		`{"type":"assistant","session_id":"session-1","message":{"content":[{"type":"text","text":"Reconciled the disposition table."}]}}`,
+		terminal,
+		terminal,
+	}, "\n") + "\n"
+}
+
+// A provider that ends one invocation twice has drifted, and drift is a relaunch
+// condition rather than a fatality. The invocation is reported as a transient
+// death — the class the harness already relaunches within a durable budget, in
+// the same worktree and the same session — instead of failing the whole run on a
+// parse error.
+func TestRunRelaunchesRatherThanFailingOnADuplicateTerminalResult(t *testing.T) {
+	t.Parallel()
+
+	var events []execution.Event
+	result, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: duplicateTerminalStream()}}},
+		Clock:  fixedClock{},
+	}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "reconcile the disposition table",
+		EventSink: func(event execution.Event) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	// The parse error is what threw the change away. Nothing about a duplicate
+	// terminal is unreadable, so nothing about it may end the run.
+	if err != nil {
+		t.Fatalf("Run() error = %v, want a duplicate terminal to be reported rather than to fail the stream", err)
+	}
+	if result.TransientFailure == nil {
+		t.Fatalf("Run() reported no transient failure, so nothing would relaunch: %#v", result)
+	}
+	// Both endings travel with the death, because which of them was this
+	// invocation's is exactly what the duplicate makes unanswerable.
+	wantDetail := `the provider ended this invocation twice, first with "completed" and again with "completed"`
+	if result.TransientFailure.Detail != wantDetail {
+		t.Fatalf("transient failure detail = %q, want %q", result.TransientFailure.Detail, wantDetail)
+	}
+	// Neither of the provider's own reasons is the recorded one: the harness
+	// names the anomaly rather than picking an ending it cannot tell apart.
+	if !result.IsError || result.StopReason != duplicateTerminalReason {
+		t.Fatalf("Run() result = %#v, want a failed invocation stopped by %q", result, duplicateTerminalReason)
+	}
+	// The decided result still stands. The duplicate replaces nothing, so the
+	// attempt's session — which is what the relaunch continues in — and the
+	// evidence of what it cost are both intact.
+	if result.SessionID != "session-1" || result.ResolvedModel != "claude-opus-5" || result.CostUSD != 7.5 {
+		t.Fatalf("the duplicate terminal displaced the decided result: %#v", result)
+	}
+	if result.FinalText != "Reconciled the disposition table." {
+		t.Fatalf("FinalText = %q, want the decided terminal's own text", result.FinalText)
+	}
+	// Nothing about this is a refusal, and reading it as one would park the run
+	// waiting for a condition nobody named.
+	if result.ServerOverload != nil || result.UsageLimit != nil {
+		t.Fatalf("a duplicate terminal became a refusal: overload=%#v limit=%#v", result.ServerOverload, result.UsageLimit)
+	}
+	// The anomaly is recorded whole, because a dialect that drifted cannot be
+	// diagnosed from a record that kept only the fact that it drifted.
+	if len(events) != 4 {
+		t.Fatalf("events = %d, want the duplicate recorded beside the three the invocation produced", len(events))
+	}
+	anomaly := string(events[3].Payload)
+	if events[3].Type != execution.EventProcessOutput {
+		t.Fatalf("duplicate terminal recorded as %q, want stream noise rather than a second completion", events[3].Type)
+	}
+	for _, want := range []string{`"anomaly":"duplicate_terminal_result"`, `"terminal_reason":"completed"`, `"total_cost_usd":7.5`} {
+		if !strings.Contains(anomaly, want) {
+			t.Fatalf("duplicate terminal payload is missing %s: %s", want, anomaly)
+		}
+	}
+}
+
+// An overload is the transient death the harness already has a wait for, and the
+// two answers are never reported together. A duplicate arriving after one leaves
+// that wait to answer the invocation rather than adding a second answer beside
+// it.
+func TestRunLeavesADuplicateTerminalAfterAnOverloadToTheWait(t *testing.T) {
+	t.Parallel()
+
+	duplicated, err := json.Marshal(map[string]any{
+		"type":            "result",
+		"subtype":         "error",
+		"session_id":      "session-1",
+		"is_error":        true,
+		"terminal_reason": "api_error",
+		"result":          overloadedMessage,
+		"usage":           map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("Marshal() duplicate terminal error = %v", err)
+	}
+	result, _ := runUsageLimitStream(t, terminalErrorStream("api_error", overloadedMessage)+string(duplicated)+"\n")
+	if result.ServerOverload == nil {
+		t.Fatalf("Run() lost the overload behind the duplicate: %#v", result)
+	}
+	if result.TransientFailure != nil {
+		t.Fatalf("an overload was also reported as a transient death: %#v", result.TransientFailure)
+	}
+}
+
+// An exhausted limit is the other refusal the harness answers with a wait, and
+// unlike an overload it is still moving while the stream runs: the provider
+// re-reports as the limit changes, and a serving report supersedes an exhausted
+// one. Which answer the invocation carries is therefore decided from the whole
+// stream rather than from the order two envelopes happened to arrive in.
+func TestRunLeavesADuplicateTerminalBesideAnExhaustedLimitToTheWait(t *testing.T) {
+	t.Parallel()
+
+	const exhausted = `{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour"}`
+	const duplicate = `{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"terminal_reason":"usage_limit","result":"limit reached","usage":{}}` + "\n"
+	const lifted = `{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}` + "\n"
+
+	for _, testCase := range []struct {
+		name     string
+		stream   string
+		wantWait bool
+	}{
+		{
+			// The account will not serve another attempt, so relaunching into it
+			// would spend the run's budget on invocations the provider has already
+			// declined. The wait reissues into the same worktree and the same
+			// session the relaunch would have continued, and costs no attempt.
+			name:     "a limit still refusing when the stream ends",
+			stream:   usageLimitStream(exhausted) + duplicate,
+			wantWait: true,
+		},
+		{
+			// Nothing is left to wait out, so the duplicate is answered the way it
+			// is answered on its own. Deciding at the end is what makes this
+			// independent of the order the two arrived in.
+			name:     "a limit that lifted after the duplicate arrived",
+			stream:   usageLimitStream(exhausted) + duplicate + lifted,
+			wantWait: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, testCase.stream)
+			// Whichever answer it carries, the invocation is not trusted to have
+			// produced one of its own.
+			if !result.IsError || result.StopReason != duplicateTerminalReason {
+				t.Fatalf("Run() result = %#v, want a failed invocation stopped by %q", result, duplicateTerminalReason)
+			}
+			if testCase.wantWait {
+				if result.UsageLimit == nil {
+					t.Fatalf("Run() lost the exhausted limit behind the duplicate: %#v", result)
+				}
+				// Two answers to one invocation is one answer too many: which one a
+				// run took would depend on the order the caller read them.
+				if result.TransientFailure != nil {
+					t.Fatalf("a duplicate beside an exhausted limit was also reported as a relaunch: %#v", result.TransientFailure)
+				}
+				return
+			}
+			if result.UsageLimit != nil {
+				t.Fatalf("a limit that had lifted was still reported as refusing: %#v", result.UsageLimit)
+			}
+			if result.TransientFailure == nil {
+				t.Fatalf("Run() reported no transient failure, so nothing would relaunch: %#v", result)
+			}
+		})
+	}
+}
+
 func TestRunClassifiesProviderError(t *testing.T) {
 	t.Parallel()
 
@@ -365,11 +596,10 @@ func TestRunRejectsMalformedOrIncompleteStream(t *testing.T) {
 		{name: "malformed", stream: "{\n", want: "decode stream event"},
 		{name: "missing type", stream: "{}\n", want: "type is required"},
 		{name: "no result", stream: `{"type":"system","subtype":"init","session_id":"session-1"}` + "\n", want: "without a result"},
-		// Telling a nested result apart from a terminal one does not soften the
-		// guard: two envelopes that both carry a terminal's marks are still two
-		// terminals, and the second may not replace the first.
-		{name: "second result", stream: `{"type":"result","subtype":"success","session_id":"session-1","result":"done","terminal_reason":"completed","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","terminal_reason":"api_error","usage":{}}` + "\n", want: "second provider terminal result"},
-		{name: "second result after a nested one", stream: `{"type":"result","session_id":"session-1","result":"","terminal_reason":"","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-1","result":"done","terminal_reason":"completed","usage":{}}` + "\n" + `{"type":"result","subtype":"success","session_id":"session-2","is_error":true,"result":"replaced","terminal_reason":"api_error","usage":{}}` + "\n", want: "second provider terminal result"},
+		// A second terminal result is deliberately not in this class. It is a
+		// stream this parser can read perfectly well, saying something the
+		// provider's dialect should not say, and it is answered by a relaunch —
+		// TestRunRelaunchesRatherThanFailingOnADuplicateTerminalResult.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

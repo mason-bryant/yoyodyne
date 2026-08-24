@@ -96,15 +96,22 @@ const (
 	KindExchangeClosed Kind = "exchange.closed"
 	// What a reply in a topic's thread did. They are the acknowledgment the
 	// inbound half owes every message it reads: the directive as recorded with
-	// its identifier, the resolution that lifted one, or the refusal with its
-	// reason. Three kinds rather than one, because they are the three different
-	// things an operator has to know — the work is now steered, the work is
-	// moving again, or nothing was recorded at all — and a reader who could not
-	// tell them apart at a glance would have to open the record to find out
-	// whether they had been heard.
-	KindDirectiveRecorded Kind = "directive.recorded"
-	KindDirectiveResolved Kind = "directive.resolved"
-	KindDirectiveRefused  Kind = "directive.refused"
+	// its identifier, the resolution that lifted one, what came of one that held
+	// nothing up, or the refusal with its reason. Four kinds rather than one,
+	// because they are the four different things an operator has to know — the
+	// work is now steered, the work is moving again, what they asked for was
+	// done, or nothing was recorded at all — and a reader who could not tell them
+	// apart at a glance would have to open the record to find out whether they
+	// had been heard.
+	//
+	// Carried out is separate from resolved because a resolution lifts a pause
+	// and an outcome never held one. Said as a resolution, the commonest kind of
+	// directive would be reported to the thread that asked for it in words about
+	// work resuming that had never stopped.
+	KindDirectiveRecorded   Kind = "directive.recorded"
+	KindDirectiveResolved   Kind = "directive.resolved"
+	KindDirectiveCarriedOut Kind = "directive.carried-out"
+	KindDirectiveRefused    Kind = "directive.refused"
 	// The operator's two switches. They are about the whole line rather than any
 	// one item, which is why they are addressed to the product rather than
 	// buried in a thread that would misfile them.
@@ -173,6 +180,7 @@ func Kinds() []Kind {
 		KindExchangeClosed,
 		KindDirectiveRecorded,
 		KindDirectiveResolved,
+		KindDirectiveCarriedOut,
 		KindDirectiveRefused,
 		KindIntakeHeld,
 		KindIntakeReleased,
@@ -201,7 +209,7 @@ func (k Kind) Valid() bool {
 		KindPromoted, KindPublished, KindMergeQueued, KindMergeCompleted,
 		KindRunParked, KindRunContinued, KindBlockerRecorded, KindUsageLimitExhausted,
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
-		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveRefused,
+		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
 		KindLineWaiting, KindCatchUpDigest:

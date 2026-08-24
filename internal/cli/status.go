@@ -15,6 +15,17 @@ package cli
 // failed piece of work, and a listing that ran them together would undo the
 // separation the records take care to keep.
 //
+// What each run's own line says is what became of the work rather than what
+// became of the attempt, in a small fixed vocabulary the read model derives.
+// "failed" was one word for four different things — a review nobody repaired, a
+// target branch the replay could not catch, a provider that kept killing the
+// run, and an operator stopping it — and three of those leave the change intact
+// and the item back in somebody's hands. An operator read three of those lines
+// and asked whether the runs had been discarded, which is the one question this
+// listing exists to answer. So the outcome says which of them it was, the line
+// beside it says whether anything survives, and the lines under it name the
+// branch, the worktree, and the session that do.
+//
 // It is read-only in the strongest sense. Reading a run is not acting on it, so
 // this holds nothing, adopts nothing, and settles nothing — a run another
 // process is executing is listed exactly as a finished one is. Settling what a
@@ -333,6 +344,7 @@ func printRunHistory(writer io.Writer, history runstate.RunHistory, workItemID s
 		if printRunReasons(writer, run) {
 			reasoned = true
 		}
+		printRunArtifacts(writer, run)
 		printOutstandingSteps(writer, run)
 	}
 	if remaining := history.Matched - len(history.Runs); remaining > 0 {
@@ -404,6 +416,58 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 	return printed
 }
 
+// printRunArtifacts names what a run that did not succeed left behind, which is
+// the question a listing of those runs is actually read for: whether the work is
+// gone. The brackets above answer that in a word; these lines say where it is,
+// so an operator who wants to look at the change is not sent to the run's JSON
+// for the path.
+//
+// It is silent on a run that succeeded and on one still in flight. A successful
+// run removes its worktree and branch by design, so naming them would report the
+// harness working as a loss; a run still going holds everything it has by
+// definition, so saying so of every one of them would make "preserved" mean
+// nothing on the records where it means preserved work nobody has looked at.
+//
+// An artifact the harness recorded as removed is named as removed rather than
+// left out. Sending somebody to a worktree that is gone and telling them nothing
+// was preserved are the same failure in opposite directions, and the record
+// distinguishes them. A run whose record names neither says nothing here at all:
+// the brackets above already say the record names no artifact, and a line
+// repeating it on every run that broke before it made anything is a line every
+// reader learns to skip.
+func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
+	if !run.Status.Terminal() || run.Outcome == runstate.OutcomeSucceeded {
+		return
+	}
+	if run.Branch != "" {
+		if run.BranchRemoved {
+			fmt.Fprintf(writer, "  branch already removed: %s\n", run.Branch)
+		} else {
+			fmt.Fprintf(writer, "  preserved branch: %s\n", run.Branch)
+		}
+	}
+	if run.WorktreePath != "" {
+		if run.WorktreeRemoved {
+			fmt.Fprintf(writer, "  worktree already removed: %s\n", run.WorktreePath)
+		} else {
+			fmt.Fprintf(writer, "  preserved worktree: %s\n", run.WorktreePath)
+		}
+	}
+	// The session and the findings are said only where the change survives. A
+	// session that continues work nothing holds any more continues nothing, and
+	// findings about a change that is gone are a reading list rather than
+	// something to act on.
+	if !run.Preserved() {
+		return
+	}
+	if run.ProviderSessionID != "" {
+		fmt.Fprintf(writer, "  preserved developer session: %s\n", run.ProviderSessionID)
+	}
+	if run.ReviewFindings > 0 {
+		fmt.Fprintf(writer, "  %d review finding(s) recorded against the preserved change\n", run.ReviewFindings)
+	}
+}
+
 // recorded says what a record holds for one field, or states the absence in
 // words. A blank in a listing reads as a bug in the listing rather than as a
 // record that was written before the field existed, which is what an absence
@@ -457,20 +521,51 @@ func describeRunSelection(workItemID string, failedOnly bool) string {
 	return selection
 }
 
-// renderRunState says where a run is: the status, the phase it reached, whether
-// it promoted anything, and — on a run that is over — whether it still owes
-// somebody a step. The last is only said of a terminal run because only there
-// does it carry news: a run still in flight owes its own remaining steps by
-// definition, and saying so of every one of them would make the word mean
-// nothing on the records where it means an interrupted cleanup or a merge the
-// forge has not settled.
+// renderRunState says what became of a run and what remains of it: the outcome,
+// the phase it reached, whether it promoted anything, whether its change
+// survives, and — on a run that is over — whether it still owes somebody a step.
+//
+// It leads with the outcome rather than the durable status, because the status
+// answers a question nobody is asking here. "failed" is true of a run whose
+// reviewer blocked it, of one the target branch outran, of one the provider kept
+// killing, and of one that broke before it made anything — and the first three
+// leave a branch, a worktree, a session, and an item back in somebody's hands.
+// An operator reading that one word has been told the attempt is over and
+// nothing about whether the work is.
+//
+// Preservation is stated on every run that did not succeed, in one of three
+// fixed phrases, and on no others: a successful run removes what it made on
+// purpose, and a run still in flight holds everything by definition. Two of the
+// three are facts the record holds; the third says the record holds neither,
+// rather than turning two empty fields into a claim that the run made nothing.
+// The outstanding marker keeps the same rule and for the same reason it always
+// had.
 func renderRunState(run runstate.RunSummary) string {
-	state := string(run.Status)
+	state := string(run.Outcome)
 	if run.Phase != "" {
 		state += ", " + string(run.Phase)
 	}
 	if run.Integrated {
 		state += ", integrated"
+	}
+	if run.Status.Terminal() && run.Outcome != runstate.OutcomeSucceeded {
+		switch {
+		case run.Preserved():
+			state += ", work preserved"
+		case run.Branch != "" || run.WorktreePath != "":
+			// Something was made and the harness recorded removing it. That is a
+			// different answer from never having made anything, and an operator
+			// asking whether their work is gone is owed the one that is true.
+			state += ", work removed"
+		default:
+			// Two empty fields are not a claim that the run made nothing, and this
+			// says which it is: the record names no artifact. It is the same
+			// discipline `recorded` below keeps for the account and the
+			// configuration — an absence stated as an absence — and it matters more
+			// here, because the reading it refuses is exactly the false reassurance
+			// this listing exists to stop.
+			state += ", no artifacts recorded"
+		}
 	}
 	if run.Outstanding && run.Status.Terminal() {
 		state += ", outstanding"
@@ -507,17 +602,35 @@ func printStatusUsage(writer io.Writer) {
 	fmt.Fprintln(writer, `Usage: yoyo status [options] [<beads-id>]
 
 What became of the runs the harness made, newest first: the work item, the
-status it reached, the phase it was in, what it cost, and the reasons its record
+outcome it reached, the phase it was in, what it cost, and the reasons its record
 kept. Naming an item reports only its runs, and under them what triage has spent
 on that item: the review rounds it has cost across every run of it, against the
 cap that bounds them, and the repair grants, re-runs, and merge re-arms it has
 been given. An item triaged more than once says so there.
 
+The outcome in the brackets is one of a small fixed set. "succeeded" landed its
+work. "stopped" ended on a durable blocker: the item carries it, a person decides
+what happens next, and nothing was discarded — an unrepaired review, a check that
+kept failing, refused paths, a replay the target branch outran, and a provider
+that would not carry the run all end this way, and the reason under the run says
+which. "cancelled" was stopped rather than judged. "timed out" was stopped on
+time. "failed" is what is left: a run that ended leaving nobody anything to act
+on. A run still going says "pending" or "running" instead.
+
+Beside it, every run that did not succeed says what remains of it: "work
+preserved", "work removed" for artifacts the harness recorded removing, or "no
+artifacts recorded" where the record names neither. The last states an absence
+rather than claiming the run made nothing, and in practice it is a run that broke
+before it got a worktree: a run that reached any phase has one. The preserved
+branch, worktree, and developer session are named under the run. A successful run
+removes what it made on purpose, so it says nothing about preservation; a run
+still in flight holds everything it has.
+
 Each recorded reason is printed under the run and named for what it is. Only
-"reason" says the work itself failed; an outstanding publication, an outstanding
-cleanup, a failing check, and a completion recorded late are things recorded
-around the work, and a run can carry one of those with its change already
-promoted. The last is the class whose work-item note is itself unreliable —
+"reason" is the run's own account of why it ended; an outstanding publication, an
+outstanding cleanup, a failing check, and a completion recorded late are things
+recorded around the work, and a run can carry one of those with its change
+already promoted. The last is the class whose work-item note is itself unreliable —
 recording that note is part of what was failing — so this listing is its
 authoritative home.
 

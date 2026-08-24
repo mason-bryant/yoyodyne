@@ -193,4 +193,20 @@ func TestTriageRepairTellsAWaitFromARefusal(t *testing.T) {
 	if !strings.Contains(stderr.String(), "still blocked") {
 		t.Fatalf("stderr = %q, want it to say what the operator is left holding", stderr.String())
 	}
+
+	// The twin refusal: the worktree is the harness's own and holds none of the
+	// change, so what the operator is told is where the work still is.
+	stdout.Reset()
+	stderr.Reset()
+	empty := orchestrator.MissingPreservedChangeError{
+		RunID:        "run-0123456789abcdef0123456789abcdef",
+		WorktreePath: "/state/worktrees/task",
+		Cause:        errors.New("/state/worktrees/task holds no change at all"),
+	}
+	if code := reportRepair(&stdout, &stderr, false, orchestrator.RepairContinueResult{}, empty); code != 1 {
+		t.Fatalf("reportRepair() code = %d, want a handback without its change reported as a failure", code)
+	}
+	if !strings.Contains(stderr.String(), "the run's branch is where the preserved change is") {
+		t.Fatalf("stderr = %q, want it to say where the preserved work is", stderr.String())
+	}
 }

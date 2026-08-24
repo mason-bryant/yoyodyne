@@ -112,7 +112,10 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 		WorkItemID: "yoyodyne-ifd.2.7",
 		Runs: []runstate.RunPrice{
 			{
-				RunID: "run-1", Status: runstate.StatusFailed, Phase: runstate.PhaseReviewing, StartedAt: started,
+				// A run the reviewer blocked: the price listing says what became of
+				// it in the same words the run listing does.
+				RunID: "run-1", Status: runstate.StatusFailed, Outcome: runstate.OutcomeStopped,
+				Phase: runstate.PhaseReviewing, StartedAt: started,
 				CostUSD: 8.91, Invocations: 3,
 				Phases: runstate.PhaseSpend{
 					Development: runstate.PhaseCost{CostUSD: 5.00, Invocations: 1},
@@ -122,7 +125,8 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 				},
 			},
 			{
-				RunID: "run-2", Status: runstate.StatusSucceeded, Phase: runstate.PhaseComplete, StartedAt: started,
+				RunID: "run-2", Status: runstate.StatusSucceeded, Outcome: runstate.OutcomeSucceeded,
+				Phase: runstate.PhaseComplete, StartedAt: started,
 				Integrated: true, CostUSD: 19.02, Invocations: 2,
 				Phases: runstate.PhaseSpend{
 					Development: runstate.PhaseCost{CostUSD: 13.02, Invocations: 1},
@@ -143,7 +147,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	for _, required := range []string{
 		"yoyodyne-ifd.2.7: $27.93 across 2 run(s)",
 		"development $18.02 from 2 invocation(s), review $6.10 from 2, repair $3.81 from 2",
-		"[failed, reviewing] $8.91 from 3 invocation(s)",
+		"[stopped, reviewing] $8.91 from 3 invocation(s)",
 		// Each attempt says where its own money went, because an item's split
 		// says which attempts were expensive and not which part of one was.
 		"development $5.00 from 1 invocation(s), review $2.00 from 1, repair $1.91 from 1",
@@ -168,7 +172,10 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	out.Reset()
 	printPrices(&out, []runstate.ItemPrice{{
 		WorkItemID: "yoyodyne-ifd.41",
-		Runs:       []runstate.RunPrice{{RunID: "run-4", Status: runstate.StatusRunning, Phase: runstate.PhaseDeveloping, StartedAt: started}},
+		Runs: []runstate.RunPrice{{
+			RunID: "run-4", Status: runstate.StatusRunning, Outcome: runstate.RunOutcome(runstate.StatusRunning),
+			Phase: runstate.PhaseDeveloping, StartedAt: started,
+		}},
 	}}, true)
 	if !strings.Contains(out.String(), "$0.00 so far from 0 invocation(s)") {
 		t.Fatalf("rendered breakdown = %q", out.String())
@@ -181,7 +188,7 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	printPrices(&out, []runstate.ItemPrice{{
 		WorkItemID: "yoyodyne-ifd.41",
 		Runs: []runstate.RunPrice{{
-			RunID: "run-5", Status: runstate.StatusFailed, StartedAt: started,
+			RunID: "run-5", Status: runstate.StatusFailed, Outcome: runstate.OutcomeFailed, StartedAt: started,
 			Unknown: "the run's event log is no longer recorded",
 			Phases:  runstate.PhaseSpend{Waits: runstate.Waits{UsageLimitSeconds: 1800}},
 		}},

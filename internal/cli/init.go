@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -343,10 +344,49 @@ func initializeProject(directory, productID string, force bool) ([]string, confi
 	// Loading what was just written is the only proof that it is usable: the
 	// personas have to resolve from the project directory they were copied into,
 	// not from the bundle they came from.
-	if _, err := config.Load(paths[0]); err != nil {
+	loaded, err := config.Load(paths[0])
+	if err != nil {
 		return nil, detection, fmt.Errorf("the generated configuration does not load: %w", err)
 	}
-	return paths, detection, nil
+
+	// The artifact homes the configuration just named each get an index saying
+	// what is filed there, whose it is, and whether the operator may edit one by
+	// hand. They are written from the loaded configuration rather than from the
+	// scaffold, so a project that pointed its designs somewhere else is indexed
+	// where its designs actually are.
+	indexes, err := writeArtifactHomeIndexes(project, named, loaded)
+	if err != nil {
+		return nil, detection, err
+	}
+	return append(paths, indexes...), detection, nil
+}
+
+// writeArtifactHomeIndexes writes the README each artifact home gets, and
+// returns the ones it wrote.
+//
+// An index that is already there is left exactly as it is, and `--force` does not
+// reach these: that flag is about regenerating the configuration this command
+// owns, and a README in a documentation directory is the project's own prose
+// rather than something init generated. Refusing the whole init over one would be
+// worse still — it would refuse `yoyo init` in every repository that already has
+// a word of its own at the door of `docs/`. What to do about an index that is
+// there and no longer answers the three questions is `yoyo doctor`'s to report
+// and `yoyo setup`'s to offer, where replacing somebody's prose is something they
+// are asked about first.
+func writeArtifactHomeIndexes(project repowrite.Root, named string, cfg config.Config) ([]string, error) {
+	var written []string
+	for _, status := range artifacthome.Inspect(project, cfg) {
+		if status.State != artifacthome.StateMissing {
+			continue
+		}
+		if _, err := artifacthome.Write(project, status.Home); err != nil {
+			return nil, err
+		}
+		// Named the way the operator named the project, like every other path
+		// this command reports, rather than the resolved form the write returns.
+		written = append(written, filepath.Join(named, filepath.FromSlash(status.Path)))
+	}
+	return written, nil
 }
 
 // defaultProductID names the product after the directory being configured,

@@ -41,9 +41,18 @@ type Directives interface {
 	// List reports every recorded directive, resolved and unresolved alike, in
 	// the order they were received.
 	List(ctx context.Context) ([]directive.Directive, error)
+	// Find reports the one directive a reference names, so something about to be
+	// recorded against a directive can be held to naming one that exists. The
+	// reference may be any prefix that names exactly one directive.
+	Find(ctx context.Context, reference string) (directive.Directive, error)
 	// Resolve settles one, which is what releases the work it paused. The
 	// reference may be any prefix that names exactly one directive.
 	Resolve(ctx context.Context, reference, resolution string) (directive.Directive, error)
+	// CarryOut records what came of a directive that paused nothing. It is the
+	// disposition of the commonest kind of directive there is, and the only thing
+	// that ever says one was acted on rather than filed: it refuses the pausing
+	// kinds, so admitting work can never lift a pause that is holding work up.
+	CarryOut(ctx context.Context, reference, outcome string) (directive.Directive, error)
 }
 
 // DirectiveRequest is what the operator asked to have recorded. The harness
@@ -354,25 +363,34 @@ func (d DirectiveResolved) Render() string {
 	return rendered.String()
 }
 
-// renderDirectives lists what the operator has directed, unresolved first,
-// because those are the ones still holding work up.
+// renderDirectives lists what the operator has directed, what is still in force
+// first, because that is what still constrains the work.
+//
+// The split is what applies against what is over, rather than what has an
+// account of it against what does not. Those were the same split while only a
+// pausing directive could be settled at all, and they stopped being the same
+// the moment an operational one could carry an outcome: such a directive is
+// accounted for and still standing, and grouping it under what is finished would
+// tell the operator their instruction had lapsed. Each entry says which it is in
+// its own words, so a carried-out directive appears among what is in force with
+// what it produced printed under it.
 func renderDirectives(recorded []directive.Directive) string {
 	if len(recorded) == 0 {
 		return "no directives are recorded for this product.\n"
 	}
-	var unresolved, settled []directive.Directive
+	var live, over []directive.Directive
 	for _, candidate := range recorded {
-		if candidate.Resolved() {
-			settled = append(settled, candidate)
+		if candidate.InForce() {
+			live = append(live, candidate)
 			continue
 		}
-		unresolved = append(unresolved, candidate)
+		over = append(over, candidate)
 	}
 	var rendered strings.Builder
 	for _, group := range []struct {
 		label string
 		items []directive.Directive
-	}{{"unresolved", unresolved}, {"resolved", settled}} {
+	}{{"in force", live}, {"no longer in force", over}} {
 		if len(group.items) == 0 {
 			fmt.Fprintf(&rendered, "%s: none\n", group.label)
 			continue

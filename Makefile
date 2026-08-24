@@ -13,7 +13,7 @@ LDFLAGS := -X main.version=$(VERSION)
 # the README's install section, which says so rather than implying parity.
 PLATFORMS ?= darwin/arm64 darwin/amd64 linux/amd64
 
-.PHONY: build test race vet fmt fmtcheck check dist dist-verify clean-dist release
+.PHONY: build test race vet fmt fmtcheck links check dist dist-verify clean-dist release release-notes
 .NOTPARALLEL: check
 
 build:
@@ -40,7 +40,26 @@ fmtcheck:
 		echo "gofmt needed:"; echo "$$unformatted"; exit 1; \
 	fi
 
-check: fmtcheck test race vet
+# Every link this repository's Markdown makes to itself, resolved rather than
+# believed: a relative path that is not here, or a `#fragment` naming a heading
+# its target does not carry. Neither is visible to somebody reading a patch --
+# a relative path resolves only against the directory layout, and a slug is
+# written down nowhere -- which is why reviews of this project kept ending in
+# "the anchor could not be verified from the evidence available".
+#
+# It asserts what `test` already asserts, and it is named separately so that a
+# documentation change is answered in a second rather than behind the whole Go
+# suite. The whole package runs rather than one test by name: the fixtures beside
+# the repository-wide pass are what prove the checker still catches anything, and
+# a `-run` pattern is a second place for a test name to drift out of. `-count=1`
+# is deliberate -- the assertion is about files outside the package, so a cached
+# pass would be reporting on the documents of some earlier run.
+links:
+	$(GO) test -count=1 ./internal/doclink
+
+# `links` runs first and is the cheapest thing here, so a moved anchor stops a
+# change before `race` spends a suite on one that is already red.
+check: fmtcheck links test race vet
 
 clean-dist:
 	rm -rf $(DIST)
@@ -120,3 +139,12 @@ dist-verify: dist
 # rather than cutting whatever the checkout happens to describe itself as.
 release:
 	scripts/cut-release.sh $(if $(filter command line environment,$(origin VERSION)),$(VERSION))
+
+# One release's notes, drafted from the work items that landed since the last
+# tag and then edited: which work is key functionality, which is an enhancement,
+# and which fix is critical enough to go to the top is a judgement the draft
+# does not make. `release` above refuses a tag whose notes are missing and
+# drafts them for you, so this is for drafting ahead of the cut, or again after
+# more work lands. VERSION is withheld the same way, for the same reason.
+release-notes:
+	bash scripts/release-notes.sh $(if $(filter command line environment,$(origin VERSION)),$(VERSION))

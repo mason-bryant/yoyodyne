@@ -38,7 +38,7 @@ const commandHelp = `Commands the harness carries out for you:
   /stop-everything [reason]   hold intake and stop every run in flight, settling what each left
   /redirect <beads-id> <what to do differently>
                               record direction on an item, stopping it first if it is running
-  /directives                 what you have directed, and what is still unresolved
+  /directives                 what you have directed, and what is still in force
   /directive <what you have decided>
                               record a directive that takes effect now
   /directive ambiguous <what is unresolved> | <what you said>

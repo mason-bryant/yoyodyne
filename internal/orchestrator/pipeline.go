@@ -145,6 +145,18 @@ type StateStore interface {
 	// what it is for here: reading a record is not acting on it, so this takes no
 	// lease and the run it describes may well belong to another process.
 	Incomplete() ([]runstate.State, error)
+	// Latest is the most recently started run recorded for this item, whatever
+	// became of it, and runstate.ErrNoRecordedRun where the harness has never run
+	// it. Adopt answers for the runs in flight and says nothing about the ones
+	// that ended, which is exactly the blind spot a fresh run started in place of
+	// a repair falls into: the stopped run is not in flight, so nothing above
+	// notices that starting over is the wrong thing to do to it.
+	Latest(workItemID string) (runstate.State, error)
+	// Reruns is what triage has claimed of the fresh runs it decided. A fresh run
+	// of an item whose last run stopped owing a repair is right in exactly one
+	// case — the development manager decided the ground moved and the work is to
+	// be done again — and a claim against that stoppage is what says so.
+	Reruns() *runstate.RerunStore
 }
 
 type CheckRunner interface {
@@ -373,6 +385,15 @@ type Outcome struct {
 	// identifier, because what an operator has to do about it — answer the
 	// question, or decide the artifact change — is in the directive's own words.
 	PausedByDirective *directive.Directive `json:"paused_by_directive,omitempty"`
+	// PausedByDependency is the unfinished work this run or this work item stopped
+	// short for. It carries the blocking items themselves rather than only saying
+	// there are some, because what somebody has to do about it — close that work,
+	// or unlink it — is a decision about those items by name.
+	//
+	// Like the directive it can appear with no run behind it, on work a dependency
+	// stopped before anything was claimed, and unlike the directive what lifts it
+	// is other work finishing rather than a person deciding.
+	PausedByDependency *runstate.DependencyPause `json:"paused_by_dependency,omitempty"`
 	// PausedByOperator is the operator's hold on all harness activity, present on
 	// a run parked at a provider-call boundary for it and on work this process
 	// declined to start while it was in force. It carries the hold itself rather
@@ -521,6 +542,17 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if len(pausing) > 0 {
 		return pauseWorkItem(workItemID, pausing[0]), nil
 	}
+	// What the item waits on is read at the same boundary, from the same freshly
+	// loaded item, and for the same reason. A dependency link applied after this
+	// item was selected is a gate somebody added to work that was already moving,
+	// and a run that trusted the readiness selection saw would develop straight
+	// through it — which is exactly what a link applied to an in-flight item is
+	// filed to stop. Nothing has been claimed at this point, so the item is left
+	// where it is, and a run already in flight for it is left in flight rather
+	// than resumed.
+	if blockers := blockingDependencies(item); len(blockers) > 0 {
+		return pauseWorkItemForDependencies(workItemID, blockers), nil
+	}
 	// An incomplete run for this item is either a run an interrupted process left
 	// behind, a run waiting out a provider usage limit, or a duplicate that must
 	// be refused. Adopting it takes the same exclusive lease a fresh reservation
@@ -536,13 +568,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	case err == nil:
 		defer lease.Release()
 		// A usage-limit pause, a provider the harness stopped on time, a run held
-		// up by a directive, and one the operator parked are all resumable whatever
-		// the approval policy, because none of them depends on the repair loop: the
-		// first has not had its attempt served yet, the second is owed the rest of
-		// an attempt it was making, and the last two are owed the rest of the step
-		// they stopped short of. Nothing reaches here while the hold is still in
-		// force, so a run carrying one is a run whose hold has been lifted.
-		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
+		// up by a directive, one waiting on work its item depends on, and one the
+		// operator parked are all resumable whatever the approval policy, because
+		// none of them depends on the repair loop: the first has not had its
+		// attempt served yet, the second is owed the rest of an attempt it was
+		// making, and the rest are owed the rest of the step they stopped short of.
+		// Nothing reaches here while the hold or the dependency is still in force,
+		// so a run carrying one is a run whose reason to wait has gone.
+		if !pausedForUsageLimit(inFlight) && !pausedForDirective(inFlight) && !pausedForDependency(inFlight) && !pausedForOperatorHold(inFlight) && !stoppedProviderIsResumable(inFlight) && !(p.automatic() && resumableRepair(inFlight)) {
 			return Outcome{}, ExistingRunError{State: inFlight}
 		}
 		return p.resumeRun(ctx, inFlight, item, publishing, skipped)
@@ -561,6 +594,14 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// already under way carries on while intake is held.
 	if outcome, held, err := p.holdIntake(workItemID); err != nil || held {
 		return outcome, err
+	}
+	// And what follows would start it clean, which for an item whose last run
+	// stopped owing a repair is starting over on work that is waiting to be
+	// continued. It is asked before the item's own readiness, because the item
+	// having been put back is what lets this substitution past every other gate
+	// and says nothing about whether starting over is the right thing to do.
+	if err := p.refuseSubstitutedHandback(workItemID); err != nil {
+		return Outcome{}, err
 	}
 	if err := validateReadyItem(item, workItemID); err != nil {
 		return Outcome{}, err
@@ -790,6 +831,15 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 			return run.fail(err, runstate.StatusFailed)
 		}
 	}
+	// A recorded dependency pause is lifted rather than honored, on the same
+	// evidence and for the same reason: nothing reaches this point while the item
+	// still waits on unfinished work, because what it waits on was read from a
+	// freshly loaded item before the run was adopted.
+	if state.DependencyPause != nil {
+		if err := run.clearDependencyPause(); err != nil {
+			return run.fail(err, runstate.StatusFailed)
+		}
+	}
 	// A recorded operator hold is lifted rather than served, for the same reason
 	// and on the same evidence: nothing reaches this point while the operator is
 	// still holding activity, because the hold was read before the run was
@@ -807,6 +857,15 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		if err := run.awaitRecordedUsageLimit(ctx); err != nil {
 			return run.stop(ctx, err)
 		}
+	}
+	// A re-entry carries the preserved change, not a clean worktree. It is asked
+	// here rather than inside the branch below because both routes out of this
+	// point continue a change: the branch below hands a developer a failure about
+	// a change this run already made, and the step past it puts that change
+	// through the checks and the reviewer. Neither has anything to work on if the
+	// worktree lost it.
+	if err := run.verifyHandback(ctx); err != nil {
+		return run.stop(ctx, err)
 	}
 	// A repair attempt that was in flight when the process stopped was already
 	// counted against the budget, so it is re-run rather than re-counted, with
@@ -844,6 +903,128 @@ func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle st
 		return repairPrompt(invariants, state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
 		return developerPrompt(persona, invariants, bundle), nil
+	}
+}
+
+// handedBackRepair reports a run carrying a failure that was actually returned
+// to its developer: refused paths, a failing check, or the reviewer's findings.
+// Each of the three is a failure about a change that exists, so the presence of
+// any of them is what says a worktree is supposed to hold one, and a run that
+// recorded none of them never had a failure returned at all.
+func handedBackRepair(state runstate.State) bool {
+	return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+}
+
+// resumesAnExistingChange reports a resumed run whose worktree is supposed to
+// hold a change already. Two different facts put a run in that position, and
+// both of them have to be here or the gate below covers one route and reads as
+// though it covers every one.
+//
+// A run resumed inside its repair loop carries a failure returned about a change
+// it made, and the prompt it is about to be handed describes that change. A run
+// resumed at the checks or at the review has completed a developer attempt
+// whatever else it recorded — what those two steps judge is the change that
+// attempt made, and there is nothing else there for them to judge. That second
+// one is not hypothetical: a repair round that reached a review and burned it on
+// an empty diff is one of the field instances this item was filed for.
+//
+// The one resume this is false for is the run owed its first attempt — paused
+// before or during it, with no failure ever returned — and an empty worktree is
+// exactly what that attempt starts from.
+func resumesAnExistingChange(state runstate.State) bool {
+	switch state.Phase {
+	case runstate.PhaseChecking, runstate.PhaseReviewing:
+		return true
+	case runstate.PhaseDeveloping:
+		return handedBackRepair(state)
+	default:
+		return false
+	}
+}
+
+// owedARepair reports a stopped run a repair would continue rather than replace:
+// it ended on a blocker nobody has settled, a failure was returned to its
+// developer, and the branch it left still carries the change. All three are read
+// from the run's own record, which is the only account of it that survives the
+// process that made it.
+func owedARepair(state runstate.State) bool {
+	if !state.Status.Terminal() || strings.TrimSpace(state.Blocker) == "" {
+		return false
+	}
+	if !handedBackRepair(state) {
+		return false
+	}
+	return state.Branch != "" && !state.BranchRemoved
+}
+
+// ErrHandbackSubstituted is what a fresh run refused for standing in place of a
+// repair unwraps to, so a caller can tell it from a handback that arrived
+// without its change — the opposite failure, and the one that at least got as
+// far as re-entering the run.
+var ErrHandbackSubstituted = errors.New("a fresh run would start over on work a repair is owed")
+
+// SubstitutedHandbackError refuses a fresh run of an item whose last run stopped
+// owing a repair of the change it preserved. Nothing was reserved, claimed, or
+// created: the stopped run is exactly as it was, and so is its branch.
+type SubstitutedHandbackError struct {
+	WorkItemID   string
+	RunID        string
+	Branch       string
+	WorktreePath string
+}
+
+func (e SubstitutedHandbackError) Error() string {
+	return fmt.Sprintf(
+		"run %s of %s stopped on a blocker with a failure returned to its developer and its change preserved on %s, so what that stoppage is owed is a repair of the change it already has rather than a fresh run started from nothing; no run was reserved and no worktree was created. A fresh run here hands a developer the work item and an empty worktree off the target branch, which is delivered as an empty change or as the preserved change re-derived by hand — `yoyo triage repair %s` continues the stopped run in the worktree it preserved at %s, and `yoyo triage rerun %s` is what starts over deliberately, recording that the development manager decided the ground moved",
+		e.RunID, e.WorkItemID, e.Branch, e.RunID, e.WorktreePath, e.RunID)
+}
+
+func (e SubstitutedHandbackError) Unwrap() error { return ErrHandbackSubstituted }
+
+// refuseSubstitutedHandback refuses to start a fresh run of an item whose last
+// run stopped owing a repair of the change it preserved.
+//
+// This is the other half of the failure this item was filed for, and it is not
+// the same failure as a handback arriving on an empty worktree: nothing is
+// handed back at all. A fresh run reserves a new run, creates a new worktree off
+// the target branch, and hands a developer the work item — so the developer sees
+// work to do from nothing, and what it delivers is either an empty change or the
+// preserved change re-derived by hand against a base that has moved. It is
+// silent by construction, because the fresh worktree is perfectly valid and the
+// only record that says otherwise belongs to a run nothing in this path reads.
+//
+// A re-run is the one fresh run of such an item that is right, and it says so in
+// the record before it starts: triage claims it against the stoppage, and a claim
+// naming this run is the development manager deciding that the ground moved and
+// the work is to be done again. So the claim is what this looks for, and its
+// absence is what refuses. An item nobody has run yet, one whose last run
+// finished, and one whose preserved branch has since been retired all pass
+// without a question being asked of them.
+func (p Pipeline) refuseSubstitutedHandback(workItemID string) error {
+	latest, err := p.Store.Latest(workItemID)
+	if errors.Is(err, runstate.ErrNoRecordedRun) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read the last run of %s, to tell a fresh run from work a repair is owed: %w", workItemID, err)
+	}
+	if !owedARepair(latest) {
+		return nil
+	}
+	claimed, err := p.Store.Reruns().Claimed(workItemID)
+	if err != nil {
+		return fmt.Errorf("read the re-runs triage has claimed of %s: %w", workItemID, err)
+	}
+	for _, rerun := range claimed {
+		if rerun.PriorRunID == latest.RunID {
+			return nil
+		}
+	}
+	return SubstitutedHandbackError{
+		WorkItemID:   workItemID,
+		RunID:        latest.RunID,
+		Branch:       latest.Branch,
+		WorktreePath: latest.WorktreePath,
 	}
 }
 
@@ -953,6 +1134,31 @@ func grantEvidence(item beads.WorkItem) []string {
 	return []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria}
 }
 
+// refuseProviderGrant refuses to start on an item that grants a path no provider
+// honours. Such a grant admits work no attempt can finish, so no attempt is
+// made: the run stops here, before the item is claimed and before a single
+// repair round is spent, which is the entire failure this gate was built for.
+//
+// It exists as well as the check admission makes, rather than instead of it,
+// because the two doors admission holds — a proposal and a tracker action —
+// carry an item's title and description and nothing else. A grant is honoured
+// from the design guidance and the acceptance criteria too, and nothing in the
+// harness writes either of those: they are set with the tracker's own command,
+// by an operator or by an agent's shell, so there is no admission door for them
+// to be refused at. This is where a grant written into one is caught, and it is
+// also what catches an item admitted before that gate existed.
+//
+// It reads exactly the fields the gate that obeys a grant reads, through the
+// same predicate admission asks, so what a run refuses and what a run would have
+// obeyed can never come apart.
+func refuseProviderGrant(item beads.WorkItem) error {
+	problems := protectedpath.GrantProblems(grantEvidence(item)...)
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("work item %s grants a path no run can write to: %w", item.ID, errors.Join(problems...))
+}
+
 // recordDeliveredInvariants keeps the run's account of which constraints its
 // change was held to. It merges rather than replaces, because a run delivers
 // twice — once to the developer and once to the reviewer — and the second
@@ -992,6 +1198,9 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 		if err := a.holdForDirective(); err != nil {
 			return a.stop(ctx, err)
 		}
+		if err := a.holdForDependency(ctx); err != nil {
+			return a.stop(ctx, err)
+		}
 		if err := a.verify(ctx); err != nil {
 			return a.stop(ctx, err)
 		}
@@ -1016,8 +1225,14 @@ func (a *activeRun) verifyReviewAndFinish(ctx context.Context) (Outcome, error) 
 		// and the loop above can have spent hours in the provider since it last
 		// asked. Asking again here is what keeps a directive recorded mid-repair
 		// from reaching the run only after its change was already on the target
-		// branch, which is indistinguishable from it reaching nothing.
+		// branch, which is indistinguishable from it reaching nothing. A dependency
+		// link applied in that same stretch is the same fact and is asked the same
+		// way: promoting work somebody has just made wait on other work is the one
+		// outcome a link applied late must not still produce.
 		if err := a.holdForDirective(); err != nil {
+			return a.stop(ctx, err)
+		}
+		if err := a.holdForDependency(ctx); err != nil {
 			return a.stop(ctx, err)
 		}
 		err := a.integrate(ctx)
@@ -1180,6 +1395,41 @@ func (a *activeRun) blockOnRebaseConflict(cause error) error {
 	return cause
 }
 
+// blockOnDivergedTarget ends a run whose target branch and the remote's have
+// gone different ways, before anything is promoted. It is the remote-side twin
+// of the replay conflict: the local branch cannot be brought onto what the
+// remote holds, so there is nowhere to replay onto, and promoting anyway would
+// close this item as integrated against a divergence no later sweep can
+// reconcile. Nothing is forced and nothing is reset — both branches are left
+// exactly where they are and named for whoever settles them.
+func (a *activeRun) blockOnDivergedTarget(catchup gitworktree.Catchup) error {
+	remote := a.pipeline.Config.Execution.Remote
+	diverged := fmt.Errorf("%s cannot be brought onto %s before promoting: %s",
+		catchup.TargetBranch, remote, catchup.Held)
+	if err := a.block(renderDivergedTargetNotes(a.outcome, catchup, remote, diverged.Error())); err != nil {
+		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
+	}
+	return diverged
+}
+
+// blockOnPromotedDivergence ends a run whose remote target diverged in the
+// window after the local promotion, which is the same divergence as
+// blockOnDivergedTarget's with one thing already done that cannot be undone: the
+// change is on the local target branch. So the blocker says so rather than
+// pretending otherwise — what a person settles here is the two branches and the
+// publication, not the work — and the run ends without closing the item, because
+// an item closed as integrated is exactly the receipt that made this outcome
+// invisible.
+func (a *activeRun) blockOnPromotedDivergence(integration gitworktree.Integration, catchup gitworktree.Catchup, cause error) error {
+	remote := a.pipeline.Config.Execution.Remote
+	diverged := fmt.Errorf("%w; %s cannot be brought onto %s afterwards: %s",
+		cause, integration.TargetBranch, remote, catchup.Held)
+	if err := a.block(renderPromotedDivergenceNotes(a.outcome, integration, catchup, remote, diverged.Error())); err != nil {
+		return errors.Join(diverged, fmt.Errorf("record the diverged target branch as a blocker: %w", err))
+	}
+	return diverged
+}
+
 // repairLoop returns each failure to the same developer until an attempt both
 // passes the deterministic gates and is approved, or the configured repair
 // budget is spent. A refused path, a failing check, and a reviewer's findings
@@ -1200,6 +1450,15 @@ func (a *activeRun) repairLoop(ctx context.Context) error {
 		// directive that arrived during the attempt that got the run here reaches
 		// it, which is the case this exists for.
 		if err := a.holdForDirective(); err != nil {
+			return err
+		}
+		// It asks what the item waits on for the same reason, from a freshly read
+		// item rather than from the one selection saw. The first round is where a
+		// dependency link applied while the developer was working reaches the run,
+		// and it reaches it before the reviewer is asked to judge work that should
+		// never have been developed — which is the round that was burned when this
+		// gate was missing.
+		if err := a.holdForDependency(ctx); err != nil {
 			return err
 		}
 		if err := a.verify(ctx); err != nil {
@@ -1327,6 +1586,45 @@ func (a *activeRun) blockOnFailingCheck(limit int) error {
 		return errors.Join(cause, fmt.Errorf("record the failing check as a blocker: %w", err))
 	}
 	return cause
+}
+
+// verifyHandback proves the worktree a run is re-entered in still holds the
+// change the next step is about, before that step spends anything on it.
+//
+// This is the enforcement rather than the courtesy. The triage action that
+// carries out a handback asks the same question before it spends the item's
+// grant, and asking it here is what makes the answer bind every route into a
+// resumed run — that action, an interrupted process a later invocation picks up,
+// and whatever re-entry is built next, none of which will mention this. The
+// failure it catches is silent by construction: a worktree that lost its change
+// looks exactly like a valid one, so what is spent on it comes back as an empty
+// repair, a review round burned on an empty diff, or the change reinvented, and
+// the run's own record afterwards says none of those.
+//
+// It refuses to a person rather than starting over. Whether the change was never
+// seeded or somebody removed it is not something this can tell, and both are
+// decisions about work that may still exist on the preserved branch.
+func (a *activeRun) verifyHandback(ctx context.Context) error {
+	if !resumesAnExistingChange(a.state) {
+		return nil
+	}
+	if err := preservedChangeHeld(ctx, a.pipeline.Worktrees, a.state); err != nil {
+		return a.blockOnMissingPreservedChange(err)
+	}
+	return nil
+}
+
+// blockOnMissingPreservedChange ends a run re-entered to continue a change its
+// worktree does not hold. It is the handback-side twin of the repair blockers:
+// nothing here says the change was wrong, and the branch the run recorded may
+// still carry every line of it, so what this hands a person is where to go
+// looking rather than a verdict.
+func (a *activeRun) blockOnMissingPreservedChange(cause error) error {
+	blocked := fmt.Errorf("%w: run %s was picked up again at the %s phase and %v", ErrPreservedChangeMissing, a.state.RunID, a.state.Phase, cause)
+	if err := a.block(renderMissingPreservedChangeNotes(a.outcome, blocked.Error())); err != nil {
+		return errors.Join(blocked, fmt.Errorf("record the missing preserved change as a blocker: %w", err))
+	}
+	return blocked
 }
 
 // blockOnRefusedPaths ends a run whose repair budget was spent still touching
@@ -2150,6 +2448,106 @@ func pausedForDirective(state runstate.State) bool {
 	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
 }
 
+// pauseWorkItemForDependencies reports work the harness declined to start or
+// resume because the item waits on work that is not finished. There is no run
+// behind it: nothing was claimed, no worktree exists, and a run already in flight
+// for the item was left exactly as it was. It is a pause rather than a failure
+// because closing what it waits on is all that stands between here and the work
+// proceeding.
+func pauseWorkItemForDependencies(workItemID string, blockers []string) Outcome {
+	paused := runstate.DependencyPause{Blockers: blockers}
+	return Outcome{
+		WorkItemID:         workItemID,
+		Paused:             true,
+		PausedByDependency: &paused,
+	}
+}
+
+// holdForDependency stops a run in flight for work its item has since been made
+// to wait on, and does nothing at all when there is none, which is the ordinary
+// case. What it returns on the pausing path is a dependencyPause, which travels
+// the path a stopped step already travels.
+//
+// The item is re-read from the tracker rather than taken from the run, and that
+// is the whole of what this adds. The item a run carries is what selection read
+// when the run started; a dependency link applied since then is precisely the
+// gate that would otherwise stop nothing, and a run answering from its own copy
+// would be the run this exists to end.
+//
+// A failure to read is a failure to proceed, exactly as an unreadable directive
+// is: a harness that cannot find out what an item waits on is indistinguishable
+// from one whose item waits on nothing, and spending another attempt on that
+// reading is the whole failure this exists to prevent.
+func (a *activeRun) holdForDependency(ctx context.Context) error {
+	item, err := a.pipeline.Tracker.Show(ctx, a.state.WorkItemID)
+	if err != nil {
+		return fmt.Errorf("read what %s waits on: %w", a.state.WorkItemID, err)
+	}
+	blockers := blockingDependencies(item)
+	if len(blockers) == 0 {
+		return nil
+	}
+	return a.recordDependencyPause(blockers)
+}
+
+// recordDependencyPause makes the pause durable and then reports it, for the
+// reason recordDirectivePause does: a process that dies here must leave a run
+// that can be told from an interrupted one and picked up again.
+func (a *activeRun) recordDependencyPause(blockers []string) error {
+	// The developer's attempt is behind this run and the gate is what it stopped
+	// short of, so the recorded phase says so. Left at developing, a resumed run
+	// would be handed a second developer attempt it does not need.
+	if a.state.Phase == runstate.PhaseDeveloping {
+		a.state.Phase = runstate.PhaseChecking
+	}
+	paused := runstate.DependencyPause{Blockers: blockers}
+	a.state.DependencyPause = &paused
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("record the unfinished work that paused this run: %w", err)
+	}
+	return dependencyPause{blockers: blockers}
+}
+
+// clearDependencyPause records that the run is no longer waiting, before it
+// carries on. A pause left behind would make a running attempt look like a
+// waiting one to the next process that adopts the run.
+func (a *activeRun) clearDependencyPause() error {
+	if a.state.DependencyPause == nil {
+		return nil
+	}
+	a.state.DependencyPause = nil
+	a.state.UpdatedAt = a.pipeline.clock().Now()
+	if err := a.pipeline.Store.Save(a.state); err != nil {
+		return fmt.Errorf("clear the dependency pause: %w", err)
+	}
+	return nil
+}
+
+// dependencyPause reports a run that stopped short of finishing because its work
+// item waits on work that is not finished. Like the directive pause it is an
+// error only so that it travels the path a stopped step already travels; it is
+// deliberately not a failure, and the run it leaves behind is still in flight,
+// still claimed, and still resumable.
+type dependencyPause struct {
+	blockers []string
+}
+
+func (e dependencyPause) Error() string {
+	return "paused for unfinished work this item waits on: " + strings.Join(e.blockers, ", ")
+}
+
+// pausedForDependency reports a run held up by work its item waits on. The
+// recorded pause is what makes it a pause rather than an interruption, and the
+// worktree is what makes it resumable: the change every attempt shares is what
+// the run comes back to.
+func pausedForDependency(state runstate.State) bool {
+	if state.Status != runstate.StatusRunning || state.DependencyPause == nil {
+		return false
+	}
+	return state.WorktreePath != "" && state.Branch != "" && state.BaseCommit != ""
+}
+
 // operatorHoldProbe is how often a held run looks for the operator lifting the
 // hold. It bounds how long `yoyo resume` takes to be acted on by a process that
 // is already parked, so it is short enough to read as immediate to the person
@@ -2571,6 +2969,14 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	// system does it anyway when the process exits. A close that failed therefore
 	// says nothing about the promotion below, which either happened or did not.
 	defer func() { _ = lease.Release() }()
+	// Where the remote target stands is settled before the promotion rather than
+	// only after it. A promotion made onto a target the remote has moved away from
+	// can be neither published nor taken back, so finding out afterwards closes the
+	// item as integrated against a divergence nothing owns; finding out here leaves
+	// a change that can still be replayed onto wherever the target went.
+	if err := a.settleRemoteTarget(ctx); err != nil {
+		return err
+	}
 	integration, err := p.Worktrees.Integrate(ctx, a.worktree, integrationMessage(a.item, a.outcome))
 	if err != nil {
 		// A refused promotion may already have committed what the developer left,
@@ -2596,9 +3002,15 @@ func (a *activeRun) integrate(ctx context.Context) error {
 		PreviousTargetCommit: integration.PreviousTargetCommit,
 	}
 	// The approving verdict authorized this promotion, so it also authorized the
-	// merge of the pull request that carried it. Publishing cannot fail the run:
-	// the local target branch has already moved and it is the authoritative one.
-	a.publishIntegration(ctx)
+	// merge of the pull request that carried it. Publishing does not fail the run
+	// over an unfinished publication — the local target branch has already moved
+	// and it is the authoritative one — but it does fail it over a remote target
+	// that diverged in the window this check-then-act leaves open, because the
+	// alternative is closing the item as integrated against a divergence no
+	// fast-forward reconciles. The promotion stands either way; the blocker says so.
+	if err := a.publishIntegration(ctx); err != nil {
+		return err
+	}
 	a.state.Phase = runstate.PhaseCompleting
 	a.state.UpdatedAt = p.clock().Now()
 	if err := p.Store.Save(a.state); err != nil {
@@ -2607,8 +3019,9 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	return nil
 }
 
-// finish records the outcome, closes an integrated item, makes the run durably
-// terminal, and only then removes what the run created.
+// finish records the outcome, closes an integrated item whose publication is
+// settled, makes the run durably terminal, and only then removes what the run
+// created.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
@@ -2617,14 +3030,23 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	if _, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome)); err != nil {
 		return a.fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
 	}
-	if a.outcome.Integration != nil {
+	// An item closes as integrated once the promotion is where it is going to
+	// stay. A merge the forge only queued is not that yet: it lands minutes
+	// later, or the forge drops it because something the base branch requires
+	// went unmet, and closing here would record integrated for a publication
+	// that may never happen. So the closure waits for the forge's answer, which
+	// is the same step that already settles the queue — and until it arrives the
+	// item stays claimed with the queued merge named on it, rather than closed
+	// against a merge nobody has confirmed.
+	if a.outcome.Integration != nil && !a.mergeQueued() {
 		if _, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome)); err != nil {
 			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 		}
 		a.outcome.WorkItemClosed = true
 	}
-	// The item is priced once it is closed rather than before, so what the
-	// tracker carries beside a finished item is the price of finishing it.
+	// The item is priced when the run that spent it ends, whether or not the
+	// closure waits: a queued merge defers the closure to a later sweep, and that
+	// sweep does not re-read what this run cost.
 	a.recordPrice()
 
 	// The run becomes durably terminal before anything is destroyed. Cleanup is
@@ -2709,6 +3131,10 @@ func (a *activeRun) stop(ctx context.Context, cause error) (Outcome, error) {
 	var directed directivePause
 	if errors.As(cause, &directed) {
 		return a.pauseForDirective(directed)
+	}
+	var waiting dependencyPause
+	if errors.As(cause, &waiting) {
+		return a.pauseForDependency(waiting)
 	}
 	var operatorHeld operatorHoldPause
 	if errors.As(cause, &operatorHeld) {
@@ -2812,6 +3238,37 @@ func (a *activeRun) pauseForDirective(paused directivePause) (Outcome, error) {
 	return a.outcome, nil
 }
 
+// pauseForDependency reports a run held up by work its item waits on. It behaves
+// exactly as the directive pause it sits beside: the pause was made durable
+// before this point, nothing is cleaned up, and nothing is made terminal, so the
+// change the run has already produced stays where the next attempt continues it.
+// What differs is only what lifts it — the work it waits on being closed or
+// unlinked, rather than somebody settling a question.
+func (a *activeRun) pauseForDependency(paused dependencyPause) (Outcome, error) {
+	a.outcome.Status = runstate.StatusRunning
+	a.outcome.Phase = a.state.Phase
+	a.outcome.Paused = true
+	waiting := runstate.DependencyPause{Blockers: paused.blockers}
+	a.outcome.PausedByDependency = &waiting
+	a.outcome.Branch = a.state.Branch
+	a.outcome.WorktreePath = a.state.WorktreePath
+	a.outcome.BaseCommit = a.state.BaseCommit
+	a.outcome.ProviderSessionID = a.state.ProviderSessionID
+	if !a.claimed {
+		return a.outcome, nil
+	}
+	recordCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, err := a.pipeline.Tracker.RecordOutcome(recordCtx, a.state.WorkItemID, renderDependencyPauseNotes(a.outcome, waiting)); err != nil {
+		// The pause is already durable, so a note that could not be written costs
+		// the run nothing. It is still reported, for the same reason the other
+		// pauses report it: an operator watching the tracker would otherwise see
+		// the item simply stop moving.
+		return a.outcome, fmt.Errorf("record the dependency pause on the work item: %w", err)
+	}
+	return a.outcome, nil
+}
+
 // pauseForOperatorHold reports a run parked because the operator holds harness
 // activity. It is the fourth of the pauses and behaves exactly as the other
 // three: the park was made durable before this point, nothing is cleaned up, and
@@ -2850,13 +3307,14 @@ func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	message := cause.Error()
 	completedAt := p.clock().Now()
 	// A recorded pause or stop is an instruction to resume later, and this run is
-	// ending now. Clearing all four keeps the terminal record coherent; what
+	// ending now. Clearing all five keeps the terminal record coherent; what
 	// stopped the run is still named by the recorded limit kind and by the
 	// failure, and what it spent waiting stays on the record either way.
 	a.state.UsageLimitResetsAt = nil
 	a.state.PauseCause = ""
 	a.state.ProviderStop = ""
 	a.state.DirectivePause = nil
+	a.state.DependencyPause = nil
 	a.state.OperatorHeldSince = nil
 	a.state.Status = status
 	a.state.UpdatedAt = completedAt
@@ -3300,7 +3758,7 @@ func resumableRepair(state runstate.State) bool {
 	}
 	switch state.Phase {
 	case runstate.PhaseDeveloping:
-		return state.PathRefusal != nil || state.CheckFailure != nil || len(state.ReviewFindingDetails) > 0
+		return handedBackRepair(state)
 	case runstate.PhaseChecking, runstate.PhaseReviewing:
 		return true
 	default:
@@ -3449,17 +3907,39 @@ func validateWorkItem(item beads.WorkItem, requestedID, expectedStatus string) e
 	if item.Status != expectedStatus {
 		return fmt.Errorf("work item %s status is %q, want %s", item.ID, item.Status, expectedStatus)
 	}
+	if blockers := blockingDependencies(item); len(blockers) > 0 {
+		return fmt.Errorf("work item %s is blocked by: %s", item.ID, strings.Join(blockers, ", "))
+	}
+	// Asked of a ready item and of a claimed one alike, because an item that
+	// acquired the grant after it was claimed is the same wall as one that carried
+	// it all along, and a run resumed into it spends the rounds a run refused here
+	// does not.
+	return refuseProviderGrant(item)
+}
+
+// blocksDependency is the tracker relation that makes one item wait for another.
+// It is named once because more than one gate decides on it, and two gates
+// spelling the relation differently would be two accounts of what "blocked"
+// means that could disagree.
+const blocksDependency = "blocks"
+
+// blockingDependencies names the unfinished work an item waits for, in a stable
+// order. It is the single reading every dependency gate in this package decides
+// on: the run-start check, the gate each attempt passes through, and the refusal
+// a stopped run's continuation is held to.
+//
+// A dependency whose own item is closed is not something anybody is waiting for,
+// and a relation that is not "blocks" — a parent-child link, say — says nothing
+// about whether this work may proceed.
+func blockingDependencies(item beads.WorkItem) []string {
 	var blockers []string
 	for _, dependency := range item.Dependencies {
-		if dependency.Type == "blocks" && dependency.Status != "closed" {
+		if dependency.Type == blocksDependency && dependency.Status != "closed" {
 			blockers = append(blockers, dependency.ID)
 		}
 	}
-	if len(blockers) > 0 {
-		sort.Strings(blockers)
-		return fmt.Errorf("work item %s is blocked by: %s", item.ID, strings.Join(blockers, ", "))
-	}
-	return nil
+	sort.Strings(blockers)
+	return blockers
 }
 
 func (p Pipeline) clock() execution.Clock {
@@ -3478,6 +3958,8 @@ const developerContract = `You are the developer for one bounded Yoyodyne work i
 Work only inside the current assigned worktree. Do not create, remove, or switch branches or worktrees. Do not commit, push, or integrate the change; the harness does all three. Do not modify upstream product, goal, design, or specification artifacts; propose the change instead, in the block described below. Implement the assigned work, run relevant focused checks, and finish with a concise summary of changes, verification, and any remaining risk.
 
 That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
+
+A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 
@@ -3775,6 +4257,26 @@ func relaunchBlockerVerdict(outcome Outcome, checkFailure *runstate.CheckFailure
 	return "No check failed and no reviewer asked for repair; nothing here says the change is wrong. The branch, worktree, and developer session are preserved, and what needs looking at is the provider."
 }
 
+// renderMissingPreservedChangeNotes describes a run picked up again to continue
+// a change its worktree does not hold. It names the branch first and says
+// plainly that nothing was developed, because the two things a reader has to be
+// stopped from concluding are that the work is gone and that the empty diff
+// behind this is somebody's verdict on it: the change may be on the recorded
+// branch in full, and no developer and no reviewer were ever invoked.
+func renderMissingPreservedChangeNotes(outcome Outcome, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its run was picked up again to continue a change, and the worktree it was re-entered in holds none of that change.",
+		"Nothing was developed, checked, or reviewed from an empty worktree; continuing a run means continuing a change that already exists, and doing it from nothing is how an empty repair, a review round burned on an empty diff, or a reinvented change gets delivered.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"Base commit: " + outcome.BaseCommit,
+		"Nothing here says the change was wrong, and nothing was deleted: the branch above is where the preserved work is if it survived. What this needs is somebody to say whether the worktree was seeded from that branch, and to re-enter the run once it carries the change again.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
 // renderRebaseConflictNotes describes a change that cannot be replayed onto what
 // its target became. This is the one integration outcome that is genuinely a
 // decision rather than a retry, so it names both sides and says explicitly that
@@ -3789,6 +4291,64 @@ func renderRebaseConflictNotes(outcome Outcome, failure string) string {
 		"Worktree: " + outcome.WorktreePath,
 		"Base commit: " + outcome.BaseCommit,
 		"The branch and worktree are preserved exactly as they were; reconciling them against the target branch is what this needs.",
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// renderDivergedTargetNotes describes a target branch that has gone a different
+// way from the one on the remote, with nothing promoted. Like the replay
+// conflict it says explicitly that nothing was resolved, and it names where each
+// branch stands: what a person settles here is which of the two histories the
+// project's target branch is, and neither commit can be found from the other.
+func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, remote, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: its target branch and the one on the remote have diverged, so the change was never promoted.",
+		"Nothing was force-merged, reset, or auto-resolved; which history is right is a decision for a person.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		"Base commit: " + outcome.BaseCommit,
+		fmt.Sprintf("Local %s: %s", catchup.TargetBranch, nonEmpty(catchup.LocalCommit, "an unresolved commit")),
+		fmt.Sprintf("%s %s: %s", remote, catchup.TargetBranch, nonEmpty(catchup.RemoteCommit, "no such branch")),
+		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and reconciling the two target branches is what this needs before the change can be promoted.",
+		divergedTargetRecovery,
+	}
+	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
+}
+
+// divergedTargetRecovery is the route out of a target branch that has gone a
+// different way from the remote's, named wherever that divergence is reported. It
+// is the one repository state the harness will not decide, so a report of it that
+// says only that a person is needed leaves them to invent the steps: which side
+// is the shared truth, where the unpublished promotions go so nothing is lost,
+// and how the branch is moved without racing a promotion. Those steps are written
+// down, and every report of the divergence says where.
+const divergedTargetRecovery = "Recovery: follow \"Unwedging a target branch that diverged from the forge\" in docs/operations.md. It preserves the local-only promotions on their own branch, puts the target back onto the remote's history, and leaves that branch for you to republish; the harness will not do it unasked, because which history is right is yours to say."
+
+// renderPromotedDivergenceNotes describes the same divergence found one step too
+// late: the local target branch already carries the promotion. It says that
+// plainly and first, because a reader who assumed the change was lost would go
+// looking for work that is already on their branch — and it says the item is
+// deliberately not closed, because the promotion alone would ordinarily have
+// closed it and what stops that here is the divergence rather than any doubt
+// about the change.
+func renderPromotedDivergenceNotes(outcome Outcome, integration gitworktree.Integration, catchup gitworktree.Catchup, remote, failure string) string {
+	lines := []string{
+		"Yoyodyne stopped this item: the change was promoted onto the local target branch, and the one on the remote then turned out to have diverged from it.",
+		"The change itself is not at risk — it is on the local target branch, which is the authoritative one — but the publication did not happen and the two branches cannot be brought together by a fast-forward.",
+		"The item is deliberately left open rather than closed as integrated: closing it would record this work as landed against a state nothing reconciles.",
+		"Nothing was force-merged, reset, or auto-resolved; which history is right is a decision for a person.",
+		"Failure: " + failure,
+		"Run: " + outcome.RunID,
+		"Branch: " + outcome.Branch,
+		"Worktree: " + outcome.WorktreePath,
+		fmt.Sprintf("Promoted commit: %s, onto local %s at %s", integration.SourceCommit, integration.TargetBranch, integration.TargetCommit),
+		fmt.Sprintf("%s %s: %s", remote, integration.TargetBranch, nonEmpty(catchup.RemoteCommit, "could not be resolved")),
+		divergedTargetRecovery,
+	}
+	if outcome.PullRequest != nil {
+		lines = append(lines, fmt.Sprintf("Pull request left unmerged: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL))
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
@@ -3879,6 +4439,33 @@ func renderDirectivePauseNotes(outcome Outcome, held directive.Directive) string
 	return strings.Join(lines, "\n")
 }
 
+// renderDependencyPauseNotes describes a run held up by work its item waits on.
+// It names the blocking items, because closing or unlinking one of them is what
+// lifts the pause, and it says plainly that the work was not abandoned: an
+// operator reading a claimed item that has gone quiet has to be able to tell
+// waiting from stopped.
+func renderDependencyPauseNotes(outcome Outcome, waiting runstate.DependencyPause) string {
+	lines := []string{
+		"Yoyodyne paused this run: this item waits on work that is not finished, so the run is waiting rather than failing. Nothing about the change was judged.",
+		"Waiting on: " + waiting.Summary(),
+		"Run: " + outcome.RunID,
+	}
+	if outcome.Branch != "" {
+		lines = append(lines, "Branch: "+outcome.Branch)
+	}
+	if outcome.WorktreePath != "" {
+		lines = append(lines, "Worktree: "+outcome.WorktreePath)
+	}
+	if outcome.ProviderSessionID != "" {
+		lines = append(lines, "Claude session: "+outcome.ProviderSessionID)
+	}
+	lines = append(lines,
+		"This item stays claimed and its branch, worktree, and developer session are all preserved.",
+		"Closing the work above, or removing the dependency link, is what lifts the pause; running Yoyodyne on this item after that continues the same run.",
+	)
+	return strings.Join(lines, "\n")
+}
+
 // renderOperatorHoldNotes describes a run parked because the operator paused all
 // harness activity. It says who paused it and when, because the one thing an
 // operator reading a quiet item has to be able to tell is a system they paused
@@ -3934,9 +4521,9 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.Integration != nil {
 		headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically."
 	}
-	// These notes are recorded before cleanup, because the item is closed first
-	// and only a closed item's artifacts are removed. Cleanup can still fail, so
-	// say it is scheduled rather than predicting that it happened.
+	// These notes are recorded before cleanup, because the promotion is settled
+	// first and only a promoted change's artifacts are removed. Cleanup can still
+	// fail, so say it is scheduled rather than predicting that it happened.
 	worktree := "Worktree: " + outcome.WorktreePath
 	if outcome.Integration != nil {
 		worktree = "Worktree (cleanup pending): " + outcome.WorktreePath

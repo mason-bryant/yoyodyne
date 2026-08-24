@@ -1244,8 +1244,13 @@ func TestShowBreaksAnItemsCostDownByRun(t *testing.T) {
 
 	work := &fakeWork{price: ItemPrice{
 		Runs: []RunPrice{
-			{RunID: "run-1", Status: "failed", Phase: "reviewing", StartedAt: fixedClock{}.Now(), Invocations: 3, CostUSD: 8.91},
-			{RunID: "run-2", Status: "succeeded", Phase: "complete", StartedAt: fixedClock{}.Now(), Integrated: true, Invocations: 2, CostUSD: 19.02},
+			// The first attempt was blocked and its work preserved, which is what
+			// the survey says over it: the durable status is still "failed", and
+			// the word a reader sees is what became of the work.
+			{RunID: "run-1", Status: "failed", Outcome: "stopped", Phase: "reviewing", StartedAt: fixedClock{}.Now(), Invocations: 3, CostUSD: 8.91},
+			{RunID: "run-2", Status: "succeeded", Outcome: "succeeded", Phase: "complete", StartedAt: fixedClock{}.Now(), Integrated: true, Invocations: 2, CostUSD: 19.02},
+			// A run recorded before the vocabulary existed says so rather than
+			// falling back to a status word that would misdescribe it.
 			{RunID: "run-3", Status: "failed", StartedAt: fixedClock{}.Now(), Unknown: "the run's event log is no longer recorded"},
 		},
 		TotalUSD:    27.93,
@@ -1266,8 +1271,9 @@ func TestShowBreaksAnItemsCostDownByRun(t *testing.T) {
 	transcript := out.String()
 	for _, required := range []string{
 		"cost: at least $27.93 across 3 run(s)",
-		"[failed, reviewing] $8.91 from 3 invocation(s)",
+		"[stopped, reviewing] $8.91 from 3 invocation(s)",
 		"[succeeded, complete, integrated] $19.02 from 2 invocation(s)",
+		"[outcome not recorded]",
 		"unknown: the run's event log is no longer recorded",
 		"1 of those run(s) left no record to price",
 		"not priced against any item",

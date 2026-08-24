@@ -131,9 +131,14 @@ func (p *PhaseSpend) Merge(other PhaseSpend) {
 
 // RunPrice is what one recorded run cost, as its own event log reports it.
 type RunPrice struct {
-	RunID       string     `json:"run_id"`
-	WorkItemID  string     `json:"work_item_id"`
-	Status      Status     `json:"status"`
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Status     Status `json:"status"`
+	// Outcome is what became of the run, in the fixed vocabulary a listing says
+	// it in. It is read from the same derivation the run history uses rather than
+	// from the status here, so a run a reader meets in a price breakdown and in
+	// `yoyo status` is described in one word rather than two.
+	Outcome     RunOutcome `json:"outcome"`
 	Phase       Phase      `json:"phase,omitempty"`
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -259,6 +264,7 @@ func (s *Store) priceRun(state State) RunPrice {
 		RunID:       state.RunID,
 		WorkItemID:  state.WorkItemID,
 		Status:      state.Status,
+		Outcome:     state.Outcome(),
 		Phase:       state.Phase,
 		StartedAt:   state.StartedAt,
 		CompletedAt: state.CompletedAt,

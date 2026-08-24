@@ -198,6 +198,128 @@ func TestAssembleProductSurfacesSpecificationsThatIgnoreTheStructure(t *testing.
 	}
 }
 
+// A directory index is not a specification and is not held to a specification's
+// shape. Both readings of one would be reported forever and neither would be
+// actionable: `docs/product/goals/README.md` was reported for opening with its
+// goals because its title read "Goals directory", and the same file rewritten to
+// say what is filed there would be reported for stating none. The index is still
+// carried into the context, because it says what is filed beside it.
+func TestADirectoryIndexIsNotHeldToTheSpecificationShape(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/good.md", wellFormed)
+	writeProductFile(t, root, "docs/product/goals/README.md", "# Goals directory\n\nWhat is filed here, and whose it is.\n")
+	writeProductFile(t, root, "docs/product/README.md", "# docs/product\n\n**Purpose.** The brief and the goals that serve it.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if len(bundle.SpecificationProblems) != 0 {
+		t.Fatalf("problems = %v, want an index held to no shape at all", bundle.SpecificationProblems)
+	}
+	if strings.Contains(bundle.Text, "## Specifications that do not follow the required structure") {
+		t.Fatalf("an index was reported as a specification that ignores the structure:\n%s", bundle.Text)
+	}
+	// Carried, and carried as what it is: an index arrives under its own heading
+	// so the reader is not left to work out that it states nothing.
+	if !strings.Contains(bundle.Text, "## Directory index: docs/product/goals/README.md") {
+		t.Fatalf("the index was dropped rather than carried under its own heading:\n%s", bundle.Text)
+	}
+	if strings.Contains(bundle.Text, "## Specification: docs/product/README.md") {
+		t.Fatalf("an index was carried as a specification:\n%s", bundle.Text)
+	}
+	if bundle.SpecificationsIncluded != 1 || len(bundle.References) != 3 {
+		t.Fatalf("specifications = %d, references = %d: only good.md states anything",
+			bundle.SpecificationsIncluded, len(bundle.References))
+	}
+}
+
+// The ordinary starting case, after `yoyo init`. It writes an index into the
+// specifications directory and another into the goals directory beneath it, so
+// the directory a repository with no intent has is no longer empty. What must
+// not change is what the product manager is told: that intent is not written
+// down, which is what makes the first conversation on a fresh repository ask
+// what the product is for rather than infer it from two files about filing.
+func TestADirectoryHoldingOnlyIndexesRecordsNoProductIntent(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/README.md",
+		"# docs/product\n\n**Purpose.** The brief and the goals that serve it.\n\n**Owner.** The product manager.\n\n**Editing by hand.** You may.\n")
+	writeProductFile(t, root, "docs/product/goals/README.md",
+		"# docs/product/goals\n\n**Purpose.** The goals derived from the brief.\n\n**Owner.** The product manager.\n\n**Editing by hand.** You may.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if bundle.SpecificationsIncluded != 0 {
+		t.Fatalf("specifications = %d, want none: an index states no intent", bundle.SpecificationsIncluded)
+	}
+	for _, required := range []string{
+		"No specification was found under docs/product.",
+		"Say that product intent is not written down",
+		"- Brief: none recorded.",
+		"- Goals: none recorded.",
+	} {
+		if !strings.Contains(bundle.Text, required) {
+			t.Fatalf("product context is missing %q:\n%s", required, bundle.Text)
+		}
+	}
+	// The indexes are still there, and still not called specifications, so the
+	// context does not say in one section that none was found and in the next
+	// that here are two.
+	if len(bundle.References) != 2 {
+		t.Fatalf("references = %d, want both indexes carried", len(bundle.References))
+	}
+	if strings.Contains(bundle.Text, "## Specification: ") {
+		t.Fatalf("an index was carried as a specification alongside a report that none was found:\n%s", bundle.Text)
+	}
+	if len(bundle.SpecificationProblems) != 0 {
+		t.Fatalf("problems = %v, want an index held to no shape", bundle.SpecificationProblems)
+	}
+	if bundle.Bytes != len(bundle.Text) {
+		t.Fatalf("bundle bytes = %d, text = %d", bundle.Bytes, len(bundle.Text))
+	}
+}
+
+// The same thing one level down: `yoyo init` writes an index into the designs
+// home too, and a home holding only that has still recorded no designs. The
+// architect has to be told to treat them as unwritten rather than as something
+// it has read, which is what that note exists for.
+func TestARoleDocumentHomeHoldingOnlyItsIndexIsStillUnwritten(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/runs.md", wellFormed)
+	writeProductFile(t, root, "docs/designs/README.md",
+		"# docs/designs\n\n**Purpose.** How what the goals ask for gets built.\n\n**Owner.** The architect.\n\n**Editing by hand.** You may.\n")
+
+	bundle, err := AssembleProduct(ProductRequest{
+		RepositoryRoot:          root,
+		SpecificationsDirectory: "docs/product",
+		RoleDocuments:           []DocumentSet{{Label: "Design", Directory: "docs/designs"}},
+	})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	if !strings.Contains(bundle.Text, "Nothing was found under docs/designs.") {
+		t.Fatalf("a designs home holding only its index reads as written:\n%s", bundle.Text)
+	}
+	if strings.Contains(bundle.Text, "Your own documents are here too") {
+		t.Fatalf("the architect is told it has read designs that were never written:\n%s", bundle.Text)
+	}
+	// The index is still carried, and still not called a design.
+	if !strings.Contains(bundle.Text, "## Directory index: docs/designs/README.md") {
+		t.Fatalf("the index was dropped rather than carried under its own heading:\n%s", bundle.Text)
+	}
+	if strings.Contains(bundle.Text, "## Design: docs/designs/README.md") {
+		t.Fatalf("an index was carried as a design:\n%s", bundle.Text)
+	}
+}
+
 func TestSpecificationStructureProblem(t *testing.T) {
 	t.Parallel()
 

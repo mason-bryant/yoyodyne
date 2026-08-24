@@ -1340,10 +1340,22 @@ func TestStateRejectsIncoherentPublishedEvidence(t *testing.T) {
 		},
 		{
 			// The forge is only asked to merge once the promotion it carries has
-			// been made, so a merged request cannot be recorded before it is.
-			name:    "merged with nothing integrated",
-			mutate:  func(state *State) { state.PullRequest.Merged = true },
-			problem: "merged pull request requires recorded integration",
+			// been made, so a merge this run asked for cannot be recorded before
+			// it is. The recorded method is what says the run asked.
+			name: "merged by a request this run made, with nothing integrated",
+			mutate: func(state *State) {
+				state.PullRequest.Merged = true
+				state.PullRequest.MergeMethod = "merge"
+			},
+			problem: "merged pull request the run asked the forge for requires recorded integration",
+		},
+		{
+			// A merge nobody here asked for is what somebody merging the request
+			// on the forge after the run was over looks like. Recording it says
+			// what the forge did, not that this run promoted anything, and
+			// refusing to store it is what left such a record stale for good.
+			name:   "merged on the forge by somebody else, with nothing integrated",
+			mutate: func(state *State) { state.PullRequest.Merged = true },
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

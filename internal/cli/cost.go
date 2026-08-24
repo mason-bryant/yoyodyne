@@ -298,8 +298,12 @@ func renderTotal(total float64, unpriced int) string {
 	return fmt.Sprintf("$%.2f", total)
 }
 
+// renderRunOutcome says how one priced attempt went, in the same fixed
+// vocabulary the run listing uses. It reads the outcome the record derives
+// rather than the durable status, because a reader meeting the same run in both
+// places must not be told two different things about it.
 func renderRunOutcome(run runstate.RunPrice) string {
-	outcome := string(run.Status)
+	outcome := string(run.Outcome)
 	if run.Phase != "" {
 		outcome += ", " + string(run.Phase)
 	}

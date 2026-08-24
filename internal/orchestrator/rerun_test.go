@@ -999,10 +999,14 @@ func newPipelinedRerun(t *testing.T, beforeStart func()) *pipelinedRerun {
 		t.Fatalf("runstate.NewIntakeHoldStore() error = %v", err)
 	}
 	pipeline.Intake = intake
-	reruns, err := runstate.NewRerunStore(root, "yoyodyne")
-	if err != nil {
-		t.Fatalf("runstate.NewRerunStore() error = %v", err)
-	}
+	// And one re-run record for both readings, for exactly the reason there is one
+	// intake record. The action claims the re-run before it starts anything, and
+	// the pipeline reads that claim where it would otherwise refuse to start a
+	// fresh run on work a repair is owed — so a test that wired them to two
+	// records would prove nothing about either, and would have the fresh run
+	// refused by a claim it had itself just taken. It is the store's own, which is
+	// what `buildRerunner` and `pipelineFrom` share in the command.
+	reruns := store.Reruns()
 	// The stoppage this decision is about, recorded in the same store the fresh
 	// run is reserved in, so what is in flight is read from one place. It is a
 	// different run to the one this pipeline will reserve, because the item has
