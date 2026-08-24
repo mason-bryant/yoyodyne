@@ -15,6 +15,22 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+What the item waits on is read from the tracker at every point the run is about
+to commit to work — before it is claimed or resumed, at the start of each round
+of the gate, and once more before the promotion — rather than trusted from
+whatever readiness selection saw. A dependency link added to an item that is
+already in flight therefore takes effect on that run: it pauses at the next of
+those boundaries exactly as an unresolved directive does, keeping its claim, its
+branch, its worktree, and its developer session, and it carries on when the work
+it waits on is closed or the link is removed. That matters because a development
+manager linking a dependency onto work already moving is precisely how a gate
+gets added late, and a run that answered from selection-time state would develop
+straight through the gate filed to stop it — and spend review rounds on a change
+that should never have been dispatched. Both the developer's context and the
+reviewer's evidence state what the item waits on, and state it as `nothing` when
+it waits on nothing, so neither can mistake an item this context happens not to
+describe for one nothing blocks.
+
 Then the change is gated on what it touched. The project configuration and the
 artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
 `docs/designs/`, and `docs/decisions/` by default — are default-deny for a

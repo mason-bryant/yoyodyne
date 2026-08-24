@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode"
@@ -30,7 +31,76 @@ const defaultTimeout = 4 * time.Hour
 // than the total budget for exactly that reason.
 const defaultIdleTimeout = 5 * time.Minute
 
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
+// NotesGuardScript is the notes-writer guard, named from the repository root.
+// It is exported because it is named in more than one place and none of them
+// can be allowed to name a different script: the developer settings below, and
+// the PreToolUse block CLAUDE.md and AGENTS.md tell an operator to merge into
+// .claude/settings.json for interactive sessions. One implementation behind
+// both is what would make "the same refusal in both populations" a fact rather
+// than a resemblance -- but only the developer half is wired. The interactive
+// half is a paste no run can perform, because Claude Code refuses an agent's
+// write to a settings file, and it is the population that destroyed all twelve
+// recorded attributions.
+const NotesGuardScript = "scripts/bd-notes-guard.sh"
+
+// developerSettings confines a developer run's Bash to the worktree and puts
+// every Bash call through the notes-writer guard first.
+//
+// This hook is what covers a developer run's own Bash, and nothing else does.
+// `beads.Client.Update` passing only `--append-notes` makes the writes the
+// *harness* issues safe, and says nothing about an agent inside a developer run
+// typing `bd update <id> --notes=` into Bash, which is the same command that
+// destroyed twelve attributions from interactive sessions. It covers only this
+// population: an interactive session is reached by the block in
+// .claude/settings.json, which is a paste no run can make.
+//
+// The script is named by an absolute path built from the worktree this run was
+// given, rather than through $CLAUDE_PROJECT_DIR. The variable would have been
+// shorter, but its failure is silent and one-directional: a hook command that
+// does not resolve is reported by Claude Code as a non-blocking error and the
+// call proceeds, so an unset or differently-rooted variable leaves the run
+// unguarded and looks like nothing happened. The harness already knows where it
+// put the worktree -- Run refuses a request without it -- so nothing is gained
+// by asking the provider to tell us again. The block written for
+// .claude/settings.json has no such choice: one checked-in file would serve
+// every checkout, so no absolute path is true in all of them, and it reaches
+// the script through $CLAUDE_PROJECT_DIR.
+//
+// Both the path and the surrounding JSON are encoded rather than concatenated,
+// because a worktree path is not a tame string: this repository's own worktrees
+// live under "Application Support", and a path with a space, a quote, or a
+// backslash in it would otherwise produce a command that parses as something
+// else or settings that do not parse at all.
+func developerSettings(worktree string) (string, error) {
+	settings := map[string]any{
+		"sandbox": map[string]any{
+			"enabled":                  true,
+			"failIfUnavailable":        true,
+			"allowUnsandboxedCommands": false,
+		},
+		"hooks": map[string]any{
+			"PreToolUse": []any{map[string]any{
+				"matcher": "Bash",
+				"hooks": []any{map[string]any{
+					"type":    "command",
+					"command": "bash " + shellQuoted(filepath.Join(worktree, NotesGuardScript)),
+				}},
+			}},
+		},
+	}
+	encoded, err := json.Marshal(settings)
+	if err != nil {
+		return "", fmt.Errorf("encode developer settings: %w", err)
+	}
+	return string(encoded), nil
+}
+
+// shellQuoted renders one argument so a shell reads it as exactly this string.
+// Single quotes protect everything a path can contain except a single quote,
+// which is closed, escaped, and reopened.
+func shellQuoted(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
+}
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
@@ -196,7 +266,11 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		"--name", "yoyodyne-" + shortRunID(request.RunID),
 	}
 	if request.Role == domain.RoleDeveloper {
-		args = append(args, "--settings", developerSandboxSettings)
+		settings, err := developerSettings(request.WorkingDirectory)
+		if err != nil {
+			return backend.RunResult{}, err
+		}
+		args = append(args, "--settings", settings)
 	} else {
 		// Repository instruction files are evidence, not harness policy. Safe
 		// mode prevents a checked-in CLAUDE.md from entering the provider's

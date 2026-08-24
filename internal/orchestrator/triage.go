@@ -466,6 +466,13 @@ func (d Docketer) publicationEntry(state runstate.State, now time.Time) (triage.
 // replayed change's re-review as well — so a docket that added them up could
 // report an item at its cap that the guard would grant, and refuse in a reader's
 // head what nothing refuses in the record.
+//
+// It is every figure the record holds rather than a chosen few. A field the
+// ledger keeps and the view drops is a decision the guards can see and the
+// development manager cannot, which reads on the docket as a decision nobody
+// took: the rounds a grant came to, whether the cap cut it, and what it stands
+// committed to are all of them detail the harness reported as it recorded the
+// grant, and all of them were missing from the entry it was recorded against.
 func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerunsCarriedOut int) triage.Counters {
 	return triage.Counters{
 		ReviewRounds:        ledger.ReviewRounds,
@@ -474,6 +481,9 @@ func (d Docketer) counters(ledger runstate.TriageCounters, repairAttempts, rerun
 		RepairGrantAttempts: d.Triage.RepairGrantAttempts,
 		RepairGrants:        ledger.RepairGrants,
 		RepairGrantsCap:     d.Caps.RepairGrants,
+		GrantedRounds:       ledger.GrantedRounds,
+		TruncatedGrants:     ledger.TruncatedGrants,
+		CommittedRounds:     ledger.CommittedRounds,
 		Reruns:              ledger.Reruns,
 		RerunsCap:           d.Caps.Reruns,
 		MergeRearms:         ledger.MergeRearms,
