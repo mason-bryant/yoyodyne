@@ -109,8 +109,21 @@ func (d conversationDirectives) List(_ context.Context) ([]directive.Directive, 
 	return d.store.List()
 }
 
+func (d conversationDirectives) Find(_ context.Context, reference string) (directive.Directive, error) {
+	return d.store.Find(reference)
+}
+
 func (d conversationDirectives) Resolve(_ context.Context, reference, resolution string) (directive.Directive, error) {
 	return d.store.Resolve(reference, resolution, time.Now())
+}
+
+// CarryOut records what came of a directive that paused nothing, in the same
+// product-scoped store every run and every other surface reads. What became of a
+// directive is a fact about the product rather than about the conversation that
+// happened to record it, which is why it lands here and not in the conversation's
+// own log.
+func (d conversationDirectives) CarryOut(_ context.Context, reference, outcome string) (directive.Directive, error) {
+	return d.store.CarryOut(reference, outcome, time.Now())
 }
 
 // Survey reads what the harness has in flight from durable run state and what

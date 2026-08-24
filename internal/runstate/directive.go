@@ -27,8 +27,9 @@ import (
 //
 // It is a file per directive rather than an append-only log, which is the one
 // way it differs from the reports beside it. A report is written once and never
-// revised; a directive is revised exactly once, when somebody resolves it, and
-// resolving it is what lets the paused work resume.
+// revised; a directive is revised exactly once, when somebody settles it —
+// resolving one that paused work, which is what lets that work resume, or
+// recording what came of one that paused nothing.
 type DirectiveStore struct {
 	root      string
 	productID domain.ProductID
@@ -194,22 +195,44 @@ func (s *DirectiveStore) Find(reference string) (directive.Directive, error) {
 	}
 }
 
-// Resolve settles a directive and returns what was recorded. Settling is what
-// lifts the pause: the work it affected becomes runnable again on the next
-// consultation, in whichever process makes it.
+// Resolve settles a directive that pauses work and returns what was recorded.
+// Settling is what lifts the pause: the work it affected becomes runnable again
+// on the next consultation, in whichever process makes it.
 func (s *DirectiveStore) Resolve(reference, resolution string, at time.Time) (directive.Directive, error) {
+	return s.settle(reference, func(found directive.Directive) (directive.Directive, error) {
+		return found.Resolve(resolution, at)
+	})
+}
+
+// CarryOut records what came of a directive that pauses nothing. Nothing is
+// released by it — an operational directive held nothing up — so what it changes
+// is what the record can answer: until it is written, the disposition of the
+// commonest kind of directive exists only in whoever carried it out, and
+// anything reading these records for what became of one finds an open directive
+// forever.
+func (s *DirectiveStore) CarryOut(reference, outcome string, at time.Time) (directive.Directive, error) {
+	return s.settle(reference, func(found directive.Directive) (directive.Directive, error) {
+		return found.CarryOut(outcome, at)
+	})
+}
+
+// settle is the one revision path: find what the reference names, let the record
+// itself decide whether the act is one its kind takes, and replace it. Both
+// callers go through it so a settlement is never written by one route that the
+// other would have refused.
+func (s *DirectiveStore) settle(reference string, apply func(directive.Directive) (directive.Directive, error)) (directive.Directive, error) {
 	found, err := s.Find(reference)
 	if err != nil {
 		return directive.Directive{}, err
 	}
-	resolved, err := found.Resolve(resolution, at)
+	settled, err := apply(found)
 	if err != nil {
 		return directive.Directive{}, err
 	}
-	if err := s.save(resolved); err != nil {
+	if err := s.save(settled); err != nil {
 		return directive.Directive{}, err
 	}
-	return resolved, nil
+	return settled, nil
 }
 
 // save replaces one recorded directive atomically. It is the one revision a

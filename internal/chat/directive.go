@@ -41,9 +41,18 @@ type Directives interface {
 	// List reports every recorded directive, resolved and unresolved alike, in
 	// the order they were received.
 	List(ctx context.Context) ([]directive.Directive, error)
+	// Find reports the one directive a reference names, so something about to be
+	// recorded against a directive can be held to naming one that exists. The
+	// reference may be any prefix that names exactly one directive.
+	Find(ctx context.Context, reference string) (directive.Directive, error)
 	// Resolve settles one, which is what releases the work it paused. The
 	// reference may be any prefix that names exactly one directive.
 	Resolve(ctx context.Context, reference, resolution string) (directive.Directive, error)
+	// CarryOut records what came of a directive that paused nothing. It is the
+	// disposition of the commonest kind of directive there is, and the only thing
+	// that ever says one was acted on rather than filed: it refuses the pausing
+	// kinds, so admitting work can never lift a pause that is holding work up.
+	CarryOut(ctx context.Context, reference, outcome string) (directive.Directive, error)
 }
 
 // DirectiveRequest is what the operator asked to have recorded. The harness
@@ -354,25 +363,30 @@ func (d DirectiveResolved) Render() string {
 	return rendered.String()
 }
 
-// renderDirectives lists what the operator has directed, unresolved first,
-// because those are the ones still holding work up.
+// renderDirectives lists what the operator has directed, the open ones first,
+// because those are the ones still holding work up or still owed an outcome.
+//
+// The two groups are open and settled rather than unresolved and resolved: only
+// a pausing directive is ever resolved, and an operational one settles by being
+// carried out, so labelling the groups by the pausing kinds' word would file
+// every carried-out directive under something that did not happen to it.
 func renderDirectives(recorded []directive.Directive) string {
 	if len(recorded) == 0 {
 		return "no directives are recorded for this product.\n"
 	}
-	var unresolved, settled []directive.Directive
+	var open, settled []directive.Directive
 	for _, candidate := range recorded {
 		if candidate.Resolved() {
 			settled = append(settled, candidate)
 			continue
 		}
-		unresolved = append(unresolved, candidate)
+		open = append(open, candidate)
 	}
 	var rendered strings.Builder
 	for _, group := range []struct {
 		label string
 		items []directive.Directive
-	}{{"unresolved", unresolved}, {"resolved", settled}} {
+	}{{"open", open}, {"settled", settled}} {
 		if len(group.items) == 0 {
 			fmt.Fprintf(&rendered, "%s: none\n", group.label)
 			continue

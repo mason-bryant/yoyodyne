@@ -41,10 +41,15 @@ const (
 	// answer to where it got to, however long that is.
 	ReceiptUnderConsideration Receipt = "under-consideration"
 	// ReceiptSettled is a reply whose directive has been settled: the one it
-	// recorded, once somebody resolved it, or the one it resolved itself. It
-	// lands at the same moment the outcome is said in the thread, never at the
-	// moment the directive was written down. What settled it is in the thread;
-	// this says there is an answer to read.
+	// recorded, once somebody resolved it or carried it out, or the one it
+	// resolved itself. It lands at the same moment the outcome is said in the
+	// thread, never at the moment the directive was written down. What settled it
+	// is in the thread; this says there is an answer to read.
+	//
+	// Carrying out is what most replies reach it by, because most replies record
+	// an operational directive: it never paused anything, so the only thing that
+	// ever moves this mark off the thinking face is somebody recording what came
+	// of it.
 	ReceiptSettled Receipt = "settled"
 	// ReceiptRefused is a reply that recorded nothing — from somebody the project
 	// granted nothing, in a thread that is not a work item's, or saying something

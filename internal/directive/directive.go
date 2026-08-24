@@ -41,8 +41,8 @@ import (
 
 // SchemaVersion is versioned independently of run, conversation, and report
 // state. A directive is none of those: it outlives every run it pauses, it is
-// revised exactly once when it is resolved, and it belongs to the product rather
-// than to any invocation.
+// revised exactly once when somebody settles it, and it belongs to the product
+// rather than to any invocation.
 const SchemaVersion = 1
 
 const (
@@ -73,7 +73,9 @@ type Kind string
 const (
 	// KindOperational is a directive that takes effect immediately. It changes
 	// how work is done rather than what the work is, so nothing waits for it and
-	// nothing about it is unresolved.
+	// nothing about it is unresolved. What settles it is somebody carrying it
+	// out, recorded as its outcome — which is the whole of what ever says an
+	// operational directive was acted on rather than filed.
 	KindOperational Kind = "operational"
 	// KindArtifact changes a governed artifact: the brief, a goal, a design, a
 	// specification. Work derived from that artifact cannot be judged against
@@ -154,13 +156,22 @@ type Directive struct {
 	// better narrows it.
 	Scope []string `json:"scope,omitempty"`
 	// Resolution is how the directive was settled, and ResolvedAt is when. They
-	// are written together and only once: a resolved directive stops pausing
-	// work, and what it was resolved with is the record of why the work resumed.
+	// are written together and only once, and they are the one disposition a
+	// record ever carries — which is the same field for every kind because it is
+	// the same fact, read the way the kind says to read it. On a directive that
+	// pauses work it is the answer that let the work resume; on one that pauses
+	// nothing it is what came of it, which is the only thing that ever says an
+	// operational directive was acted on rather than filed.
 	Resolution string     `json:"resolution,omitempty"`
 	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
 }
 
-var idPattern = regexp.MustCompile(`^directive-[a-f0-9]{32}$`)
+var (
+	idPattern = regexp.MustCompile(`^directive-[a-f0-9]{32}$`)
+	// referencePattern is an identifier as somebody names one: the whole of it,
+	// or any prefix of it, which is what a store resolves against what it holds.
+	referencePattern = regexp.MustCompile(`^directive-[a-f0-9]{1,32}$`)
+)
 
 func NewID() (string, error) {
 	bytes := make([]byte, 16)
@@ -174,6 +185,15 @@ func NewID() (string, error) {
 // a file after it, so it is checked before anything built from outside is used
 // as a path.
 func ValidID(id string) bool { return idPattern.MatchString(id) }
+
+// ValidReference reports a reference somebody could be naming a directive with:
+// a full identifier, or a prefix of one. It says nothing about whether any
+// directive answers to it, which is the store's to say and needs the records —
+// this is what refuses a value that was never going to name one, before anything
+// is written down against it.
+func ValidReference(reference string) bool {
+	return referencePattern.MatchString(strings.TrimSpace(reference))
+}
 
 // Validate reports every contract violation in the directive at once.
 func (d Directive) Validate() error {
@@ -241,10 +261,27 @@ func kindNames() []string {
 	return names
 }
 
-// Resolved reports a directive somebody has settled: the ambiguity answered, or
-// the artifact change decided.
+// Resolved reports a directive somebody has settled, whichever way its kind is
+// settled: the ambiguity answered, the artifact change decided, or the
+// operational directive carried out. It is one predicate rather than one per
+// kind because everything downstream asks the same question — is there a
+// disposition on this record yet — and a directive that could be settled and
+// still read as open would leave whoever asked for it waiting on an answer that
+// had already been given.
 func (d Directive) Resolved() bool {
 	return d.ResolvedAt != nil
+}
+
+// Settlement is what settling this kind of directive is called, which is the
+// difference between the two acts that reach the same two fields. A pausing
+// directive is resolved, by somebody answering what it left unresolved; one that
+// pauses nothing is carried out, and saying it was resolved would describe a
+// pause it never held.
+func (d Directive) Settlement() string {
+	if d.Kind.Pauses() {
+		return "resolved"
+	}
+	return "carried out"
 }
 
 // Pauses reports a directive that stops the work it affects. Only an unresolved
@@ -270,28 +307,67 @@ func (d Directive) Affects(workItemID string) bool {
 	return false
 }
 
-// Resolve settles a directive, returning the resolved copy. It refuses to
-// re-resolve one: a second resolution would overwrite the account of why the
-// work resumed the first time, and the work has already resumed.
+// Resolve settles a directive that pauses work, returning the resolved copy. It
+// refuses to re-resolve one: a second resolution would overwrite the account of
+// why the work resumed the first time, and the work has already resumed.
 func (d Directive) Resolve(resolution string, at time.Time) (Directive, error) {
 	if d.Resolved() {
-		return Directive{}, fmt.Errorf("%s was already resolved at %s", d.ID, d.ResolvedAt.UTC().Format(time.RFC3339))
+		return Directive{}, d.alreadySettled()
 	}
 	if !d.Kind.Pauses() {
-		return Directive{}, fmt.Errorf("%s is %s and has nothing to resolve; it took effect when it was recorded", d.ID, d.Kind)
+		return Directive{}, fmt.Errorf("%s is %s and has nothing to resolve; it took effect when it was recorded, and what came of it is recorded as an outcome instead", d.ID, d.Kind)
 	}
-	trimmed := strings.TrimSpace(resolution)
-	if trimmed == "" {
+	if strings.TrimSpace(resolution) == "" {
 		return Directive{}, errors.New("say how the directive was settled; work resumes on the answer rather than on the act of answering")
 	}
-	resolvedAt := at.UTC()
-	resolved := d
-	resolved.Resolution = trimmed
-	resolved.ResolvedAt = &resolvedAt
-	if err := resolved.Validate(); err != nil {
+	return d.settle(resolution, at)
+}
+
+// CarryOut records what came of a directive that pauses nothing, returning the
+// settled copy. It is Resolve's sibling rather than a special case of it, and
+// the two refuse each other's kinds, because they are opposite acts on the same
+// two fields: resolving is somebody answering what held work up, and carrying
+// out is somebody having done what was asked. An outcome written onto a pausing
+// directive would settle it — lifting the pause it holds — on the strength of
+// something that never answered what it was waiting for.
+//
+// Until this existed, an operational directive had no disposition at all: it was
+// in force from the moment it was recorded and nothing ever said whether anybody
+// acted on it, so what became of the commonest kind of directive lived only in
+// whoever remembered. That is what an outcome is for, and it is why the outcome
+// is worth naming the work it became rather than only saying it was done.
+func (d Directive) CarryOut(outcome string, at time.Time) (Directive, error) {
+	if d.Resolved() {
+		return Directive{}, d.alreadySettled()
+	}
+	if d.Kind.Pauses() {
+		return Directive{}, fmt.Errorf("%s is %s and is settled by resolving what it left unresolved rather than by being carried out; an outcome on it would lift the pause it holds", d.ID, d.Kind)
+	}
+	if strings.TrimSpace(outcome) == "" {
+		return Directive{}, errors.New("say what came of the directive; an outcome nobody wrote down is one whoever asked for it never hears")
+	}
+	return d.settle(outcome, at)
+}
+
+// settle writes the one revision a directive ever takes. Both acts reach it,
+// having each refused the kinds they are not for, so a disposition on a record
+// always means what that record's kind says it means.
+func (d Directive) settle(disposition string, at time.Time) (Directive, error) {
+	settledAt := at.UTC()
+	settled := d
+	settled.Resolution = strings.TrimSpace(disposition)
+	settled.ResolvedAt = &settledAt
+	if err := settled.Validate(); err != nil {
 		return Directive{}, err
 	}
-	return resolved, nil
+	return settled, nil
+}
+
+// alreadySettled refuses a second disposition, in the words of the act that
+// would have written it. A record carries one account of what became of it, and
+// the first one is the one anything downstream has already reported.
+func (d Directive) alreadySettled() error {
+	return fmt.Errorf("%s was already %s at %s", d.ID, d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339))
 }
 
 // Pausing selects the unresolved directives that pause one work item. It is the
@@ -339,7 +415,7 @@ func (d Directive) Render() string {
 	}
 	rendered.WriteString("  affects: " + d.scope() + "\n")
 	if d.Resolved() {
-		fmt.Fprintf(&rendered, "  resolved %s: %s\n", d.ResolvedAt.UTC().Format(time.RFC3339), indented(d.Resolution))
+		fmt.Fprintf(&rendered, "  %s %s: %s\n", d.Settlement(), d.ResolvedAt.UTC().Format(time.RFC3339), indented(d.Resolution))
 	}
 	return rendered.String()
 }

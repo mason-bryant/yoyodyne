@@ -117,6 +117,76 @@ func TestOnlyUnresolvedArtifactAndAmbiguousDirectivesPauseWork(t *testing.T) {
 	}
 }
 
+// An operational directive is settled by being carried out, which is the only
+// account there is of what became of the commonest kind of directive: it takes
+// effect the moment it is recorded and has nothing to resolve, so without an
+// outcome it stands open forever and whoever asked for it is never told the work
+// exists.
+func TestAnOperationalDirectiveIsSettledByBeingCarriedOut(t *testing.T) {
+	t.Parallel()
+
+	recorded := operational()
+	if recorded.Resolved() {
+		t.Fatal("a directive nobody has settled reads as settled")
+	}
+	carried, err := recorded.CarryOut("admitted yoyodyne-ifd.170 to the backlog: stop opening those pull requests", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	if !carried.Resolved() || carried.Pauses() {
+		t.Fatalf("carried = %#v, want a settled directive that pauses nothing", carried)
+	}
+	// The outcome names the work, because a thread told its directive was acted
+	// on is told nothing it can follow.
+	if !strings.Contains(carried.Render(), "carried out") || !strings.Contains(carried.Render(), "yoyodyne-ifd.170") {
+		t.Fatalf("Render() = %q, want it to say it was carried out and name what it became", carried.Render())
+	}
+	// One record, one account of what became of it.
+	if _, err := carried.CarryOut("admitted again", recordedAt.Add(2*time.Hour)); err == nil {
+		t.Fatal("CarryOut() on a settled directive error = nil, want a refusal")
+	}
+	if _, err := recorded.CarryOut("", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("CarryOut() with no outcome error = nil, want a refusal")
+	}
+}
+
+// The two acts refuse each other's kinds. Resolving is somebody answering what
+// held work up and carrying out is somebody having done what was asked, so an
+// outcome written onto a pausing directive would lift its pause on the strength
+// of something that never answered it.
+func TestResolvingAndCarryingOutRefuseEachOthersKinds(t *testing.T) {
+	t.Parallel()
+
+	pausing := operational()
+	pausing.Kind = KindAmbiguous
+	pausing.Unresolved = "which of the two readings was meant"
+	if _, err := pausing.CarryOut("admitted yoyodyne-ifd.170 to the backlog", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("CarryOut() on a directive that pauses work error = nil, want a refusal")
+	}
+	if _, err := operational().Resolve("the second reading", recordedAt.Add(time.Hour)); err == nil {
+		t.Fatal("Resolve() on a directive that pauses nothing error = nil, want a refusal")
+	}
+}
+
+// A reference is what somebody types to name a directive, and it is checked
+// before anything is recorded against it. Whether any directive answers to it
+// needs the records; this only refuses what was never going to name one.
+func TestValidReferenceAcceptsAnIdentifierAndAnyPrefixOfOne(t *testing.T) {
+	t.Parallel()
+
+	full := "directive-" + strings.Repeat("0", 32)
+	for _, valid := range []string{full, "directive-0", "directive-3f2a", "  " + full + "  "} {
+		if !ValidReference(valid) {
+			t.Fatalf("ValidReference(%q) = false, want a reference the store can look up", valid)
+		}
+	}
+	for _, invalid := range []string{"", "directive-", "3f2a", "directive-zzzz", full + "0", "yoyodyne-ifd.170"} {
+		if ValidReference(invalid) {
+			t.Fatalf("ValidReference(%q) = true, want it refused", invalid)
+		}
+	}
+}
+
 // An unscoped directive reaches every item. It is the conservative reading and a
 // deliberate one: a directive that rewrites the brief affects whatever was
 // derived from the brief, and nothing here can yet say which work that is.

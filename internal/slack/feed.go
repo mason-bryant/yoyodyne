@@ -428,6 +428,12 @@ func (f *HarnessFeed) usageLimitDeliveries(cursors Cursors, streams map[string]s
 // their own message stops wearing the thinking face, which is why the reply that
 // asked travels with the delivery.
 //
+// Both settlements are read here, and the commonest one by far is a directive
+// that paused nothing being carried out. Only pausing kinds could be settled at
+// all until the harness could record what came of an operational one, so a plain
+// reply — which is what most replies are — reached this loop, was recorded,
+// and then stood open forever with its thread never told what became of it.
+//
 // Only directives said into a thread are read, because only those have a thread
 // to answer in and somebody to answer. One recorded at a terminal is not in the
 // steer map, and reporting on it here would be this feed announcing every
@@ -492,11 +498,16 @@ func (f *HarnessFeed) directiveDeliveries(cursors Cursors, streams map[string]st
 		}
 		advanced = advanced.With(mark)
 		deliveries = append(deliveries, Delivery{
-			Stream:       directiveStream,
-			Cursor:       advanced,
-			Mention:      steer.Member,
-			Reply:        steer.Message,
-			Notification: acknowledged(topic, notify.KindDirectiveResolved, directed, *directed.ResolvedAt),
+			Stream:  directiveStream,
+			Cursor:  advanced,
+			Mention: steer.Member,
+			Reply:   steer.Message,
+			// How it was settled decides how it is said. A directive that paused
+			// work is reported as resolved and a directive that paused nothing as
+			// carried out, because the reader of the second one was never waiting
+			// for work to resume — they were waiting to hear what came of what they
+			// asked for.
+			Notification: acknowledged(topic, settledKind(directed), directed, *directed.ResolvedAt),
 		})
 	}
 	return deliveries, nil
