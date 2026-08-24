@@ -84,6 +84,16 @@ func TestRunInitWritesAnIndexAtTheDoorOfEveryArtifactHome(t *testing.T) {
 	if len(homes) == 0 {
 		t.Fatal("a generated configuration names no artifact home")
 	}
+	// The invariants directory is named rather than left to the loop, because it
+	// is the home a reader doubts: it carries its own identity scheme instead of
+	// artifact frontmatter, and it still gets an index like every other home.
+	invariants := false
+	for _, home := range homes {
+		invariants = invariants || home.Directory == cfg.Product.Invariants
+	}
+	if !invariants {
+		t.Fatalf("homes = %#v, want the invariants home %q among the ones init writes an index for", homes, cfg.Product.Invariants)
+	}
 	for _, home := range homes {
 		path := filepath.Join(project, filepath.FromSlash(home.Path()))
 		content, err := os.ReadFile(path)
