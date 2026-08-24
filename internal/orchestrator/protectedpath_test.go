@@ -26,6 +26,24 @@ func writeUpstream(t *testing.T, worktree, relative, content string) error {
 	return os.WriteFile(full, []byte(content), 0o600)
 }
 
+// Admission refuses a grant naming one of these paths, so no item admitted
+// after that gate carries one. Items admitted before it still do, and the
+// contract is what stops one of those spending its whole repair budget on a
+// write the provider was never going to allow: the developer is told before its
+// first attempt rather than after its last.
+func TestTheDeveloperContractNamesEveryPathBeyondAGrant(t *testing.T) {
+	t.Parallel()
+
+	for _, entry := range protectedpath.ProviderPaths {
+		if !strings.Contains(developerContract, entry.Path) {
+			t.Fatalf("the developer contract never names %q, which no grant reaches", entry.Path)
+		}
+		if !strings.Contains(developerContract, entry.Provider) {
+			t.Fatalf("the developer contract never names %q, which is what refuses %q", entry.Provider, entry.Path)
+		}
+	}
+}
+
 func TestAChangeTouchingAnUngrantedProtectedPathIsRefusedBeforeAnythingJudgesIt(t *testing.T) {
 	t.Parallel()
 

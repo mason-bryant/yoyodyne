@@ -13,6 +13,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -313,6 +314,13 @@ func (p Proposal) Validate() error {
 	if p.Class != "" && !p.Class.Valid() {
 		problems = append(problems, fmt.Errorf("class %q is not one the harness recognizes; the classes there are: %s", p.Class, namedWorkItemClasses()))
 	}
+	// A grant naming a path the provider refuses is caught here rather than by the
+	// run it would be admitted for. The harness's grant lifts the harness's own
+	// refusal and never a provider's, and the difference between the two is
+	// measured in repair rounds. Only the two fields the created item will carry
+	// are read: the rationale goes into the item's notes, which is not a field a
+	// grant is ever read from, so a marker there admits nothing to catch.
+	problems = append(problems, protectedpath.GrantProblems(p.Title, p.Description)...)
 	seen := make(map[string]struct{}, len(p.Dependencies))
 	for i, dependency := range p.Dependencies {
 		trimmed := strings.TrimSpace(dependency)
