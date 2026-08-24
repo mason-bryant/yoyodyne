@@ -182,9 +182,12 @@ func (r RunSummary) Failed() bool { return endedBadly(r.Status) }
 // Preserved reports the run's change surviving the run: a branch or a worktree
 // the harness has not recorded as removed. It asks about both because either one
 // on its own still holds the work — a removed worktree whose branch stands is
-// work somebody can still check out — and it is false for a run that never got
-// as far as creating either, which is a run with nothing to preserve rather than
-// one whose work was thrown away.
+// work somebody can still check out.
+//
+// It is false for a run whose record names neither, which is not the same claim
+// as work thrown away and must not be rendered as one: what a caller knows from
+// a false answer here is that the record says nothing, and it has to look at the
+// two fields to say which of the two it is.
 func (r RunSummary) Preserved() bool {
 	return (r.Branch != "" && !r.BranchRemoved) || (r.WorktreePath != "" && !r.WorktreeRemoved)
 }

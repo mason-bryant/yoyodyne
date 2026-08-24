@@ -43,8 +43,18 @@ func TestStatusReportsFailedRunsWithTheirReasons(t *testing.T) {
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	started := time.Date(2026, 8, 16, 8, 0, 0, 0, time.UTC)
+	// A review nobody repaired, recorded the way the harness records one: the
+	// item carries a blocker, and the branch and worktree that hold the change
+	// are still there. A fixture without them would be a run this listing cannot
+	// produce, and asserting over it would enshrine the claim the vocabulary
+	// exists to remove.
 	failed := recordedRun(t, store, runstate.StatusFailed, "yoyodyne-ifd.2.7", started.Add(time.Hour))
 	failed.Phase = runstate.PhaseReviewing
+	failed.WorktreePath = "/state/worktrees/yoyodyne-ifd-2-7"
+	failed.Branch = "yoyodyne/yoyodyne-ifd.2.7/0123abcd"
+	failed.BaseCommit = strings.Repeat("a", 40)
+	failed.ProviderSessionID = "session-developer"
+	failed.Blocker = "Yoyodyne blocked this item: independent review requires repair"
 	failed.Failure = "independent review requires repair after 2 of 2 permitted attempt(s):\nthe change does not do what the item asked"
 	saveRun(t, store, failed)
 	// A failed attempt spent real money, and the listing prices it from the same
@@ -63,9 +73,11 @@ func TestStatusReportsFailedRunsWithTheirReasons(t *testing.T) {
 		"2 of 2 shown",
 		failed.RunID,
 		"yoyodyne-ifd.2.7",
-		// The run never got as far as a worktree, so what it left behind is
-		// stated as nothing to preserve rather than as work that is gone.
-		"[failed, reviewing, nothing to preserve]",
+		// The word the operator misread is gone: this run's item is back with a
+		// person and every line of its change is still there.
+		"[stopped, reviewing, work preserved]",
+		"preserved branch: yoyodyne/yoyodyne-ifd.2.7/0123abcd",
+		"preserved worktree: /state/worktrees/yoyodyne-ifd-2-7",
 		"reason: independent review requires repair",
 		"$8.91",
 		"yoyodyne-ifd.41",
@@ -411,9 +423,10 @@ func TestStatusSaysWhatBecameOfTheWorkRatherThanOneWordForEveryEnding(t *testing
 		"[stopped, developing, work preserved]",
 		// An operator cancel is its own word: nothing judged the change.
 		"[cancelled, developing, work preserved]",
-		// And the one run that really did fail keeps the bare word, with the
-		// honest answer about artifacts nothing ever made.
-		"[failed, nothing to preserve]",
+		// And the one run that really did fail keeps the bare word. What it left
+		// behind is stated as an absence in the record rather than as a promise
+		// that nothing was made, which is a claim two empty fields cannot carry.
+		"[failed, no artifacts recorded]",
 		// What remains is named rather than left to the run's JSON.
 		"preserved branch: yoyodyne/yoyodyne-ifd.90",
 		"preserved worktree: /state/worktrees/yoyodyne-ifd.90",

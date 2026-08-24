@@ -670,10 +670,16 @@ func (p ItemPrice) total() string {
 // outcome names how the attempt went, the way a survey names a run: what became
 // of it, the phase it reached, and whether it was the attempt that promoted the
 // work.
+//
+// A survey assembled before the vocabulary existed says so rather than falling
+// back to the status it carries. The status is the word that reads "failed" over
+// a preserved, blocked run, which is the sentence the vocabulary was introduced
+// to stop — substituting it here would put that sentence back in exactly the
+// records nobody can re-derive it for.
 func (r RunPrice) outcome() string {
 	outcome := r.Outcome
 	if outcome == "" {
-		outcome = r.Status
+		outcome = "outcome not recorded"
 	}
 	if r.Phase != "" {
 		outcome += ", " + r.Phase

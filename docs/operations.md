@@ -527,7 +527,7 @@ run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:1
   preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
   preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
   preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
-run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, nothing to preserve] $12.80
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
   ran under an account the record does not name, configuration a configuration the record does not name
   reason: create isolated worktree: primary checkout is not ready for integration
@@ -556,18 +556,21 @@ all of them and for the two below it, which is how three preserved runs came to
 read as three discarded ones.
 
 Beside it, every run that did not succeed says what remains: `work preserved`,
-`work removed` where the harness recorded removing the artifacts, or `nothing to
-preserve` where the run broke before it made any. The preserved branch, worktree,
-and developer session are then named under the run, so looking at the change is
-not a trip through the run's JSON for a path. A successful run removes what it
-made by design, so it says nothing about preservation at all; a run still in
-flight holds everything it has.
+`work removed` where the harness recorded removing the artifacts, or `no
+artifacts recorded` where the record names neither. The preserved branch,
+worktree, and developer session are then named under the run, so looking at the
+change is not a trip through the run's JSON for a path. A successful run removes
+what it made by design, so it says nothing about preservation at all; a run still
+in flight holds everything it has.
 
-The second run above has no phase between the two words, and that is the record
-rather than a gap in it: a run that could not create its worktree never reached
-one, which is the same reason it has nothing to preserve. Any run that did reach
-a phase has a worktree, so it reports `work preserved` or `work removed` and
-names it underneath.
+The third phrase states an absence rather than claiming the run made nothing —
+the same discipline as the `selected: no reason recorded` and `an account the
+record does not name` lines below, and for the same reason: a listing that turns
+an empty field into a reassurance is the failure this one exists to remove. In
+practice it is a run that broke before it got a worktree, which is also why the
+second run above has no phase between the two words: the phase is only recorded
+once the worktree exists, so any run carrying one has a branch and a worktree and
+reports `work preserved` or `work removed` with the paths underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot

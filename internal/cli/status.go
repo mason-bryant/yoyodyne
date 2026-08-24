@@ -431,8 +431,8 @@ func printRunReasons(writer io.Writer, run runstate.RunSummary) bool {
 // An artifact the harness recorded as removed is named as removed rather than
 // left out. Sending somebody to a worktree that is gone and telling them nothing
 // was preserved are the same failure in opposite directions, and the record
-// distinguishes them. A run that never created either says nothing here at all:
-// the brackets above already say there is nothing to preserve, and a line
+// distinguishes them. A run whose record names neither says nothing here at all:
+// the brackets above already say the record names no artifact, and a line
 // repeating it on every run that broke before it made anything is a line every
 // reader learns to skip.
 func printRunArtifacts(writer io.Writer, run runstate.RunSummary) {
@@ -535,8 +535,11 @@ func describeRunSelection(workItemID string, failedOnly bool) string {
 //
 // Preservation is stated on every run that did not succeed, in one of three
 // fixed phrases, and on no others: a successful run removes what it made on
-// purpose, and a run still in flight holds everything by definition. The
-// outstanding marker keeps the same rule and for the same reason it always had.
+// purpose, and a run still in flight holds everything by definition. Two of the
+// three are facts the record holds; the third says the record holds neither,
+// rather than turning two empty fields into a claim that the run made nothing.
+// The outstanding marker keeps the same rule and for the same reason it always
+// had.
 func renderRunState(run runstate.RunSummary) string {
 	state := string(run.Outcome)
 	if run.Phase != "" {
@@ -555,7 +558,13 @@ func renderRunState(run runstate.RunSummary) string {
 			// asking whether their work is gone is owed the one that is true.
 			state += ", work removed"
 		default:
-			state += ", nothing to preserve"
+			// Two empty fields are not a claim that the run made nothing, and this
+			// says which it is: the record names no artifact. It is the same
+			// discipline `recorded` below keeps for the account and the
+			// configuration — an absence stated as an absence — and it matters more
+			// here, because the reading it refuses is exactly the false reassurance
+			// this listing exists to stop.
+			state += ", no artifacts recorded"
 		}
 	}
 	if run.Outstanding && run.Status.Terminal() {
@@ -609,8 +618,10 @@ time. "failed" is what is left: a run that ended leaving nobody anything to act
 on. A run still going says "pending" or "running" instead.
 
 Beside it, every run that did not succeed says what remains of it: "work
-preserved", "work removed" for artifacts the harness recorded removing, or
-"nothing to preserve" for a run that broke before it made any. The preserved
+preserved", "work removed" for artifacts the harness recorded removing, or "no
+artifacts recorded" where the record names neither. The last states an absence
+rather than claiming the run made nothing, and in practice it is a run that broke
+before it got a worktree: a run that reached any phase has one. The preserved
 branch, worktree, and developer session are named under the run. A successful run
 removes what it made on purpose, so it says nothing about preservation; a run
 still in flight holds everything it has.
