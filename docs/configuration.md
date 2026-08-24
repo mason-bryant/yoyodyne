@@ -2282,15 +2282,34 @@ well. The intake hold applies for the reason it applies to a
 re-run: this spends on a provider, and the development manager naming the item is
 not the operator naming it.
 
-**The resumed run asks the same question again**, at the moment it would invoke
-the developer, and blocks rather than developing where the answer has changed.
-That is the enforcement rather than a second opinion: it binds every route into a
-repair loop — this action, an interrupted process a later invocation picks up,
-and whatever re-entry is built next — because a handback given a worktree seeded
-from the target branch looks exactly like a valid one and is caught by nothing
-else. The blocker it records names the run's branch as where the preserved work
-is, and says plainly that no developer ran, because the empty diff behind it is
-not a verdict on the change.
+**The resumed run asks the same question again**, and blocks rather than
+spending where the answer has changed. That is the enforcement rather than a
+second opinion: it binds every route into a run that continues a change — this
+action, an interrupted process a later invocation picks up, and whatever
+re-entry is built next — because a worktree that lost its change looks exactly
+like a valid one and is caught by nothing else. It is asked of every resume whose
+worktree is supposed to hold a change already, which is two different cases: a
+run picked up inside its repair loop, which carries a failure returned about a
+change it made, and a run picked up at the checks or at the review, which has
+completed a developer attempt and has nothing else for those steps to judge. Only
+the run owed its first attempt is exempt, because an empty worktree is what that
+attempt starts from. The blocker it records names the run's branch as where the
+preserved work is, and says plainly that nothing was developed, checked, or
+reviewed, because the empty diff behind it is not a verdict on the change.
+
+**A fresh run is refused where a repair is owed**, which is the same loss
+arriving by the opposite route: nothing is handed back at all, and a run starts
+clean on an item whose last run stopped with its change preserved. The fresh
+worktree is a perfectly valid one off the target branch, so nothing downstream
+notices; what makes it visible is the stopped run's own record — terminal, its
+blocker standing, a failure returned to its developer, and a branch that still
+carries the change. So `yoyo run` reads that record before it reserves anything,
+and refuses, naming both the repair that would continue the change and the re-run
+that would deliberately start over. The one fresh run of such an item that is
+right is the re-run, and it says so in the record before it starts: triage claims
+it against the stoppage, and a claim naming that run is what lets the fresh run
+through. Nothing is reserved, claimed, or created by the refusal, so carrying out
+either decision afterwards costs the stoppage nothing.
 
 **A repair supersedes the blocker rather than needing somebody to remember to.**
 The run that stopped blocked its item and recorded the blocker on its own state,

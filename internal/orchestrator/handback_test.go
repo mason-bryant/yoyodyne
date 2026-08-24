@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/triage"
 )
 
 // handbackFiles is the shape of the change the founding case lost: ten files
@@ -124,29 +125,10 @@ func TestAResumedRepairRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	// The failure this item was filed for, in the state it leaves on disk: the
 	// worktree is registered, its HEAD is exactly where the harness left it, and
 	// it holds none of the change the findings are about.
-	for _, relative := range handbackFiles {
-		if err := os.Remove(filepath.Join(stopped.WorktreePath, filepath.FromSlash(relative))); err != nil {
-			t.Fatalf("Remove() error = %v", err)
-		}
-	}
+	emptyPreservedWorktree(t, stopped.WorktreePath)
 	// The run made live again and the item put back, which is what a handback
 	// records before the pipeline is asked to continue it.
-	state, err := store.Load(stopped.RunID)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	state.Status = runstate.StatusRunning
-	state.Phase = runstate.PhaseDeveloping
-	state.RepairAttempts++
-	state.Blocker = ""
-	state.Failure = ""
-	state.CompletedAt = nil
-	if err := store.Save(state); err != nil {
-		t.Fatalf("Save() error = %v", err)
-	}
-	if _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
-		t.Fatalf("Claim() error = %v", err)
-	}
+	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseDeveloping)
 
 	second := roleBackend(func(request backend.RunRequest) error {
 		t.Errorf("a developer was invoked for a repair of a change that is not in %s", request.WorkingDirectory)
@@ -177,6 +159,159 @@ func TestAResumedRepairRefusesAWorktreeThatLostThePreservedChange(t *testing.T) 
 	// concluded the work was gone would replan work that still exists.
 	if !strings.Contains(tracker.blockReason, "nothing was deleted") {
 		t.Fatalf("blocker does not say where the preserved work is: %q", tracker.blockReason)
+	}
+}
+
+// The same loss caught one step further on. A run re-entered at the review has
+// completed a developer attempt, so what the reviewer is about to judge is that
+// attempt's change — and an empty worktree there buys a review round spent on an
+// empty diff, which is one of the field instances this item was filed for. The
+// gate is not conditioned on the repair input for exactly this reason.
+func TestAResumedReviewRefusesAWorktreeThatLostThePreservedChange(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	emptyPreservedWorktree(t, stopped.WorktreePath)
+	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseReviewing)
+
+	second := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a developer was invoked from %s, which a review-phase resume never does", request.WorkingDirectory)
+		return nil
+	}, approveVerdict)
+	continuing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, second, []string{"exit 0"}), second)
+
+	if _, err := continuing.Run(context.Background(), tracker.item.ID); !errors.Is(err, ErrPreservedChangeMissing) {
+		t.Fatalf("Run() error = %v, want the re-entry refused for holding none of its change", err)
+	}
+	if invocations := len(second.requests); invocations != 0 {
+		t.Fatalf("provider invocations = %d, want the reviewer never asked to judge an empty diff", invocations)
+	}
+}
+
+// The substitution the field instances describe: no handback at all, but a fresh
+// run dispatched into a clean worktree off the target branch for an item whose
+// last run stopped owing a repair. The fresh worktree is perfectly valid, so
+// nothing downstream notices — this refuses before anything is reserved.
+func TestAFreshRunIsRefusedWhereARepairIsOwed(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	// Somebody puts the item back, which is what lets a fresh run past every
+	// other gate and says nothing about whether starting over is right.
+	tracker.item.Status = "open"
+
+	fresh := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a fresh run reached a developer in %s, in place of the repair run %s is owed", request.WorkingDirectory, stopped.RunID)
+		return nil
+	}, approveVerdict)
+	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, fresh, []string{"exit 0"}), fresh)
+	starting.NewRunID = runstate.NewRunID
+
+	_, err := starting.Run(context.Background(), tracker.item.ID)
+	if !errors.Is(err, ErrHandbackSubstituted) {
+		t.Fatalf("Run() error = %v, want the fresh run refused as a substituted handback", err)
+	}
+	// The refusal names both ways out, because which one is right is the
+	// development manager's to decide and neither is guessable from the record.
+	for _, want := range []string{"yoyo triage repair", "yoyo triage rerun", stopped.Branch} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal = %v, is missing %q", err, want)
+		}
+	}
+	if len(fresh.requests) != 0 {
+		t.Fatalf("provider invocations = %d, want nothing spent", len(fresh.requests))
+	}
+	// Nothing was reserved and nothing was created: the stoppage is exactly as it
+	// was, so carrying out either decision afterwards costs it nothing.
+	inFlight, err := store.Incomplete()
+	if err != nil {
+		t.Fatalf("Incomplete() error = %v", err)
+	}
+	if len(inFlight) != 0 {
+		t.Fatalf("runs in flight = %#v, want the refusal to have reserved nothing", inFlight)
+	}
+}
+
+// And the one fresh run of such an item that is right still starts. A re-run is
+// the development manager deciding the ground moved and the work is to be done
+// again, and it says so in the record before it starts, so the refusal above
+// reads that record rather than the shape of the stoppage alone.
+func TestAClaimedReRunStartsFreshWhereARepairIsOwed(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	tracker.item.Status = "open"
+
+	if _, err := store.Reruns().Claim(context.Background(), runstate.Rerun{
+		DocketKey:  triage.Key(triage.ClassStoppedRun, stopped.RunID),
+		PriorRunID: stopped.RunID,
+		WorkItemID: tracker.item.ID,
+		Reason:     "the ground under this change moved, so it is the item that needs running again rather than the change that needs repairing",
+	}); err != nil {
+		t.Fatalf("Claim() error = %v", err)
+	}
+
+	var startedIn string
+	fresh := roleBackend(func(request backend.RunRequest) error {
+		startedIn = request.WorkingDirectory
+		return writeHandbackChange(request.WorkingDirectory)
+	}, approveVerdict)
+	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, fresh, []string{"exit 0"}), fresh)
+	starting.NewRunID = runstate.NewRunID
+
+	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the claimed re-run started", err)
+	}
+	if outcome.RunID == stopped.RunID || startedIn == "" || startedIn == stopped.WorktreePath {
+		t.Fatalf("re-run = %s in %q, want a fresh run in a worktree of its own rather than the stopped run %s in %s",
+			outcome.RunID, startedIn, stopped.RunID, stopped.WorktreePath)
+	}
+}
+
+// emptyPreservedWorktree leaves the worktree registered and its HEAD exactly
+// where the harness left it, holding none of the change: the state a worktree
+// seeded from the target branch rather than from the preserved one is in, and
+// the one the ownership gate passes.
+func emptyPreservedWorktree(t *testing.T, path string) {
+	t.Helper()
+	for _, relative := range handbackFiles {
+		if err := os.Remove(filepath.Join(path, filepath.FromSlash(relative))); err != nil {
+			t.Fatalf("Remove() error = %v", err)
+		}
+	}
+}
+
+// reEnterAt records what a re-entry records before the pipeline is asked to
+// continue a run: the run live again at the phase it is picked up in, and the
+// item put back so the resumed run is not one the pipeline refuses.
+func reEnterAt(t *testing.T, store *runstate.Store, tracker *fakeTracker, runID string, phase runstate.Phase) {
+	t.Helper()
+	state, err := store.Load(runID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	state.Status = runstate.StatusRunning
+	state.Phase = phase
+	state.Blocker = ""
+	state.Failure = ""
+	state.CompletedAt = nil
+	if phase == runstate.PhaseDeveloping {
+		// A handback counts the attempt it is about before the developer is
+		// invoked, exactly as the repair loop's own attempts are counted.
+		state.RepairAttempts++
+	}
+	if err := store.Save(state); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+	if _, err := tracker.Claim(context.Background(), tracker.item.ID); err != nil {
+		t.Fatalf("Claim() error = %v", err)
 	}
 }
 

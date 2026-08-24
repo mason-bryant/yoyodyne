@@ -1671,9 +1671,18 @@ committed — refuses to a person, leaves the item blocked, and says so. And **t
 change has to still be in it**: a worktree the harness would call its own and that
 holds nothing passes the check above and fails this one, and a developer handed
 the reviewer's findings and an empty directory delivers an empty repair or
-reinvents the change from them. The run asks the same question again at the
-moment it would invoke the developer, so a handback that lost its change anywhere
-along the way stops there too, naming the branch as where the work is.
+reinvents the change from them.
+
+The run asks that last question again itself, on every resume whose worktree is
+supposed to hold a change already — one picked up inside its repair loop, and one
+picked up at the checks or the review, which has a developer attempt behind it
+and nothing else for those steps to judge. Only the run owed its first attempt is
+exempt. And a **fresh run is refused where a repair is owed**: an item whose last
+run stopped with its change preserved on a branch does not get started over from
+nothing, because a clean worktree off the target branch looks perfectly valid and
+is caught by nothing downstream. The refusal names the branch and both ways out,
+and `yoyo triage rerun` is the one that starts over deliberately — a claimed
+re-run is exactly what lets a fresh run through.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

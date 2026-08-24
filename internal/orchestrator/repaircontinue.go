@@ -255,11 +255,11 @@ func (e WorktreeSurgeryError) Error() string {
 
 func (e WorktreeSurgeryError) Unwrap() error { return ErrWorktreeNotAsLeft }
 
-// ErrPreservedChangeMissing is what a handback refused for a worktree holding
-// none of the change it is a repair of unwraps to, so a caller can tell that
-// apart from a worktree somebody has been operating in without matching on the
-// words of either.
-var ErrPreservedChangeMissing = errors.New("the preserved worktree holds none of the change the repair is about")
+// ErrPreservedChangeMissing is what a re-entry refused for a worktree holding
+// none of the change it was picked up to continue unwraps to, so a caller can
+// tell that apart from a worktree somebody has been operating in without
+// matching on the words of either.
+var ErrPreservedChangeMissing = errors.New("the preserved worktree holds none of the change it was picked up to continue")
 
 // MissingPreservedChangeError refuses a continuation whose preserved worktree no
 // longer holds the change the reviewer's findings are about. Nothing was spent
