@@ -316,6 +316,49 @@ func TestHistoryTellsAStoppedRunFromACancelledOneAndNamesWhatSurvives(t *testing
 	}
 }
 
+// The vocabulary is closed, so what it maps every recorded status to is stated
+// once here rather than left to whichever cases a rendering test happened to
+// build. The two that are easy to get wrong are the ones spelled out: a blocker
+// outranks the status, because a run stopped at a deadline having handed
+// somebody a decision is a stoppage rather than a clock; and a run with no
+// blocker keeps the word for how it ended, which is what stops "timed out" and
+// "cancelled" collapsing into the failure they are not.
+func TestOutcomeMapsEveryRecordedStatusOntoTheFixedVocabulary(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		status  Status
+		blocker string
+		want    RunOutcome
+	}{
+		{name: "pending", status: StatusPending, want: RunOutcome(StatusPending)},
+		{name: "running", status: StatusRunning, want: RunOutcome(StatusRunning)},
+		{name: "succeeded", status: StatusSucceeded, want: OutcomeSucceeded},
+		{name: "failed with nothing handed to anybody", status: StatusFailed, want: OutcomeFailed},
+		{name: "cancelled", status: StatusCancelled, want: OutcomeCancelled},
+		{name: "timed out", status: StatusTimedOut, want: OutcomeTimedOut},
+		{name: "failed on a blocker", status: StatusFailed, blocker: "the item carries this", want: OutcomeStopped},
+		// The harness stops a provider on time and then blocks the item when its
+		// relaunch budget is spent, so this pairing is one the records really
+		// hold: what became of the work is the stoppage, not the clock.
+		{name: "timed out on a blocker", status: StatusTimedOut, blocker: "the item carries this", want: OutcomeStopped},
+		// Whitespace is not a blocker anybody was handed.
+		{name: "failed on a blank blocker", status: StatusFailed, blocker: "  \n ", want: OutcomeFailed},
+		// A run still in flight is never described as stopped, whatever a blocker
+		// left over from an attempt triage re-entered says.
+		{name: "running with a superseded blocker", status: StatusRunning, blocker: "cleared as it went again", want: RunOutcome(StatusRunning)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := State{Status: test.status, Blocker: test.blocker}
+			if outcome := state.Outcome(); outcome != test.want {
+				t.Fatalf("Outcome() = %q, want %q", outcome, test.want)
+			}
+		})
+	}
+}
+
 // The item every run in the test above was made for, named once so the listing
 // can be read back for it.
 const stoppedItem = "yoyodyne-ifd.173"

@@ -3432,7 +3432,7 @@ run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:1
   preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
   preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
   preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
-run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking, nothing to preserve] $12.80
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, nothing to preserve] $12.80
   selected: no reason recorded
   ran under an account the record does not name, configuration a configuration the record does not name
   reason: create isolated worktree: primary checkout is not ready for integration
@@ -3467,6 +3467,12 @@ and developer session are then named under the run, so looking at the change is
 not a trip through the run's JSON for a path. A successful run removes what it
 made by design, so it says nothing about preservation at all; a run still in
 flight holds everything it has.
+
+The second run above has no phase between the two words, and that is the record
+rather than a gap in it: a run that could not create its worktree never reached
+one, which is the same reason it has nothing to preserve. Any run that did reach
+a phase has a worktree, so it reports `work preserved` or `work removed` and
+names it underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
