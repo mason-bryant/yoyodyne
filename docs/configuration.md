@@ -895,6 +895,11 @@ branch, so a developer run on a branch predating the script finds nothing to
 run. It exits quietly and that run is unguarded, which is deliberate — the
 alternative is a hook error on every Bash call the run ever makes.
 
+An earlier attempt at this guard was closed against work that never reached the
+tree and was never built;
+`docs/diagnoses/yoyodyne-ifd-180-guard-absent-from-tree.md` records what it
+implemented and what remains unresolved about how it closed.
+
 It errs toward refusing: it matches the flag in the raw hook payload, so a
 command that merely *mentions* `bd update --notes` — grepping for it in these
 docs, for instance — is refused too. That trade is deliberate. Over-refusing
