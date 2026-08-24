@@ -29,12 +29,13 @@ when it opened.
 A goal document opens with an introduction saying what it covers and why, and
 states the goals that serve that introduction under a `Goals` heading. That is
 [the shape the harness checks](../../configuration.md#product-specifications),
-and it is checked of every document filed here that states anything.
-[The v1 non-goals](v1-non-goals.md) states its content under a `Non-goals`
-heading, so the harness reports it as stating none. It is still read exactly as
-written rather than dropped, because refusing it would lose intent somebody
-recorded. The contract having no shape for a non-goals document is a gap in the
-contract, not a reason to file non-goals under a `Goals` heading.
+and it is checked of every document filed here but this index, which is exempt
+by name rather than for what it says. [The v1 non-goals](v1-non-goals.md)
+states its content under a `Non-goals` heading, so the harness reports it as
+stating none. It is still read exactly as written rather than dropped, because
+refusing it would lose intent somebody recorded. The contract having no shape
+for a non-goals document is a gap in the contract, not a reason to file
+non-goals under a `Goals` heading.
 
 Each goal states one outcome the product is trying to reach, and should be:
 
@@ -55,8 +56,9 @@ goal in force names a claim the brief states. A reader can still trace the links
 by hand; the harness no longer depends on them to.
 
 This file is a directory index rather than an artifact: it carries no identity
-frontmatter, nothing refers to it by id, and artifact governance skips it. The
-shape check above skips it for the same reason — an index says what is filed
-beside it and states no intent of its own, so there is no introduction for goals
-to serve and no goals to state. `yoyo init` writes it and `yoyo doctor` reports
-it missing, so editing it is safe and deleting it is noticed.
+frontmatter, nothing refers to it by id, and artifact governance skips it by
+name. The shape check above skips it by that same name and not by a rule of its
+own, so there is no document the two read differently and nothing here is ever
+reported for the shape of a document it was not trying to be. `yoyo init`
+writes it and `yoyo doctor` reports it missing, so editing it is safe and
+deleting it is noticed.
