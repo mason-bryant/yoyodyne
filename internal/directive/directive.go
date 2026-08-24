@@ -261,15 +261,44 @@ func kindNames() []string {
 	return names
 }
 
-// Resolved reports a directive somebody has settled, whichever way its kind is
-// settled: the ambiguity answered, the artifact change decided, or the
-// operational directive carried out. It is one predicate rather than one per
-// kind because everything downstream asks the same question — is there a
-// disposition on this record yet — and a directive that could be settled and
-// still read as open would leave whoever asked for it waiting on an answer that
-// had already been given.
+// Resolved reports a disposition on the record: the ambiguity answered, the
+// artifact change decided, or the operational directive carried out. It says
+// only that somebody has accounted for the directive, and deliberately nothing
+// about whether the directive still applies — InForce is that question, and the
+// two are not the same one.
+//
+// They were the same question while only the pausing kinds could be settled at
+// all, because settling one of those is exactly what ends it. An operational
+// directive is the opposite: it is a standing instruction, in force from the
+// moment it was recorded, and admitting one piece of work in answer to it says
+// what came of it without retiring it. Anything asking whether a directive is
+// still live has to ask InForce, because reading it off this would quietly
+// retire an instruction the operator never withdrew.
 func (d Directive) Resolved() bool {
 	return d.ResolvedAt != nil
+}
+
+// InForce reports a directive that still constrains work, which is the question
+// enforcement and every listing of live direction asks.
+//
+// A pausing directive is in force until somebody resolves it: it is a hold, and
+// answering what it was waiting for is what lifts it. A directive that pauses
+// nothing is in force from the moment it was recorded and stays there — it
+// changes how work is done rather than holding any of it up, so there is nothing
+// for an outcome to lift. "Stop opening pull requests for documentation-only
+// changes" is still the instruction after the item it prompted is admitted, and
+// after that item ships.
+//
+// Nothing ends an operational directive today. Superseding and retiring are what
+// the design says end one, and neither is built, so this returns true for every
+// operational directive rather than pretending to a lifecycle the record cannot
+// express. That is the honest answer and the safe one: the failure this package
+// exists to end is direction that stops reaching the work.
+func (d Directive) InForce() bool {
+	if d.Kind.Pauses() {
+		return !d.Resolved()
+	}
+	return true
 }
 
 // Settlement is what settling this kind of directive is called, which is the

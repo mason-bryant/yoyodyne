@@ -966,7 +966,7 @@ everything else is said to the product manager:
 /intake                  whether the harness may start work on its own, and why not
 /stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
-/directives              what you have directed, and what is still unresolved
+/directives              what you have directed, and what is still in force
 /directive <what you have decided>
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
@@ -1305,8 +1305,17 @@ unresolved.
 `/resolve <id> <how it was settled>` lifts the pause. The release is the record
 changing rather than anything done to a run: the next time the item is started,
 in whichever process, the same run continues from the gate it stopped at.
-`/directives` lists what is recorded and what is still unresolved. An identifier
-may be shortened to any prefix that names exactly one directive.
+`/directives` lists what is recorded, in force first and no longer in force
+after it. An identifier may be shortened to any prefix that names exactly one
+directive.
+
+An operational directive has nothing to resolve, so what settles one is somebody
+carrying it out — usually the product manager admitting the work you asked for,
+naming your directive as it admits the item so the directive's own record is told
+which item it became. That records what it produced and does not withdraw it: a
+standing instruction stays in force, and stays in the listing, with the account
+of what it became under it. See
+[`docs/conversation.md`](docs/conversation.md#directives-and-the-work-they-pause).
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:

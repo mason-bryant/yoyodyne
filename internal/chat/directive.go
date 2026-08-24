@@ -363,30 +363,34 @@ func (d DirectiveResolved) Render() string {
 	return rendered.String()
 }
 
-// renderDirectives lists what the operator has directed, the open ones first,
-// because those are the ones still holding work up or still owed an outcome.
+// renderDirectives lists what the operator has directed, what is still in force
+// first, because that is what still constrains the work.
 //
-// The two groups are open and settled rather than unresolved and resolved: only
-// a pausing directive is ever resolved, and an operational one settles by being
-// carried out, so labelling the groups by the pausing kinds' word would file
-// every carried-out directive under something that did not happen to it.
+// The split is what applies against what is over, rather than what has an
+// account of it against what does not. Those were the same split while only a
+// pausing directive could be settled at all, and they stopped being the same
+// the moment an operational one could carry an outcome: such a directive is
+// accounted for and still standing, and grouping it under what is finished would
+// tell the operator their instruction had lapsed. Each entry says which it is in
+// its own words, so a carried-out directive appears among what is in force with
+// what it produced printed under it.
 func renderDirectives(recorded []directive.Directive) string {
 	if len(recorded) == 0 {
 		return "no directives are recorded for this product.\n"
 	}
-	var open, settled []directive.Directive
+	var live, over []directive.Directive
 	for _, candidate := range recorded {
-		if candidate.Resolved() {
-			settled = append(settled, candidate)
+		if candidate.InForce() {
+			live = append(live, candidate)
 			continue
 		}
-		open = append(open, candidate)
+		over = append(over, candidate)
 	}
 	var rendered strings.Builder
 	for _, group := range []struct {
 		label string
 		items []directive.Directive
-	}{{"open", open}, {"settled", settled}} {
+	}{{"in force", live}, {"no longer in force", over}} {
 		if len(group.items) == 0 {
 			fmt.Fprintf(&rendered, "%s: none\n", group.label)
 			continue

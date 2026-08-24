@@ -150,6 +150,58 @@ func TestAnOperationalDirectiveIsSettledByBeingCarriedOut(t *testing.T) {
 	}
 }
 
+// Recording what came of an operational directive does not withdraw it. It is a
+// standing instruction — "stop opening pull requests for documentation-only
+// changes" is still the instruction after the item it prompted is admitted — so
+// having an account of it and having lapsed are two different facts, and only
+// the pausing kinds have ever ended by being settled.
+//
+// This is the half that matters most, because before an operational directive
+// could be settled at all it was permanently unresolved and so permanently in
+// force. Anything that read "still live" off the absence of a disposition would
+// silently retire the operator's instruction the first time work was admitted
+// for it, which is the failure this package exists to end arriving through its
+// own front door.
+func TestCarryingOutAnOperationalDirectiveLeavesItInForce(t *testing.T) {
+	t.Parallel()
+
+	recorded := operational()
+	if !recorded.InForce() {
+		t.Fatal("a recorded operational directive is not in force")
+	}
+	carried, err := recorded.CarryOut("admitted yoyodyne-ifd.170 to the backlog", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	if !carried.InForce() {
+		t.Fatalf("carried = %#v, want a standing instruction still in force after it was acted on", carried)
+	}
+	// The two facts stay apart: it is accounted for, and it still applies.
+	if !carried.Resolved() {
+		t.Fatalf("carried = %#v, want the outcome recorded on it", carried)
+	}
+}
+
+// A directive that pauses work is the one that ends by being settled: resolving
+// it is exactly what lifts the hold, so it stops being in force at that moment.
+func TestResolvingAPausingDirectiveTakesItOutOfForce(t *testing.T) {
+	t.Parallel()
+
+	pausing := operational()
+	pausing.Kind = KindAmbiguous
+	pausing.Unresolved = "which of the two readings was meant"
+	if !pausing.InForce() {
+		t.Fatal("an unresolved directive that pauses work is not in force")
+	}
+	resolved, err := pausing.Resolve("the second reading", recordedAt.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if resolved.InForce() {
+		t.Fatalf("resolved = %#v, want a lifted pause to stop constraining work", resolved)
+	}
+}
+
 // The two acts refuse each other's kinds. Resolving is somebody answering what
 // held work up and carrying out is somebody having done what was asked, so an
 // outcome written onto a pausing directive would lift its pause on the strength

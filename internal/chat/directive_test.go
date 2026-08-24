@@ -397,6 +397,51 @@ func TestAdmittingWorkForADirectiveRecordsWhatTheDirectiveBecame(t *testing.T) {
 	}
 }
 
+// What the operator is shown groups by what still applies, not by what has an
+// account of it. An operational directive somebody carried out is both — it is
+// accounted for and it is still the instruction — and listing it among the
+// directives that are over would tell the operator something they never decided.
+func TestTheDirectiveListingKeepsACarriedOutInstructionInForce(t *testing.T) {
+	t.Parallel()
+
+	standing := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            "directive-" + strings.Repeat("a", 32),
+		ProductID:     "yoyodyne",
+		Kind:          directive.KindOperational,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    settledAt,
+		Text:          "stop opening pull requests for documentation-only changes",
+	}
+	carried, err := standing.CarryOut("admitted yoyodyne-ifd.170 to the backlog", settledAt)
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	lifted := standing
+	lifted.ID = "directive-" + strings.Repeat("b", 32)
+	lifted.Kind = directive.KindAmbiguous
+	lifted.Unresolved = "which of the two readings was meant"
+	resolved, err := lifted.Resolve("the second reading", settledAt)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	rendered := renderDirectives([]directive.Directive{carried, resolved})
+	inForce, over, found := strings.Cut(rendered, "no longer in force")
+	if !found {
+		t.Fatalf("listing = %q, want it to separate what applies from what is over", rendered)
+	}
+	if !strings.Contains(inForce, carried.ID) || !strings.Contains(inForce, "carried out") {
+		t.Fatalf("in force = %q, want the standing instruction with what it produced under it", inForce)
+	}
+	if !strings.Contains(over, resolved.ID) {
+		t.Fatalf("no longer in force = %q, want the lifted pause", over)
+	}
+	if strings.Contains(over, carried.ID) {
+		t.Fatalf("listing = %q, want a carried-out instruction never filed as no longer in force", rendered)
+	}
+}
+
 // A creation naming a directive nobody recorded is refused before anything is
 // created. An item whose notes claim a directive that does not exist says
 // something untrue about where the work came from, and the outcome it was about

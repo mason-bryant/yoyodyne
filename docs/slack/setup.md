@@ -600,6 +600,11 @@ you — the identifier of the work, not just that you were heard — so a reply 
 turned into a work item stops wearing :thinking_face: at the moment there is
 something to go and read.
 
+The check mark says you have an answer, not that your instruction has lapsed.
+An operational directive is in force from the moment it is recorded and stays
+there; carrying it out records what it produced and withdraws nothing, so it is
+still listed by `yoyo directive list` as in force, with what it became under it.
+
 Three things are refused, visibly:
 
 - **a reply from somebody without `direct-work`**, or with the grant but no
