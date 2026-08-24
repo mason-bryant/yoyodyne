@@ -682,33 +682,65 @@ func TestSetupJSONAsksNothingAndChangesNothing(t *testing.T) {
 	if report.SchemaVersion != setupSchemaVersion || len(report.Steps) == 0 || len(report.Diagnosis.Findings) == 0 {
 		t.Fatalf("the report on exit 1 is not one an agent could act on: %#v", report)
 	}
+	// The step this project was arranged to leave setup a write to decline. What
+	// it reports does not depend on the tools this machine has: the indexes were
+	// missing, nothing could be asked about writing them, and they are still
+	// missing -- which is the filesystem's account of the same thing, said in the
+	// report an agent is the one reading.
+	var indexes setupStep
 	for _, step := range report.Steps {
-		if step.Status == setupDone {
-			t.Errorf("step %q is %s, so reading a report carried the walk out: %s", step.Step, step.Status, step.Summary)
+		if step.Step == stepArtifactReadmes {
+			indexes = step
 		}
+	}
+	if indexes.Status != setupSkipped {
+		t.Errorf("artifact-readmes step = %s (%s), want the write it could not ask about left undone",
+			indexes.Status, indexes.Summary)
+	}
+	if indexes.Remedy == "" {
+		t.Error("the step nobody was asked about says nothing about what would do it")
 	}
 }
 
-// The other way this command exits nonzero, kept apart from the diagnosis on
+// The other ways this command exits nonzero, kept apart from the diagnosis on
 // purpose. An agent is told to read the report on exit 1, which is worth nothing
 // if a command that never reached a diagnosis exits 1 too: it would go looking
-// for a report on stdout that nothing wrote. Being pointed at a directory that
-// is not there is that case, and it exits the way a positional argument does.
-func TestSetupExitsTwoWhenItWasPointedAtNoProject(t *testing.T) {
-	t.Parallel()
+// for a report on stdout that nothing wrote. These are every remaining nonzero
+// return this command has that is not the diagnosis.
+func TestSetupExitsTwoWhenItCouldNotDoWhatItWasAsked(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
 
 	nowhere := filepath.Join(t.TempDir(), "nowhere")
 	var stdout, stderr bytes.Buffer
 	code := runSetup(context.Background(), []string{"--directory", nowhere, "--json"}, strings.NewReader(""), &stdout, &stderr, "test")
 
 	if code != 2 {
-		t.Fatalf("code = %d, want 2 rather than the status a diagnosis carries", code)
+		t.Fatalf("code = %d for a directory that is not there, want 2 rather than the status a diagnosis carries", code)
 	}
 	if strings.TrimSpace(stdout.String()) != "" {
 		t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
 	}
 	if !strings.Contains(stderr.String(), nowhere) {
 		t.Fatalf("stderr = %q, want it to name the directory that is not there", stderr.String())
+	}
+
+	// A flag it does not have, which the flag package refuses before the walk
+	// begins.
+	stdout.Reset()
+	stderr.Reset()
+	if code := runSetup(context.Background(), []string{"--repair", "--json"}, strings.NewReader(""), &stdout, &stderr, "test"); code != 2 {
+		t.Fatalf("code = %d for a flag setup does not have, want 2", code)
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
+	}
+
+	// And a report nothing could write, which is the one case where the walk did
+	// happen and the exit status is all that is left to say so.
+	stderr.Reset()
+	code = runSetup(context.Background(), []string{"--directory", t.TempDir(), "--json"}, strings.NewReader(""), unwritable{}, &stderr, "test")
+	if code != 2 {
+		t.Fatalf("code = %d for a report that could not be written, want 2", code)
 	}
 }
 
@@ -735,6 +767,12 @@ func (i *unreadInput) Read([]byte) (int, error) {
 }
 
 func (i *unreadInput) wasRead() bool { return i.read.Load() }
+
+// unwritable is stdout that takes nothing, which is the one way a report does
+// not reach whoever asked for it however well the walk went.
+type unwritable struct{}
+
+func (unwritable) Write([]byte) (int, error) { return 0, errors.New("stdout is closed") }
 
 // projectTree is every path under a directory and what is in it. "Changes
 // nothing" is checked against the whole project rather than against the one

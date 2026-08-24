@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -179,6 +180,67 @@ func TestDoctorExitsOneAsAReportAndLeavesTheRepositoryAlone(t *testing.T) {
 		if was := report.Findings[index]; finding.Check != was.Check || finding.Status != was.Status {
 			t.Errorf("retrying doctor made %s of %s, was %s of %s", finding.Status, finding.Check, was.Status, was.Check)
 		}
+	}
+}
+
+// TestDoctorSeparatesWhatItCouldNotDoFromTheDiagnosis is the other half of the
+// same claim, and it is held against this command rather than against setup's
+// because skills/yoyo-setup/SKILL.md makes it about both. An agent reading that
+// document treats exit 1 as a report to parse and not to retry, so a command
+// that exited 1 having never made a diagnosis would send it looking for JSON
+// nothing wrote; and a bad `--config`, which looks like a misuse, is deliberately
+// on the other side of the line, because being told the configuration is missing
+// is what an agent runs this for.
+func TestDoctorSeparatesWhatItCouldNotDoFromTheDiagnosis(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	for name, args := range map[string][]string{
+		"a flag it does not have": {"doctor", "--repair", "--json"},
+		"a positional argument":   {"doctor", "everything"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(args, &stdout, &stderr, "v1.2.3"); code != 2 {
+				t.Fatalf("code = %d, want 2 rather than the status a diagnosis carries", code)
+			}
+			if strings.TrimSpace(stdout.String()) != "" {
+				t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
+			}
+			if strings.TrimSpace(stderr.String()) == "" {
+				t.Fatal("doctor refused without saying why")
+			}
+		})
+	}
+
+	// A report nothing could write is on the same side of the line: the exit
+	// status is all a caller has left, and 1 would promise it a report to read.
+	var stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, unwritable{}, &stderr, "v1.2.3"); code != 2 {
+		t.Fatalf("code = %d for a report that could not be written, want 2", code)
+	}
+
+	// And the case that looks like a misuse and is not. A configuration that is
+	// not there is the first thing this command exists to say, so it is a finding
+	// with a remedy under an exit status that comes with the report.
+	var stdout bytes.Buffer
+	stderr.Reset()
+	missing := filepath.Join(t.TempDir(), config.DirectoryName, config.FileName)
+	if code := Run([]string{"doctor", "--json", "--config", missing}, &stdout, &stderr, "v1.2.3"); code != 1 {
+		t.Fatalf("code = %d for a configuration that is not there, want the diagnosis; stderr = %q", code, stderr.String())
+	}
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+	}
+	var told bool
+	for _, finding := range report.Findings {
+		if finding.Check == "configuration" && finding.Status == doctor.StatusProblem && finding.Remedy != "" {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatalf("the report says nothing about the configuration it was pointed at: %#v", report.Findings)
 	}
 }
 

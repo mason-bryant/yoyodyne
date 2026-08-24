@@ -54,8 +54,8 @@ in this task requires writing code.
 Both print JSON to stdout, and **both exit 1 when something would stop work
 running**. That exit status is the report rather than a failure of the command:
 read the JSON either way, and do not retry a command because it exited 1. Exit 2
-is the other thing entirely — the command was used wrongly, it said why on
-stderr, and there is no report on stdout to read. Never key on the
+is the other thing entirely — the command could not do what it was asked, it
+said why on stderr, and there is no report on stdout to read. Never key on the
 human-readable output — the prose is written for a person and both commands have
 a `--json` that carries the same findings structurally.
 
