@@ -19,19 +19,26 @@
 # docs/diagnoses/yoyodyne-ifd-122-goal-attribution-loss.md, which matches each
 # loss to the command that caused it.
 #
-# Who runs this. There are two populations and one script, so the refusal is the
-# same in both rather than merely alike:
+# Who runs this, and who does not. There are two populations and one script, so
+# where both are wired the refusal is the same in both rather than merely alike.
+# Only one of them is wired:
 #
 #   harness developer runs  wired in `developerSettings`
 #                           (internal/backend/claudecode/backend.go), which names
 #                           this script by an absolute path into the run's own
 #                           worktree and is held to that by
 #                           TestDeveloperRunsPutBashThroughTheNotesGuard.
-#   interactive sessions    wired in this repository's .claude/settings.json,
-#                           which names it through $CLAUDE_PROJECT_DIR because
-#                           that file is shared by every checkout and no absolute
-#                           path is true in all of them. Held to that by
-#                           TestInteractiveSessionsAreWiredToTheNotesGuard.
+#   interactive sessions    NOT wired. It takes the `PreToolUse` block in
+#                           CLAUDE.md and AGENTS.md merged into
+#                           .claude/settings.json, which only a person can do:
+#                           Claude Code refuses an agent's write to a settings
+#                           file whatever else the session is permitted, so no
+#                           run can land it. Until somebody does, an interactive
+#                           `bd update --notes=` is unguarded -- and that is the
+#                           population all twelve recorded losses came from.
+#                           TestTheInteractiveNotesGuardWiringMatchesTheDocumentedBlock
+#                           holds the settings file to that block once it carries
+#                           the paste, and says so out loud when it does not.
 #
 # `beads.Client.Update` passing only `--append-notes` is a separate guarantee
 # and covers neither of the above: it makes the writes the *harness itself*

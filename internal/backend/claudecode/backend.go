@@ -32,23 +32,27 @@ const defaultTimeout = 4 * time.Hour
 const defaultIdleTimeout = 5 * time.Minute
 
 // NotesGuardScript is the notes-writer guard, named from the repository root.
-// It is exported because two wirings have to name the same script and neither
-// can be allowed to name a different one: the developer settings below, and the
-// PreToolUse hook in .claude/settings.json that covers interactive sessions.
-// One implementation behind two wirings is the only way "the same refusal in
-// both populations" is a fact rather than a resemblance -- and the interactive
-// population is the one that destroyed all twelve recorded attributions.
+// It is exported because it is named in more than one place and none of them
+// can be allowed to name a different script: the developer settings below, and
+// the PreToolUse block CLAUDE.md and AGENTS.md tell an operator to merge into
+// .claude/settings.json for interactive sessions. One implementation behind
+// both is what would make "the same refusal in both populations" a fact rather
+// than a resemblance -- but only the developer half is wired. The interactive
+// half is a paste no run can perform, because Claude Code refuses an agent's
+// write to a settings file, and it is the population that destroyed all twelve
+// recorded attributions.
 const NotesGuardScript = "scripts/bd-notes-guard.sh"
 
 // developerSettings confines a developer run's Bash to the worktree and puts
 // every Bash call through the notes-writer guard first.
 //
-// The guard is here as well as in .claude/settings.json because the two cover
-// different writers. `beads.Client.Update` passing only `--append-notes` makes
-// the writes the *harness* issues safe, and says nothing about an agent inside
-// a developer run typing `bd update <id> --notes=` into Bash, which is the same
-// command that destroyed twelve attributions from interactive sessions. Only
-// this hook covers that.
+// This hook is what covers a developer run's own Bash, and nothing else does.
+// `beads.Client.Update` passing only `--append-notes` makes the writes the
+// *harness* issues safe, and says nothing about an agent inside a developer run
+// typing `bd update <id> --notes=` into Bash, which is the same command that
+// destroyed twelve attributions from interactive sessions. It covers only this
+// population: an interactive session is reached by the block in
+// .claude/settings.json, which is a paste no run can make.
 //
 // The script is named by an absolute path built from the worktree this run was
 // given, rather than through $CLAUDE_PROJECT_DIR. The variable would have been
@@ -57,9 +61,10 @@ const NotesGuardScript = "scripts/bd-notes-guard.sh"
 // call proceeds, so an unset or differently-rooted variable leaves the run
 // unguarded and looks like nothing happened. The harness already knows where it
 // put the worktree -- Run refuses a request without it -- so nothing is gained
-// by asking the provider to tell us again. The checked-in settings file has no
-// such choice: one file serves every checkout, so no absolute path is true in
-// all of them, and it reaches the script through $CLAUDE_PROJECT_DIR.
+// by asking the provider to tell us again. The block written for
+// .claude/settings.json has no such choice: one checked-in file would serve
+// every checkout, so no absolute path is true in all of them, and it reaches
+// the script through $CLAUDE_PROJECT_DIR.
 //
 // Both the path and the surrounding JSON are encoded rather than concatenated,
 // because a worktree path is not a tame string: this repository's own worktrees

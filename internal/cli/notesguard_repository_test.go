@@ -1,8 +1,8 @@
 package cli
 
 // The tests here hold the notes-writer guard — scripts/bd-notes-guard.sh, the
-// two wirings that run it, and the hook block the instruction files carry — to
-// what they claim.
+// one wiring that runs it today, and the hook block the instruction files carry
+// for the wiring that is still a paste — to what they claim.
 //
 // The guard exists because a work item's goal attribution is one line in its
 // notes, so `bd update <id> --notes=` destroys it; twelve attributions were lost
@@ -259,15 +259,25 @@ func TestTheDocumentedNotesGuardHookIsPasteable(t *testing.T) {
 // repository's own `.claude/settings.json` to the block the instruction files
 // tell an operator to paste into it — once it carries the paste at all.
 //
-// It is written to skip rather than fail on a settings file with no PreToolUse
-// entry because no check here can put one there. Claude Code refuses an agent's
-// write to a settings file: the Write and Edit tools are both denied on that
-// path regardless of what the run is otherwise permitted, so the paste is the
-// operator's hand and nothing else. What this covers is the failure that comes
-// after it — a paste that lands and then drifts, or a script that moves out from
-// under a settings file nothing else in `make check` reads. The skip names the
-// paste, so an environment that has not had it says so out loud rather than
-// reporting a guard it does not have.
+// It skips rather than fails on a settings file with no PreToolUse entry
+// because nothing that runs here can put one there. Claude Code refuses an
+// agent's write to a settings file: Write and Edit are both denied on that path
+// regardless of what the run is otherwise permitted — including a run holding an
+// explicit grant for it, which was tried — so the paste is a person's hand and
+// nothing else. A check that fails on a state no contributor working through an
+// agent can leave is a red gate rather than a finding.
+//
+// **The skip expires the moment the entry lands.** Once `.claude/settings.json`
+// carries a PreToolUse hook, the reason this is not an assertion is gone, and
+// the branch below has to become a failure: otherwise deleting the interactive
+// wiring — the half that covers the population all twelve losses came from —
+// passes `make check` in silence, which is the exact shape of failure this file
+// exists to catch everywhere else. Whoever pastes the block changes t.Skipf to
+// t.Fatalf in the same commit.
+//
+// What it holds meanwhile is the failure that comes after the paste: a wiring
+// that lands and then drifts from the documented block, or a script that moves
+// out from under a settings file nothing else in `make check` reads.
 func TestTheInteractiveNotesGuardWiringMatchesTheDocumentedBlock(t *testing.T) {
 	t.Parallel()
 
@@ -280,7 +290,7 @@ func TestTheInteractiveNotesGuardWiringMatchesTheDocumentedBlock(t *testing.T) {
 		t.Fatalf("%s is not JSON (%v); Claude Code reads it before every session here", notesGuardSettingsPath, err)
 	}
 	if len(settings.Hooks["PreToolUse"]) == 0 {
-		t.Skipf("%s wires no PreToolUse hook, so an interactive `bd update <id> --notes=` here is unguarded — which is the population that destroyed all twelve recorded attributions. Paste the block between %s and %s in %s; an agent cannot, because Claude Code refuses a write to a settings file.",
+		t.Skipf("%s wires no PreToolUse hook, so an interactive `bd update <id> --notes=` here is unguarded — which is the population that destroyed all twelve recorded attributions. Paste the block between %s and %s in %s; an agent cannot, because Claude Code refuses a write to a settings file. Turn this skip into a t.Fatalf in the same commit: once the entry is there, its absence is a deletion rather than a state nobody could fix.",
 			notesGuardSettingsPath, notesGuardBlockOpen, notesGuardBlockClose, notesGuardInstructionPaths[0])
 	}
 
