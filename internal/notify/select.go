@@ -470,21 +470,30 @@ func checksBehind(state runstate.State) bool {
 	}
 }
 
-// verdictGiven reports a record that holds a reviewer's verdict at all. The
-// record passes through no verdict twice per round — it is cleared before each
-// review runs and written again when that review answers — so the absence is a
-// real state of a run rather than only the state of one that has never been
+// verdictGiven reports a record that holds a verdict this line has words for.
+// The record passes through no verdict twice per round — it is cleared before
+// each review runs and written again when that review answers — so the absence is
+// a real state of a run rather than only the state of one that has never been
 // reviewed.
+//
+// An upheld refusal is deliberately not one of them. It is neither an approval
+// nor a request for repairs, and reporting it as the second — which is what a
+// line with two kinds and three verdicts would do — is the reviewer's judgement
+// said backwards. The run that carries one blocks its item immediately
+// afterwards, and the blocker says in words what the reviewer decided, so what
+// this omits is a mislabel rather than the news.
 func verdictGiven(state runstate.State) bool {
-	return state.ReviewDecision != ""
+	return state.ReviewDecision == runstate.ReviewApprove || state.ReviewDecision == runstate.ReviewRepair
 }
 
 // parked reports a run stopped short of finishing with an instruction to resume:
-// a provider that refused it, the operator holding everything, or a directive
-// nobody has resolved. All three keep the run's claim and its worktree, which is
-// what makes a park different from a failure.
+// a provider that refused it, the operator holding everything, a directive
+// nobody has resolved, or work the item was made to wait on. All four keep the
+// run's claim and its worktree, which is what makes a park different from a
+// failure.
 func parked(state runstate.State) bool {
-	return state.UsageLimitResetsAt != nil || state.OperatorHeldSince != nil || state.DirectivePause != nil
+	return state.UsageLimitResetsAt != nil || state.OperatorHeldSince != nil ||
+		state.DirectivePause != nil || state.DependencyPause != nil
 }
 
 // causeOf names what a parked run is waiting on, as the object of "waiting on".
@@ -498,6 +507,9 @@ func causeOf(state runstate.State) string {
 			waiting += ": " + unresolved
 		}
 		return waiting
+	}
+	if pause := state.DependencyPause; pause != nil {
+		return "unfinished work this item depends on: " + pause.Summary()
 	}
 	if state.OperatorHeldSince != nil {
 		return runstate.DescribePause(runstate.PauseOperatorHold, "")
@@ -515,13 +527,14 @@ func causeOf(state runstate.State) string {
 //
 // An exhausted usage limit is a warning and the other causes are notes. That is
 // not a judgement about which is worse: it is what an unattended reader can do
-// about each. A directive and an operator hold are waiting on the person reading
-// the channel, who already knows they placed them; an exhausted limit is hours
-// in which nothing will happen for a reason nobody chose, and it must not weigh
-// the same as checks passing. A transient overload lifts in seconds and stays a
-// note for exactly that reason.
+// about each. A directive, a dependency link, and an operator hold are waiting on
+// a decision somebody already made — the person reading the channel placed the
+// first and the last, and the middle one is a development manager's own link; an
+// exhausted limit is hours in which nothing will happen for a reason nobody
+// chose, and it must not weigh the same as checks passing. A transient overload
+// lifts in seconds and stays a note for exactly that reason.
 func parkSeverity(state runstate.State) report.Severity {
-	if state.DirectivePause != nil || state.OperatorHeldSince != nil {
+	if state.DirectivePause != nil || state.DependencyPause != nil || state.OperatorHeldSince != nil {
 		return report.SeverityNote
 	}
 	if state.PauseCause == runstate.PauseServerOverload {

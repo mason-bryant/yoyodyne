@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# cut-release.sh - cut one release: gate on the adoption walkthrough and the
-# checks, build the archives and their checksums for the tag, then tag the
-# commit they were built from.
+# cut-release.sh - cut one release: gate on its notes, the adoption walkthrough
+# and the checks, build the archives and their checksums for the tag, then tag
+# the commit they were built from.
 #
 #   make release VERSION=v0.3.0      what an operator runs
 #   scripts/cut-release.sh v0.3.0    the same thing, without make
@@ -20,15 +20,36 @@
 #
 # The order is deliberate: every gate runs before anything is written, and the
 # tag is created last, so a refusal at any point leaves the repository exactly
-# as it was. There is no half-cut release to clean up.
+# as it was. There is no half-cut release to clean up. Two things are written
+# before the tag, and both are held to that claim rather than excepted from it.
+# The housekeeping commit for the tracker's derived exports is written after the
+# last gate has passed, for the reason given there: it is made or it is not, and
+# a failure partway through puts the index back rather than leaving the exports
+# staged. And a release whose notes are missing has them drafted, which is the
+# single exception -- a cut with no story to tell writes docs/releases/<tag>.md
+# from the work items that landed and refuses, so the tag lands on a commit that
+# carries its own notes rather than on one they are added after. That refusal
+# says outright what it wrote.
 #
-# Requires git, make, go, and whatever scripts/walk-adoption.sh needs (bd and
-# python3). Nothing outside the repository is written, and nothing is pushed.
+# Requires git 2.9 or newer. Two things here have a floor: the `:(exclude)`
+# pathspec the cleanliness check uses needs 1.9, and `core.hooksPath`, which is
+# how the housekeeping commit keeps the tracker's export hook from rewriting the
+# very files that commit exists to clean, is only honoured from 2.9. Older git
+# does not refuse `core.hooksPath` -- it ignores it, the hook runs, and the tag
+# names a tree that was dirty again a millisecond after it was cleaned, with
+# nothing saying so. The `git push --atomic` this prints on a day it housekept
+# needs 2.4 of whoever runs it, which the same floor covers. Also make, go, and
+# whatever scripts/walk-adoption.sh needs (bd and python3). Nothing outside the
+# repository is written, and nothing is pushed.
 
 set -euo pipefail
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 walkthrough="$repository/scripts/walk-adoption.sh"
+notes_writer="$repository/scripts/release-notes.sh"
+# Where a release's notes live, versioned beside the code they describe and
+# named for the tag, so the release page and the repository tell one story.
+notes_home="$repository/docs/releases"
 # When this was reached through `make release`, use the same make.
 make_program="${MAKE:-make}"
 # Where `dist` writes, spelled the way the Makefile spells it: DIST ?= dist,
@@ -42,6 +63,13 @@ dist_directory="$repository/${DIST:-dist}"
 # prerelease, and a looser pattern would let VERSION's build-time default be
 # cut as if it were a release.
 tag_pattern='^v[0-9]+\.[0-9]+\.[0-9]+$'
+# The tracker's derived exports. Beads keeps the issues in a local database and
+# writes these out as a passive dump, so they change whenever anything touches
+# the tracker -- including the adoption walkthrough this gate runs itself, which
+# is why they cannot simply be committed beforehand. Nothing a release ships is
+# built from them. Each one is also a change a run declares the primary checkout
+# may acquire while it works, in internal/cli/run.go.
+derived_exports=(".beads/interactions.jsonl" ".beads/issues.jsonl")
 
 step()   { printf '\n=== %s\n' "$*"; }
 # Every refusal names the tag it did not cut, because the operator's next
@@ -74,10 +102,23 @@ step "the commit $tag would name"
 # The archives are built from the working tree and the tag is placed on HEAD,
 # so the two agree only while the tree is clean. A dirty tree would ship a
 # binary built from something no commit holds.
-dirty="$(git -C "$repository" status --porcelain)"
+#
+# The tracker's derived exports are not that: nothing is built from them, and
+# under a daily cadence they are dirty nearly every day, so refusing on them
+# stalls the cut on a day nobody is standing there to stash. They are committed
+# rather than excepted -- see the housekeeping step -- so what this asks is that
+# the tree is clean of everything else, and it still names what it found.
+exclude_exports=()
+for export_path in "${derived_exports[@]}"; do
+  exclude_exports+=(":(exclude)$export_path")
+done
+dirty="$(git -C "$repository" status --porcelain -- . "${exclude_exports[@]}")"
 if [ -n "$dirty" ]; then
   printf '%s\n' "$dirty" >&2
   refuse "the working tree has uncommitted changes, so the archives would not be the commit $tag names. Commit or stash them first"
+fi
+if [ -n "$(git -C "$repository" status --porcelain -- "${derived_exports[@]}")" ]; then
+  printf "the tracker's derived exports have changed; they are committed as housekeeping once every gate is green\n"
 fi
 
 # Releases come off the branch integration lands on. A tag on a feature branch
@@ -108,6 +149,28 @@ else
   printf 'SKIPPED: origin is unreachable, so whether HEAD is current was not checked\n'
 fi
 
+step "gate: this release's notes"
+# A release nobody can read is a release nobody adopts, so the notes are a gate
+# rather than a courtesy -- and they are gated here, before the walkthrough and
+# the cross-compile, because drafting them costs seconds and those cost minutes.
+#
+# The notes are the one thing a cut cannot finish on its own: which work is key
+# functionality, which is an enhancement, and which critical fix belongs at the
+# top is the product manager's judgement. So a missing file is drafted from the
+# items that landed and the cut refuses, leaving the operator a file to read,
+# place, and commit. The tag then names a commit that carries its own notes.
+notes_file="$notes_home/$tag.md"
+if [ ! -f "$notes_file" ]; then
+  printf '%s has no notes yet, so they are drafted here from what landed since\n' "$tag"
+  printf 'the last tag. Nothing else has been written and no tag exists.\n\n'
+  if ! bash "$notes_writer" "$tag"; then
+    refuse "$tag's notes could not be drafted, so $tag was not cut"
+  fi
+  refuse "drafted docs/releases/$tag.md and stopped there. Read it, move each item into the section its work belongs in, commit it, then cut $tag again -- that is the only thing this left behind"
+fi
+printf 'docs/releases/%s.md is present and committed, so %s will name a commit\n' "$tag" "$tag"
+printf 'that carries its own notes\n'
+
 step "gate: the adoption walkthrough"
 printf 'A release is what the install path consumes, so the documented first hour\n'
 printf 'is walked before the tag exists rather than after it is published.\n\n'
@@ -134,6 +197,42 @@ if ! "$make_program" -C "$repository" dist-verify VERSION="$tag"; then
   refuse "the release build for $tag failed, so no tag was written"
 fi
 
+step "housekeeping: the tracker's derived exports"
+# Here rather than at the top, for two reasons. The walkthrough and the checks
+# above touch the tracker themselves, so an earlier commit would be dirty again
+# behind them; and every gate has now passed, so this is the first thing written
+# and every refusal above it left the repository exactly as it found it.
+# Committing rather than excepting these paths is what keeps the
+# tag naming a tree with nothing uncommitted in it, so "the archives are the
+# commit the tag names" stays a property rather than a property with a footnote.
+housekept=()
+for export_path in "${derived_exports[@]}"; do
+  if [ -n "$(git -C "$repository" status --porcelain -- "$export_path")" ]; then
+    housekept+=("$export_path")
+  fi
+done
+if [ "${#housekept[@]}" -gt 0 ]; then
+  # Hooks are off for this one commit: the tracker installs commit hooks that
+  # export, which would dirty the tree this commit exists to clean. This is the
+  # git 2.9 in the prerequisites above -- older git ignores the option rather
+  # than refusing it, and the hook runs.
+  if ! git -C "$repository" add -- "${housekept[@]}" ||
+     ! git -C "$repository" -c core.hooksPath=/dev/null \
+         commit -q -m "record the tracker's derived exports for $tag"; then
+    # Put the index back, so this refusal leaves the repository exactly as it
+    # was like every refusal above it rather than leaving the exports staged.
+    # Its own stderr stands if it cannot, which is the only way this leaves
+    # anything behind and is louder than the refusal that follows.
+    git -C "$repository" reset -q -- "${housekept[@]}" || true
+    refuse "the tracker's derived exports could not be committed, so $tag was not cut and the index was put back"
+  fi
+  head="$(git -C "$repository" rev-parse HEAD)"
+  printf 'committed %s\n' "${housekept[*]}"
+  printf 'HEAD: %s\n' "$head"
+else
+  printf 'nothing to commit\n'
+fi
+
 step "tag"
 # Last, and only now: everything above passed, so this tag never needs undoing.
 git -C "$repository" tag -a "$tag" -m "$tag"
@@ -147,4 +246,11 @@ printf '\n=== cut\n'
 cat "$dist_directory/checksums.txt" 2>/dev/null ||
   printf 'the cut succeeded, but %s/checksums.txt is not where it was expected\n' "$dist_directory"
 printf '\nPublishing is the tag push, which the release workflow acts on:\n'
-printf '  git push origin %s\n' "$tag"
+if [ "${#housekept[@]}" -gt 0 ]; then
+  # The tag names the housekeeping commit, which origin does not have, so the
+  # branch goes with it -- atomically, because a tag published without its
+  # commit on the branch is the divergence the gate above refuses.
+  printf '  git push --atomic origin %s %s\n' "$default_branch" "$tag"
+else
+  printf '  git push origin %s\n' "$tag"
+fi

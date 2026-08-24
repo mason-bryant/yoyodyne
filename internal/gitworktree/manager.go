@@ -263,6 +263,12 @@ type DiffLimits struct {
 	// A worktree's change is described against one base commit and has no
 	// history of its own, so this bounds a branch-scope change only.
 	MaxCommits int
+	// MaxListedFiles bounds the listing of what the repository holds. It is
+	// separate from MaxFiles and far larger, because the two bound opposite
+	// things: MaxFiles bounds how much of a change is rendered, and this bounds a
+	// listing whose only use is proving a path is or is not in the repository —
+	// which a bounded listing can only half do.
+	MaxListedFiles int
 }
 
 // ChangeDiff is a bounded unified view of everything a developer changed in a
@@ -533,6 +539,77 @@ func (m *Manager) ChangedPaths(ctx context.Context, worktree Worktree) ([]string
 	changed = append(changed, untracked...)
 	sort.Strings(changed)
 	return changed, nil
+}
+
+// DefaultMaxListedFiles bounds how many paths a listing of a commit names. It is
+// generous enough that an ordinary repository is listed whole, because the whole
+// of the point is being able to say a path is not there, and a bounded listing
+// can never say that. A repository past it is listed in part and reported as
+// bounded, so what is lost is stated rather than discovered.
+const DefaultMaxListedFiles = 20000
+
+// CommitListing is every path one commit holds, or as much of it as the bound
+// allowed. It answers the question a patch structurally cannot: a file the change
+// left alone is absent from the diff whatever the repository holds, so absence
+// read out of a diff is absence read out of nothing.
+//
+// Omitted is what keeps a bounded listing honest. A listing that named only some
+// of the paths can prove one is present and can prove nothing about one it does
+// not name, and a reader that took the short listing for the whole would make the
+// same mistake one step further along.
+type CommitListing struct {
+	Commit  string   `json:"commit"`
+	Files   []string `json:"files,omitempty"`
+	Omitted int      `json:"omitted,omitempty"`
+}
+
+// FilesAtHead lists what the repository holds at the commit a run's worktree is
+// on: the base it was created at, or the one commit the harness itself made and
+// recorded. It only reads, and it reads the committed tree rather than the
+// working directory, so a file the developer has since created is deliberately
+// not in it — that file is in the patch, and this exists to answer for the ones
+// that are not.
+func (m *Manager) FilesAtHead(ctx context.Context, worktree Worktree, maxFiles int) (CommitListing, error) {
+	path, head, err := m.verifyOwnedHead(ctx, worktree)
+	if err != nil {
+		return CommitListing{}, err
+	}
+	return m.listCommit(ctx, path, head, maxFiles)
+}
+
+// listCommit reads one commit's tree as a sorted listing of paths, in whichever
+// checkout the caller names: a run's worktree for its own HEAD, and the
+// repository itself for a branch under review.
+func (m *Manager) listCommit(ctx context.Context, path, commit string, maxFiles int) (CommitListing, error) {
+	if maxFiles <= 0 {
+		maxFiles = DefaultMaxListedFiles
+	}
+	if !commitPattern.MatchString(commit) {
+		return CommitListing{}, fmt.Errorf("listed commit %q is invalid", commit)
+	}
+	// The NUL-separated form is used for the reason it is used everywhere else
+	// here: a path holding a space, a quote, or a newline survives it, and Git's
+	// quoted form would have to be parsed back.
+	result, err := m.run(ctx, "-C", path, "ls-tree", "-r", "--name-only", "-z", commit)
+	if err != nil {
+		return CommitListing{}, err
+	}
+	if result.Status != execution.ProcessSucceeded {
+		return CommitListing{}, fmt.Errorf("list the files at %s failed with exit code %d: %s", commit, result.ExitCode, strings.TrimSpace(result.Stderr))
+	}
+	var files []string
+	for _, entry := range strings.Split(strings.TrimSuffix(result.Stdout, "\n"), "\x00") {
+		if entry != "" {
+			files = append(files, entry)
+		}
+	}
+	sort.Strings(files)
+	listing := CommitListing{Commit: commit, Files: files}
+	if len(files) > maxFiles {
+		listing.Files = files[:maxFiles]
+		listing.Omitted = len(files) - maxFiles
+	}
+	return listing, nil
 }
 
 // UnifiedChanges reports the actual change a developer produced, tracked and
@@ -819,7 +896,10 @@ func (l DiffLimits) resolve() (DiffLimits, error) {
 	if l.MaxCommits == 0 {
 		l.MaxCommits = DefaultMaxDiffCommits
 	}
-	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 || l.MaxCommits < 0 {
+	if l.MaxListedFiles == 0 {
+		l.MaxListedFiles = DefaultMaxListedFiles
+	}
+	if l.MaxTotalBytes < 0 || l.MaxFileBytes < 0 || l.MaxFiles < 0 || l.MaxCommits < 0 || l.MaxListedFiles < 0 {
 		return DiffLimits{}, errors.New("diff limits cannot be negative")
 	}
 	return l, nil

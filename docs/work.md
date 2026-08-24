@@ -15,6 +15,22 @@ developer for the change:
 On success, the JSON result reports the run ID, branch, worktree, base commit,
 change summary, checks, and agent summary.
 
+What the item waits on is read from the tracker at every point the run is about
+to commit to work — before it is claimed or resumed, at the start of each round
+of the gate, and once more before the promotion — rather than trusted from
+whatever readiness selection saw. A dependency link added to an item that is
+already in flight therefore takes effect on that run: it pauses at the next of
+those boundaries exactly as an unresolved directive does, keeping its claim, its
+branch, its worktree, and its developer session, and it carries on when the work
+it waits on is closed or the link is removed. That matters because a development
+manager linking a dependency onto work already moving is precisely how a gate
+gets added late, and a run that answered from selection-time state would develop
+straight through the gate filed to stop it — and spend review rounds on a change
+that should never have been dispatched. Both the developer's context and the
+reviewer's evidence state what the item waits on, and state it as `nothing` when
+it waits on nothing, so neither can mistake an item this context happens not to
+describe for one nothing blocks.
+
 Then the change is gated on what it touched. The project configuration and the
 artifact homes upstream of the work — `.yoyodyne/`, `docs/product/`,
 `docs/designs/`, and `docs/decisions/` by default — are default-deny for a
@@ -48,7 +64,12 @@ change whose ground moved. **The two are different acts with different
 accounting** — one spends the item's repair grant and the review rounds that
 grant buys, the other spends its re-run budget — and neither of them is `yoyo
 run <beads-id>`, which is you naming an item rather than carrying out a decision
-somebody recorded about a run that stopped.
+somebody recorded about a run that stopped. `yoyo run` enforces that difference
+rather than relying on it being understood: an item whose last run stopped with
+its change preserved on a branch is refused a fresh clean run, naming both the
+repair that would continue the change and the re-run that would start over
+deliberately, because a fresh worktree off the target branch looks perfectly
+valid and a developer given one delivers an empty change or reinvents the work.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

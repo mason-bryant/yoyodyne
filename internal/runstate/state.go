@@ -98,7 +98,30 @@ const (
 const (
 	ReviewApprove = "approve"
 	ReviewRepair  = "repair"
+	// ReviewRefusalUpheld is a review that agreed the developer was right not to
+	// implement the item, because it waits on something upstream nobody has
+	// decided. It approves nothing: every gate here asks whether the decision is
+	// ReviewApprove, so a run carrying this one integrates exactly as little as a
+	// run carrying a repair does.
+	ReviewRefusalUpheld = "refusal_upheld"
 )
+
+// validReviewDecision reports a verdict this durable schema defines. Every
+// decision the review contract can reach has to be one of them, because a record
+// the store refuses is a verdict that never reaches disk: the run goes on
+// carrying it in memory, and what survives the process is the state written
+// before the review, which reads as a run nothing ever judged.
+//
+// Empty is one of them. A run that has not been reviewed records no decision
+// rather than a decision meaning "none".
+func validReviewDecision(decision string) bool {
+	switch decision {
+	case "", ReviewApprove, ReviewRepair, ReviewRefusalUpheld:
+		return true
+	default:
+		return false
+	}
+}
 
 const (
 	SeverityBlocker = "blocker"
@@ -424,6 +447,42 @@ func (d DirectivePause) Validate() error {
 	return errors.Join(problems...)
 }
 
+// DependencyPause is the unfinished work a run stopped short for: the blocking
+// dependencies its work item carried when the run last read it. It is recorded
+// before the run returns, for the same reason a directive pause is — the pause
+// has to survive the process, so a later invocation can tell a run that is
+// waiting from one that was interrupted, and resume it rather than start a
+// second attempt at the same item.
+//
+// The dependency graph itself lives in the tracker, which is what makes it
+// reachable from every process. What is copied here is only what a reader of
+// this run needs in order to say what the run is waiting for without going and
+// finding it: the items it is waiting on.
+type DependencyPause struct {
+	Blockers []string `json:"blockers"`
+}
+
+// Summary names the work this pause is waiting on, in one line, for a reader who
+// needs to know what to close rather than the whole dependency graph.
+func (d DependencyPause) Summary() string {
+	return strings.Join(d.Blockers, ", ")
+}
+
+// Validate rejects a recorded pause that cannot say what the run is waiting for.
+// A pause nobody can name the blocker of is a pause nobody can lift, which is
+// exactly the state enforcing dependencies exists to prevent.
+func (d DependencyPause) Validate() error {
+	if len(d.Blockers) == 0 {
+		return errors.New("blockers is required")
+	}
+	for _, blocker := range d.Blockers {
+		if strings.TrimSpace(blocker) == "" {
+			return errors.New("every blocker must name the work item it waits on")
+		}
+	}
+	return nil
+}
+
 // MaxRepairContinuations bounds how many granted continuations one run's record
 // may carry. What actually bounds them is the item's per-item grant cap, which
 // refuses long before this; this is the record's own bound, so a budget somebody
@@ -577,7 +636,19 @@ type State struct {
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
 	// when the run is picked up again.
-	TargetBranch        string `json:"target_branch,omitempty"`
+	TargetBranch string `json:"target_branch,omitempty"`
+	// DeveloperSummary is the developer's own account of its last attempt: what it
+	// changed, what it verified, and where it refused to implement something, why.
+	// It is durable because the reviewer is shown it and a run is routinely
+	// reviewed by a later process than the one that developed it — a resumed run
+	// holding the account only in memory would hand the reviewer the same silence
+	// that had three consecutive reviews judging against a summary they never saw.
+	//
+	// It is replaced by each attempt rather than accumulated, for the reason the
+	// review evidence beside it is cleared: what the reviewer is judging is the
+	// change now in the worktree, and an earlier attempt's account describes one
+	// that is gone.
+	DeveloperSummary    string `json:"developer_summary,omitempty"`
 	ReviewSessionID     string `json:"review_session_id,omitempty"`
 	ReviewModel         string `json:"review_model,omitempty"`
 	ReviewResolvedModel string `json:"review_resolved_model,omitempty"`
@@ -710,6 +781,16 @@ type State struct {
 	// branch, and is picked up again once the directive is resolved. It is cleared
 	// as the run resumes.
 	DirectivePause *DirectivePause `json:"directive_pause,omitempty"`
+	// DependencyPause records that unfinished work this item was made to wait on
+	// stopped the run short of finishing. Like a directive pause it is an
+	// instruction to resume later rather than a failure, so a run carrying one
+	// keeps its claim, its worktree, and its branch, and is picked up again once
+	// the work it waits on is closed. It is cleared as the run resumes.
+	//
+	// It is a separate field from the directive pause rather than a second kind of
+	// one because what lifts them differs: a directive is settled by a person
+	// deciding, and this is lifted by other work finishing.
+	DependencyPause *DependencyPause `json:"dependency_pause,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -871,7 +952,7 @@ func (s State) Validate() error {
 	if s.Phase != "" && !s.Phase.Valid() {
 		problems = append(problems, errors.New("phase is invalid"))
 	}
-	if s.ReviewDecision != "" && s.ReviewDecision != ReviewApprove && s.ReviewDecision != ReviewRepair {
+	if !validReviewDecision(s.ReviewDecision) {
 		problems = append(problems, errors.New("review_decision is invalid"))
 	}
 	if s.ReviewFindings < 0 {
@@ -979,6 +1060,17 @@ func (s State) Validate() error {
 		// continuation nothing will ever make.
 		if s.Status.Terminal() {
 			problems = append(problems, errors.New("directive_pause requires a run that is still in flight"))
+		}
+	}
+	if s.DependencyPause != nil {
+		if err := s.DependencyPause.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("dependency_pause: %w", err))
+		}
+		// A dependency pause is the same kind of instruction as the ones above:
+		// resume this later. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("dependency_pause requires a run that is still in flight"))
 		}
 	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {

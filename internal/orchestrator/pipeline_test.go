@@ -452,7 +452,13 @@ func TestPipelineEnforcesConfiguredDeveloperCapacityBeforeClaim(t *testing.T) {
 	}
 }
 
-func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
+// An item waiting on unfinished work is paused before it is claimed rather than
+// failed. It is a pause because closing the blocker is all that stands between
+// here and the work proceeding, and because the same fact reaching a run already
+// in flight parks that run: one dependency must not read as a wait in one place
+// and as a broken run in another. Only the relation that blocks counts — a
+// parent-child link says nothing about whether this work may proceed.
+func TestPipelinePausesBlockedItemBeforeClaim(t *testing.T) {
 	t.Parallel()
 
 	repository := pipelineRepository(t)
@@ -468,8 +474,15 @@ func TestPipelineRefusesBlockedItemBeforeClaim(t *testing.T) {
 	provider := &fakeBackend{availability: backend.Availability{Installed: true, Authenticated: true}}
 	pipeline, store := newPipeline(t, repository, tracker, provider, []string{"exit 0"})
 
-	if _, err := pipeline.Run(context.Background(), tracker.item.ID); err == nil || !strings.Contains(err.Error(), "yoyodyne-blocker") {
-		t.Fatalf("Run() blocked error = %v", err)
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !outcome.Paused || outcome.PausedByDependency == nil {
+		t.Fatalf("outcome = %#v, want the item paused for what it waits on", outcome)
+	}
+	if got := outcome.PausedByDependency.Blockers; len(got) != 1 || got[0] != "yoyodyne-blocker" {
+		t.Fatalf("blockers = %v, want only the blocking dependency named", got)
 	}
 	if tracker.claimed {
 		t.Fatal("blocked run claimed work")
@@ -2532,6 +2545,10 @@ func (partialWorktreeManager) UnifiedChanges(context.Context, gitworktree.Worktr
 
 func (partialWorktreeManager) ChangedPaths(context.Context, gitworktree.Worktree) ([]string, error) {
 	return nil, nil
+}
+
+func (partialWorktreeManager) FilesAtHead(context.Context, gitworktree.Worktree, int) (gitworktree.CommitListing, error) {
+	return gitworktree.CommitListing{}, nil
 }
 
 func (partialWorktreeManager) Integrate(context.Context, gitworktree.Worktree, string) (gitworktree.Integration, error) {

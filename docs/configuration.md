@@ -374,8 +374,14 @@ review is not a change anybody can trust.
 ```
 
 The directory is walked to any depth, and every `.md` file inside it is a
-specification. Its prose is checked for the introduction-then-goals shape above,
-and its identity — the frontmatter naming its id, kind, status, and what it
+specification, with one exception: a `README.md` is a directory index rather than
+a document stating anything, so neither the shape above nor
+[artifact identity](#artifact-identity-and-metadata) is asked of it, and it is not
+counted as a specification. It is still read into the context, under a heading of
+its own, because what is filed in a directory is worth knowing to whoever is about
+to write the first document into it.
+Everything else has its prose checked for the introduction-then-goals shape
+above, and its identity — the frontmatter naming its id, kind, status, and what it
 supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
 The two are read by different things and reported differently, so a
 specification with a malformed id is still read as intent, and one with no goals
@@ -393,7 +399,10 @@ loading intent in the wrong shape and saying so.
 
 An empty or missing specifications directory is not an error either. The
 conversation says that product intent is not written down, which is a true
-statement about the repository rather than a reason to fail.
+statement about the repository rather than a reason to fail. A directory holding
+nothing but the indexes `yoyo init` wrote is that same directory: an index states
+no intent, so it is not counted as a specification and the conversation still
+says intent is not written down.
 
 The context also states, in so many words, what the directory records of the two
 documents intent is written in: the **brief** saying what the product is and who
@@ -481,6 +490,23 @@ which sits inside the decisions home by default and carries
 [its own identity scheme](#architectural-invariants). A home that does not exist
 is not an error — a project that has not written its designs down yet records no
 design artifacts.
+
+That exemption is what makes the `README.md` the place these directories explain
+themselves in, and `yoyo init` writes one for every home above — the
+specifications directory, the `goals` directory under it, the designs, the
+decision records, and the invariants. Each states three things and nothing else:
+what is filed there, which agent owns it, and whether you may edit one of those
+documents by hand. None of that is policy the file invents. A role that is not
+the owner proposes an amendment and waits, per the ownership table above; your
+own edit is never refused, and what it is is reported — a revision recorded under
+a role that does not own the document is an unauthorized revision every load
+names, and what a change leaves stale downstream is
+[`yoyo stale`](#traceability-references-and-orphans)'s to report. An index that is
+already there is left alone, `--force` included, because it is the project's own
+prose rather than something `init` generated; `yoyo doctor` reports one that is
+missing or has stopped stating the three things, and `yoyo setup` offers to write
+it — asking separately, and defaulting to no, before it replaces one somebody
+wrote.
 
 The metadata is the model the invariants already use, deliberately rather than a
 second scheme beside it: **the file name is the id**, a frontmatter id that
@@ -1091,16 +1117,42 @@ may state is witnessed without its words rather than stored cut in half.
 **The witness covers a goal only from the moment it is written.** An attribution
 made before this existed carries none, so replacing its notes reads as work
 nobody ever attributed and does not fail the audit. `yoyo goals witness` closes
-that gap over a backlog: it records, on every admitted item whose notes state a
-goal and which carries no witness, the goal those notes already state. It writes
-no attribution and decides nothing — the statement is the item's own, copied to
-where a careless writer cannot reach it — and it is worth running once after
-upgrading, and again after any bulk import of work attributed elsewhere.
+that gap: it records, on every work item whose notes state a goal and which
+carries no witness, the goal those notes already state. It writes no attribution
+and decides nothing — the statement is the item's own, copied to where a careless
+writer cannot reach it — and it is worth running once after upgrading, and again
+after any bulk import of work attributed elsewhere. It sweeps every status the
+tracker holds rather than the queue, because the command that destroys an
+attribution reaches a claimed or closed item just as easily, and most of the
+losses on record were on items that had already closed.
+
+**The sweep is wider than the audit, and what a witness buys differs across that
+line.** `attribution` reads the backlog — `open` and `blocked` — so on those a
+witnessed loss is a `lost` state it reports and exits non-zero for. On claimed
+and closed items the sweep also reaches, nothing reports the loss: what the
+witness buys there is recovery, because the statement is kept where replacing
+the notes cannot reach it and a destroyed attribution can be put back from the
+record rather than judged again.
+
+`yoyo goals guard` is the same loss stopped rather than reported. Wired as a
+`PreToolUse` hook on `Bash`, it reads the command an agent session is about to
+run and refuses `bd update <id> --notes`, which replaces an item's notes and
+takes the goal recorded in them with it; a replacement carrying a
+`Goal served:` line through is allowed, because that one destroys nothing. It
+decides from the command line alone and never reads the item, so it checks such a
+line is present and not that it is the item's own — a substitution passes it, and
+the witness rather than the guard is what holds the words that were replaced. The
+harness gives it to every developer run it makes on the Claude Code backend,
+which is the backend that passes the hook; any other agent session is covered
+only by wiring the same command into that session's own hooks. It is passed to
+the provider rather than enforced by the harness, so where the hook does not fire
+the command runs as it did before and nothing reports that it did.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
 yoyo goals attribution   # what each admitted work item says it is for
-yoyo goals witness       # witness the goals already recorded on admitted work
+yoyo goals witness       # witness the goals already recorded on work items
+yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 `attribution` exits non-zero for an item whose attribution is `unresolved` or
@@ -2213,17 +2265,51 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Three more things refuse it. The stopped run has to be really over, terminal with
+Four more things refuse it. The stopped run has to be really over, terminal with
 its blocker standing, read from the run's own record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, or whose replay conflicted, never had a failure returned to its
-developer, so there is no repair loop to re-enter. And the preserved worktree has
+developer, so there is no repair loop to re-enter. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
-item blocked and says so. The intake hold applies for the reason it applies to a
+item blocked and says so. And that worktree has to still hold the change: a
+checkout the harness would call its own and that holds nothing passes the gate
+above and fails this one, and a developer handed the reviewer's findings and an
+empty directory delivers an empty repair or reinvents the change from them, with
+nothing in the run's record afterwards to tell either from a repair that went
+well. The intake hold applies for the reason it applies to a
 re-run: this spends on a provider, and the development manager naming the item is
 not the operator naming it.
+
+**The resumed run asks the same question again**, and blocks rather than
+spending where the answer has changed. That is the enforcement rather than a
+second opinion: it binds every route into a run that continues a change — this
+action, an interrupted process a later invocation picks up, and whatever
+re-entry is built next — because a worktree that lost its change looks exactly
+like a valid one and is caught by nothing else. It is asked of every resume whose
+worktree is supposed to hold a change already, which is two different cases: a
+run picked up inside its repair loop, which carries a failure returned about a
+change it made, and a run picked up at the checks or at the review, which has
+completed a developer attempt and has nothing else for those steps to judge. Only
+the run owed its first attempt is exempt, because an empty worktree is what that
+attempt starts from. The blocker it records names the run's branch as where the
+preserved work is, and says plainly that nothing was developed, checked, or
+reviewed, because the empty diff behind it is not a verdict on the change.
+
+**A fresh run is refused where a repair is owed**, which is the same loss
+arriving by the opposite route: nothing is handed back at all, and a run starts
+clean on an item whose last run stopped with its change preserved. The fresh
+worktree is a perfectly valid one off the target branch, so nothing downstream
+notices; what makes it visible is the stopped run's own record — terminal, its
+blocker standing, a failure returned to its developer, and a branch that still
+carries the change. So `yoyo run` reads that record before it reserves anything,
+and refuses, naming both the repair that would continue the change and the re-run
+that would deliberately start over. The one fresh run of such an item that is
+right is the re-run, and it says so in the record before it starts: triage claims
+it against the stoppage, and a claim naming that run is what lets the fresh run
+through. Nothing is reserved, claimed, or created by the refusal, so carrying out
+either decision afterwards costs the stoppage nothing.
 
 **A repair supersedes the blocker rather than needing somebody to remember to.**
 The run that stopped blocked its item and recorded the blocker on its own state,

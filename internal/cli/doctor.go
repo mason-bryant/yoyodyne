@@ -130,7 +130,8 @@ Usage: yoyo doctor [options]
 
 Check whether this installation can actually run work, and say what would fix it
 where it cannot. It reads the build on PATH against the one running, Git, the
-tracker, the configuration, the deterministic checks, each provider the agents
+tracker, the configuration, the deterministic checks, whether each artifact home
+still says what is filed there and who owns it, each provider the agents
 name -- installed always, and authenticated where the harness has an adapter that
 can ask -- forge access where the project publishes, and, where reporting is on,
 this project's own Slack secrets and the sink that is supposed to be using them.

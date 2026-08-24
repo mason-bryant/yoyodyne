@@ -226,6 +226,16 @@ func (r Reconciler) settle(ctx context.Context, state runstate.State) (Reconcili
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
 		return result, nil
 	}
+	// A run waiting on work its item depends on is not an interrupted run either.
+	// It recorded what it waits for and is owed the rest of the gate once that
+	// work is closed or unlinked, so settling it here would cancel work somebody
+	// only made wait.
+	if pausedForDependency(state) {
+		result := reconciliationOf(state, ActionResumable)
+		result.Detail = fmt.Sprintf("the run is paused because %s waits on unfinished work and can continue once it is closed: %s",
+			state.WorkItemID, state.DependencyPause.Summary())
+		return result, nil
+	}
 	// A run parked because the operator paused all harness activity is not an
 	// interrupted run either, and it is the one where settling it would be
 	// worst: the operator stopped it deliberately and expects to find it where

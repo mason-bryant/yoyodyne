@@ -76,7 +76,10 @@ type Bundle struct {
 	// which the references alone no longer answer: a role that reads its own
 	// documents as well has references whether or not the product records any
 	// intent at all, and "this repository has no brief or goals" is exactly the
-	// thing a caller must still be able to say.
+	// thing a caller must still be able to say. A directory index is carried as
+	// a reference and is not counted here for the same reason — it says what
+	// would be filed in a directory rather than stating any intent, and `yoyo
+	// init` writes one into a specifications directory that is otherwise empty.
 	SpecificationsIncluded int
 }
 
@@ -595,6 +598,7 @@ func renderWorkItem(item beads.WorkItem) string {
 ID: %s
 Title: %s
 Status: %s
+Depends on: %s
 
 ## Description
 
@@ -611,7 +615,56 @@ Status: %s
 ## Notes
 
 %s
-`, item.ID, item.Title, item.Status, emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
+`, item.ID, item.Title, item.Status, renderDependencies(item),
+		emptyFallback(item.Description), emptyFallback(item.Design), emptyFallback(item.AcceptanceCriteria), emptyFallback(item.Notes))
+}
+
+// blocksDependency is the tracker relation that makes one item wait for another.
+const blocksDependency = "blocks"
+
+// renderDependencies states what the item waits on, on the same line whether it
+// waits on anything or not.
+//
+// Saying "nothing" is the half that matters. This context is what both the
+// developer and the reviewer read the item from, and a line that appeared only
+// when there were dependencies would leave them unable to tell an item nothing
+// blocks from an item whose blockers this context happens not to carry. A
+// reviewer judging a change against an item that waits on unfinished work needs
+// to be able to see that it does — a change written as if the work it depends on
+// were settled is judged differently from one written after it was.
+//
+// A dependency whose own item is closed is not something anybody is waiting for,
+// and it is left out rather than listed as satisfied: what this line is for is
+// what is still outstanding.
+// The state each blocker is in is carried beside the identifiers, and so is what
+// waiting means for a reader judging the change. An identifier on its own says
+// an item waits and says nothing a reviewer can act on, which is how a reviewer
+// judging work that was correctly refused for an undecided upstream came to issue
+// findings telling the developer to implement it anyway.
+func renderDependencies(item beads.WorkItem) string {
+	var waiting []string
+	states := make(map[string]string, len(item.Dependencies))
+	for _, dependency := range item.Dependencies {
+		if dependency.Type == blocksDependency && dependency.Status != "closed" {
+			waiting = append(waiting, dependency.ID)
+			states[dependency.ID] = dependency.Status
+		}
+	}
+	if len(waiting) == 0 {
+		return "nothing; no unfinished work blocks this item"
+	}
+	sort.Strings(waiting)
+	described := make([]string, 0, len(waiting))
+	for _, id := range waiting {
+		state := states[id]
+		if strings.TrimSpace(state) == "" {
+			state = "in a state the tracker did not name"
+		}
+		described = append(described, id+" is "+state)
+	}
+	return strings.Join(waiting, ", ") + " (unfinished work this item waits on)" +
+		"\nAs the tracker holds them: " + strings.Join(described, ", ") + "." +
+		"\nWork this item waits on is work that is not settled. A change written as though it were is judged differently from one written after it was, and a change that stopped short because of it may be right to have stopped rather than incomplete."
 }
 
 func emptyFallback(value string) string {

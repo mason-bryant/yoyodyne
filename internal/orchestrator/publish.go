@@ -163,6 +163,70 @@ func (a *activeRun) republishRebase(ctx context.Context, rebase gitworktree.Reba
 	return nil
 }
 
+// settleRemoteTarget settles where the remote target branch stands before the
+// promotion rather than only after it.
+//
+// The check publishIntegration makes against the remote runs once the local
+// target branch has already moved, and nothing moves it back. A run that finds
+// the remote somewhere else there has integrated already: the item closes as
+// integrated, an outstanding publication is recorded, and what is left is a
+// local target the remote does not carry and no fast-forward reconciles — a
+// divergence nothing owns. Asking the same question first is what makes the same
+// movement recoverable, because nothing has been promoted yet and there is still
+// a change to replay.
+//
+// A remote that moved onto work this repository can take on is taken on. The
+// local target is fast-forwarded onto it, which leaves the change written
+// against a commit the target no longer stands at, and the promotion below
+// refuses that as drift exactly as it refuses a target another run moved: the
+// run replays onto where the target went, runs its checks again, and earns a
+// fresh independent verdict. That is what a human push to the target during a
+// run costs, and it is a cost rather than a wedge.
+//
+// A remote that moved somewhere the local branch cannot be brought onto is the
+// divergence only a person can settle, and it stops the run here — with both
+// branch positions named and the worktree and branch preserved — rather than
+// after an item has been closed against it.
+func (a *activeRun) settleRemoteTarget(ctx context.Context) error {
+	if !a.publishing {
+		return nil
+	}
+	// The question asked before the promotion is the one publishIntegration asks
+	// after it, about the target branch as it stands: the remote must be at or
+	// behind it, or carry exactly its content above it. The commit this run was
+	// written against is both sides of it, because a local target that has since
+	// moved away from that commit is drift the promotion itself refuses.
+	standing := gitworktree.Integration{
+		TargetBranch:         a.worktree.TargetBranch,
+		TargetCommit:         a.worktree.BaseCommit,
+		PreviousTargetCommit: a.worktree.BaseCommit,
+	}
+	err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, standing)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
+		return fmt.Errorf("check the remote target branch before promoting: %w", err)
+	}
+	catchup, catchupErr := a.pipeline.Worktrees.CatchUpTarget(ctx, a.worktree.TargetBranch)
+	if catchupErr != nil {
+		return fmt.Errorf("bring %s onto what %s has before promoting: %w",
+			a.worktree.TargetBranch, a.pipeline.Config.Execution.Remote, catchupErr)
+	}
+	// A remote with no such branch is not a divergence but a repository whose
+	// target has never been published, and the publication that follows the
+	// promotion is what puts it there. It reaches here because an absent remote
+	// branch is drift to the check above, and it must not stop a first publication.
+	if catchup.RemoteCommit == "" {
+		return nil
+	}
+	if catchup.Held != "" {
+		return a.blockOnDivergedTarget(catchup)
+	}
+	a.outcome.Catchup = &catchup
+	return nil
+}
+
 // mergeMethod is how the harness asks the forge to merge, and it is a constant
 // rather than a setting because the choice decides what the remote history is.
 // A merge commit is the only method that puts the promoted commit itself on the
@@ -203,12 +267,21 @@ const mergeMethod = publish.MergeCommit
 // The forge's merge commit sits above that and stays on the remote; the local
 // branch is never rewritten to take it on.
 //
-// Nothing here can fail the run. The work is integrated and the authoritative
-// branch already moved, so a publication that did not finish is an outstanding
-// fact for an operator, in the same way an outstanding cleanup is.
-func (a *activeRun) publishIntegration(ctx context.Context) {
+// Almost nothing here can fail the run. The work is integrated and the
+// authoritative branch already moved, so a publication that did not finish is an
+// outstanding fact for an operator, in the same way an outstanding cleanup is.
+//
+// The one exception is the remote target having moved after settleRemoteTarget
+// looked at it and before this asks the forge — the window a check-then-act
+// leaves open, which the promotion lease closes against this machine and against
+// nothing else. That is not an unfinished publication but a divergence: the
+// local target carries a promotion the remote does not, and no fast-forward
+// reconciles the two. Recording it as outstanding and finishing would close the
+// item as integrated against a state nobody owns, so it stops the run instead —
+// which is still before the item closes, because finish runs after this.
+func (a *activeRun) publishIntegration(ctx context.Context) error {
 	if !a.publishing || a.outcome.PullRequest == nil || a.outcome.Integration == nil {
-		return
+		return nil
 	}
 	integration := *a.outcome.Integration
 	published := *a.outcome.PullRequest
@@ -221,14 +294,18 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	if published.HeadCommit != integration.SourceCommit {
 		a.recordPublishFailure(fmt.Errorf("pull request %d carries %s, but the promotion integrated %s; the published branch is not what would merge",
 			published.Number, published.HeadCommit, integration.SourceCommit))
-		return
+		return nil
 	}
 	// A forge asked to merge into a branch that moved would reconcile that
 	// movement itself. The drift check the promotion made locally is therefore
 	// made again here, against the remote, immediately before the merge.
 	if err := a.pipeline.Worktrees.VerifyRemoteTarget(ctx, integration); err != nil {
-		a.recordPublishFailure(fmt.Errorf("check the remote target branch before merging: %w", err))
-		return
+		cause := fmt.Errorf("check the remote target branch before merging: %w", err)
+		a.recordPublishFailure(cause)
+		if errors.Is(err, gitworktree.ErrRemoteTargetDrift) {
+			return a.settlePromotedDivergence(ctx, integration, cause)
+		}
+		return nil
 	}
 	result, err := a.pipeline.Publisher.Merge(ctx, publish.MergeRequest{
 		Number:     published.Number,
@@ -237,7 +314,7 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	})
 	if err != nil {
 		a.recordPublishFailure(err)
-		return
+		return nil
 	}
 	published.MergeMethod = string(mergeMethod)
 	// A queued merge is the ordinary answer from a protected branch: the forge
@@ -254,12 +331,12 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 		if err := a.pipeline.Store.Save(a.state); err != nil {
 			a.recordPublishFailure(fmt.Errorf("record the queued merge: %w", err))
 		}
-		return
+		return nil
 	}
 	merged, err := a.awaitMerge(ctx)
 	if err != nil {
 		a.recordPublishFailure(fmt.Errorf("confirm the pull request merged: %w", err))
-		return
+		return nil
 	}
 	published.State = merged.State
 	published.Merged = merged.Merged
@@ -268,7 +345,7 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	if !merged.Merged {
 		a.recordPublishFailure(fmt.Errorf("pull request %d is still %s after the forge accepted the merge into %s",
 			published.Number, strings.ToLower(nonEmpty(merged.State, "in an unreported state")), integration.TargetBranch))
-		return
+		return nil
 	}
 	// The forge says it merged; this is what its merge actually did to the
 	// branch. The recorded commit is the forge's merge commit, which is the one
@@ -276,7 +353,7 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	remoteTarget, err := a.pipeline.Worktrees.ConfirmRemoteTarget(ctx, integration)
 	if err != nil {
 		a.recordPublishFailure(fmt.Errorf("confirm the merge reached %s: %w", integration.TargetBranch, err))
-		return
+		return nil
 	}
 	published.MergeCommit = remoteTarget
 	// The merge left the remote one commit ahead of the local target, so the
@@ -290,12 +367,48 @@ func (a *activeRun) publishIntegration(ctx context.Context) {
 	// published and merged.
 	if err := a.pipeline.Worktrees.DeleteRemoteBranch(ctx, a.worktree, published.HeadCommit); err != nil {
 		a.recordPublishFailure(fmt.Errorf("delete the merged remote branch: %w", err))
-		return
+		return nil
 	}
 	a.state.UpdatedAt = a.pipeline.clock().Now()
 	if err := a.pipeline.Store.Save(a.state); err != nil {
 		a.recordPublishFailure(fmt.Errorf("record the merged pull request: %w", err))
 	}
+	return nil
+}
+
+// settlePromotedDivergence decides what a remote target that moved after the
+// promotion leaves behind, and it is the residual half of settleRemoteTarget:
+// the same movement, arriving in the window a check-then-act cannot close, with
+// the local target branch already advanced.
+//
+// The promotion cannot be taken back, so the only question left is whether the
+// two branches can still be brought together. A remote that swept the promotion
+// in along the way — a forge merge carrying this commit and somebody else's — is
+// caught up onto and leaves an ordinary outstanding publication: the work is on
+// both branches and only the merge request did not happen. A remote that has
+// gone somewhere the local branch cannot reach is the divergence nothing
+// reconciles, and it stops the run so the item is not closed as integrated
+// against it.
+//
+// A remote with no such branch is neither: it is a target this repository has
+// never published, and the outstanding publication already says so.
+func (a *activeRun) settlePromotedDivergence(ctx context.Context, integration gitworktree.Integration, cause error) error {
+	catchup, err := a.pipeline.Worktrees.CatchUpTarget(ctx, integration.TargetBranch)
+	if err != nil {
+		// Whether the branches can be reconciled is exactly what could not be
+		// established, and a promotion whose remote nobody could look at must not
+		// close an item either.
+		return a.blockOnPromotedDivergence(integration, gitworktree.Catchup{
+			TargetBranch: integration.TargetBranch,
+			LocalCommit:  integration.TargetCommit,
+			Held:         err.Error(),
+		}, cause)
+	}
+	if catchup.RemoteCommit == "" || catchup.Held == "" {
+		a.outcome.Catchup = &catchup
+		return nil
+	}
+	return a.blockOnPromotedDivergence(integration, catchup, cause)
 }
 
 // mergeConfirmationDelays are the waits between asking the forge whether the

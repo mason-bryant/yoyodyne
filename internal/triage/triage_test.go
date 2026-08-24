@@ -245,6 +245,98 @@ func TestARenderedEntrySaysWhatTriageHasAlreadyDecided(t *testing.T) {
 	}
 }
 
+// A grant is more than a count of grants, and the rest of it is what the harness
+// already told whoever recorded the decision: how many rounds it came to, and
+// whether the cap cut it. An entry that carried the count alone disagreed with
+// the sentence the development manager had just been handed.
+func TestARenderedEntrySaysWhatARecordedGrantCameTo(t *testing.T) {
+	t.Parallel()
+
+	// The record left behind by "the grant was cut from 2 round(s) to the 1 the
+	// cap still had room for": one grant, worth one round, cut, committing the
+	// item to the whole of its cap.
+	granted := stoppedRunEntry()
+	granted.Counters.RepairGrants, granted.Counters.RepairGrantsCap = 1, 1
+	granted.Counters.GrantedRounds, granted.Counters.TruncatedGrants = 1, 1
+	granted.Counters.CommittedRounds = 4
+	rendered := granted.Render()
+	for _, want := range []string{
+		"1 of 1 repair grant(s) worth 1 review round(s), 1 of them cut down to the room the cap still had",
+		"4 of 4 are committed by a grant not yet spent",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered entry is missing %q:\n%s", want, rendered)
+		}
+	}
+
+	// A grant given in full says what it was worth and nothing about a cut that
+	// did not happen.
+	full := stoppedRunEntry()
+	full.Counters.RepairGrants, full.Counters.RepairGrantsCap = 1, 2
+	full.Counters.GrantedRounds = 2
+	if rendered := full.Render(); !strings.Contains(rendered, "1 of 2 repair grant(s) worth 2 review round(s);") {
+		t.Fatalf("rendered entry does not say what the grant was worth:\n%s", rendered)
+	}
+	if rendered := full.Render(); strings.Contains(rendered, "cut down") {
+		t.Fatalf("a grant given in full was rendered as one the cap cut:\n%s", rendered)
+	}
+}
+
+// The counts say what has been decided; they do not say what deciding it again
+// would meet. Leaving that to the guard is the round-trip this docket exists to
+// remove: the development manager reads the entry, decides, and is refused by a
+// budget the entry could have shown them.
+func TestARenderedEntrySaysWhatARepeatedDecisionWouldMeet(t *testing.T) {
+	t.Parallel()
+
+	// An item nothing has been granted says nothing about grants: an entry that
+	// announced every untouched budget is one a reader learns to skip.
+	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "repair grant for") {
+		t.Fatalf("an item with no grant recorded was rendered as standing somewhere with them:\n%s", rendered)
+	}
+
+	// Its own budget refuses first, exactly as the guard asks it first.
+	spent := stoppedRunEntry()
+	spent.Counters.RepairGrants, spent.Counters.RepairGrantsCap = 1, 1
+	spent.Counters.GrantedRounds = 1
+	if rendered := spent.Render(); !strings.Contains(rendered,
+		"A further repair grant for yoyodyne-task is refused: 1 of 1 permitted grant(s) are already recorded") {
+		t.Fatalf("rendered entry does not say a further grant is refused:\n%s", rendered)
+	}
+
+	// With its own budget to spare, the round budget is what refuses, and the
+	// figure it refuses against is what the item is committed to.
+	committed := stoppedRunEntry()
+	committed.Counters.RepairGrants, committed.Counters.RepairGrantsCap = 1, 2
+	committed.Counters.GrantedRounds, committed.Counters.CommittedRounds = 1, 4
+	if rendered := committed.Render(); !strings.Contains(rendered,
+		"refused by the review round budget: 4 of 4 round(s) are spent or committed") {
+		t.Fatalf("rendered entry does not say the round budget refuses a further grant:\n%s", rendered)
+	}
+
+	// A grant with room left and rounds unspent is a decision standing rather
+	// than one to take again.
+	standing := stoppedRunEntry()
+	standing.Counters.ReviewRoundsCap = 6
+	standing.Counters.RepairGrants, standing.Counters.RepairGrantsCap = 1, 2
+	standing.Counters.GrantedRounds, standing.Counters.CommittedRounds = 2, 5
+	if rendered := standing.Render(); !strings.Contains(rendered,
+		"is recorded and its rounds are not spent, so this stoppage may be handed back on the decision that stands") {
+		t.Fatalf("rendered entry does not say the grant still stands:\n%s", rendered)
+	}
+
+	// The re-arms are the third budget, and silent until one is spent.
+	rearmed := stoppedRunEntry()
+	rearmed.Counters.MergeRearms, rearmed.Counters.MergeRearmsCap = 2, 2
+	if rendered := rearmed.Render(); !strings.Contains(rendered,
+		"A further merge re-arm for yoyodyne-task is refused: 2 of 2 permitted re-arm(s) are already recorded") {
+		t.Fatalf("rendered entry does not say a further re-arm is refused:\n%s", rendered)
+	}
+	if rendered := stoppedRunEntry().Render(); strings.Contains(rendered, "merge re-arm for") {
+		t.Fatalf("an item with no re-arm recorded was rendered as standing somewhere with them:\n%s", rendered)
+	}
+}
+
 // A triage record that could not be read is stated. Rendering it as an item with
 // nothing decided about it is the one reading that turns an unreadable record
 // into a decision taken twice.
