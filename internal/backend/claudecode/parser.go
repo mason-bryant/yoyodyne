@@ -26,11 +26,13 @@ type streamParser struct {
 	reply     func(string)
 	result    backend.RunResult
 	sawResult bool
-	// decidedTerminal is the reason the terminal result named, kept apart from
-	// the result's own stop reason because a duplicate terminal replaces that
-	// reason with the harness's name for the anomaly. Without it a third terminal
-	// would record the anomaly as the ending the first one gave.
-	decidedTerminal string
+	// duplicateTerminal is what to say about an invocation the provider ended
+	// more than once, and empty when it ended once. It is held rather than
+	// applied because what a duplicate asks the caller for depends on the whole
+	// stream: a refusal can be reported after it, and a refusal already carries
+	// its own answer. Result decides between them when there is nothing left to
+	// arrive.
+	duplicateTerminal string
 }
 
 type streamEnvelope struct {
@@ -539,7 +541,6 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	if p.result.StopReason == "" {
 		p.result.StopReason = envelope.StopReason
 	}
-	p.decidedTerminal = p.result.StopReason
 	p.result.ServerOverload = transientServerOverload(p.result)
 	// An overload is the transient death the harness already has a wait for, so
 	// it is never also reported as one to relaunch on. Deciding it here rather
@@ -566,23 +567,24 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 // provider ended twice. Neither of the reasons the provider gave can be it:
 // which of the two endings was this invocation's is precisely what a second
 // terminal makes unanswerable, so the recorded reason says that rather than
-// picking one. Both are kept beside it, in the anomaly event and in the
-// relaunch's detail.
+// picking one. Both of the provider's own reasons are kept beside it in the
+// anomaly event, whichever answer the invocation ends up carrying.
 const duplicateTerminalReason = "duplicate_terminal_result"
 
-// recordDuplicateTerminal answers a second terminal result the way every other
-// provider death that judged nothing is answered: with a relaunch against the
-// run's own budget, in the same worktree and the same session.
+// recordDuplicateTerminal records a second terminal result and what it makes of
+// the invocation. The answer it leads to is a relaunch against the run's own
+// budget, in the same worktree and the same session — the way every other
+// provider death that judged nothing is answered — but that is settled in
+// Result rather than here, because a refusal reported later carries an answer
+// of its own.
 //
-// The decided result still stands — nothing here reads a field off the second
-// envelope, so the guarded invariant that a duplicate cannot replace the first
+// The decided result still stands — nothing off the second envelope is written
+// into it, so the guarded invariant that a duplicate cannot replace the first
 // terminal holds — but it stops being trusted as the invocation's outcome. The
 // nested-agent case above is why: a subagent completion that carries a
 // terminal's marks is read as this invocation's terminal, and the real terminal
 // then arrives as the duplicate, so the result already recorded may be a
-// subagent's rather than the run's. Marking the invocation failed is what turns
-// that into another attempt instead of a run that publishes somebody else's
-// answer.
+// subagent's rather than the run's.
 //
 // This used to fail the stream, which failed the run. Run run-e2b8d016,
 // developing yoyodyne-ifd.117.1 on 2026-08-23, died that way mid-development and
@@ -611,20 +613,12 @@ func (p *streamParser) recordDuplicateTerminal(envelope streamEnvelope) error {
 	}); err != nil {
 		return err
 	}
-	p.result.IsError = true
-	p.result.StopReason = duplicateTerminalReason
-	// An overload is the transient death the harness already has a wait for, and
-	// the two are never reported together, so a duplicate arriving after one
-	// leaves that wait to answer the invocation rather than adding a second
-	// answer beside it. This is the same mutual exclusivity parseResult
-	// constructs, kept here for the same reason: by construction rather than by
-	// each answer remembering the other.
-	if p.result.ServerOverload == nil {
-		p.result.TransientFailure = &backend.TransientFailure{
-			Detail: fmt.Sprintf("the provider ended this invocation twice, first with %s and again with %s",
-				terminalReasonName(p.decidedTerminal), terminalReasonName(duplicate)),
-		}
-	}
+	// The decided terminal's own reason is read off the result rather than kept
+	// beside it, which it can be because nothing here writes to the result: a
+	// third terminal names the ending the first one gave, not the anomaly the
+	// second one caused.
+	p.duplicateTerminal = fmt.Sprintf("the provider ended this invocation twice, first with %s and again with %s",
+		terminalReasonName(p.result.StopReason), terminalReasonName(duplicate))
 	return nil
 }
 
@@ -653,8 +647,34 @@ func (p *streamParser) emit(eventType execution.EventType, payload any) error {
 	return nil
 }
 
+// Result is the invocation's own answer, decided once the stream has ended.
+//
+// Everything but the duplicate terminal is settled as it arrives. That one is
+// not, because the two answers it must not stand beside are both still moving
+// while the stream runs: a usage limit is re-reported as it changes, and a
+// serving report supersedes an exhausted one, so which refusals this invocation
+// is carrying is a fact about the whole stream rather than about the moment the
+// duplicate showed up. Deciding here is what makes the exclusivity a
+// construction instead of a race between two envelopes.
+//
+// An exhausted limit and an overload are the refusals the harness answers with a
+// wait, and a wait costs a relaunch nothing: it reissues into the same worktree
+// and the same session the relaunch would have continued, without spending an
+// attempt on a provider that has already said it will not serve one. So a
+// duplicate that arrives beside either of them leaves the answer to it, and adds
+// only what it alone knows — that this invocation is not to be trusted to have
+// produced one.
 func (p *streamParser) Result() backend.RunResult {
-	return p.result
+	result := p.result
+	if p.duplicateTerminal == "" {
+		return result
+	}
+	result.IsError = true
+	result.StopReason = duplicateTerminalReason
+	if result.UsageLimit == nil && result.ServerOverload == nil {
+		result.TransientFailure = &backend.TransientFailure{Detail: p.duplicateTerminal}
+	}
+	return result
 }
 
 func (p *streamParser) SawResult() bool {

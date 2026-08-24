@@ -311,9 +311,15 @@ func TestRunHonorsTheParentTerminalWhenANestedAgentFinishesFirst(t *testing.T) {
 // deliberately not retained (see Backend.Run), and the parse error ended the
 // invocation before anything past the first terminal reached the event log, so
 // what the record holds of the duplicate is its existence. It is therefore
-// written in the shape a genuine terminal has, which is the only shape that
-// reaches this path at all: an envelope carrying neither a terminal reason nor
-// result text is a nested agent's and never counts as a terminal.
+// written in the shape a genuine terminal has.
+//
+// That is not the only shape that reaches this path. What the guard passes on is
+// any result envelope after the first that carries a terminal reason or result
+// text — one with neither is a nested agent's and is recorded as stream noise
+// before the guard sees it — so a subagent whose completion carries result text
+// reaches it too, and spends one relaunch on an invocation that had in fact
+// finished. That is the same trade the nested-agent discrimination makes, with a
+// consequence one relaunch cheaper than the one it replaces: the run used to end.
 func duplicateTerminalStream() string {
 	terminal := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"Reconciled the disposition table.","total_cost_usd":7.5,"usage":{"input_tokens":10},"terminal_reason":"completed"}`
 	return strings.Join([]string{
@@ -420,6 +426,71 @@ func TestRunLeavesADuplicateTerminalAfterAnOverloadToTheWait(t *testing.T) {
 	}
 	if result.TransientFailure != nil {
 		t.Fatalf("an overload was also reported as a transient death: %#v", result.TransientFailure)
+	}
+}
+
+// An exhausted limit is the other refusal the harness answers with a wait, and
+// unlike an overload it is still moving while the stream runs: the provider
+// re-reports as the limit changes, and a serving report supersedes an exhausted
+// one. Which answer the invocation carries is therefore decided from the whole
+// stream rather than from the order two envelopes happened to arrive in.
+func TestRunLeavesADuplicateTerminalBesideAnExhaustedLimitToTheWait(t *testing.T) {
+	t.Parallel()
+
+	const exhausted = `{"status":"rejected","resetsAt":1755300000,"rateLimitType":"five_hour"}`
+	const duplicate = `{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"terminal_reason":"usage_limit","result":"limit reached","usage":{}}` + "\n"
+	const lifted = `{"type":"rate_limit_event","session_id":"session-1","rate_limit_info":{"status":"allowed","rateLimitType":"five_hour"}}` + "\n"
+
+	for _, testCase := range []struct {
+		name     string
+		stream   string
+		wantWait bool
+	}{
+		{
+			// The account will not serve another attempt, so relaunching into it
+			// would spend the run's budget on invocations the provider has already
+			// declined. The wait reissues into the same worktree and the same
+			// session the relaunch would have continued, and costs no attempt.
+			name:     "a limit still refusing when the stream ends",
+			stream:   usageLimitStream(exhausted) + duplicate,
+			wantWait: true,
+		},
+		{
+			// Nothing is left to wait out, so the duplicate is answered the way it
+			// is answered on its own. Deciding at the end is what makes this
+			// independent of the order the two arrived in.
+			name:     "a limit that lifted after the duplicate arrived",
+			stream:   usageLimitStream(exhausted) + duplicate + lifted,
+			wantWait: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			result, _ := runUsageLimitStream(t, testCase.stream)
+			// Whichever answer it carries, the invocation is not trusted to have
+			// produced one of its own.
+			if !result.IsError || result.StopReason != duplicateTerminalReason {
+				t.Fatalf("Run() result = %#v, want a failed invocation stopped by %q", result, duplicateTerminalReason)
+			}
+			if testCase.wantWait {
+				if result.UsageLimit == nil {
+					t.Fatalf("Run() lost the exhausted limit behind the duplicate: %#v", result)
+				}
+				// Two answers to one invocation is one answer too many: which one a
+				// run took would depend on the order the caller read them.
+				if result.TransientFailure != nil {
+					t.Fatalf("a duplicate beside an exhausted limit was also reported as a relaunch: %#v", result.TransientFailure)
+				}
+				return
+			}
+			if result.UsageLimit != nil {
+				t.Fatalf("a limit that had lifted was still reported as refusing: %#v", result.UsageLimit)
+			}
+			if result.TransientFailure == nil {
+				t.Fatalf("Run() reported no transient failure, so nothing would relaunch: %#v", result)
+			}
+		})
 	}
 }
 
