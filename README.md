@@ -3465,6 +3465,22 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+**And one thing does not wait to be read.** A channel line is still something you
+find when you look, and the one condition under which nobody looks is the harness
+having stopped. So three states are sent as direct messages to every human the
+project granted `direct-work`: the brake tripped, capacity gone past the point of
+waiting it out, and a directive nobody has settled. Each says what stopped, why it
+is yours, whose move follows, and where the record is, with the options and a
+recommendation in the thread under it — and **the reply in that thread is the
+decision**, recorded against the option it names in the same record `yoyo
+directive record` writes. Where the ask is about a directive nobody has settled,
+answering settles that one, so the work it stopped picks up and the ask does not
+come back. A single blocked item is deliberately not one of these: it has an
+owner, and messaging everybody about each of those is how a channel stops being
+read. It needs the app's `im:write` scope, and that scope is the tier's only
+switch: without it the channel reports exactly as it does with it, and this one
+tier stays quiet and says so once.
+
 [`docs/slack/setup.md`](docs/slack/setup.md) takes you from an empty workspace to
 live reporting, and the app it asks you to create is the checked-in manifest
 beside it rather than a list of checkboxes to work through by hand.

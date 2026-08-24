@@ -194,6 +194,8 @@ var harnessVoice = voice{
 		KindWatchResumed:        "The watch session is choosing work again: {why}",
 		KindWatchStopped:        "The watch session ended: {why}",
 		KindLineWaiting:         "Nothing is being chosen on this product: {stopped}, for {age} now, with {ready} ready to pull.",
+		KindEscalationRaised:    "{stopped}. This is yours to decide and nobody else's: {why} The whole of it is in {record}.",
+		KindEscalationOptions:   "It has stood for {age}. The choice is between:{options}\nRecommended: {recommend}\nReply in this thread with the letter. The reply is the decision, and it is recorded against the option it names.",
 		KindCatchUpDigest:       "{events} were recorded here over {age} while nothing was posting them. Every one of them is in the durable record.",
 	},
 }
@@ -243,6 +245,8 @@ var developerVoice = voice{
 		KindWatchResumed:        "Work is being handed out again, and I'll take what I'm given: {why}",
 		KindWatchStopped:        "Nothing more will be handed to me until somebody starts it again: {why}",
 		KindLineWaiting:         "Nothing has been handed to me for {age}: {stopped}, with {ready} in the queue that could have been.",
+		KindEscalationRaised:    "Everything I could be doing is stopped, and starting it again is not mine: {stopped}. {why} What I would go and read is {record}.",
+		KindEscalationOptions:   "That is {age} of my not building anything. What can actually be decided:{options}\nI would take {recommend}\nAnswer here with the letter and the change picks up from where it stopped.",
 		KindCatchUpDigest:       "There are {events} here from {age} nobody was watching. I'm not replaying the work message by message; the record kept all of it.",
 	},
 }
@@ -292,6 +296,8 @@ var reviewerVoice = voice{
 		KindWatchResumed:        "Work is starting again, so changes will come back to me: {why}",
 		KindWatchStopped:        "No more changes will arrive from this session; what I judged already stands: {why}",
 		KindLineWaiting:         "No change has come to me for a verdict in {age}: {stopped}, with {ready} waiting behind it.",
+		KindEscalationRaised:    "Nothing is coming to me for a verdict, and no verdict of mine would clear it: {stopped}. {why} The record behind it is {record}.",
+		KindEscalationOptions:   "{age} of it now. The ways out, as the record reads:{options}\nOn the evidence: {recommend}\nA letter in this thread settles it, and I judge whatever comes back afterwards.",
 		KindCatchUpDigest:       "{events} went unreported here across {age}. I judge changes rather than backlogs of messages, and the record holds each of them.",
 	},
 }
@@ -340,6 +346,8 @@ var developmentManagerVoice = voice{
 		KindWatchResumed:        "I'm pulling from the top of the queue again: {why}",
 		KindWatchStopped:        "The queue stops being pulled from here; what is in it stays in it: {why}",
 		KindLineWaiting:         "The queue has not been pulled from for {age}: {stopped}, with {ready} pullable right now.",
+		KindEscalationRaised:    "The queue has stopped being pulled from and I cannot restart it: {stopped}. {why} What it is written in is {record}.",
+		KindEscalationOptions:   "{age} without a pull. What there is to decide:{options}\nMy call would be {recommend}\nReply with the letter here and I queue from whatever it settles.",
 		KindCatchUpDigest:       "{events} piled up here over {age} with nothing posting them. The work moved regardless, and the record is the account of it.",
 	},
 }
@@ -389,6 +397,8 @@ var productManagerVoice = voice{
 		KindWatchResumed:        "Work is being chosen again, and what I admit is what gets spent on: {why}",
 		KindWatchStopped:        "Nothing further is being chosen or spent, and the backlog is untouched by that: {why}",
 		KindLineWaiting:         "Nothing has been spent on this product for {age}: {stopped}, with {ready} admitted and ready to be worked on.",
+		KindEscalationRaised:    "Nothing is being spent on this product and only you can change that: {stopped}. {why} The whole of it is in {record}.",
+		KindEscalationOptions:   "It has stood {age}. In plain terms, what you can do:{options}\nWhat I would recommend: {recommend}\nThe letter you reply with here is the decision, and it is recorded as one rather than as a message about one.",
 		KindCatchUpDigest:       "{events} accumulated here over {age} that nobody read as they happened. What they add up to is in the record, rather than in a scroll of replays.",
 	},
 }
@@ -438,6 +448,8 @@ var architectVoice = voice{
 		KindWatchResumed:        "Selection resumes where it left off, from a queue read fresh rather than remembered: {why}",
 		KindWatchStopped:        "The selection loop is closed; every run it started was waited out rather than abandoned: {why}",
 		KindLineWaiting:         "Selection has chosen nothing for {age}: {stopped}, with {ready} the tracker calls ready behind it. Quiet nobody chose is the failure mode this exists to say out loud.",
+		KindEscalationRaised:    "The system has stopped at a boundary no role may cross: {stopped}. {why} It is recorded in {record}.",
+		KindEscalationOptions:   "{age} at that boundary. The decisions available:{options}\nThe one the design supports: {recommend}\nReply with its letter here; the answer becomes the record rather than a message about one.",
 		KindCatchUpDigest:       "{events} went unsaid here over {age}. A surface that replayed all of them would carry less than this line does; the record is the full account either way.",
 	},
 }
@@ -544,7 +556,13 @@ var nextMoves = map[Kind]string{
 	KindWatchResumed:   "the harness's — work is being chosen again.",
 	KindWatchStopped:   "the operator's — nothing more is chosen until a session is started again.",
 	KindLineWaiting:    "the operator's — this stands until somebody clears what stopped it.",
-	KindCatchUpDigest:  "nobody's — the record holds all of it, and the thread carries on from here.",
+	// The one pair whose answer is the message itself. Naming the move is not a
+	// formality here: an escalation is delivered to a person rather than found by
+	// one, so the clause is what says the harness is not going to resolve this
+	// while they wait.
+	KindEscalationRaised:  "the operator's — nothing here moves until somebody decides it, and no role may decide it for them.",
+	KindEscalationOptions: "the operator's — the reply in this thread is the decision.",
+	KindCatchUpDigest:     "nobody's — the record holds all of it, and the thread carries on from here.",
 }
 
 // directiveInForceMove is whose move follows a directive that stopped nothing.
@@ -721,6 +739,9 @@ func (e Event) fields(topic Topic) map[string]string {
 		"priority":  priorityOf(detail),
 		"executor":  stated(carrierOf(detail.Executor), "something the record does not name"),
 		"stopped":   stated(detail.Stopped, "nothing the record names has stopped it"),
+		"record":    stated(detail.Record, "the durable records under the state root"),
+		"options":   optionsOf(detail.Options),
+		"recommend": stated(detail.Recommendation, "nothing the record can recommend on its own"),
 		"age":       ageOf(detail.Since, e.At),
 		"ready":     countOf(detail.Ready, "item", "items", "a number of items the record does not carry"),
 		"events":    countOf(detail.Accumulated, "event", "events", "a number of events the record does not carry"),
@@ -884,6 +905,66 @@ func effectOf(detail Detail) string {
 		return "the work it affects waits until this is settled: " + unresolved
 	}
 	return "it is in force from now, and nothing waits on it"
+}
+
+// The letters an escalation's options are offered under, and the most one may
+// offer. A letter is not decoration: the reply that answers an escalation names
+// one, and what is recorded is which option it named, so the lettering is done
+// here — beside the text it labels — rather than by whatever derived the
+// options. A surface that lettered them for itself would be a surface that could
+// record a decision the operator did not make.
+//
+// Six is the bound because these are read on a phone by somebody who is being
+// interrupted. An ask that needs more than six is an ask that has not been
+// decided down to a question yet.
+const (
+	optionLetters = "abcdef"
+	MaxOptions    = len(optionLetters)
+)
+
+// optionsOf lays out the choice an escalation offers: one option to a line,
+// each under the letter a reply names it by.
+//
+// An option the record left empty is said as an absence in its own place rather
+// than dropped, because dropping it would shift every letter after it — and the
+// letters are what the decision is recorded against.
+func optionsOf(options []Option) string {
+	if len(options) == 0 {
+		return " nothing the record offers to choose between"
+	}
+	var laid strings.Builder
+	for index, option := range options {
+		if index >= MaxOptions {
+			break
+		}
+		fmt.Fprintf(&laid, "\n(%s) %s", OptionLetter(index), stated(option.Text, "an option the record does not carry"))
+	}
+	return laid.String()
+}
+
+// OptionLetter is the letter one option is offered under, empty for a position
+// past the bound.
+func OptionLetter(index int) string {
+	if index < 0 || index >= MaxOptions {
+		return ""
+	}
+	return optionLetters[index : index+1]
+}
+
+// OptionAt is the option one letter names, reporting whether it names one at
+// all. It is the other half of the lettering, so a decision made from a reply is
+// made against exactly the option the message offered under that letter — both
+// the words it is recorded under and what choosing it does.
+func OptionAt(options []Option, letter string) (Option, bool) {
+	wanted := strings.ToLower(strings.TrimSpace(letter))
+	for index := range options {
+		if index < MaxOptions && OptionLetter(index) == wanted {
+			chosen := options[index]
+			chosen.Text = strings.TrimSpace(chosen.Text)
+			return chosen, true
+		}
+	}
+	return Option{}, false
 }
 
 // outcomeOf says how an exchange ended. Closing unresolved at the round cap is

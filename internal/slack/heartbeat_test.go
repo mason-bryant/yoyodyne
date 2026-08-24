@@ -23,18 +23,20 @@ func TestAHeldLineWithReadyWorkSaysSoAgainWhileItStands(t *testing.T) {
 	harness.watched(t, runstate.WatchStopped, "the session spent the budget it was given", moment)
 	harness.hold(t, "the harness held intake after runs kept blocking", moment)
 
-	// The first sighting arms the clock and says nothing: the hold said itself
-	// when it was placed, and repeating it a poll later would be the sink saying
-	// what the channel already has.
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	// The first sighting arms the channel's clock and says nothing there: the hold
+	// said itself when it was placed, and repeating it a poll later would be the
+	// sink saying what the channel already has. The push half beside it goes at
+	// once, because nothing else is going to reach the operator at all.
+	cursors := harness.poll(t, harness.start(),
+		notify.KindWatchStopped, notify.KindIntakeHeld, notify.KindEscalationRaised)
 	harness.now = harness.now.Add(59 * time.Minute)
 	cursors = harness.poll(t, cursors)
 
 	harness.now = harness.now.Add(2 * time.Minute)
-	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting, notify.KindEscalationRaised)
 	// And again the hour after that, for as long as it stands.
 	harness.now = harness.now.Add(time.Hour)
-	harness.poll(t, cursors, notify.KindLineWaiting)
+	harness.poll(t, cursors, notify.KindLineWaiting, notify.KindEscalationRaised)
 }
 
 // What it says is what somebody woken by it has to act on: which state, how long
@@ -48,7 +50,8 @@ func TestTheHeartbeatNamesTheStateItsAgeAndWhatIsWaiting(t *testing.T) {
 	held := harness.now
 	harness.hold(t, "reordering the backlog first", held)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStopped, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(),
+		notify.KindWatchStopped, notify.KindIntakeHeld, notify.KindEscalationRaised)
 	harness.now = held.Add(10 * time.Hour)
 	said := harness.say(t, cursors, notify.KindLineWaiting)
 	for _, fact := range []string{"intake is held", "reordering the backlog first", "10 hours", "4 items"} {
@@ -69,9 +72,10 @@ func TestTheHeartbeatStopsWhenTheStateClears(t *testing.T) {
 	harness.watched(t, runstate.WatchWatching, "watching the backlog until stopped", moment)
 	harness.hold(t, "looking at something first", moment)
 
-	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted, notify.KindIntakeHeld)
+	cursors := harness.poll(t, harness.start(),
+		notify.KindWatchStarted, notify.KindIntakeHeld, notify.KindEscalationRaised)
 	harness.now = harness.now.Add(time.Hour)
-	cursors = harness.poll(t, cursors, notify.KindLineWaiting)
+	cursors = harness.poll(t, cursors, notify.KindLineWaiting, notify.KindEscalationRaised)
 
 	if _, _, err := harness.intake.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
@@ -175,11 +179,11 @@ func TestANewStateIsArmedRatherThanInheritingTheLastOnesClock(t *testing.T) {
 
 	// The operator holds intake, which is now what has stopped the line.
 	harness.hold(t, "looking at the queue", harness.now)
-	cursors = harness.poll(t, cursors, notify.KindIntakeHeld)
+	cursors = harness.poll(t, cursors, notify.KindIntakeHeld, notify.KindEscalationRaised)
 	harness.now = harness.now.Add(30 * time.Minute)
 	cursors = harness.poll(t, cursors)
 	harness.now = harness.now.Add(31 * time.Minute)
-	harness.poll(t, cursors, notify.KindLineWaiting)
+	harness.poll(t, cursors, notify.KindLineWaiting, notify.KindEscalationRaised)
 }
 
 // One log holds every session a product has had, and nothing stops two running

@@ -1125,6 +1125,14 @@ type recordedPosts struct {
 	// transient refusal is retried inside the call.
 	allow int
 	count int
+	// opens is every member a direct-message conversation was asked for, in
+	// order, and refuseOpen is the Slack error every one of those is refused
+	// with — an app installed before the manifest asked for `im:write`, which is
+	// also the configuration the setup document offers to anybody who would
+	// rather not be messaged.
+	opens       []string
+	refuseOpen  string
+	directPosts []postRequest
 }
 
 func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request) {
@@ -1137,6 +1145,20 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
+	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; method == "conversations.open" {
+		var opened directRequest
+		if err := json.Unmarshal(body, &opened); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseOpen != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseOpen})
+			return
+		}
+		r.opens = append(r.opens, opened.Users)
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": "D" + opened.Users}})
+		return
+	}
 	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
 		var reaction reactionRequest
 		if err := json.Unmarshal(body, &reaction); err != nil {
@@ -1185,6 +1207,9 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	r.requests = append(r.requests, decoded)
+	if strings.HasPrefix(decoded.Channel, "D") {
+		r.directPosts = append(r.directPosts, decoded)
+	}
 	ts := "1755.000" + strconv.Itoa(r.count)
 	r.timestamps = append(r.timestamps, ts)
 	writeJSON(writer, map[string]any{"ok": true, "ts": ts})

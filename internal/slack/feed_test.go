@@ -410,7 +410,9 @@ func TestAHoldIsSaidWhenItIsPlacedAndAgainWhenItIsLifted(t *testing.T) {
 	if _, err := harness.intake.Hold("reordering the backlog first", moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld)
+	// The hold is the brake, so it is also one of the three states the operators
+	// are told about directly rather than left to find.
+	cursors := harness.poll(t, harness.start(), notify.KindIntakeHeld, notify.KindEscalationRaised)
 	// Held twice is the same hold, and it is said once.
 	cursors = harness.poll(t, cursors)
 
@@ -436,7 +438,7 @@ func TestTheOperatorHoldIsSaidSeparatelyFromTheIntakeHold(t *testing.T) {
 	if _, err := harness.holds.Hold(moment); err != nil {
 		t.Fatalf("Hold() error = %v", err)
 	}
-	cursors := harness.poll(t, harness.start(), notify.KindHoldPlaced)
+	cursors := harness.poll(t, harness.start(), notify.KindHoldPlaced, notify.KindEscalationRaised)
 
 	if _, _, err := harness.holds.Release(); err != nil {
 		t.Fatalf("Release() error = %v", err)
@@ -459,8 +461,9 @@ func TestWhatBecomesOfADirectiveSaidInAThreadIsSaidInThatThread(t *testing.T) {
 	recorded := harness.directive(t, "yoyodyne-ifd.68.3", member, askTS)
 
 	// Nothing has become of it yet. The thread already carries what was recorded,
-	// and a directive nobody has settled is not news a second time.
-	cursors := harness.poll(t, harness.start())
+	// and a directive nobody has settled is not news a second time — but it is one
+	// nobody but the operator can settle, so they are told directly.
+	cursors := harness.poll(t, harness.start(), notify.KindEscalationRaised)
 
 	if _, err := harness.directives.Resolve(recorded.ID, "the second one, and the design says so", moment); err != nil {
 		t.Fatalf("Resolve() error = %v", err)

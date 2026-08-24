@@ -130,6 +130,20 @@ const (
 	// is still true hours later. Silence has to mean nothing to do, so a state
 	// that means waiting-on-you says so periodically until it clears.
 	KindLineWaiting Kind = "line.waiting"
+	// The whole system stopped on a person, and the decision that lifts it. They
+	// are two kinds because they are two messages: the first is the alarm — what
+	// stopped, why it is the operator's and nobody else's, and where the whole of
+	// it is — and the second is the ask, which carries the context and the
+	// enumerated options underneath it.
+	//
+	// They are the one pair here that is pushed rather than posted. Every other
+	// kind is something a reader finds by looking at a channel, which is the right
+	// shape for a narrative and the wrong shape for the one condition under which
+	// nobody is going to look: the line has stopped and it stays stopped until a
+	// human decides something. So these go to the operators themselves, and the
+	// reply that answers one is the decision rather than a message about it.
+	KindEscalationRaised  Kind = "escalation.raised"
+	KindEscalationOptions Kind = "escalation.options"
 	// What one topic gathered while nothing was posting it. Every kind above is
 	// something the record says happened; this one is what a surface does with a
 	// backlog it cannot say one message at a time — a long gap replayed in full
@@ -184,6 +198,8 @@ func Kinds() []Kind {
 		KindWatchResumed,
 		KindWatchStopped,
 		KindLineWaiting,
+		KindEscalationRaised,
+		KindEscalationOptions,
 		KindCatchUpDigest,
 	}
 }
@@ -204,7 +220,7 @@ func (k Kind) Valid() bool {
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
 		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
-		KindLineWaiting, KindCatchUpDigest:
+		KindLineWaiting, KindEscalationRaised, KindEscalationOptions, KindCatchUpDigest:
 		return true
 	default:
 		return false
@@ -547,9 +563,33 @@ type Detail struct {
 	// Since is read a second time by KindCatchUpDigest, where it is the first of
 	// the events the digest stands for: the same subtraction against the event's
 	// own moment says how much of a gap was digested away.
+	//
+	// Stopped and Since are read a third time by the two escalation kinds, where
+	// they are the blocked outcome and how long it has stood. It is deliberately
+	// the same pair the line's own state carries: the states that reach an
+	// operator directly are the states the channel already describes, and two
+	// fields for one fact would be two chances to describe it differently.
 	Stopped string    `json:"stopped,omitempty"`
 	Since   time.Time `json:"since,omitempty"`
 	Ready   int       `json:"ready,omitempty"`
+	// Options is what the operator may choose between, in nontechnical terms and
+	// in the order they were offered, read by KindEscalationOptions. It is the
+	// governed escalation shape's own list rather than prose about one, because
+	// the answer is recorded against which of these was chosen: a decision nobody
+	// can name is a decision nobody can act on afterwards.
+	Options []Option `json:"options,omitempty"`
+	// Recommendation is which option the record supports and why, read by
+	// KindEscalationOptions. The escalation shape requires one — an operator asked
+	// to decide without being told what the harness would do is being asked to do
+	// the harness's work — and it is a recommendation rather than an act, so it
+	// never narrows what may be chosen.
+	Recommendation string `json:"recommendation,omitempty"`
+	// Record is where the whole of a stopped state is, in the words a reader would
+	// use to go and find it, read by KindEscalationRaised. It is prose rather than
+	// an identifier because the three states that reach an operator directly are
+	// held in three different places, and a reference line naming none of them
+	// would leave the alarm as the only account there is.
+	Record string `json:"record,omitempty"`
 	// Accumulated is how many events one topic gathered while nothing was posting
 	// them, read by KindCatchUpDigest. It is the whole of what the digest claims:
 	// how much there is, and therefore how much of the thread's narrative is in
@@ -561,6 +601,25 @@ type Detail struct {
 	// nothing, read by KindDirectiveRefused. An operator who holds in a hurry
 	// owes nobody an explanation, so absence is ordinary.
 	Reason string `json:"reason,omitempty"`
+}
+
+// Option is one thing an escalation offers to decide, and what choosing it does.
+//
+// The two halves are one type because an option that says one thing and does
+// another is the failure this exists to prevent: an ask that offered to settle
+// something the answer could not settle would leave the operator believing they
+// had ended a state that goes on interrupting them. So what an option does is
+// carried beside the words that offer it, and the surface that reads the answer
+// does what the option said rather than what it can most easily do.
+type Option struct {
+	// Text is what the option says, in the terms somebody who is not reading the
+	// code can choose between.
+	Text string `json:"text"`
+	// Settles is the identifier of the directive that choosing this option ends.
+	// It is empty for an option that ends nothing on its own — which is most of
+	// them, because most of what stops the harness is ended by a person doing
+	// something the harness may not do for them.
+	Settles string `json:"settles,omitempty"`
 }
 
 // Event is one reportable thing the record says happened. It carries no words of
