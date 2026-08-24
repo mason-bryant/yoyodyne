@@ -19,15 +19,102 @@ import (
 	"time"
 )
 
+// RunOutcome is what became of a run, in the fixed vocabulary every listing
+// says it in. It exists because the durable status alone answers a different
+// question from the one a listing is read for: "failed" is accurate about the
+// attempt and says nothing about the work, so a run whose change is preserved
+// and whose item is back with a person printed the same word as one that was
+// cancelled and one that broke with nothing to show for it.
+//
+// The vocabulary is small and closed on purpose. A word per failure message
+// would be a vocabulary nobody can learn, and the whole point of these is that a
+// reader who has seen them once knows what the next line means without reading
+// the reason under it.
+type RunOutcome string
+
+const (
+	// OutcomeSucceeded is the run whose work landed.
+	OutcomeSucceeded RunOutcome = "succeeded"
+	// OutcomeStopped is the run that ended on a durable blocker: the item carries
+	// it, a person decides what happens next, and nothing about the change was
+	// discarded. Every stoppage the harness hands to somebody lands here — an
+	// unrepaired review, a check that kept failing, refused paths, a replay the
+	// target branch outran, a provider that would not carry the run — because what
+	// they have in common is the fact a reader is asking about: the work is still
+	// there and it is waiting on a decision. Which of them it was is the reason
+	// printed under the run and the phase printed beside this word.
+	OutcomeStopped RunOutcome = "stopped"
+	// OutcomeCancelled is the run something stopped rather than judged: the
+	// operator, or a killed process. Nothing here is a verdict on the change.
+	OutcomeCancelled RunOutcome = "cancelled"
+	// OutcomeTimedOut is the run the harness stopped on time, with nothing
+	// recorded for anybody to decide.
+	OutcomeTimedOut RunOutcome = "timed out"
+	// OutcomeFailed is what is left: a run that ended without succeeding and
+	// without leaving anybody a blocker to act on. It is the harness itself
+	// having failed to carry the run, which is why it keeps the bare word.
+	OutcomeFailed RunOutcome = "failed"
+)
+
+// Outcome reports what became of this run in that vocabulary. It is derived
+// here, in the read model, rather than in each surface, so `yoyo status` and
+// `yoyo cost` cannot come to say different words about one run.
+//
+// It draws only on distinctions the record already holds, so a run recorded long
+// before this existed classifies exactly as a run recorded today: a recorded
+// blocker is what says the item was handed back, and it outranks the status
+// because a run blocked at a deadline is still a stoppage somebody owns. A run
+// that has not reached a terminal status keeps its own status word, since
+// "pending" and "running" are already the two facts a reader wants there.
+func (s State) Outcome() RunOutcome {
+	if !s.Status.Terminal() {
+		return RunOutcome(s.Status)
+	}
+	switch {
+	case s.Status == StatusSucceeded:
+		return OutcomeSucceeded
+	case strings.TrimSpace(s.Blocker) != "":
+		return OutcomeStopped
+	case s.Status == StatusCancelled:
+		return OutcomeCancelled
+	case s.Status == StatusTimedOut:
+		return OutcomeTimedOut
+	default:
+		return OutcomeFailed
+	}
+}
+
 // RunSummary is what one recorded run says about itself: how it ended, where it
 // was when it did, what it gave as the reason, and what it spent getting there.
 type RunSummary struct {
-	RunID       string     `json:"run_id"`
-	WorkItemID  string     `json:"work_item_id"`
-	Status      Status     `json:"status"`
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Status     Status `json:"status"`
+	// Outcome is what became of the run in the fixed vocabulary above. It is
+	// carried beside the status rather than instead of it: the status is the
+	// durable value and stays what it always was, and this is the reading of it a
+	// listing shows.
+	Outcome     RunOutcome `json:"outcome"`
 	Phase       Phase      `json:"phase,omitempty"`
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	// The artifacts the run leaves behind, and the harness's own record of which
+	// of them it removed. They are here because "is my work gone" is the question
+	// a listing of runs that did not succeed is actually read for, and a listing
+	// that named neither the branch nor the worktree left it to be answered by
+	// going and looking.
+	Branch          string `json:"branch,omitempty"`
+	WorktreePath    string `json:"worktree_path,omitempty"`
+	BranchRemoved   bool   `json:"branch_removed,omitempty"`
+	WorktreeRemoved bool   `json:"worktree_removed,omitempty"`
+	// ProviderSessionID is the developer session preserved with the change, which
+	// is what a continuation resumes in rather than deriving the work a second
+	// time. It is named for the same reason the artifacts are.
+	ProviderSessionID string `json:"provider_session_id,omitempty"`
+	// ReviewFindings is how many findings the last review of this run recorded.
+	// It says there is something written down to read rather than carrying the
+	// findings themselves, which are the docket's to render in full.
+	ReviewFindings int `json:"review_findings,omitempty"`
 	// Integrated reports a run that promoted its work, which is what separates
 	// the attempt that finished a piece of work from the ones that did not.
 	Integrated bool `json:"integrated,omitempty"`
@@ -91,6 +178,16 @@ type RunSummary struct {
 // that the work did not land, which is what somebody looking for the runs that
 // went wrong is asking about, and each of them records why it ended.
 func (r RunSummary) Failed() bool { return endedBadly(r.Status) }
+
+// Preserved reports the run's change surviving the run: a branch or a worktree
+// the harness has not recorded as removed. It asks about both because either one
+// on its own still holds the work — a removed worktree whose branch stands is
+// work somebody can still check out — and it is false for a run that never got
+// as far as creating either, which is a run with nothing to preserve rather than
+// one whose work was thrown away.
+func (r RunSummary) Preserved() bool {
+	return (r.Branch != "" && !r.BranchRemoved) || (r.WorktreePath != "" && !r.WorktreeRemoved)
+}
 
 // CostKnown reports a run the recorded evidence could actually price.
 func (r RunSummary) CostKnown() bool { return r.UnknownCost == "" }
@@ -167,20 +264,27 @@ func (s *Store) History(query RunQuery) (RunHistory, error) {
 
 func (s *Store) summarize(state State) RunSummary {
 	summary := RunSummary{
-		RunID:          state.RunID,
-		WorkItemID:     state.WorkItemID,
-		Status:         state.Status,
-		Phase:          state.Phase,
-		StartedAt:      state.StartedAt,
-		CompletedAt:    state.CompletedAt,
-		Integrated:     state.Integration != nil,
-		Outstanding:    state.Outstanding(),
-		MergeQueued:    state.PullRequest != nil && state.PullRequest.MergeQueued,
-		AccountAlias:   state.AccountAlias,
-		ConfigRevision: state.ConfigRevision,
-		Failure:        state.Failure,
-		PublishFailure: state.PublishFailure,
-		CleanupFailure: state.CleanupFailure,
+		RunID:             state.RunID,
+		WorkItemID:        state.WorkItemID,
+		Status:            state.Status,
+		Outcome:           state.Outcome(),
+		Phase:             state.Phase,
+		StartedAt:         state.StartedAt,
+		CompletedAt:       state.CompletedAt,
+		Branch:            state.Branch,
+		WorktreePath:      state.WorktreePath,
+		BranchRemoved:     state.BranchRemoved,
+		WorktreeRemoved:   state.WorktreeRemoved,
+		ProviderSessionID: state.ProviderSessionID,
+		ReviewFindings:    state.ReviewFindings,
+		Integrated:        state.Integration != nil,
+		Outstanding:       state.Outstanding(),
+		MergeQueued:       state.PullRequest != nil && state.PullRequest.MergeQueued,
+		AccountAlias:      state.AccountAlias,
+		ConfigRevision:    state.ConfigRevision,
+		Failure:           state.Failure,
+		PublishFailure:    state.PublishFailure,
+		CleanupFailure:    state.CleanupFailure,
 
 		CompletionRecordingFailure: state.CompletionRecordingFailure,
 	}

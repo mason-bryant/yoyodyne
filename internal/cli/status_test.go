@@ -63,7 +63,9 @@ func TestStatusReportsFailedRunsWithTheirReasons(t *testing.T) {
 		"2 of 2 shown",
 		failed.RunID,
 		"yoyodyne-ifd.2.7",
-		"[failed, reviewing]",
+		// The run never got as far as a worktree, so what it left behind is
+		// stated as nothing to preserve rather than as work that is gone.
+		"[failed, reviewing, nothing to preserve]",
 		"reason: independent review requires repair",
 		"$8.91",
 		"yoyodyne-ifd.41",
@@ -179,6 +181,7 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 				RunID:                      "run-0123456789abcdef0123456789abcdef",
 				WorkItemID:                 "yoyodyne-ifd.41",
 				Status:                     runstate.StatusSucceeded,
+				Outcome:                    runstate.OutcomeSucceeded,
 				Phase:                      runstate.PhaseCleaningUp,
 				StartedAt:                  completedAt,
 				CompletedAt:                &completedAt,
@@ -194,8 +197,11 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 				RunID:      "run-fedcba9876543210fedcba9876543210",
 				WorkItemID: "yoyodyne-ifd.2.7",
 				Status:     runstate.StatusRunning,
-				Phase:      runstate.PhaseChecking,
-				StartedAt:  completedAt,
+				// A run that has not reached a terminal status keeps its own
+				// status word, which is already the fact a reader wants there.
+				Outcome:   runstate.RunOutcome(runstate.StatusRunning),
+				Phase:     runstate.PhaseChecking,
+				StartedAt: completedAt,
 				// Every run still in flight owes its own remaining steps, so
 				// saying so of this one would say nothing.
 				Outstanding: true,
@@ -239,6 +245,7 @@ func TestStatusNamesEachRecordedReasonForWhatItIs(t *testing.T) {
 			RunID:       "run-0123456789abcdef0123456789abcdef",
 			WorkItemID:  "yoyodyne-ifd.41",
 			Status:      runstate.StatusFailed,
+			Outcome:     runstate.OutcomeFailed,
 			StartedAt:   completedAt,
 			CompletedAt: &completedAt,
 			UnknownCost: "the run's event log is no longer recorded",
@@ -262,6 +269,7 @@ func TestStatusSaysWhatAnOutstandingRunStillOwes(t *testing.T) {
 		RunID:       "run-0123456789abcdef0123456789abcdef",
 		WorkItemID:  "yoyodyne-ifd.41",
 		Status:      runstate.StatusSucceeded,
+		Outcome:     runstate.OutcomeSucceeded,
 		Phase:       runstate.PhaseComplete,
 		StartedAt:   completedAt,
 		CompletedAt: &completedAt,
@@ -295,6 +303,7 @@ func TestStatusSaysWhatAnOutstandingRunStillOwes(t *testing.T) {
 	// would be noise rather than news.
 	running := finished
 	running.Status = runstate.StatusRunning
+	running.Outcome = runstate.RunOutcome(runstate.StatusRunning)
 	running.CompletedAt = nil
 	running.Phase = runstate.PhaseDeveloping
 	out.Reset()
@@ -319,6 +328,7 @@ func TestStatusBoundsAReasonWithoutBreakingARune(t *testing.T) {
 		RunID:       "run-0123456789abcdef0123456789abcdef",
 		WorkItemID:  "yoyodyne-ifd.41",
 		Status:      runstate.StatusFailed,
+		Outcome:     runstate.OutcomeFailed,
 		StartedAt:   completedAt,
 		CompletedAt: &completedAt,
 		Failure:     verdict,
@@ -337,6 +347,145 @@ func TestStatusBoundsAReasonWithoutBreakingARune(t *testing.T) {
 		if len(line) > maxSingleLineBytes+32 {
 			t.Fatalf("the listed reason is %d bytes: %q", len(line), line)
 		}
+	}
+}
+
+// The operator read three stopped runs' lines and asked whether the runs had
+// been discarded. Every one of them said "failed", which is true of the attempt
+// and says nothing about the work: their branches, worktrees, and sessions were
+// all still there and their items were back in his hands. So this replays that
+// listing — three stoppages, an operator cancel, and a run that broke before it
+// made anything — and holds it to saying what happened and what remains.
+func TestStatusSaysWhatBecameOfTheWorkRatherThanOneWordForEveryEnding(t *testing.T) {
+	t.Parallel()
+
+	completedAt := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+	stopped := func(runID, item string, phase runstate.Phase, reason string) runstate.RunSummary {
+		return runstate.RunSummary{
+			RunID:        runID,
+			WorkItemID:   item,
+			Status:       runstate.StatusFailed,
+			Outcome:      runstate.OutcomeStopped,
+			Phase:        phase,
+			StartedAt:    completedAt,
+			CompletedAt:  &completedAt,
+			Branch:       "yoyodyne/" + item,
+			WorktreePath: "/state/worktrees/" + item,
+			Failure:      reason,
+		}
+	}
+	review := stopped("run-1111111111111111111111111111aa", "yoyodyne-ifd.90", runstate.PhaseReviewing,
+		"independent review requires repair after 2 of 2 permitted attempt(s)")
+	review.ProviderSessionID = "session-developer"
+	review.ReviewFindings = 3
+	replay := stopped("run-2222222222222222222222222222bb", "yoyodyne-ifd.91", runstate.PhaseIntegrating,
+		"the change cannot be replayed onto main")
+	provider := stopped("run-3333333333333333333333333333cc", "yoyodyne-ifd.92", runstate.PhaseDeveloping,
+		"the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)")
+	cancelled := stopped("run-4444444444444444444444444444dd", "yoyodyne-ifd.93", runstate.PhaseDeveloping,
+		"the operator stopped this run")
+	cancelled.Status = runstate.StatusCancelled
+	cancelled.Outcome = runstate.OutcomeCancelled
+	broke := runstate.RunSummary{
+		RunID:       "run-5555555555555555555555555555ee",
+		WorkItemID:  "yoyodyne-ifd.94",
+		Status:      runstate.StatusFailed,
+		Outcome:     runstate.OutcomeFailed,
+		StartedAt:   completedAt,
+		CompletedAt: &completedAt,
+		Failure:     "create isolated worktree: primary checkout is not ready",
+	}
+
+	var out bytes.Buffer
+	printRunHistory(&out, runstate.RunHistory{
+		Matched:  5,
+		Recorded: 5,
+		Runs:     []runstate.RunSummary{review, replay, provider, cancelled, broke},
+	}, "", true)
+	rendered := out.String()
+	for _, want := range []string{
+		// The three stoppages read as stoppages, each saying where it stopped,
+		// and each saying the work is still there.
+		"[stopped, reviewing, work preserved]",
+		"[stopped, integrating, work preserved]",
+		"[stopped, developing, work preserved]",
+		// An operator cancel is its own word: nothing judged the change.
+		"[cancelled, developing, work preserved]",
+		// And the one run that really did fail keeps the bare word, with the
+		// honest answer about artifacts nothing ever made.
+		"[failed, nothing to preserve]",
+		// What remains is named rather than left to the run's JSON.
+		"preserved branch: yoyodyne/yoyodyne-ifd.90",
+		"preserved worktree: /state/worktrees/yoyodyne-ifd.90",
+		"preserved developer session: session-developer",
+		"3 review finding(s) recorded against the preserved change",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+	// The word that started this must not describe a run whose work is preserved
+	// and whose item is back with a person.
+	for _, line := range strings.Split(rendered, "\n") {
+		if !strings.Contains(line, "run-1111") && !strings.Contains(line, "run-4444") {
+			continue
+		}
+		if strings.Contains(line, "[failed") {
+			t.Fatalf("a preserved stoppage still reads as a failure: %q", line)
+		}
+	}
+	// A run that left nothing behind is never sent anywhere to look at it.
+	if strings.Contains(rendered, "preserved branch: yoyodyne/yoyodyne-ifd.94") {
+		t.Fatalf("a run with no artifacts was reported as preserving some: %q", rendered)
+	}
+
+	// An artifact the harness recorded removing is named as removed rather than
+	// dropped: telling somebody nothing was preserved and sending them to a
+	// worktree that is gone are the same failure in opposite directions.
+	retired := review
+	retired.RunID = "run-6666666666666666666666666666ff"
+	retired.BranchRemoved = true
+	retired.WorktreeRemoved = true
+	out.Reset()
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{retired}}, "", true)
+	rendered = out.String()
+	for _, want := range []string{
+		"[stopped, reviewing, work removed]",
+		"branch already removed: yoyodyne/yoyodyne-ifd.90",
+		"worktree already removed: /state/worktrees/yoyodyne-ifd.90",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("rendered = %q, want it to contain %q", rendered, want)
+		}
+	}
+	// Continuing in a session whose change is gone continues nothing, so it is
+	// not offered.
+	if strings.Contains(rendered, "preserved developer session") {
+		t.Fatalf("a removed change was offered its session back: %q", rendered)
+	}
+
+	// A run that landed its work is not described in this vocabulary at all: it
+	// removes what it made on purpose, and reporting that as a loss would report
+	// the harness working as something to look at.
+	landed := runstate.RunSummary{
+		RunID:       "run-7777777777777777777777777777aa",
+		WorkItemID:  "yoyodyne-ifd.95",
+		Status:      runstate.StatusSucceeded,
+		Outcome:     runstate.OutcomeSucceeded,
+		Phase:       runstate.PhaseComplete,
+		StartedAt:   completedAt,
+		CompletedAt: &completedAt,
+		Integrated:  true,
+		Branch:      "yoyodyne/yoyodyne-ifd.95",
+	}
+	out.Reset()
+	printRunHistory(&out, runstate.RunHistory{Matched: 1, Recorded: 1, Runs: []runstate.RunSummary{landed}}, "", false)
+	rendered = out.String()
+	if !strings.Contains(rendered, "[succeeded, complete, integrated]") {
+		t.Fatalf("rendered = %q, want a landed run described as itself", rendered)
+	}
+	if strings.Contains(rendered, "preserve") || strings.Contains(rendered, "removed") {
+		t.Fatalf("a successful run was described in the stopped-work vocabulary: %q", rendered)
 	}
 }
 

@@ -56,10 +56,16 @@ invites:
 
 ```text
 cost: at least $27.93 across 3 run(s)
-  run-0123…  started 2026-08-10T09:14:02Z [failed, reviewing] $8.91 from 3 invocation(s)
+  run-0123…  started 2026-08-10T09:14:02Z [stopped, reviewing] $8.91 from 3 invocation(s)
   run-89ab…  started 2026-08-10T11:02:41Z [succeeded, complete, integrated] $19.02 from 2 invocation(s)
   run-cdef…  started 2026-08-09T18:30:00Z [failed, developing] unknown: the run's event log is no longer recorded
 ```
+
+The word in the brackets is the same fixed vocabulary
+[`yoyo status`](operations.md#what-became-of-the-runs-and-what-remains-of-them) uses,
+read from the same records: `stopped` ended on a blocker somebody has to decide
+about and left its change intact, `failed` left nobody anything to act on, and a
+run met in both places is described the same way in both.
 
 From the command line, `yoyo cost` prices items from the same recorded runs —
 one line per item, or a run-by-run breakdown when you name one — and
