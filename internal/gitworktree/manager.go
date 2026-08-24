@@ -443,22 +443,39 @@ func (m *Manager) Create(ctx context.Context, request CreateRequest) (Worktree, 
 	if !inspection.Registered || inspection.Branch != branch {
 		return worktree, errors.New("created worktree is not registered with the expected branch")
 	}
-	// A checkout of a commit holds that commit's tracked files and nothing else,
-	// so an untracked file in it at this moment came from somewhere other than the
-	// commit it was created from. A developer cannot tell that from its own work:
-	// what it reads through a file listing looks exactly like its branch, and it
-	// has no way to ask Git which half is which if its shell is unavailable. That
-	// is not hypothetical — another effort's outputs sitting untracked in a run's
-	// worktree had a developer building against files its branch did not have,
-	// while two reviewers correctly reported them absent from the change.
-	stray, err := m.untrackedFiles(ctx, path)
-	if err != nil {
-		return worktree, fmt.Errorf("inspect the created worktree for files that are not its branch's: %w", err)
-	}
-	if len(stray) > 0 {
-		return worktree, fmt.Errorf("created worktree %s holds %d untracked file(s) that are not its branch's, starting with %s; it has to be inspected by hand", path, len(stray), stray[0])
+	if err := m.refuseStrayFiles(ctx, path); err != nil {
+		return worktree, err
 	}
 	return worktree, nil
+}
+
+// refuseStrayFiles refuses a checkout that holds anything its branch does not.
+//
+// A checkout of a commit holds that commit's tracked files and nothing else, so
+// an untracked file in a worktree the harness has just created came from
+// somewhere other than the commit it was created from — a `post-checkout` hook
+// the repository runs, another process writing into the worktree root, or an
+// earlier effort's outputs left where this checkout was about to go. A developer
+// cannot tell any of those from its own work: what it reads through a file
+// listing looks exactly like its branch, and it has no way to ask Git which half
+// is which if its shell is unavailable. That is not hypothetical — another
+// effort's outputs sitting untracked in a run's worktree had a developer building
+// against files its branch did not have, while two reviewers correctly reported
+// them absent from the change.
+//
+// So it is refused at creation, loudly and by name, rather than handed over. It
+// is the narrowest question that catches the case: tracked files are the branch's
+// by definition, and ignored files are the project's own build residue rather
+// than anything a reviewer would be asked about, so neither is asked about here.
+func (m *Manager) refuseStrayFiles(ctx context.Context, path string) error {
+	stray, err := m.untrackedFiles(ctx, path)
+	if err != nil {
+		return fmt.Errorf("inspect the created worktree for files that are not its branch's: %w", err)
+	}
+	if len(stray) > 0 {
+		return fmt.Errorf("created worktree %s holds %d untracked file(s) that are not its branch's, starting with %s; it has to be inspected by hand", path, len(stray), stray[0])
+	}
+	return nil
 }
 
 // CurrentBranch reports the local branch the primary checkout is on, which is

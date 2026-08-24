@@ -1743,10 +1743,19 @@ integration policy would be taking the decision that setting reserves for you.
 
 | `publishing` | `integration` | What you get |
 | --- | --- | --- |
-| `human` | `human` | Local branch and worktree, preserved for you. |
+| `human` | `human` | Local branch and worktree, preserved for you — the branch indefinitely, the worktree until [the tail bound](operations.md#recovering-interrupted-runs) reaches it. |
 | `human` | `automatic` | Local fast-forward into the target branch, artifacts removed. Nothing pushed. |
 | `automatic` | `automatic` | Pull request opened, merged on approval — or queued with the forge until your required checks pass — and the branch removed locally, then on the remote once the merge has happened. |
-| `automatic` | `human` | Pull request opened and left for you. Nothing merged, nothing cleaned up. |
+| `automatic` | `human` | Pull request opened and left for you. Nothing merged, and nothing cleaned up but the worktree once [the tail bound](operations.md#recovering-interrupted-runs) reaches it. |
+
+The two rows that preserve a worktree say "until the tail bound reaches it"
+because `yoyo reconcile` retires the *checkout* of a settled run once eight more
+recent ones have accumulated, or once a later run lands that work. Under
+`integration: human` a successful run promotes nothing, so those runs are exactly
+what the tail reaches. Nothing else about either row moves: the branch stays, a
+checkout holding uncommitted work stays, the pull request is neither merged nor
+closed, and what the retirement removed is written onto that run's own record so
+nothing afterwards names a directory that is gone.
 
 ### Which branch is authoritative
 
@@ -2253,7 +2262,13 @@ lease, because its record is what `yoyo status` and the docket read to say
 whether its branch and worktree are still there. A stopped run promoted nothing,
 so the removal names the run that superseded it — `artifacts_retired_by` on the
 run's state — which is the second way a recorded removal is earned beside a
-promotion of the run's own. A retirement the harness could not write onto that
+promotion of the run's own. There is a third, and it is narrower than either:
+the convergence sweep retiring a settled run's checkout to keep the
+repository's worktree registrations bounded, which records `checkout_retired`
+beside it and never earns the removal of a branch. A retirement that both
+happened to — a checkout the sweep took because a later run had landed the
+work — records both, so which sweep removed it and which run answered for it
+are two facts rather than one guessed at. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 

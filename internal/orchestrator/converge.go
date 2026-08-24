@@ -266,13 +266,15 @@ func (r Reconciler) retireCheckout(ctx context.Context, candidate checkoutCandid
 		return sweep
 	}
 	state.WorktreeRemoved = true
-	// A settled run promoted nothing, so the removal is only ever recorded with
-	// the claim that earned it: the run that superseded this one where there is
-	// one, and the sweep's own bound where there is not.
+	// This sweep removed it, so the record says so on every retirement rather than
+	// only on the ones no successor answers for. Which of the two claims it was
+	// taken on is a second fact beside that one: a superseded checkout also names
+	// the run that landed the work, and a checkout taken for being past the tail
+	// names nothing, because there is nothing to name. Recording only the
+	// successor would file a sweep's removal under a decision triage never made.
+	state.CheckoutRetired = true
 	if candidate.superseded != "" {
 		state.ArtifactsRetiredBy = candidate.superseded
-	} else {
-		state.CheckoutRetired = true
 	}
 	// When the run ended is what dates it; this dates the last thing the harness
 	// did to what it left behind, which is what UpdatedAt has always meant.

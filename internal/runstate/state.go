@@ -603,14 +603,19 @@ type State struct {
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	// ArtifactsRetiredBy names the run that superseded this one, on a run whose
-	// artifacts were retired by triage rather than cleaned up after a promotion
-	// of its own. It is the second way a removal is earned, and the reason it is
-	// recorded rather than inferred: a stopped run integrates nothing, so without
-	// it a removal on one would be a claim with no evidence behind it — which is
-	// exactly what the rule below refuses.
+	// artifacts were retired for it rather than cleaned up after a promotion of
+	// its own — by triage starting the successor, or by the convergence sweep
+	// finding one had already landed. It is the second way a removal is earned,
+	// and the reason it is recorded rather than inferred: a stopped run integrates
+	// nothing, so without it a removal on one would be a claim with no evidence
+	// behind it — which is exactly what the rule below refuses.
+	//
+	// It says which run answered for the work and never which mechanism removed
+	// the artifacts, so a reader that has to tell a triage retirement from a
+	// sweep's reads CheckoutRetired beside it rather than this alone.
 	//
 	// Absent is every run whose artifacts it removed itself, which is all of them
-	// until triage retires one.
+	// until something supersedes one.
 	ArtifactsRetiredBy string `json:"artifacts_retired_by,omitempty"`
 	// CheckoutRetired records that the convergence sweep removed this settled
 	// run's preserved checkout to keep the repository's worktree registrations
@@ -621,7 +626,11 @@ type State struct {
 	// loses nothing while every commit it carried is still on a branch the sweep
 	// only ever deletes on proof the target already carries it.
 	//
-	// Absent is every run whose checkout nothing swept, which is all of them until
+	// It is recorded on every retirement the sweep makes, including one it made
+	// because a successor had landed the work — which then carries both, since
+	// what removed the checkout and what answered for the work are two facts.
+	//
+	// Absent is every run whose checkout no sweep took, which is all of them until
 	// the tail of kept checkouts moves past one.
 	CheckoutRetired bool `json:"checkout_retired,omitempty"`
 	// TargetBranch is the integration target fixed when the worktree was

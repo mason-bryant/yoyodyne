@@ -425,8 +425,15 @@ func TestConvergeRetiresTheCheckoutASupersededRunPreserved(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
-	if !recorded.WorktreeRemoved || recorded.ArtifactsRetiredBy != landedRunID {
-		t.Errorf("recorded = %#v, want the removal recorded against the run that superseded it", recorded)
+	// Both facts are recorded, because they are two: this sweep removed the
+	// checkout, and the run that landed the work is what answered for it.
+	if !recorded.WorktreeRemoved || !recorded.CheckoutRetired || recorded.ArtifactsRetiredBy != landedRunID {
+		t.Errorf("recorded = %#v, want the sweep's removal recorded against the run that superseded it", recorded)
+	}
+	// And the retirement claims one artifact. Whether the branch may go is a
+	// question about the target that this claim never asks.
+	if recorded.BranchRemoved {
+		t.Errorf("recorded = %#v, want the retirement to claim the checkout and nothing else", recorded)
 	}
 	// Sweeping again is what every later reconcile does, and a checkout already
 	// retired is not swept twice.
@@ -436,6 +443,113 @@ func TestConvergeRetiresTheCheckoutASupersededRunPreserved(t *testing.T) {
 	}
 	if len(repeated.Checkouts) != 0 {
 		t.Fatalf("second convergence = %#v, want nothing left to retire", repeated.Checkouts)
+	}
+}
+
+// The other claim, driven the whole way through the sweep: nothing superseded
+// this run and nobody decided anything about it, and its checkout goes because
+// eight more recent settled ones have accumulated behind it. That is the claim
+// the bound actually rests on — the registrations are a resource of the machine,
+// and a stoppage nobody landed is still a path every agent's sandbox profile
+// carries on every command it spawns.
+func TestConvergeRetiresACheckoutPastTheTail(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:                execution.OSProcessRunner{},
+		RepositoryRoot:        repository,
+		WorktreeRoot:          worktreeRoot,
+		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+	})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	oldestRunID := "run-0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
+	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
+		RunID:        oldestRunID,
+		WorkItemID:   tracker.item.ID,
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	opened := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC)
+	recordSettledRun(t, store, oldestRunID, tracker.item.ID, opened, worktree)
+
+	// Eight more recent settled checkouts, each of its own work item so nothing
+	// supersedes anything. Their directories need not exist: what pushes the
+	// oldest past the bound is how many more recent ones the records carry, and
+	// only the one actually retired is ever looked for on disk.
+	for index := 1; index <= retainedSettledCheckouts; index++ {
+		recordSettledRun(t, store,
+			fmt.Sprintf("run-%032d", index),
+			fmt.Sprintf("yoyodyne-tail-%d", index),
+			opened.Add(time.Duration(index)*time.Hour),
+			gitworktree.Worktree{})
+	}
+
+	convergence, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge() error = %v", err)
+	}
+	if len(convergence.Checkouts) != 1 {
+		t.Fatalf("checkouts = %#v, want only the one past the tail swept", convergence.Checkouts)
+	}
+	swept := convergence.Checkouts[0]
+	if !swept.Removed || swept.Failure != "" || swept.Kept != "" {
+		t.Fatalf("sweep = %#v, want the checkout retired", swept)
+	}
+	// It names no successor, because there is none: the tail is a bound on a
+	// shared resource rather than a judgement about the work.
+	if swept.RunID != oldestRunID || swept.Superseded != "" {
+		t.Errorf("sweep = %#v, want run %s retired for being past the tail", swept, oldestRunID)
+	}
+	if _, err := os.Stat(worktree.Path); !os.IsNotExist(err) {
+		t.Errorf("the checkout is still on disk: %v", err)
+	}
+	recorded, err := store.Load(oldestRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.WorktreeRemoved || !recorded.CheckoutRetired || recorded.ArtifactsRetiredBy != "" {
+		t.Errorf("recorded = %#v, want the sweep's own claim and no successor named", recorded)
+	}
+}
+
+// recordSettledRun writes a terminal run that left a checkout behind. Passing a
+// created worktree records that one; passing the zero value records a checkout
+// that is only ever counted, which is what the runs standing between an old one
+// and the tail bound are for.
+func recordSettledRun(t *testing.T, store *runstate.Store, runID, workItemID string, startedAt time.Time, worktree gitworktree.Worktree) {
+	t.Helper()
+	completed := startedAt
+	state := runstate.State{
+		SchemaVersion: runstate.StateSchemaVersion,
+		RunID:         runID,
+		ProductID:     "yoyodyne",
+		RepositoryID:  "yoyodyne",
+		WorkItemID:    workItemID,
+		Backend:       "claude-code",
+		Status:        runstate.StatusFailed,
+		Phase:         runstate.PhaseDeveloping,
+		StartedAt:     startedAt,
+		UpdatedAt:     startedAt,
+		CompletedAt:   &completed,
+		WorktreePath:  worktree.Path,
+		Branch:        worktree.Branch,
+		BaseCommit:    worktree.BaseCommit,
+		TargetBranch:  "main",
+	}
+	if state.WorktreePath == "" {
+		state.WorktreePath = "/checkouts/" + runID
+		state.Branch = "yoyodyne/" + workItemID + "/" + strings.TrimPrefix(runID, "run-")[:8]
+		state.BaseCommit = strings.Repeat("b", 40)
+	}
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() run %s error = %v", runID, err)
 	}
 }
 
