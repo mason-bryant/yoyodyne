@@ -350,7 +350,7 @@ Commands:
   agent             read the configured agents and their state, and address one
   config validate   validate a Yoyodyne configuration
   config show       print the effective configuration and value origins
-  artifact          read the canonical artifacts, and record your approval of one
+  artifact          read the canonical artifacts, approve one, and check them all
   amendment         read changes proposed to artifacts, and decide them
   evaluation        read what the product manager made of the ideas you brought it
   goals             read the goals and what work serves, and witness and guard it

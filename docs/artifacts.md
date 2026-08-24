@@ -85,6 +85,33 @@ is asked to support anything. The
 [configuration guide](configuration.md#traceability-references-and-orphans)
 is the reference for the schema, the fields, and what is reported.
 
+### Where a defect in one of these documents fails
+
+Reported everywhere and refused nowhere leaves one question: what actually goes
+red when you leave one of these documents malformed. The answer is one command,
+and it is the one you run:
+
+```sh
+./bin/yoyo artifact check
+```
+
+It reads every governed document — the artifacts, the goals stated in them, and
+the invariants — and exits non-zero on a defect in any: a goal hard-wrapped
+across two physical lines, a `supports` entry naming a document nobody wrote, an
+artifact reaching no brief, a revision recorded by a role that does not own the
+file. Each one is named with the role that owns it and the command that reaches
+that role.
+
+**Nothing else goes red on what you wrote, and that is deliberate.** These
+documents live in directories every developer's change is refused in, so a
+malformed one used to stop every run in the project over a file no developer
+could open, with the only route out an amendment proposal made while every run
+stayed red. The checks a run makes still read these documents and still report
+what they find in full — they escalate it to the owning role instead of failing,
+naming the role and the route. This command is where the same defect fails, run
+by whoever can put it right. The index at the door of each artifact home says so
+too.
+
 ## Goals, and what work serves them
 
 Identity ends at the document. The last link of the chain is the goal a work
