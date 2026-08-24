@@ -262,7 +262,16 @@ func (r Reconciler) retireCheckout(ctx context.Context, candidate checkoutCandid
 		return sweep
 	}
 	if !removal.Removed {
+		// A checkout that survived always says why, and a sweep repeats itself until
+		// somebody acts on that reason — which is right, because the reason is a
+		// directory a person has to look at. What must never happen is the same
+		// candidate coming back with nothing said about it: an entry with neither a
+		// removal nor a reason is a silent no-op re-attempted on every later pass,
+		// so one is named as the thing to inspect rather than left empty.
 		sweep.Kept = removal.Kept
+		if sweep.Kept == "" {
+			sweep.Kept = fmt.Sprintf("%s was neither retired nor kept for a stated reason, so it has to be inspected by hand", state.WorktreePath)
+		}
 		return sweep
 	}
 	state.WorktreeRemoved = true

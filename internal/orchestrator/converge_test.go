@@ -321,15 +321,7 @@ func TestConvergeRetiresTheCheckoutASupersededRunPreserved(t *testing.T) {
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	worktrees, err := gitworktree.New(gitworktree.Options{
-		Runner:                execution.OSProcessRunner{},
-		RepositoryRoot:        repository,
-		WorktreeRoot:          worktreeRoot,
-		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
-	})
-	if err != nil {
-		t.Fatalf("gitworktree.New() error = %v", err)
-	}
+	worktrees := newWorktreeManager(t, repository, worktreeRoot)
 	stoppedRunID := "run-0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
 	landedRunID := "run-11112222333344445555666677778888"
 	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
@@ -457,15 +449,7 @@ func TestConvergeRetiresACheckoutPastTheTail(t *testing.T) {
 
 	repository, worktreeRoot, store := restartableFixture(t)
 	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
-	worktrees, err := gitworktree.New(gitworktree.Options{
-		Runner:                execution.OSProcessRunner{},
-		RepositoryRoot:        repository,
-		WorktreeRoot:          worktreeRoot,
-		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
-	})
-	if err != nil {
-		t.Fatalf("gitworktree.New() error = %v", err)
-	}
+	worktrees := newWorktreeManager(t, repository, worktreeRoot)
 	oldestRunID := "run-0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a"
 	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
 		RunID:        oldestRunID,
@@ -517,6 +501,99 @@ func TestConvergeRetiresACheckoutPastTheTail(t *testing.T) {
 	if !recorded.WorktreeRemoved || !recorded.CheckoutRetired || recorded.ArtifactsRetiredBy != "" {
 		t.Errorf("recorded = %#v, want the sweep's own claim and no successor named", recorded)
 	}
+}
+
+// The state the operator's own by-hand clearance leaves: the checkout gone from
+// disk and the record still saying it is there. It is the one a sweep must
+// converge on rather than re-attempt, because it is what the affected machine is
+// full of — and it is also what proves the two steps compose, since the prune is
+// what clears the registration the retirement then finds nothing behind.
+func TestConvergeConvergesOnACheckoutSomebodyAlreadyDeleted(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	worktrees := newWorktreeManager(t, repository, worktreeRoot)
+	oldestRunID := "run-0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b"
+	worktree, err := worktrees.Create(context.Background(), gitworktree.CreateRequest{
+		RunID:        oldestRunID,
+		WorkItemID:   tracker.item.ID,
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	opened := time.Date(2020, 1, 1, 9, 0, 0, 0, time.UTC)
+	recordSettledRun(t, store, oldestRunID, tracker.item.ID, opened, worktree)
+	for index := 1; index <= retainedSettledCheckouts; index++ {
+		recordSettledRun(t, store,
+			fmt.Sprintf("run-%032d", index),
+			fmt.Sprintf("yoyodyne-tail-%d", index),
+			opened.Add(time.Duration(index)*time.Hour),
+			gitworktree.Worktree{})
+	}
+	// Somebody cleared it by hand, which is what an operator does when the sandbox
+	// profile has grown too large to spawn a command with. Nothing told the record.
+	if err := os.RemoveAll(worktree.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	convergence, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("Converge() error = %v", err)
+	}
+	if convergence.PruneFailure != "" {
+		t.Fatalf("prune failed: %s", convergence.PruneFailure)
+	}
+	if len(convergence.Prune.Pruned) != 1 || convergence.Prune.Pruned[0] != worktree.Path {
+		t.Fatalf("pruned = %#v, want the registration of the deleted checkout", convergence.Prune.Pruned)
+	}
+	if len(convergence.Checkouts) != 1 {
+		t.Fatalf("checkouts = %#v, want the deleted checkout accounted for once", convergence.Checkouts)
+	}
+	// A checkout nobody will find is reported as gone rather than as a removal
+	// this sweep could not make: the two are the same fact for a caller, and
+	// treating them apart is what would re-attempt it for ever.
+	swept := convergence.Checkouts[0]
+	if !swept.Removed || swept.Failure != "" || swept.Kept != "" {
+		t.Fatalf("sweep = %#v, want the already-deleted checkout recorded as gone", swept)
+	}
+	recorded, err := store.Load(oldestRunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !recorded.WorktreeRemoved || !recorded.CheckoutRetired {
+		t.Errorf("recorded = %#v, want the record brought onto what is actually there", recorded)
+	}
+	// The convergence the finding is about: the same candidate must not come back
+	// on every later sweep.
+	repeated, err := Reconciler{Tracker: tracker, Worktrees: worktrees, Store: store}.Converge(context.Background())
+	if err != nil {
+		t.Fatalf("second Converge() error = %v", err)
+	}
+	if len(repeated.Checkouts) != 0 {
+		t.Fatalf("second convergence = %#v, want nothing left to retire", repeated.Checkouts)
+	}
+	if len(repeated.Prune.Pruned) != 0 {
+		t.Errorf("second prune = %#v, want nothing stale left", repeated.Prune.Pruned)
+	}
+}
+
+// newWorktreeManager builds the real worktree manager a sweep is given, which is
+// what makes these tests act on a repository rather than on a double.
+func newWorktreeManager(t *testing.T, repository, worktreeRoot string) *gitworktree.Manager {
+	t.Helper()
+	worktrees, err := gitworktree.New(gitworktree.Options{
+		Runner:                execution.OSProcessRunner{},
+		RepositoryRoot:        repository,
+		WorktreeRoot:          worktreeRoot,
+		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
+	})
+	if err != nil {
+		t.Fatalf("gitworktree.New() error = %v", err)
+	}
+	return worktrees
 }
 
 // recordSettledRun writes a terminal run that left a checkout behind. Passing a

@@ -98,9 +98,14 @@ func (m *Manager) PruneRegistrations(ctx context.Context) (Prune, error) {
 }
 
 // WorktreeRemoval is what one attempt to retire a preserved worktree found.
-// Kept is why it was left where it is, and is empty both when the worktree was
-// removed and when there was nothing there to remove — Removed is what tells
-// those two apart.
+//
+// Removed answers one question and not two: will anybody find this worktree
+// afterwards. It is true both when this attempt removed it and when it was
+// already gone — a caller records the same thing either way, and a caller that
+// treated "already gone" as an unfinished removal would re-attempt the same
+// absent worktree on every later pass. Kept is why it survived, and is set on
+// exactly the attempts that leave something behind, so `Removed == false` always
+// carries a reason and never reads as a silent no-op.
 type WorktreeRemoval struct {
 	Path    string `json:"path"`
 	Removed bool   `json:"removed"`

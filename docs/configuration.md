@@ -2257,6 +2257,22 @@ deletes the record, for the reason nothing deletes a counter file — save the o
 withdrawal above, which removes a claim whose run was refused a developer slot
 and so never existed.
 
+**The worktree half of that "kept" has one bound on it, and the branch half has
+none.** Worktree registrations are a resource of the machine rather than of a
+run — every one of them is a path an agent's sandbox profile carries on every
+command it spawns — so `yoyo reconcile` retires the *checkout* of a settled run
+once eight more recent settled checkouts have accumulated, whether or not the
+fresh run has integrated and whether or not there is a fresh run at all. What
+that costs is the directory and only the directory: the branch is never touched
+by it, a checkout holding uncommitted work is kept, and the commits a
+development manager's guidance points at are on the branch, so cherry-picking
+them still works. The removal is written onto the stopped run's own record, so
+`yoyo status` and the docket say the checkout is gone rather than sending
+somebody to open it, and `yoyo triage repair` — which re-enters that worktree —
+refuses on that record rather than on finding an empty path. See
+[recovering interrupted runs](operations.md#recovering-interrupted-runs) for the
+whole of the bound.
+
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say
 whether its branch and worktree are still there. A stopped run promoted nothing,
