@@ -1134,6 +1134,31 @@ func grantEvidence(item beads.WorkItem) []string {
 	return []string{item.Title, item.Description, item.Design, item.AcceptanceCriteria}
 }
 
+// refuseProviderGrant refuses to start on an item that grants a path no provider
+// honours. Such a grant admits work no attempt can finish, so no attempt is
+// made: the run stops here, before the item is claimed and before a single
+// repair round is spent, which is the entire failure this gate was built for.
+//
+// It exists as well as the check admission makes, rather than instead of it,
+// because the two doors admission holds — a proposal and a tracker action —
+// carry an item's title and description and nothing else. A grant is honoured
+// from the design guidance and the acceptance criteria too, and nothing in the
+// harness writes either of those: they are set with the tracker's own command,
+// by an operator or by an agent's shell, so there is no admission door for them
+// to be refused at. This is where a grant written into one is caught, and it is
+// also what catches an item admitted before that gate existed.
+//
+// It reads exactly the fields the gate that obeys a grant reads, through the
+// same predicate admission asks, so what a run refuses and what a run would have
+// obeyed can never come apart.
+func refuseProviderGrant(item beads.WorkItem) error {
+	problems := protectedpath.GrantProblems(grantEvidence(item)...)
+	if len(problems) == 0 {
+		return nil
+	}
+	return fmt.Errorf("work item %s grants a path no run can write to: %w", item.ID, errors.Join(problems...))
+}
+
 // recordDeliveredInvariants keeps the run's account of which constraints its
 // change was held to. It merges rather than replaces, because a run delivers
 // twice — once to the developer and once to the reviewer — and the second
@@ -3875,7 +3900,11 @@ func validateWorkItem(item beads.WorkItem, requestedID, expectedStatus string) e
 	if blockers := blockingDependencies(item); len(blockers) > 0 {
 		return fmt.Errorf("work item %s is blocked by: %s", item.ID, strings.Join(blockers, ", "))
 	}
-	return nil
+	// Asked of a ready item and of a claimed one alike, because an item that
+	// acquired the grant after it was claimed is the same wall as one that carried
+	// it all along, and a run resumed into it spends the rounds a run refused here
+	// does not.
+	return refuseProviderGrant(item)
 }
 
 // blocksDependency is the tracker relation that makes one item wait for another.
@@ -3920,7 +3949,7 @@ Work only inside the current assigned worktree. Do not create, remove, or switch
 
 That boundary is enforced rather than trusted. The project's configuration directory and the homes its product artifacts, designs, and decision records live in are refused in your change: the harness compares what you touched against them before any check runs and before any reviewer sees the work, and hands the change back to you if it touches one of them. The only exception is a path this work item grants, on a line beginning ` + "`" + protectedpath.GrantMarker + "`" + ` in its title, description, design guidance, or acceptance criteria. Nothing you write grants a path, and neither does anything written into the item's notes, which is where a run's own record goes. If your work genuinely needs one, leave it alone and say so — the refusal you would get names the same thing this does.
 
-A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits, so an item that grants one of those has granted you nothing: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. Those files are the operator's to change by hand. If the work you were given needs one changed, do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
+A grant lifts the harness's refusal and never somebody else's. Claude Code refuses your writes to ".claude/settings.json" and ".claude/settings.local.json" above anything this harness permits: the editing tools are denied there however this run is configured, and the shell sandbox names the file and cannot be disabled. No grant reaches those paths, and an item that tries to grant one is refused before a run starts, so the case you can actually meet is work that needs one of them changed and says so in prose. Those files are the operator's to change by hand. Do the rest of the work, say in your summary exactly what has to go into the file and that a person has to put it there, and do not spend attempts finding another way in — there is not one.
 
 The work backlog is upstream in the same way. The product manager decides what is admitted to it and in what order it is pulled, so do not admit work to it, reorder it, or retire anything from it. Work you discover goes in your summary, as work to be admitted rather than work you have queued.
 

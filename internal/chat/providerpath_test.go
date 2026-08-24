@@ -15,6 +15,13 @@ const grantLine = "\n\n" + protectedpath.GrantMarker + " .claude/settings.json\n
 // every door into the queue: admitting work, rewriting admitted work, and
 // proposing it. A door that asked a weaker question is the door such an item
 // would arrive through.
+//
+// These three doors carry a title and a description. A grant is honoured from an
+// item's design guidance and acceptance criteria as well, and neither is
+// reachable from here — no action takes them, no creation sets them, and nothing
+// in the harness writes them. What covers a grant that arrives in one of those is
+// the run refusing to start, which is asserted in the orchestrator package by
+// TestARunRefusesToStartOnAnItemWhoseDesignGuidanceGrantsAPathNoProviderHonours.
 func TestAGrantNoProviderHonoursIsRefusedAtEveryDoorIntoTheQueue(t *testing.T) {
 	t.Parallel()
 

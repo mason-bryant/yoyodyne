@@ -26,11 +26,12 @@ func writeUpstream(t *testing.T, worktree, relative, content string) error {
 	return os.WriteFile(full, []byte(content), 0o600)
 }
 
-// Admission refuses a grant naming one of these paths, so no item admitted
-// after that gate carries one. Items admitted before it still do, and the
-// contract is what stops one of those spending its whole repair budget on a
-// write the provider was never going to allow: the developer is told before its
-// first attempt rather than after its last.
+// A grant of one of these paths is refused at admission, and a run refuses to
+// start on an item carrying one however it got there. What neither gate catches
+// is the item that describes the work and grants nothing — no marker, so nothing
+// to refuse — whose developer would otherwise spend attempts looking for a way
+// into a file the provider was never going to allow. The contract is what tells
+// that developer, before its first attempt rather than after its last.
 func TestTheDeveloperContractNamesEveryPathBeyondAGrant(t *testing.T) {
 	t.Parallel()
 
@@ -41,6 +42,48 @@ func TestTheDeveloperContractNamesEveryPathBeyondAGrant(t *testing.T) {
 		if !strings.Contains(developerContract, entry.Provider) {
 			t.Fatalf("the developer contract never names %q, which is what refuses %q", entry.Provider, entry.Path)
 		}
+	}
+}
+
+// A grant is honoured from an item's design guidance and acceptance criteria as
+// well as from its title and description, and the two doors admission holds — a
+// proposal and a tracker action — carry neither of those two: no action takes
+// them, no creation sets them, and they reach an item through the tracker's own
+// command. So the run reads all four itself and refuses to start, which is the
+// same refusal one step later and still before anything is claimed or spent.
+func TestARunRefusesToStartOnAnItemWhoseDesignGuidanceGrantsAPathNoProviderHonours(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{
+		ID:     "yoyodyne-task",
+		Title:  "Wire the goal guard into the developer's hook",
+		Status: "open",
+		Design: protectedpath.GrantMarker + " .claude/settings.json\n",
+	}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{"test -f feature.txt"})
+
+	_, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() on an item granting a path no provider honours = nil error, want it refused before it started")
+	}
+	// The refusal is worth having only if it says whose boundary this is and what
+	// to do about it, exactly as the one admission gives does.
+	for _, want := range []string{".claude/settings.json", "Claude Code", "operator"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal %q never names %q", err, want)
+		}
+	}
+	// The point of refusing here is that nothing was spent: this is the budget
+	// ifd.153 burned three rounds of against the same wall.
+	if developers := len(provider.requestsForRole(domain.RoleDeveloper)); developers != 0 {
+		t.Fatalf("developer invocations = %d, want none", developers)
+	}
+	if tracker.claimed {
+		t.Fatal("the item was claimed by a run that could never finish it")
 	}
 }
 

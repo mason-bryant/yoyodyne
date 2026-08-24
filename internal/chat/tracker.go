@@ -170,7 +170,7 @@ var trackerActionNames = []string{
 // answer is available where the item is being written. A conformance test keeps
 // this list equal to the one the refusal is decided from, which is the only
 // thing standing between the contract and a role told the wrong set.
-const providerPathClause = `A work item's text can admit one of the harness's protected paths into a run's scope, by naming that path after "` + protectedpath.GrantMarker + `" on a line of its own. Two paths are beyond any such grant, and the harness refuses a creation, an update, or a proposal whose text names one: ".claude/settings.json" and ".claude/settings.local.json". Claude Code refuses an agent's writes to those files above anything this harness permits, so a grant admits nothing there — what it admits is work no run can do, and the run finds that out by spending its whole repair budget against it. Where work genuinely needs one of those files changed, say in the item what has to be in it and that the operator puts it there by hand, and admit the rest of the work as ordinary work.`
+const providerPathClause = `A work item's text can admit one of the harness's protected paths into a run's scope, by naming that path after "` + protectedpath.GrantMarker + `" on a line of its own. Two paths are beyond any such grant, and the harness refuses a creation, an update, or a proposal whose text names one: ".claude/settings.json" and ".claude/settings.local.json". Claude Code refuses an agent's writes to those files above anything this harness permits, so a grant admits nothing there — what it admits is work no run can do, and the run finds that out by spending its whole repair budget against it. Where work genuinely needs one of those files changed, say in the item what has to be in it and that the operator puts it there by hand, and admit the rest of the work as ordinary work. A grant that reaches an item some other way is refused too, one step later: a run reads the item's design guidance and acceptance criteria as well, and refuses to start on it rather than spending an attempt.`
 
 // TrackerAction is one bounded operation on the work tracker. It carries
 // authority, unlike a proposal: the harness runs it as asked, so every argument
@@ -506,9 +506,18 @@ func (a TrackerAction) validateArguments() []error {
 	// it: an item admitted clean and then rewritten to carry the grant is the same
 	// item, and the run reads its text as it stands.
 	//
-	// The note is not read, for the same reason a run does not read one: the
-	// harness appends each run's own record there, so it is not a field a grant is
-	// ever taken from.
+	// A grant is honoured from four fields and this action carries two of them.
+	// The other two are not an omission here: nothing in the harness writes an
+	// item's design guidance or acceptance criteria — no action takes them and no
+	// creation sets them, so they are written with the tracker's own command and
+	// there is no door here for a grant in one of them to arrive through. What
+	// covers those is the run itself, which reads all four before it claims the
+	// item and refuses to start rather than spending an attempt; see
+	// orchestrator.refuseProviderGrant, which asks this same predicate.
+	//
+	// The note is excluded rather than unreachable, and for the reason a run does
+	// not read one: the harness appends each run's own record there, so a grant
+	// read from it could be an agent's own prose.
 	problems = append(problems, protectedpath.GrantProblems(a.Title, a.Description)...)
 	// The arguments an operation does accept are checked wherever they appear, so
 	// a value that could not be applied is refused before anything is run.

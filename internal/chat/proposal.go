@@ -317,9 +317,16 @@ func (p Proposal) Validate() error {
 	// A grant naming a path the provider refuses is caught here rather than by the
 	// run it would be admitted for. The harness's grant lifts the harness's own
 	// refusal and never a provider's, and the difference between the two is
-	// measured in repair rounds. Only the two fields the created item will carry
-	// are read: the rationale goes into the item's notes, which is not a field a
-	// grant is ever read from, so a marker there admits nothing to catch.
+	// measured in repair rounds.
+	//
+	// The two fields read are the two a created item carries. The rationale is
+	// excluded because it goes into the item's notes, which is not a field a grant
+	// is read from; the design guidance and the acceptance criteria are absent
+	// rather than excluded, because a proposal cannot set either and nothing in
+	// the harness ever does. A grant written into one of those with the tracker's
+	// own command is caught by the run instead, which reads all four before it
+	// claims the item — see orchestrator.refuseProviderGrant, which asks this same
+	// predicate.
 	problems = append(problems, protectedpath.GrantProblems(p.Title, p.Description)...)
 	seen := make(map[string]struct{}, len(p.Dependencies))
 	for i, dependency := range p.Dependencies {

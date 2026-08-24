@@ -886,8 +886,19 @@ of these, and the refusal names the provider: what is wrong is not the item's
 judgement about the path, but that the change is a person's to make by hand
 rather than a run's to be given. Only the marker is refused — prose that names
 one of these files grants nothing and admits fine, which is what lets an item
-*about* this boundary exist at all. The developer contract names the same paths,
-because an item admitted before this gate existed can still carry such a grant.
+*about* this boundary exist at all.
+
+**And once more, where all four fields are read.** Those three doors carry an
+item's title and description; a grant is honoured from its design guidance and
+acceptance criteria too, and nothing in the harness writes either of those — they
+reach an item through the tracker's own command. So the run asks the same
+question itself, over all four fields, before the item is claimed: a run that
+would start on such an item refuses to start, which is the same refusal one step
+later and still before a single repair round is spent. That is also what covers
+an item admitted before this gate existed. The developer contract names the same
+paths for the case no gate can catch — an item that describes the work without
+granting anything, whose developer would otherwise spend attempts looking for a
+way in.
 
 The list is short and evidenced rather than a guess at a provider's whole
 posture: an entry refuses work at admission, so a path added on suspicion costs
