@@ -59,6 +59,35 @@ See [the invariants](docs/design.md#design-invariants) and
 	}
 }
 
+func TestAnAnchorMovedToAnotherDocumentFailsTheCheck(t *testing.T) {
+	t.Parallel()
+
+	// The failure this package exists for, in the shape it actually arrives in: a
+	// guide is split, a section moves into the new document, and every link that
+	// named it as a `#fragment` of the old one still reads exactly as it did. The
+	// link did not change, so the patch that broke it does not contain it — which
+	// is why the moved anchor has to fail a check rather than wait for a reader.
+	root := newRepository(t)
+	write(t, root, "docs/configuration.md", `# Configuration
+
+See [checks](#checks) and [how long a check may take](#how-long-a-check-may-take).
+
+## How long a check may take
+`)
+	write(t, root, "docs/configuration/runs.md", "# Runs\n\n## Checks\n")
+
+	problems := check(t, root)
+	if len(problems) != 1 {
+		t.Fatalf("problems = %v", problems)
+	}
+	if problems[0].Path != "docs/configuration.md" || problems[0].Line != 3 || problems[0].Target != "#checks" {
+		t.Fatalf("problem = %#v", problems[0])
+	}
+	if !strings.Contains(problems[0].Reason, "carries no heading with that anchor") {
+		t.Fatalf("reason = %q", problems[0].Reason)
+	}
+}
+
 func TestALinkThatResolvesIsNotReported(t *testing.T) {
 	t.Parallel()
 

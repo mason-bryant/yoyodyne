@@ -16,11 +16,20 @@ make build
 ./bin/yoyo chat
 ```
 
-`make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs. Those same four are what this project declares as its
-[checks](configuration.md), and a run applies them one at a time before it will
-let a change reach review or integration — so anything a run has to exercise has
-to reach one of the four, and for content that is not Go that means `make test`.
+`make check` is `fmtcheck`, `links`, `test`, `race`, and `vet`, and it is the
+gate CI runs. Four of those five — every one but `links` — are what this project
+declares as its [checks](configuration.md), and a run applies them one at a time
+before it will let a change reach review or integration, so anything a run has to
+exercise has to reach one of the four, and for content that is not Go that means
+`make test`.
+
+`links` is the odd one out on purpose. It runs `internal/doclink` on its own, and
+that package's repository-wide pass is already inside `make test`, so the
+declared four still gate every run whether or not this target exists. What the
+separate target buys is the answer in a second instead of behind the whole Go
+suite, and `check` running it first, so a moved anchor stops a change before
+`race` spends a suite on one that is already red. Declaring it as a fifth check
+would mean editing `.yoyodyne/config.yaml`, which is the operator's.
 
 ## What `test` checks besides the code
 
@@ -36,7 +45,8 @@ Go check has ever run a line of bash.
 
 | What fails | Where it lives | What it means |
 | --- | --- | --- |
-| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. |
+| A link in any Markdown file here resolving to nothing — a path that is not in the repository, or a fragment naming a heading the target does not carry | `internal/doclink` | Fix the link, or the heading it points at. Absolute URLs are not resolved: they are somebody else's to keep working, and reaching for one would put the network in a deterministic check. `make links` runs this on its own. |
+| A heading moving out from under a link written somewhere the check above does not read — today the `docs/configuration.md#checks` that `yoyo init` writes into every generated project's configuration | `internal/doclink` (`repository_test.go`) | Put the heading back, or repoint the constant in `internal/config/scaffold.go` and the entry beside it. That citation is a forge URL, so the link check does not resolve it, and it names a heading in this repository all the same. The entry fails from the other side too, once nothing links to the anchor it pins. |
 | A goal in an in-force goals document written across more than one physical line | `internal/cli` (`goals_repository_test.go`) | Rejoin the statement onto one line. The goal is recorded whole either way; what the check holds is that the words an attribution must match are what the file says outright. |
 | A governed document whose place in the chain is wrong — a `supports` entry naming nothing, an artifact reaching no brief, or a revision recorded by a role that does not own the document | `internal/cli` (`artifact_repository_test.go`) | The harness reports these and never refuses a document over one; here they fail, because a warning nobody is made to read is how one of them breaks unnoticed. |
 | A claim in the release verb's own suite, [`scripts/cut-release-test.sh`](../scripts/cut-release-test.sh), that no longer holds | `internal/cli` (`release_repository_test.go`) | Read the claim it named and fix `scripts/cut-release.sh`. The verb is shell, so no other check here executes it, and its value is entirely in cuts it refuses — a refusal first exercised on the day it was needed is one nobody had. |

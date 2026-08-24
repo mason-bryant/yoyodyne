@@ -520,21 +520,29 @@ this from a pending edit into the ifd.20 failure repeated. The set stays explici
 is the enumeration it needs, which is the argument for the map existing as a
 checked-in document rather than as a decision recorded in a conversation.
 
-**Nothing mechanically enforces that a fragment resolves.** yoyodyne-ifd.121.2
-makes "every link resolves" its definition of done, and the only thing standing
-behind that today is a reviewer reading a diff — which is exactly the check that
-does not catch a silently-ignored fragment. This has already happened once at a
-much smaller scale: yoyodyne-ifd.54 records two README anchors left dead by a
-rename, found by hand afterwards and repaired by asking a later run to grep for
-the old names. This effort moves 22 README sections and 34 configuration
-sections at once, and 91 intra-document links with them. yoyodyne-ifd.166 is
-the second demonstration and a nearer miss: four configuration sections had no
-row in the table a tranche executes against, three of them cited from documents
-that would have been left pointing at nothing. A link checker over the repository's Markdown — resolving both
-relative paths and fragments, and covering `.github/` — wired into `make check`
-is the durable form of the whole policy above, and it is what would let a
-reviewer verify the tables here instead of re-deriving them. It is named here
-and in the summary as work to admit, not queued.
+**A fragment that resolves is now mechanically enforced.** yoyodyne-ifd.121.2
+makes "every link resolves" its definition of done, and until yoyodyne-ifd.159
+the only thing standing behind that was a reviewer reading a diff — which is
+exactly the check that does not catch a silently-ignored fragment. It had already
+happened once at a much smaller scale: yoyodyne-ifd.54 records two README anchors
+left dead by a rename, found by hand afterwards and repaired by asking a later
+run to grep for the old names. This effort moves 22 README sections and 34
+configuration sections at once, and 91 intra-document links with them.
+yoyodyne-ifd.166 was the second demonstration and a nearer miss: four
+configuration sections had no row in the table a tranche executes against, three
+of them cited from documents that would have been left pointing at nothing.
+
+`internal/doclink` is the durable form of the whole policy above. It resolves
+both relative paths and fragments across every Markdown file under the
+repository, `.github/` included, and it runs as `make links` — first in
+`make check`, and again inside `make test`, which is one of the four checks this
+project declares. So a tranche that moves a section and leaves a fragment behind
+fails before review, and a reviewer can verify the tables here by running the
+check rather than by re-deriving them. What it does not resolve is an absolute
+URL, so a citation of this repository written as a forge URL is held separately
+by name — `internal/doclink/repository_test.go` carries the list, which today is
+the `docs/configuration.md#checks` that `yoyo init` writes into every generated
+project. A tranche that moves `## Checks` has to repoint that constant too.
 
 ## What the architect is being asked
 

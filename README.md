@@ -539,10 +539,11 @@ make build
 ./bin/yoyo chat
 ```
 
-`make check` is `fmtcheck`, `test`, `race`, and `vet`, and it is the gate CI
-runs. Some of what `test` runs is not about the Go code at all: it reads this
-repository's own documents and executes the part of the build that is shell, so
-a documentation link that resolves to nothing, a goal written across more than
+`make check` is `fmtcheck`, `links`, `test`, `race`, and `vet`, and it is the
+gate CI runs. Much of it is not about the Go code at all: `links` resolves every
+link and `#fragment` this repository's Markdown makes to itself, and `test` reads
+this repository's own documents and executes the part of the build that is shell,
+so a documentation link that resolves to nothing, a goal written across more than
 one physical line, a governed document whose place in the chain is wrong, and a
 claim in the release scripts' own suites that no longer holds each fail a check
 rather than costing a reviewer a paragraph.
