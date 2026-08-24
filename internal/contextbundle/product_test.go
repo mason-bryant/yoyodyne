@@ -769,6 +769,68 @@ func TestShippedDocumentationNoteFitsWhatIsReservedForIt(t *testing.T) {
 	}
 }
 
+// Every document the shipped set names has to actually reach the context, or the
+// product manager is told the product ships something it was never shown. The
+// set grew from two entries to eight when the README was reduced to a landing
+// page and the content it used to carry moved into the documents it links to, so
+// what was one large document is now seven -- and a bound that quietly dropped
+// the tail of that list would look exactly like a product that never had those
+// surfaces, which is the ifd.20 narrowing arrived at by accident.
+func TestEveryShippedDocumentReachesTheContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	writeProductFile(t, root, "docs/product/brief.md", wellFormed)
+	for index, documentPath := range shippedDocumentation {
+		writeProductFile(t, root, documentPath, fmt.Sprintf("# Document %d\n\nSurface %d is described here.\n", index, index))
+	}
+
+	bundle, err := AssembleProduct(ProductRequest{RepositoryRoot: root, SpecificationsDirectory: "docs/product"})
+	if err != nil {
+		t.Fatalf("AssembleProduct() error = %v", err)
+	}
+	for index, documentPath := range shippedDocumentation {
+		if !strings.Contains(bundle.Text, "### Shipped documentation: "+documentPath) {
+			t.Errorf("%s is named in the shipped set and has no section in the context", documentPath)
+		}
+		if !strings.Contains(bundle.Text, fmt.Sprintf("Surface %d is described here.", index)) {
+			t.Errorf("%s has a section, but its content did not reach the context", documentPath)
+		}
+	}
+	// Documentation read and then dropped for room is named rather than silently
+	// absent, so at the default budget that list has to be empty too.
+	if strings.Contains(bundle.Text, "This documentation did not fit and is not included above:") {
+		t.Errorf("documentation was dropped for room at the default budget:\n%s", bundle.Text)
+	}
+}
+
+// The shipped set is a hardcoded list of paths, so a rename or a typo in it is a
+// document the product manager silently stops being given -- the same narrowing
+// again, reached by a spelling mistake rather than by a decision. The fixture
+// above cannot catch that, because it writes its fixtures from the same list, so
+// this checks the list against the repository it is a description of.
+func TestShippedDocumentationNamesDocumentsThisRepositoryHas(t *testing.T) {
+	t.Parallel()
+
+	total := 0
+	for _, documentPath := range shippedDocumentation {
+		information, err := os.Stat(filepath.Join("../..", documentPath))
+		if err != nil {
+			t.Errorf("the shipped set names %s, which this repository does not have: %v", documentPath, err)
+			continue
+		}
+		total += int(information.Size())
+	}
+	// Naming the README's siblings moved content out of the README rather than
+	// adding it, so the set must not cost the budget twice. This is the figure
+	// that claim is worth checking against, and it is reported either way: what
+	// the reduction bought is only visible as a number.
+	if total > defaultMaxProductBytes {
+		t.Errorf("the shipped documentation is %d bytes against a product budget of %d, so some of it cannot be carried", total, defaultMaxProductBytes)
+	}
+	t.Logf("shipped documentation is %d bytes across %d documents, against a product budget of %d", total, len(shippedDocumentation), defaultMaxProductBytes)
+}
+
 // Help is compiled into the product rather than read from it, so a caller that
 // supplies far too much of it is a mistake in the caller. It is cut rather than
 // carried, and cut at a line, so what survives is still help.

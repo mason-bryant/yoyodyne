@@ -152,11 +152,31 @@ between drafting and now, and three cited anchors had no row. Re-derive it with
 a search for `configuration.md#` across the tree; every row below except the two
 Tier 1 ones is Tier 2, cited only by files this repository may rewrite.
 
-**Re-derived again on 2026-08-24** after yoyodyne-ifd.160 trimmed the README.
-Thirteen of the nineteen rows lost their README citation entirely — the section
-that made it is now in one of the six documents — and the README keeps six
-citations across four anchors, none of which moved line, since everything the
-trim deleted was below them. The `docs/operations.md` line numbers on
+**Re-derived again on 2026-08-24** after yoyodyne-ifd.160 trimmed the README,
+by searching the trimmed README for `configuration.md#`. That search returns six
+citations, and the table's README column is exactly those six:
+
+| README line | Anchor |
+|---|---|
+| `:328` | `#where-the-tracker-syncs` |
+| `:370` | `#checks` |
+| `:382` | `#how-long-a-check-may-take` |
+| `:406` | `#when-the-repository-ignores-the-configuration` |
+| `:526` | `#publishing-through-pull-requests` |
+| `:551` | `#where-the-tracker-syncs` |
+
+So six citations across **five** anchors, on five of the nineteen rows —
+`#where-the-tracker-syncs` is cited twice, from step 2 and from
+`## Configuring a project`. **Twelve rows lost their README citation entirely**,
+the section that made it now being in one of the six documents, and two rows
+never had one. Four of the six citations did not move line, because the trim
+deleted nothing above `README.md:526`; the two that did move are
+`#publishing-through-pull-requests` at `:524` → `:526` and the second
+`#where-the-tracker-syncs` at `:2446` → `:551`, the latter because
+`## Configuring a project` was held back rather than merged and travelled up the
+file with everything deleted ahead of it.
+
+The `docs/operations.md` line numbers on
 `#losing-a-race-for-the-target-branch` and `#what-one-work-item-has-been-given`
 were each wrong and were swapped between the two rows; they are corrected here.
 Line numbers in the other cited documents were not re-verified in that pass.
@@ -178,9 +198,9 @@ Line numbers in the other cited documents were not re-verified in that pass.
 | `#losing-a-race-for-the-target-branch` | `docs/operations.md:665` | `configuration/publishing.md` |
 | `#how-long-a-check-may-take` | `README.md:382` | `configuration/runs.md` |
 | `#avatars` | `docs/slack/setup.md:170` | `configuration/agents.md` |
-| `#approving-a-document` | `README.md:2649`, `docs/artifacts.md:51` | `configuration/artifacts.md` |
-| `#research-sources` | `README.md:725`, `docs/conversation.md:125` | `configuration/agents.md` |
-| `#how-long-one-role-may-ask-another` | `README.md:1487`, `docs/conversation.md:777` | `configuration/agents.md` |
+| `#approving-a-document` | `docs/artifacts.md:51` | `configuration/artifacts.md` |
+| `#research-sources` | `docs/conversation.md:125` | `configuration/agents.md` |
+| `#how-long-one-role-may-ask-another` | `docs/conversation.md:777` | `configuration/agents.md` |
 | `#when-the-repository-ignores-the-configuration` | `README.md:406` | `configuration/setup.md` |
 
 The last three rows are the ones the drafting-time sweep missed, and they are
@@ -308,7 +328,10 @@ This is the one place the map spends its size budget deliberately: the README
 lands at roughly 500 lines rather than the 150 a pure landing page would be, and
 the sections below the quick start are what carry the weight of the reduction.
 
-Target order:
+Target order. **The line ranges below are the README as it stood before
+yoyodyne-ifd.160 executed this section; they are the plan's own citations rather
+than a description of the file as it now reads**, and the trimmed README follows
+this order with `## Configuring a project` held back between steps 8 and 9:
 
 1. `# yoyo` — the value proposition, unchanged (README.md:1–31).
 2. **User testimonials**, unchanged (:32–49).
@@ -504,9 +527,11 @@ judgement rather than arithmetic, so each is stated:
 - **`## How long one role may ask another`** is the section that belonged to no
   document at all, and it goes to `configuration/agents.md` for the same reason:
   `exchange.max_rounds` bounds one agent asking another, which is a property of
-  the agents rather than of the work. It is cited from `README.md:1487` and
+  the agents rather than of the work. It was cited from `README.md:1487` and
   `docs/conversation.md:777`, so a tranche that dropped it would have left two
-  live fragments resolving to nothing.
+  live fragments resolving to nothing; ifd.160's trim deleted the README's copy
+  of the section that made the first of those, so `docs/conversation.md:777` is
+  now the only one, and the argument for the row is unchanged.
 - **`## Merge and removal semantics`** (+ `### What fails closed`) moves from
   `configuration/publishing.md` to `configuration/setup.md`. It was misassigned
   by its title: its content is how `extends` layers combine and what refuses a
