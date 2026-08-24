@@ -89,6 +89,32 @@ func TestAChildOfWorkWhoseChangeLandedIsNotHeld(t *testing.T) {
 	}
 }
 
+// Reparenting names a parent too and is deliberately not gated: what the gate
+// rests on is that the child's text was written just now against the change the
+// role is looking at, and an item moved under a new parent was written earlier.
+// This pins that as a decision rather than leaving it to read as an oversight
+// somebody later closes without noticing what it would assert.
+func TestReparentingUnderWorkWhoseChangeHasNotLandedIsNotGated(t *testing.T) {
+	t.Parallel()
+
+	const moved = "yoyodyne-ifd.101"
+	tracker := substrateTracker()
+	tracker.items[moved] = beads.WorkItem{ID: moved, Title: "work written before any of this", Status: "open"}
+	reply := substrateReply(t, tracker, unlandedParent(), trackerReply("It belongs under the stopped item.",
+		`{"action":"reparent","id":"`+moved+`","parent":"`+substrateParent+`","reason":"it is part of that work"}`))
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v", reply.Actions)
+	}
+	if len(tracker.links) != 0 || len(tracker.blocked) != 0 {
+		t.Fatalf("a reparenting was gated: links %#v, blocked %#v", tracker.links, tracker.blocked)
+	}
+	// The move itself is the one update, and nothing wrote a substrate note beside
+	// it: the harness has no evidence that this item assumes the parent's files.
+	if len(tracker.updates) != 1 || tracker.updates[0].change.AppendNotes != "" {
+		t.Fatalf("updates = %#v, want the move alone", tracker.updates)
+	}
+}
+
 // A tracker that will not record the dependency leaves the one state this must
 // never produce: a child in the queue, written against files that are not there,
 // with nothing holding it back. So the hold lands on the item itself instead.

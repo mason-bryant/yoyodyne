@@ -23,6 +23,15 @@ package chat
 // landed is exactly the work most in need of being broken down, and a
 // decomposition refused until the change landed would refuse the decision the
 // development manager was reading the docket to make.
+//
+// It is on creation and not on reparenting, which names a parent too. What the
+// gate rests on is that the child's text was written just now, against the
+// change the role decomposing is looking at. An item moved under a new parent
+// was written earlier, under circumstances the move says nothing about, so
+// linking it would assert a substrate dependency there is no evidence for.
+// Reparenting under work whose change has not landed therefore adds no link and
+// no clause, and the development manager records that dependency itself where it
+// is real, exactly as it records every other one.
 
 import (
 	"context"
