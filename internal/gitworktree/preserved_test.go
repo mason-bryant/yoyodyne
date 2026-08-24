@@ -142,6 +142,47 @@ func TestRetiringPreservedArtifactsTakesBothWhenTheWorkIsPromoted(t *testing.T) 
 	}
 }
 
+// The registration nothing else here can reach. A checkout somebody removed by
+// hand leaves bookkeeping no run record can act on — there is no directory left
+// to point a removal at — and every one of those entries is a path an agent's
+// sandbox profile carries on every command it spawns.
+func TestPruningClearsTheRegistrationOfACheckoutThatIsGone(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree := preservedWorktree(t, manager, "yoyodyne-pruned")
+	if err := os.RemoveAll(worktree.Path); err != nil {
+		t.Fatalf("RemoveAll() error = %v", err)
+	}
+
+	prune, err := manager.PruneRegistrations(context.Background())
+	if err != nil {
+		t.Fatalf("PruneRegistrations() error = %v", err)
+	}
+	if len(prune.Pruned) != 1 || prune.Pruned[0] != worktree.Path {
+		t.Fatalf("pruned = %#v, want the registration of %s", prune.Pruned, worktree.Path)
+	}
+	if prune.Registered != 1 {
+		t.Errorf("registered = %d, want only the primary checkout left", prune.Registered)
+	}
+	registered, _, err := manager.registeredWorktree(context.Background(), worktree.Path)
+	if err != nil || registered {
+		t.Fatalf("registered = %t, error = %v, want the registration gone", registered, err)
+	}
+	// The branch is left exactly as every other removal here leaves it: whether it
+	// may go is a question about the target rather than about the bookkeeping.
+	if _, err := manager.resolveBranchCommit(context.Background(), worktree.Branch); err != nil {
+		t.Fatalf("the branch was deleted with the registration: %v", err)
+	}
+	// Sweeping again is what every later reconcile does, and a repository with
+	// nothing stale has nothing to prune.
+	repeated, err := manager.PruneRegistrations(context.Background())
+	if err != nil || len(repeated.Pruned) != 0 || repeated.Registered != 1 {
+		t.Fatalf("second PruneRegistrations() = %#v, error = %v", repeated, err)
+	}
+}
+
 // The ownership rule every other removal here is held to: a worktree this
 // manager did not create is not this manager's to remove.
 func TestRetiringAWorktreeThisManagerDoesNotOwnIsRefused(t *testing.T) {

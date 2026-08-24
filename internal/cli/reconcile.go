@@ -85,6 +85,14 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			failed = true
 		}
 	}
+	for _, checkout := range convergence.Checkouts {
+		if checkout.Failure != "" {
+			failed = true
+		}
+	}
+	if convergence.PruneFailure != "" {
+		failed = true
+	}
 	if jsonOutput {
 		output := reconcileOutput{Runs: results, Convergence: convergence, Docketed: docketed}
 		if results == nil {
@@ -95,6 +103,9 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		if output.Convergence.Branches == nil {
 			output.Convergence.Branches = []orchestrator.BranchSweep{}
+		}
+		if output.Convergence.Checkouts == nil {
+			output.Convergence.Checkouts = []orchestrator.CheckoutSweep{}
 		}
 		if err != nil {
 			output.Error = err.Error()
@@ -155,6 +166,27 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 // target and per preserved branch on every sweep would bury the ones that
 // actually need reading. `--json` carries the whole sweep either way.
 func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Convergence) {
+	if convergence.PruneFailure != "" {
+		fmt.Fprintf(stderr, "stale worktree registrations not pruned: %s\n", convergence.PruneFailure)
+	}
+	// The count of what is left is said only when something went, because it is
+	// the pair that is worth reading: a registration count on every sweep is a
+	// line nobody reads, and one beside a pruning is the answer to how close the
+	// repository is to the wall this bound exists to keep it off.
+	if len(convergence.Prune.Pruned) > 0 {
+		fmt.Fprintf(stdout, "%d stale worktree registration(s) pruned, %d registered afterwards\n",
+			len(convergence.Prune.Pruned), convergence.Prune.Registered)
+	}
+	for _, checkout := range convergence.Checkouts {
+		switch {
+		case checkout.Failure != "":
+			fmt.Fprintf(stderr, "%s not retired: %s\n", checkout.Path, checkout.Failure)
+		case checkout.Removed && checkout.Superseded != "":
+			fmt.Fprintf(stdout, "%s retired: run %s landed the work it was holding\n", checkout.Path, checkout.Superseded)
+		case checkout.Removed:
+			fmt.Fprintf(stdout, "%s retired: it is past the tail of settled checkouts kept\n", checkout.Path)
+		}
+	}
 	for _, target := range convergence.Targets {
 		switch {
 		case target.Advanced:
@@ -183,6 +215,13 @@ Settles every run an interrupted process left outstanding, then converges local
 state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
+
+It also bounds what the repository's worktree bookkeeping carries, because every
+registration is a path an agent's sandbox profile carries on every command it
+spawns. Registrations whose checkout is already gone are pruned, and a settled
+run's preserved checkout is retired once a later run has landed its work or once
+it falls past the tail of recent ones kept. A checkout holding uncommitted work
+is kept whatever the tail says, and no branch is deleted by either step.
 
 It then builds the triage docket: the runs that ended on a durable blocker and
 the approved publications the forge has not merged, put where the development

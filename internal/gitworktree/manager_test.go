@@ -989,6 +989,65 @@ func TestRepositoryUnderTestLeavesNothingForTempDirToRace(t *testing.T) {
 	writeFile(t, survivor.Path, "work.txt", "left for teardown\n")
 }
 
+// The ordinary creation, which is what makes the refusal below safe to have: a
+// checkout of a commit holds that commit's files, so the hygiene check Create
+// makes has nothing to say about it and the run starts.
+func TestACreatedWorktreeHoldsItsBranchAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-clean",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(worktree.Path, "README.txt")); err != nil {
+		t.Fatalf("the created worktree does not hold its branch's files: %v", err)
+	}
+	if err := manager.refuseStrayFiles(context.Background(), worktree.Path); err != nil {
+		t.Fatalf("refuseStrayFiles() refused an ordinary creation: %v", err)
+	}
+}
+
+// The contamination this exists for: another effort's output present in a run's
+// checkout and absent from its branch, which had a developer building against
+// files it did not have while two reviewers correctly reported them missing.
+//
+// It is asked of the check Create makes rather than of Create itself, because
+// Create refuses a path that exists at all: nothing can be put in the directory
+// before the checkout is made, so the only way a stray file gets there is
+// afterwards — a `post-checkout` hook the repository runs, or another process
+// writing into the worktree root — which is exactly the state built here.
+func TestACreatedWorktreeHoldingAnotherEffortsFilesIsRefused(t *testing.T) {
+	t.Parallel()
+
+	repository := newRepository(t)
+	manager := newManager(t, repository, filepath.Join(t.TempDir(), "worktrees"))
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:      testRunID,
+		WorkItemID: "yoyodyne-contaminated",
+		BaseRef:    "HEAD",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "another-efforts-output.md", "written by something that is not this run\n")
+
+	err = manager.refuseStrayFiles(context.Background(), worktree.Path)
+	if err == nil {
+		t.Fatal("refuseStrayFiles() accepted a checkout holding a file its branch does not have")
+	}
+	// Naming the file is the whole of what makes the refusal actionable: a
+	// developer with no shell cannot find out which half is which any other way.
+	if !strings.Contains(err.Error(), "another-efforts-output.md") {
+		t.Fatalf("refusal = %v, want it to name the file that is not the branch's", err)
+	}
+}
+
 func newManager(t *testing.T, repository, worktreeRoot string) *Manager {
 	t.Helper()
 	manager, err := New(Options{

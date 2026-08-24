@@ -612,6 +612,38 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "names what it removed",
 		},
 		{
+			// The third way a removal is earned: this run promoted nothing and
+			// nothing superseded it, and the convergence sweep retired the checkout
+			// to keep the repository's registrations bounded.
+			name: "removal earned by the convergence sweep",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.CheckoutRetired = true
+			},
+		},
+		{
+			name: "a retired checkout that removed nothing",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.CheckoutRetired = true
+			},
+			problem: "names the worktree it removed",
+		},
+		{
+			// The sweep's claim is the narrowest of the three and earns exactly one
+			// removal. A branch is somebody's preserved work until the target is
+			// proven to carry it, which is a question this claim never asks.
+			name: "a retired checkout claiming its branch as well",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.BranchRemoved = true
+				state.CheckoutRetired = true
+			},
+			problem: "never its branch",
+		},
+		{
 			name: "a run recorded as superseding itself",
 			mutate: func(state *State) {
 				state.Integration = nil

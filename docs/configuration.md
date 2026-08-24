@@ -374,8 +374,14 @@ review is not a change anybody can trust.
 ```
 
 The directory is walked to any depth, and every `.md` file inside it is a
-specification. Its prose is checked for the introduction-then-goals shape above,
-and its identity — the frontmatter naming its id, kind, status, and what it
+specification, with one exception: a `README.md` is a directory index rather than
+a document stating anything, so neither the shape above nor
+[artifact identity](#artifact-identity-and-metadata) is asked of it, and it is not
+counted as a specification. It is still read into the context, under a heading of
+its own, because what is filed in a directory is worth knowing to whoever is about
+to write the first document into it.
+Everything else has its prose checked for the introduction-then-goals shape
+above, and its identity — the frontmatter naming its id, kind, status, and what it
 supports — is checked separately, by [artifact identity](#artifact-identity-and-metadata).
 The two are read by different things and reported differently, so a
 specification with a malformed id is still read as intent, and one with no goals
@@ -393,7 +399,10 @@ loading intent in the wrong shape and saying so.
 
 An empty or missing specifications directory is not an error either. The
 conversation says that product intent is not written down, which is a true
-statement about the repository rather than a reason to fail.
+statement about the repository rather than a reason to fail. A directory holding
+nothing but the indexes `yoyo init` wrote is that same directory: an index states
+no intent, so it is not counted as a specification and the conversation still
+says intent is not written down.
 
 The context also states, in so many words, what the directory records of the two
 documents intent is written in: the **brief** saying what the product is and who
@@ -481,6 +490,23 @@ which sits inside the decisions home by default and carries
 [its own identity scheme](#architectural-invariants). A home that does not exist
 is not an error — a project that has not written its designs down yet records no
 design artifacts.
+
+That exemption is what makes the `README.md` the place these directories explain
+themselves in, and `yoyo init` writes one for every home above — the
+specifications directory, the `goals` directory under it, the designs, the
+decision records, and the invariants. Each states three things and nothing else:
+what is filed there, which agent owns it, and whether you may edit one of those
+documents by hand. None of that is policy the file invents. A role that is not
+the owner proposes an amendment and waits, per the ownership table above; your
+own edit is never refused, and what it is is reported — a revision recorded under
+a role that does not own the document is an unauthorized revision every load
+names, and what a change leaves stale downstream is
+[`yoyo stale`](#traceability-references-and-orphans)'s to report. An index that is
+already there is left alone, `--force` included, because it is the project's own
+prose rather than something `init` generated; `yoyo doctor` reports one that is
+missing or has stopped stating the three things, and `yoyo setup` offers to write
+it — asking separately, and defaulting to no, before it replaces one somebody
+wrote.
 
 The metadata is the model the invariants already use, deliberately rather than a
 second scheme beside it: **the file name is the id**, a frontmatter id that
@@ -1091,16 +1117,42 @@ may state is witnessed without its words rather than stored cut in half.
 **The witness covers a goal only from the moment it is written.** An attribution
 made before this existed carries none, so replacing its notes reads as work
 nobody ever attributed and does not fail the audit. `yoyo goals witness` closes
-that gap over a backlog: it records, on every admitted item whose notes state a
-goal and which carries no witness, the goal those notes already state. It writes
-no attribution and decides nothing — the statement is the item's own, copied to
-where a careless writer cannot reach it — and it is worth running once after
-upgrading, and again after any bulk import of work attributed elsewhere.
+that gap: it records, on every work item whose notes state a goal and which
+carries no witness, the goal those notes already state. It writes no attribution
+and decides nothing — the statement is the item's own, copied to where a careless
+writer cannot reach it — and it is worth running once after upgrading, and again
+after any bulk import of work attributed elsewhere. It sweeps every status the
+tracker holds rather than the queue, because the command that destroys an
+attribution reaches a claimed or closed item just as easily, and most of the
+losses on record were on items that had already closed.
+
+**The sweep is wider than the audit, and what a witness buys differs across that
+line.** `attribution` reads the backlog — `open` and `blocked` — so on those a
+witnessed loss is a `lost` state it reports and exits non-zero for. On claimed
+and closed items the sweep also reaches, nothing reports the loss: what the
+witness buys there is recovery, because the statement is kept where replacing
+the notes cannot reach it and a destroyed attribution can be put back from the
+record rather than judged again.
+
+`yoyo goals guard` is the same loss stopped rather than reported. Wired as a
+`PreToolUse` hook on `Bash`, it reads the command an agent session is about to
+run and refuses `bd update <id> --notes`, which replaces an item's notes and
+takes the goal recorded in them with it; a replacement carrying a
+`Goal served:` line through is allowed, because that one destroys nothing. It
+decides from the command line alone and never reads the item, so it checks such a
+line is present and not that it is the item's own — a substitution passes it, and
+the witness rather than the guard is what holds the words that were replaced. The
+harness gives it to every developer run it makes on the Claude Code backend,
+which is the backend that passes the hook; any other agent session is covered
+only by wiring the same command into that session's own hooks. It is passed to
+the provider rather than enforced by the harness, so where the hook does not fire
+the command runs as it did before and nothing reports that it did.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
 yoyo goals attribution   # what each admitted work item says it is for
-yoyo goals witness       # witness the goals already recorded on admitted work
+yoyo goals witness       # witness the goals already recorded on work items
+yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 `attribution` exits non-zero for an item whose attribution is `unresolved` or
@@ -1676,7 +1728,14 @@ own check of the remote target then refuses rather than force-resolves.
 supported and does exactly half of the above: the harness pushes and opens the
 pull request, and then stops. **It merges nothing.** You get an open pull
 request, a run branch that stays on the remote, and a preserved worktree; you
-merge, and the harness never touches any of the three afterwards.
+merge, and the harness promotes, merges, and deletes none of the three
+afterwards. The one thing it does eventually do to them is bounded and is not a
+promotion: `yoyo reconcile` retires the *checkout* of a settled run once a later
+run has landed that work or once it falls past the tail of recent ones kept —
+never the branch, never a checkout holding uncommitted work, and never anything
+that would change what you are being asked to merge. See
+[recovering interrupted runs](operations.md#recovering-interrupted-runs) for why
+that bound exists.
 
 That is deliberate rather than a gap. Merging is a promotion, promotion is what
 `approvals.integration` governs, and a harness that merged under a `human`
@@ -1684,10 +1743,19 @@ integration policy would be taking the decision that setting reserves for you.
 
 | `publishing` | `integration` | What you get |
 | --- | --- | --- |
-| `human` | `human` | Local branch and worktree, preserved for you. |
+| `human` | `human` | Local branch and worktree, preserved for you — the branch indefinitely, the worktree until [the tail bound](operations.md#recovering-interrupted-runs) reaches it. |
 | `human` | `automatic` | Local fast-forward into the target branch, artifacts removed. Nothing pushed. |
 | `automatic` | `automatic` | Pull request opened, merged on approval — or queued with the forge until your required checks pass — and the branch removed locally, then on the remote once the merge has happened. |
-| `automatic` | `human` | Pull request opened and left for you. Nothing merged, nothing cleaned up. |
+| `automatic` | `human` | Pull request opened and left for you. Nothing merged, and nothing cleaned up but the worktree once [the tail bound](operations.md#recovering-interrupted-runs) reaches it. |
+
+The two rows that preserve a worktree say "until the tail bound reaches it"
+because `yoyo reconcile` retires the *checkout* of a settled run once eight more
+recent ones have accumulated, or once a later run lands that work. Under
+`integration: human` a successful run promotes nothing, so those runs are exactly
+what the tail reaches. Nothing else about either row moves: the branch stays, a
+checkout holding uncommitted work stays, the pull request is neither merged nor
+closed, and what the retirement removed is written onto that run's own record so
+nothing afterwards names a directory that is gone.
 
 ### Which branch is authoritative
 
@@ -2189,12 +2257,34 @@ deletes the record, for the reason nothing deletes a counter file — save the o
 withdrawal above, which removes a claim whose run was refused a developer slot
 and so never existed.
 
+**The worktree half of that "kept" has one bound on it, and the branch half has
+none.** Worktree registrations are a resource of the machine rather than of a
+run — every one of them is a path an agent's sandbox profile carries on every
+command it spawns — so `yoyo reconcile` retires the *checkout* of a settled run
+once eight more recent settled checkouts have accumulated, whether or not the
+fresh run has integrated and whether or not there is a fresh run at all. What
+that costs is the directory and only the directory: the branch is never touched
+by it, a checkout holding uncommitted work is kept, and the commits a
+development manager's guidance points at are on the branch, so cherry-picking
+them still works. The removal is written onto the stopped run's own record, so
+`yoyo status` and the docket say the checkout is gone rather than sending
+somebody to open it, and `yoyo triage repair` — which re-enters that worktree —
+refuses on that record rather than on finding an empty path. See
+[recovering interrupted runs](operations.md#recovering-interrupted-runs) for the
+whole of the bound.
+
 A retirement is written onto the stopped run itself as well, under that run's own
 lease, because its record is what `yoyo status` and the docket read to say
 whether its branch and worktree are still there. A stopped run promoted nothing,
 so the removal names the run that superseded it — `artifacts_retired_by` on the
 run's state — which is the second way a recorded removal is earned beside a
-promotion of the run's own. A retirement the harness could not write onto that
+promotion of the run's own. There is a third, and it is narrower than either:
+the convergence sweep retiring a settled run's checkout to keep the
+repository's worktree registrations bounded, which records `checkout_retired`
+beside it and never earns the removal of a branch. A retirement that both
+happened to — a checkout the sweep took because a later run had landed the
+work — records both, so which sweep removed it and which run answered for it
+are two facts rather than one guessed at. A retirement the harness could not write onto that
 run is reported rather than swallowed: the artifacts are gone and its record
 still says otherwise, which is a thing to go and correct.
 

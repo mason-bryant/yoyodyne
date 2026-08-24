@@ -787,6 +787,18 @@ saying how many review rounds the item has accumulated against the configured
 cap and what a repair grant would be worth. A decision made without those last
 ones is a decision the cap then contradicts.
 
+It carries what triage has already decided about the item too, joined from the
+durable record the guards spend and refuse against at the moment the docket is
+read rather than frozen into the entry when the work stopped: the repair grants,
+re-runs, and merge re-arms recorded beside the caps that refuse the next one,
+what a grant came to and whether the round cap cut it down, what the item now
+stands committed to, and which of those decisions the harness has carried out.
+Where a further decision would be refused, the entry says so and says which
+budget refuses it. That is what stops a decision already recorded from reading
+as an entry nobody has looked at — the reading that had one authorized recovery
+decided a second time, and then paid for by a round-trip on every docket after
+it.
+
 An entry states that something stopped; it decides nothing, and nothing decides
 it for the development manager. Docketing is keyed to what stopped, so a run
 that dockets its own ending and a sweep that settles it afterwards produce one
@@ -900,6 +912,19 @@ that are gone. Anything that could not be retired is recorded as kept and why; a
 branch whose work nothing promoted is never deleted, so what survives is
 discoverable rather than orphaned.
 
+**One thing takes a preserved checkout earlier than that, and it takes only the
+checkout.** Worktree registrations are a resource of the machine rather than of
+a run — every one of them is a path an agent's sandbox profile carries on every
+command it spawns — so `yoyo reconcile` retires the checkout of a settled run
+once eight more recent settled checkouts have accumulated, whether or not
+anything ever re-ran it. The branch is never touched by that, a checkout holding
+uncommitted work is kept, and the removal is written onto the run's own record
+the same way, so `/status` and the docket stay truthful. What it costs is stated
+in the repair section below: a repair is re-entry into a worktree, so a stoppage
+whose checkout the tail has reached can be re-run but not repaired.
+[Recovering interrupted runs](operations.md#recovering-interrupted-runs) is the
+whole of the bound.
+
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
@@ -927,16 +952,25 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Five things refuse it, and every one of them is asked before either of those
+Six things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
 run has to be really over. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
-to be there and not already carried out. And **the preserved worktree has to be
-as the harness left it**: what a continued developer is handed back is whatever is
-in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so.
+to be there and not already carried out. **The preserved worktree has to still be
+there**: what the run's own record says was retired is gone, whether a re-run
+retired it or the convergence sweep's tail bound did, and the refusal says so
+rather than sending a developer into a directory that is not there. And **it has
+to be as the harness left it**: what a continued developer is handed back is
+whatever is in that worktree, so a HEAD that moved — you mid-surgery, an agent
+that committed — refuses to a person, leaves the item blocked, and says so.
+
+The fifth of those is the one worth reading twice, because it is what the tail
+bound above costs. A repair is re-entry into a worktree and a re-run is not, so a
+stoppage nobody decided about for long enough that eight more recent ones
+accumulated keeps every other decision — re-run, re-scope, wait, escalate — and
+loses that one. Deciding a docketed stoppage promptly is what keeps it.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

@@ -52,7 +52,10 @@ import (
 // further repair attempts triage has continued a stopped run on are the newest
 // and behave identically: absent means nothing ever continued this run, which is
 // what every run written before triage could meant, and the configured budget is
-// then the whole of what bounded its repairs.
+// then the whole of what bounded its repairs. The checkout the convergence sweep
+// retired is the newest and behaves the same way: absent means no sweep ever
+// removed this run's preserved checkout, which is what every run written before
+// the registrations were bounded meant.
 const StateSchemaVersion = 1
 
 // The shape of the two things a run records about how it was configured. They
@@ -424,6 +427,42 @@ func (d DirectivePause) Validate() error {
 	return errors.Join(problems...)
 }
 
+// DependencyPause is the unfinished work a run stopped short for: the blocking
+// dependencies its work item carried when the run last read it. It is recorded
+// before the run returns, for the same reason a directive pause is — the pause
+// has to survive the process, so a later invocation can tell a run that is
+// waiting from one that was interrupted, and resume it rather than start a
+// second attempt at the same item.
+//
+// The dependency graph itself lives in the tracker, which is what makes it
+// reachable from every process. What is copied here is only what a reader of
+// this run needs in order to say what the run is waiting for without going and
+// finding it: the items it is waiting on.
+type DependencyPause struct {
+	Blockers []string `json:"blockers"`
+}
+
+// Summary names the work this pause is waiting on, in one line, for a reader who
+// needs to know what to close rather than the whole dependency graph.
+func (d DependencyPause) Summary() string {
+	return strings.Join(d.Blockers, ", ")
+}
+
+// Validate rejects a recorded pause that cannot say what the run is waiting for.
+// A pause nobody can name the blocker of is a pause nobody can lift, which is
+// exactly the state enforcing dependencies exists to prevent.
+func (d DependencyPause) Validate() error {
+	if len(d.Blockers) == 0 {
+		return errors.New("blockers is required")
+	}
+	for _, blocker := range d.Blockers {
+		if strings.TrimSpace(blocker) == "" {
+			return errors.New("every blocker must name the work item it waits on")
+		}
+	}
+	return nil
+}
+
 // MaxRepairContinuations bounds how many granted continuations one run's record
 // may carry. What actually bounds them is the item's per-item grant cap, which
 // refuses long before this; this is the record's own bound, so a budget somebody
@@ -564,15 +603,36 @@ type State struct {
 	WorktreeRemoved bool `json:"worktree_removed,omitempty"`
 	BranchRemoved   bool `json:"branch_removed,omitempty"`
 	// ArtifactsRetiredBy names the run that superseded this one, on a run whose
-	// artifacts were retired by triage rather than cleaned up after a promotion
-	// of its own. It is the second way a removal is earned, and the reason it is
-	// recorded rather than inferred: a stopped run integrates nothing, so without
-	// it a removal on one would be a claim with no evidence behind it — which is
-	// exactly what the rule below refuses.
+	// artifacts were retired for it rather than cleaned up after a promotion of
+	// its own — by triage starting the successor, or by the convergence sweep
+	// finding one had already landed. It is the second way a removal is earned,
+	// and the reason it is recorded rather than inferred: a stopped run integrates
+	// nothing, so without it a removal on one would be a claim with no evidence
+	// behind it — which is exactly what the rule below refuses.
+	//
+	// It says which run answered for the work and never which mechanism removed
+	// the artifacts, so a reader that has to tell a triage retirement from a
+	// sweep's reads CheckoutRetired beside it rather than this alone.
 	//
 	// Absent is every run whose artifacts it removed itself, which is all of them
-	// until triage retires one.
+	// until something supersedes one.
 	ArtifactsRetiredBy string `json:"artifacts_retired_by,omitempty"`
+	// CheckoutRetired records that the convergence sweep removed this settled
+	// run's preserved checkout to keep the repository's worktree registrations
+	// bounded. It is the third way a removal is earned, beside a promotion of the
+	// run's own and a successor that superseded it, and it is deliberately the
+	// weakest of the three: it earns the removal of a registration and never of a
+	// branch, because a registration whose directory held nothing uncommitted
+	// loses nothing while every commit it carried is still on a branch the sweep
+	// only ever deletes on proof the target already carries it.
+	//
+	// It is recorded on every retirement the sweep makes, including one it made
+	// because a successor had landed the work — which then carries both, since
+	// what removed the checkout and what answered for the work are two facts.
+	//
+	// Absent is every run whose checkout no sweep took, which is all of them until
+	// the tail of kept checkouts moves past one.
+	CheckoutRetired bool `json:"checkout_retired,omitempty"`
 	// TargetBranch is the integration target fixed when the worktree was
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
@@ -710,6 +770,16 @@ type State struct {
 	// branch, and is picked up again once the directive is resolved. It is cleared
 	// as the run resumes.
 	DirectivePause *DirectivePause `json:"directive_pause,omitempty"`
+	// DependencyPause records that unfinished work this item was made to wait on
+	// stopped the run short of finishing. Like a directive pause it is an
+	// instruction to resume later rather than a failure, so a run carrying one
+	// keeps its claim, its worktree, and its branch, and is picked up again once
+	// the work it waits on is closed. It is cleared as the run resumes.
+	//
+	// It is a separate field from the directive pause rather than a second kind of
+	// one because what lifts them differs: a directive is settled by a person
+	// deciding, and this is lifted by other work finishing.
+	DependencyPause *DependencyPause `json:"dependency_pause,omitempty"`
 	// Changes is what the run's worktree held when it was last summarized. It is
 	// absent from a run that never got as far as producing one, and it outlives
 	// the worktree it describes, which is the whole reason it is here rather than
@@ -981,6 +1051,17 @@ func (s State) Validate() error {
 			problems = append(problems, errors.New("directive_pause requires a run that is still in flight"))
 		}
 	}
+	if s.DependencyPause != nil {
+		if err := s.DependencyPause.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("dependency_pause: %w", err))
+		}
+		// A dependency pause is the same kind of instruction as the ones above:
+		// resume this later. Recorded on a terminal run it would promise a
+		// continuation nothing will ever make.
+		if s.Status.Terminal() {
+			problems = append(problems, errors.New("dependency_pause requires a run that is still in flight"))
+		}
+	}
 	if s.TargetBranch != "" && !validLocalBranch(s.TargetBranch) {
 		problems = append(problems, errors.New("target_branch must be a local branch name"))
 	}
@@ -1041,12 +1122,22 @@ func (s State) Validate() error {
 		}
 	}
 	// A removal is only ever recorded with the evidence that earned it. There are
-	// two kinds: the run promoted its own work and cleaned up after it, or triage
-	// retired what it preserved once another run superseded it. A record carrying
-	// neither describes cleanup nothing authorized.
+	// three kinds: the run promoted its own work and cleaned up after it, triage
+	// retired what it preserved once another run superseded it, or the convergence
+	// sweep retired a settled run's checkout to keep the registrations bounded. A
+	// record carrying none of them describes cleanup nothing authorized.
 	retiredBy := strings.TrimSpace(s.ArtifactsRetiredBy)
-	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
+	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" && !s.CheckoutRetired {
 		problems = append(problems, errors.New("removed artifacts require recorded integration, or the run that superseded this one and retired them"))
+	}
+	if s.CheckoutRetired {
+		// The sweep names what it removed, and it removes one thing.
+		if !s.WorktreeRemoved {
+			problems = append(problems, errors.New("a retired checkout names the worktree it removed, and this one removed neither artifact"))
+		}
+		if s.BranchRemoved && s.Integration == nil && retiredBy == "" {
+			problems = append(problems, errors.New("retiring a checkout removes its registration and never its branch"))
+		}
 	}
 	if retiredBy != "" {
 		if !ValidRunID(retiredBy) {
