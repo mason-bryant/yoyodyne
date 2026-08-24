@@ -22,8 +22,10 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -45,8 +47,22 @@ const notesGuardScriptRelativePath = "scripts/bd-notes-guard.sh"
 const notesGuardDecisionPath = "../../scripts/bd-notes-guard.py"
 
 // notesGuardSettingsPath is this repository's own Claude Code settings, which is
-// where an interactive session's copy of the hook lives.
+// where an interactive session's copy of the hook belongs.
 const notesGuardSettingsPath = "../../.claude/settings.json"
+
+// The item and goal the stub tracker answers with, for the one test that runs
+// the documented hook command for real. Any attributed item would do; what
+// matters is that the guard reads an attribution it did not get from this
+// repository's own tracker.
+const (
+	notesGuardStubItem = "yoyodyne-ifd.45"
+	notesGuardStubGoal = "Run development nearly autonomously."
+)
+
+// notesGuardBlockedExitCode is the status a PreToolUse hook exits with to stop
+// the tool call it was asked about. Anything else lets the call through, which
+// for this hook means the write it was meant to refuse.
+const notesGuardBlockedExitCode = 2
 
 // notesGuardPrefixPattern reads the prefix the guard looks for out of its
 // source. It is anchored to the assignment rather than searched for loosely, so
@@ -255,17 +271,131 @@ func TestTheDocumentedNotesGuardHookIsPasteable(t *testing.T) {
 	}
 }
 
+// TestTheDocumentedNotesGuardHookCommandRefusesAReplacingWrite runs the command
+// the instruction files tell an operator to paste — exactly as it is written
+// there, expansion and quoting and all — and requires it to refuse a write that
+// would destroy an attribution.
+//
+// The tests above hold that block to parsing and to naming a script that is
+// really there. Neither of them runs it, and running it is where the remaining
+// two failures live: the `$CLAUDE_PROJECT_DIR` expansion, and the quoting around
+// a path that on this machine contains a space. A block that parses, names the
+// right script, and still resolves to nothing installs a hook Claude Code
+// reports as a non-blocking error before letting the call through — unguarded,
+// and from the transcript indistinguishable from guarded.
+//
+// Nothing in this repository can wire that hook (see
+// TestTheInteractiveNotesGuardWiringMatchesTheDocumentedBlock), so executing its
+// command is as close as a check here can get to exercising the interactive
+// refusal. It is worth getting that close: the whole cost of a bad paste is
+// borne on the day somebody is about to destroy a record.
+func TestTheDocumentedNotesGuardHookCommandRefusesAReplacingWrite(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"bash", "python3"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("the documented hook command needs %s, which is not on PATH", tool)
+		}
+	}
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("Abs(../..) error = %v", err)
+	}
+
+	// A stub bd answering one `show` with an attributed item, so the refusal is
+	// decided against a known attribution rather than against this repository's
+	// real tracker. The notes are composed by goal.Note, which is what writes an
+	// attribution everywhere else — a stub spelling the line by hand would be a
+	// third copy of the rule the guard is being held to.
+	answer, err := json.Marshal([]map[string]string{{
+		"id":    notesGuardStubItem,
+		"notes": goal.Note(notesGuardStubGoal),
+	}})
+	if err != nil {
+		t.Fatalf("Marshal(stub answer) error = %v", err)
+	}
+	stub := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(stub, "bd"),
+		[]byte("#!/usr/bin/env bash\ncat <<'ANSWER'\n"+string(answer)+"\nANSWER\n"),
+		0o755,
+	); err != nil {
+		t.Fatalf("WriteFile(stub bd) error = %v", err)
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"hook_event_name": "PreToolUse",
+		"tool_name":       "Bash",
+		"tool_input": map[string]any{
+			"command": "bd update " + notesGuardStubItem + ` --notes="a replacement carrying no attribution"`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(payload) error = %v", err)
+	}
+
+	command := notesGuardHookCommandIn(t, notesGuardInstructionPaths[0])
+	hook := exec.Command("bash", "-c", command)
+	hook.Dir = root
+	// CLAUDE_PROJECT_DIR is what the block reaches the script through, and the
+	// stub goes in front of the real bd. Both are appended after os.Environ(),
+	// because the last setting of a name is the one exec uses.
+	hook.Env = append(os.Environ(),
+		"CLAUDE_PROJECT_DIR="+root,
+		"PATH="+stub+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+	hook.Stdin = bytes.NewReader(payload)
+	var said bytes.Buffer
+	hook.Stdout, hook.Stderr = &said, &said
+
+	var exited *exec.ExitError
+	switch err := hook.Run(); {
+	case err == nil:
+		t.Fatalf("the documented hook command allowed a write that would destroy %q. An operator pasting this block would have a hook that refuses nothing. It said: %s",
+			notesGuardStubGoal, said.String())
+	case !errors.As(err, &exited):
+		t.Fatalf("the documented hook command could not be run (%v); pasted into a settings file it would be a non-blocking error Claude Code lets the call through on. It said: %s",
+			err, said.String())
+	case exited.ExitCode() != notesGuardBlockedExitCode:
+		t.Fatalf("the documented hook command exited %d, want %d — the only status that stops the tool call. It said: %s",
+			exited.ExitCode(), notesGuardBlockedExitCode, said.String())
+	}
+	if !strings.Contains(said.String(), notesGuardStubGoal) {
+		t.Errorf("the documented hook command refused without naming the goal that would have been lost, so the caller is not told what they nearly destroyed; it said: %s",
+			said.String())
+	}
+}
+
+// notesGuardHookCommandIn pulls the one command the documented block runs out of
+// it, so a test executes what an operator pastes rather than a copy of it.
+func notesGuardHookCommandIn(t *testing.T, path string) string {
+	t.Helper()
+
+	var documented notesGuardSettings
+	if err := json.Unmarshal([]byte(notesGuardBlockIn(t, path)), &documented); err != nil {
+		t.Fatalf("%s carries a hook block that is not JSON: %v", path, err)
+	}
+	matchers := documented.Hooks["PreToolUse"]
+	if len(matchers) != 1 || len(matchers[0].Hooks) != 1 {
+		t.Fatalf("%s documents %d PreToolUse matcher(s); want exactly one running one command", path, len(matchers))
+	}
+	return matchers[0].Hooks[0].Command
+}
+
 // TestTheInteractiveNotesGuardWiringMatchesTheDocumentedBlock holds this
 // repository's own `.claude/settings.json` to the block the instruction files
 // tell an operator to paste into it — once it carries the paste at all.
 //
 // It skips rather than fails on a settings file with no PreToolUse entry
 // because nothing that runs here can put one there. Claude Code refuses an
-// agent's write to a settings file: Write and Edit are both denied on that path
-// regardless of what the run is otherwise permitted — including a run holding an
-// explicit grant for it, which was tried — so the paste is a person's hand and
-// nothing else. A check that fails on a state no contributor working through an
-// agent can leave is a red gate rather than a finding.
+// agent's write to a settings file from every direction at once, and a run
+// holding an explicit grant for this path tried all of them: Write and Edit are
+// denied on it whatever else the session is permitted, and the Bash sandbox
+// names this exact file in its write deny list, so a shell write — a python3
+// heredoc merging the entry, say — is refused too and cannot be opted out of. A
+// check that fails on a state no contributor working through an agent can leave
+// is a red gate rather than a finding, so the paste is a person's hand and this
+// says so.
 //
 // **The skip expires the moment the entry lands.** Once `.claude/settings.json`
 // carries a PreToolUse hook, the reason this is not an assertion is gone, and
