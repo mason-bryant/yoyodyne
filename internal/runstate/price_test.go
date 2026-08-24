@@ -111,10 +111,12 @@ func TestAnExchangeRecordNamesNoWorkItemToAttributeItsSpendTo(t *testing.T) {
 	}
 }
 
-// Exchanges nobody can read are not exchanges that cost nothing. The reason is
-// carried instead of a figure, so every total it touches is a floor rather than
-// a number that reads as complete.
-func TestExchangeSpendIsUnknownRatherThanZeroWhenTheRecordsCannotBeRead(t *testing.T) {
+// An exchange nobody can read is not an exchange that cost nothing — and it is
+// not the exchanges beside it either. It is counted and left out, they are
+// priced as usual, and the figure that results says it is a floor. A record
+// that reduced the whole total to nothing would reintroduce the undercount this
+// figure exists to remove, one corrupt file at a time.
+func TestExchangeSpendPricesWhatItCanReadAndCountsWhatItCannot(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -123,7 +125,8 @@ func TestExchangeSpendIsUnknownRatherThanZeroWhenTheRecordsCannotBeRead(t *testi
 		t.Fatalf("NewStore() error = %v", err)
 	}
 	exchanges := newTestExchangeStore(t, root)
-	if err := exchanges.Save(testExchange("c")); err != nil {
+	readable := testExchange("c")
+	if err := exchanges.Save(readable); err != nil {
 		t.Fatalf("Save() error = %v", err)
 	}
 	broken := filepath.Join(exchanges.Root(), "exchange-"+strings.Repeat("d", 32)+".json")
@@ -133,13 +136,42 @@ func TestExchangeSpendIsUnknownRatherThanZeroWhenTheRecordsCannotBeRead(t *testi
 
 	spend := store.ExchangeSpend()
 	if spend.Known() {
-		t.Fatalf("ExchangeSpend() = %#v, want the reason there is no figure", spend)
+		t.Fatalf("ExchangeSpend() = %#v, want a figure that says it is short", spend)
 	}
-	if !spend.Recorded() {
-		t.Fatalf("ExchangeSpend() = %#v, want an unreadable store to be worth reporting", spend)
+	if !spend.Recorded() || !spend.Enumerated() {
+		t.Fatalf("ExchangeSpend() = %#v, want records that were counted", spend)
 	}
-	if spend.CostUSD != 0 || spend.Exchanges != 0 {
-		t.Fatalf("ExchangeSpend() = %#v, want no figure claimed at all", spend)
+	if spend.Unreadable != 1 || spend.Unknown == "" {
+		t.Fatalf("ExchangeSpend() = %#v, want one unreadable record and the reason", spend)
+	}
+	// The readable exchange keeps its price. This is the whole finding: the
+	// broken file must cost the total that one thread and nothing else.
+	if spend.Exchanges != 1 || spend.Rounds != 1 || spend.CostUSD != readable.CostUSD() {
+		t.Fatalf("ExchangeSpend() = %#v, want the readable exchange still priced at %v",
+			spend, readable.CostUSD())
+	}
+
+	// Exchanges that cannot even be listed are a different answer again: what is
+	// missing is unknown in number as well as in amount, so there is not even a
+	// floor to state. A file where the directory should be is that, and unlike a
+	// mode bit it means the same thing whoever is running the test.
+	unlistable, err := NewStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	blocked := unlistable.exchanges().Root()
+	if err := os.MkdirAll(filepath.Dir(blocked), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(blocked, []byte("not a directory"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	blind := unlistable.ExchangeSpend()
+	if blind.Known() || blind.Enumerated() {
+		t.Fatalf("ExchangeSpend() = %#v, want nothing enumerated", blind)
+	}
+	if blind.Unknown == "" || blind.Unreadable != 0 {
+		t.Fatalf("ExchangeSpend() = %#v, want the reason and no count it cannot have", blind)
 	}
 }
 

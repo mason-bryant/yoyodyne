@@ -218,15 +218,27 @@ type ExchangeSpend struct {
 	Exchanges int     `json:"exchanges,omitempty"`
 	Rounds    int     `json:"rounds,omitempty"`
 	CostUSD   float64 `json:"cost_usd"`
-	// Unknown says why the exchanges could not be read, and is empty when they
-	// were. Exchanges nobody can read are not a product whose roles never asked
-	// each other anything: those are two different facts and only one of them is
-	// worth nothing.
+	// Unreadable counts the records that could not be read, and is the exchange
+	// side of ItemPrice.UnknownRuns: those records are left out of the total
+	// rather than counted as nothing, and while this is non-zero the total is a
+	// lower bound. What it must never do is take the exchanges beside them with
+	// it — money that was read is money the operator is owed a figure for.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Unknown says why, and is empty only when nothing went wrong. It carries the
+	// first record's reason where records failed, and the directory's own where
+	// the exchanges could not even be enumerated — which is the one case with no
+	// count to give, because how many are missing is itself unknown.
 	Unknown string `json:"unknown,omitempty"`
 }
 
-// Known reports exchanges the recorded evidence could actually price.
-func (e ExchangeSpend) Known() bool { return e.Unknown == "" }
+// Known reports a figure every recorded exchange is in.
+func (e ExchangeSpend) Known() bool { return e.Unreadable == 0 && e.Unknown == "" }
+
+// Enumerated reports records that could at least be counted, which is what
+// separates a total that is a lower bound from no total at all: an exchange
+// directory nothing can list leaves not even a floor, because what is missing
+// from it is unknown in number as well as in amount.
+func (e ExchangeSpend) Enumerated() bool { return e.Exchanges > 0 || e.Unreadable > 0 }
 
 // Recorded reports that there is something here to say: exchanges to price, or
 // a reason there is no figure for them. A product whose roles have never asked
@@ -241,17 +253,39 @@ func (e ExchangeSpend) Recorded() bool { return e.Exchanges > 0 || !e.Known() }
 //
 // It never fails, for the reason pricing a run never fails: exchanges that
 // cannot be read are a price nobody knows rather than an error, and reporting
-// one would take the runs beside them down with it. What it will not do is call
-// them free — a caller that finds no figure here has a total that is a floor.
+// one would take the runs beside them down with it.
+//
+// The records are read one at a time for the same reason a run is. One that
+// cannot be read is counted and left out, and the exchanges beside it are still
+// priced: a corrupt file must not be able to reduce this to nothing, because
+// nothing is exactly the answer that produced the undercount this figure exists
+// to remove. What it will not do either way is call an unread record free — a
+// caller holding a figure with anything unread holds a floor.
 func (s *Store) ExchangeSpend() ExchangeSpend {
-	recorded, err := s.exchanges().List()
+	store := s.exchanges()
+	ids, err := store.Records()
 	if err != nil {
+		// The directory itself could not be listed, so not even how many
+		// exchanges are missing from the figure is known — which is a different
+		// answer from a floor, and is given as itself.
 		return ExchangeSpend{Unknown: err.Error()}
 	}
-	spend := ExchangeSpend{Exchanges: len(recorded)}
-	for _, one := range recorded {
-		spend.Rounds += one.Spent()
-		spend.CostUSD += one.CostUSD()
+	var spend ExchangeSpend
+	for _, id := range ids {
+		recorded, err := store.Load(id)
+		if err != nil {
+			spend.Unreadable++
+			// The first reason stands for all of them. A caller reports the count
+			// beside it, and the reason is there to say what kind of broken this is
+			// rather than to enumerate every instance of it.
+			if spend.Unknown == "" {
+				spend.Unknown = err.Error()
+			}
+			continue
+		}
+		spend.Exchanges++
+		spend.Rounds += recorded.Spent()
+		spend.CostUSD += recorded.CostUSD()
 	}
 	return spend
 }

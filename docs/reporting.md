@@ -94,7 +94,7 @@ item, and across everything the harness has run:
 ```text
 item                                     runs  unpriced      develop       review       repair         cost    waited
 yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43     3h37m
-ASKS BETWEEN ROLES                          -         -            -            -            -        $4.12
+ASKS BETWEEN ROLES                          -         0            -            -            -        $4.12
 TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69    21h01m
 ```
 
@@ -108,9 +108,17 @@ channel runs between the roles that own documents and queues, with the developer
 and the reviewer, the two that work inside a run, off it. If an exchange ever
 records the work it was taken for, it belongs in that item's price beside the
 runs instead. The columns that split a run's price are left empty rather than
-filled with zeros — an ask is not development, review, or repair. Exchanges that
-cannot be read are counted as unknown rather than as nothing, exactly as an
-unpriced run is, and the total says so with the same `≥`.
+filled with zeros — an ask is not development, review, or repair — with one
+exception: **unpriced** means on this row exactly what it means on an item's. An
+exchange record that cannot be read is counted there, left out of the figure
+beside it rather than counted as nothing, and every exchange that could be read
+is still priced; the total carries the same `≥` a run's unpriced attempt puts on
+it. That marker goes on the total column alone, since money nobody could read is
+money that belongs to no phase.
+
+Exchanges that cannot even be listed are the one case with no floor to state:
+how much is missing is unknown, and so is how many records it is missing from,
+so the row reads `unknown` rather than a figure.
 
 **develop** is each run's first developer attempt, **review** is every reviewer
 invocation it made, and **repair** is every developer attempt after the first —

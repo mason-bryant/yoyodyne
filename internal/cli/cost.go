@@ -171,7 +171,7 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		if !price.Recorded() {
 			continue
 		}
-		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases, price.UnknownRuns > 0)
+		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases, false)
 		total += price.TotalUSD
 		runs += len(price.Runs)
 		unpriced += price.UnknownRuns
@@ -181,11 +181,11 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 	// below has to add up: what one role spent asking another is a provider
 	// invocation the harness made, and a reader who can see it in the total but
 	// not in a row above it is being asked to take the difference on trust.
-	floor := unpriced > 0
+	floor := false
 	if recordedExchanges(exchanges) {
 		printAskRow(writer, *exchanges)
 		total += exchanges.CostUSD
-		floor = floor || !exchanges.Known()
+		floor = !exchanges.Known()
 	}
 	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, floor)
 	if unpriced > 0 {
@@ -216,29 +216,41 @@ const askLedgerLabel = "ASKS BETWEEN ROLES"
 // split a run's price are left as "-" rather than filled with zeros: an ask is
 // not development, review, or repair, and a zero under one of them would say it
 // was one of the three and cost nothing.
+//
+// The unpriced column is the one an ask does have, and it holds exactly what it
+// holds on an item's row: the records that could not be read, left out of the
+// figure beside them and making it a floor. Records nothing could even
+// enumerate leave no floor to state, so that row says unknown instead.
 func printAskRow(writer io.Writer, exchanges runstate.ExchangeSpend) {
-	cost := renderFloor(exchanges.CostUSD, false)
-	if !exchanges.Known() {
-		cost = "unknown"
+	unreadable, cost := "-", "unknown"
+	if exchanges.Enumerated() {
+		unreadable = strconv.Itoa(exchanges.Unreadable)
+		cost = renderFloor(exchanges.CostUSD, !exchanges.Known())
 	}
-	fmt.Fprintf(writer, ledgerRow, askLedgerLabel, "-", "-", "-", "-", "-", cost, "")
+	fmt.Fprintf(writer, ledgerRow, askLedgerLabel, "-", unreadable, "-", "-", "-", cost, "")
 }
 
-// printAskNote says what the ask row is made of, or why there is no figure in
-// it. An exchange nobody can read is said out loud rather than counted as
-// nothing, which is the same discipline a run with no surviving log is held to.
+// printAskNote says what the ask row is made of, and what is missing from it.
+// An exchange nobody can read is counted and said out loud rather than counted
+// as nothing, which is the same discipline a run with no surviving log is held
+// to — and, like that run, it never takes the records beside it down with it.
 func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
 	if !recordedExchanges(exchanges) {
 		return
 	}
-	if !exchanges.Known() {
-		fmt.Fprintf(writer, "what the roles spent asking each other could not be read (%s),\n", exchanges.Unknown)
-		fmt.Fprintln(writer, "so it is left out of the total rather than counted as nothing, and the total is a floor")
+	if !exchanges.Enumerated() {
+		fmt.Fprintf(writer, "the recorded exchanges could not be listed (%s), so what the roles spent\n", exchanges.Unknown)
+		fmt.Fprintln(writer, "asking each other is missing from the total entirely rather than counted as nothing")
 		return
 	}
 	fmt.Fprintf(writer, "asks between roles is %d exchange(s) over %d round(s): a question one role put to another,\n",
 		exchanges.Exchanges, exchanges.Rounds)
 	fmt.Fprintln(writer, "recorded naming no work item to charge it to, and in the total because the harness spent it")
+	if exchanges.Unreadable > 0 {
+		fmt.Fprintf(writer, "%d exchange record(s) could not be read and are left out of that figure (%s),\n",
+			exchanges.Unreadable, exchanges.Unknown)
+		fmt.Fprintln(writer, "so the asks and the total are floors; every exchange beside them is priced as usual")
+	}
 }
 
 // ledgerRow is the shape of every line of the ledger, header and total
@@ -246,23 +258,23 @@ func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
 const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %9s\n"
 
 // printLedgerRow writes one item's line. Each phase carries the same floor
-// marker the total does, for the reason the total carries it: a column that read
-// as exact because the count saying otherwise is elsewhere on the line is the
-// mistake the marker exists to stop.
+// marker the total does when it is the runs that went unpriced, for the reason
+// the total carries it: a column that read as exact because the count saying
+// otherwise is elsewhere on the line is the mistake the marker exists to stop.
 //
-// Whether the line is a floor is the caller's to say rather than read off the
-// unpriced count, because the total line is a floor for a second reason as well:
-// exchanges nobody could read are money missing from it that no run count
-// mentions.
+// The extra floor is for the total column alone, and is what an unread exchange
+// makes of it. That money belongs to no phase — an ask is not development,
+// review, or repair — so marking the phase columns for it would claim
+// uncertainty in three figures that have none.
 func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend, floor bool) {
 	fmt.Fprintf(writer, ledgerRow,
 		label,
 		strconv.Itoa(runs),
 		strconv.Itoa(unpriced),
-		renderFloor(phases.Development.CostUSD, floor),
-		renderFloor(phases.Review.CostUSD, floor),
-		renderFloor(phases.Repair.CostUSD, floor),
-		renderFloor(total, floor),
+		renderTotal(phases.Development.CostUSD, unpriced),
+		renderTotal(phases.Review.CostUSD, unpriced),
+		renderTotal(phases.Repair.CostUSD, unpriced),
+		renderFloor(total, floor || unpriced > 0),
 		renderWait(phases.Waits.Total()),
 	)
 }

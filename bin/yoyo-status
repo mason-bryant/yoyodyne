@@ -204,10 +204,12 @@ exchange_state() {
 }
 
 # The exchange records the report could not read, named rather than dropped. A
-# record nobody can parse did not cost nothing, so it is counted and every total
-# it is missing from is said to be a floor -- which is the answer `yoyo cost`
-# gives for the same records, and the two must not differ about what an unknown
-# figure is.
+# record nobody can parse did not cost nothing, so it is counted, the exchanges
+# beside it are priced as usual, and every total it is missing from is said to be
+# a floor. `yoyo cost` answers the same way for the same records -- it counts
+# them in its ask row's unpriced column, prices the rest, and marks its own total
+# -- because two surfaces differing about what an unknown figure is leaves the
+# operator to settle it.
 report_unreadable_exchanges() {
   local list="$1"
   [ -s "$list" ] || return 0
