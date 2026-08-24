@@ -14,6 +14,8 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
+	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // MaxReviewInputBytes bounds the system contract and evidence handed to a
@@ -100,6 +102,16 @@ type Request struct {
 	RedactValues []string
 	LastSequence uint64
 	EventSink    func(execution.Event) error
+	// Spend is what the caller knows about this review's one provider invocation
+	// and the reviewer does not: which run and which work item it is being made
+	// for, on whose account, and under which configuration. The reviewer supplies
+	// the rest of the line itself, because the phase and the role are its own and
+	// no caller gets to assert them.
+	//
+	// A zero value is a caller that wired no cost log either. The two travel
+	// together: a review with nowhere to record what it spent has nothing to
+	// attribute.
+	Spend spend.Attribution
 }
 
 // Result is one completed review: the resolved verdict plus the provider and
@@ -157,6 +169,11 @@ type Reviewer struct {
 	// specialize what a reviewer looks for; it is appended after the immutable
 	// contract and can never replace or weaken it.
 	Persona string
+	// Spend is the cost log this reviewer's invocation lands in, one line per
+	// review at the moment its cost is known. It is optional: a reviewer wired
+	// without one reviews exactly as it would have, and what is lost is the only
+	// record of what the review cost that is not buried in an event log.
+	Spend   spend.Log
 	Timeout time.Duration
 	Clock   execution.Clock
 }
@@ -207,7 +224,21 @@ func (r Reviewer) Review(ctx context.Context, request Request) (Result, error) {
 	// The reviewer is independent of the developer that produced the change:
 	// a separate provider invocation with no session to resume, no write
 	// tools, and a read-only permission mode.
-	providerResult, err := r.Backend.Run(ctx, backend.RunRequest{
+	//
+	// It goes through the meter, so a review costs one line in the cost log
+	// whichever way its verdict went and including the ones that produced no
+	// verdict at all. The phase and the role are set here rather than taken from
+	// the caller: this invocation is a review, and nothing that asks for one gets
+	// to say it was anything else.
+	attribution := request.Spend
+	attribution.Phase = runstate.SpendPhaseReview
+	provider := spend.Metered{
+		Provider:    r.Backend,
+		Log:         r.Spend,
+		Attribution: attribution,
+		Clock:       r.Clock,
+	}
+	providerResult, err := provider.Run(ctx, backend.RunRequest{
 		RunID:            request.RunID,
 		Role:             domain.RoleReviewer,
 		WorkingDirectory: request.WorktreePath,

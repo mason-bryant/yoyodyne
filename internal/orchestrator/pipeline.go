@@ -28,6 +28,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // maxCommitSubjectBytes bounds the work item title carried into the
@@ -275,6 +276,14 @@ type Pipeline struct {
 	// without one runs exactly as it would have and one that could not record a
 	// price names that on the outcome.
 	Prices Pricer
+	// Spend is the cost log every provider invocation this run makes lands in,
+	// one line each at the moment its cost is known. It is optional in the same
+	// way as the three above and for a narrower reason: a pipeline wired without
+	// one runs exactly as it would have, and what it loses is the only record of
+	// what the run spent that does not have to be read back out of an event log.
+	// The harness always wires it; a test that does not care about money does not
+	// have to.
+	Spend SpendLog
 	// Docket is where a run that ends on a durable blocker is put in front of the
 	// development manager. It is optional in the same way as the three above: a
 	// stoppage is already recorded on the work item and in this run's own record
@@ -1811,12 +1820,23 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 }
 
 // attemptDevelopment makes one developer invocation.
+//
+// It goes through the meter rather than straight at the backend, so that what
+// this attempt spends is one line in the cost log however it ends. An attempt
+// the provider refused, killed, or answered badly was charged for exactly as one
+// that succeeded was, and the reissued invocation after it is charged again.
 func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID string) (backend.RunResult, error) {
 	p := a.pipeline
 	developer := p.developer()
 	a.state.ProviderModel = developer.Model
 	a.outcome.ProviderModel = developer.Model
-	return p.Backend.Run(ctx, backend.RunRequest{
+	provider := spend.Metered{
+		Provider:    p.Backend,
+		Log:         p.Spend,
+		Attribution: a.spendAttribution(domain.RoleDeveloper, a.developmentPhase()),
+		Clock:       p.Clock,
+	}
+	return provider.Run(ctx, backend.RunRequest{
 		RunID:            a.state.RunID,
 		Role:             domain.RoleDeveloper,
 		WorkingDirectory: a.worktree.Path,
@@ -3639,6 +3659,10 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		RedactValues: p.RedactValues,
 		LastSequence: a.state.LastSequence,
 		EventSink:    a.sink,
+		// What the reviewer's invocation spends is this run's spend, charged to
+		// the review rather than to the change: an item that was reviewed four
+		// times is where that distinction is the whole answer.
+		Spend: a.spendAttribution(domain.RoleReviewer, runstate.SpendPhaseReview),
 	})
 	if result.LastSequence > a.state.LastSequence {
 		a.state.LastSequence = result.LastSequence

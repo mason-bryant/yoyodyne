@@ -29,6 +29,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/report"
 	"github.com/mason-bryant/yoyodyne/internal/research"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // proposedIssueType is the Beads type an item created from this conversation
@@ -227,6 +228,20 @@ type Options struct {
 	Agent string
 	// Provider names the backend for the durable record.
 	Provider domain.Backend
+	// Spend is the cost log every turn's provider invocation lands in, one line
+	// each at the moment its cost is known. A conversation is a provider
+	// invocation like a run's, so what it spends is recorded where a run's is
+	// rather than only being shown to whoever is at the terminal. It is optional
+	// like the rest, and a conversation without one costs what it costs and
+	// records nothing.
+	Spend spend.Log
+	// AccountAlias is the provider account this conversation runs on and
+	// ConfigRevision the configuration in force while it does. They are what a
+	// turn's spend is attributable to, and they are supplied rather than read
+	// here because the conversation is handed its configuration rather than
+	// loading one.
+	AccountAlias   string
+	ConfigRevision string
 	// Repository is the working directory the provider is started in. Nothing
 	// is written there: the role has no tools.
 	Repository   string
@@ -840,7 +855,17 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// answering. Whatever authority a role has over the tracker is exercised by
 	// the harness on its behalf, so nothing here gives it a filesystem, a shell,
 	// or a network to reach.
-	result, err := s.options.Backend.Run(ctx, backend.RunRequest{
+	//
+	// The invocation goes through the meter, so this turn's spend is one line in
+	// the cost log whichever way the turn went — a turn the provider failed was
+	// charged for exactly as one that answered.
+	provider := spend.Metered{
+		Provider:    s.options.Backend,
+		Log:         s.options.Spend,
+		Attribution: s.spendAttribution(),
+		Clock:       s.options.Clock,
+	}
+	result, err := provider.Run(ctx, backend.RunRequest{
 		RunID:            s.state.ConversationID,
 		Role:             s.state.Role,
 		WorkingDirectory: s.options.Repository,

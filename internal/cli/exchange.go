@@ -25,6 +25,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // exchangeAnswerTimeout bounds one answering invocation. It is shorter than a
@@ -163,7 +164,12 @@ type exchangeVoice struct {
 	// met here would stop an exchange and leave no trace anywhere — and an
 	// exhausted limit is hours in which nothing happens anywhere, which is exactly
 	// what somebody not watching this conversation needs to be told.
-	usageLimits  *runstate.UsageLimitStore
+	usageLimits *runstate.UsageLimitStore
+	// spend is where what a round costs is written down. An answering round is a
+	// provider invocation with neither a run nor a conversation behind it, so
+	// without this it would be the one invocation the harness makes whose cost
+	// nothing durable records at all.
+	spend        *runstate.SpendStore
 	productID    domain.ProductID
 	redactValues []string
 }
@@ -179,7 +185,23 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderQuestion(question))
-	result, err := v.provider.Run(ctx, backend.RunRequest{
+	// The round goes through the meter, so what it spends is one line in the cost
+	// log beside every other provider invocation the harness makes, charged to
+	// the exchange because that is the only record it belongs to.
+	provider := spend.Metered{
+		Provider: v.provider,
+		Log:      v.spendLog(),
+		Attribution: spend.Attribution{
+			ProductID:      v.productID,
+			Agent:          name,
+			Phase:          runstate.SpendPhaseExchange,
+			AccountAlias:   v.config.AccountAlias(),
+			ConfigRevision: v.config.Revision(),
+			Backend:        agent.Backend,
+			ExchangeID:     question.ExchangeID,
+		},
+	}
+	result, err := provider.Run(ctx, backend.RunRequest{
 		// The exchange is the record this invocation belongs to, so it is what the
 		// provider is told the invocation is: an answering round has no run and no
 		// conversation of its own.
@@ -213,6 +235,17 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 	}
 	spoken.Answer = result.FinalText
 	return spoken, nil
+}
+
+// spendLog is where this voice records what a round cost, and nothing where no
+// store was wired. It is a method rather than the field handed over directly
+// because a nil store put into an interface is not a nil interface, and the
+// meter's own test for having nowhere to record would miss it.
+func (v exchangeVoice) spendLog() spend.Log {
+	if v.spend == nil {
+		return nil
+	}
+	return v.spend
 }
 
 // noteUsageLimit records a provider refusal this round met, exactly as a
@@ -297,6 +330,7 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 			provider:     provider,
 			repository:   parts.repository,
 			usageLimits:  parts.usageLimits,
+			spend:        parts.spend,
 			productID:    parts.config.Product.ID,
 			redactValues: parts.redactValues,
 		},
