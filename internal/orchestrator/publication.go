@@ -201,6 +201,13 @@ func (r Reconciler) refreshPublication(ctx context.Context, recorded runstate.St
 // the forge actually reported is taken: a field it said nothing about keeps what
 // the run recorded, because an answer that omits something is not an answer that
 // it is empty.
+//
+// The merged flag it writes can land on a run that promoted nothing, which is
+// the whole case this sweep exists for. Durable state allows that and refuses
+// the other one — a merge the run itself asked the forge for, which is what a
+// recorded merge method says, still requires the promotion that authorized it.
+// Nothing here ever writes a merge method, so what this records is only ever an
+// observation of what the forge did.
 func refreshedPublication(recorded runstate.PullRequest, observed publish.PullRequest) runstate.PullRequest {
 	refreshed := recorded
 	if strings.TrimSpace(observed.State) != "" {
