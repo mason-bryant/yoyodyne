@@ -106,16 +106,12 @@ func (a *activeRun) artifacts() (artifact.Set, error) {
 	if a.artifactSet != nil {
 		return *a.artifactSet, nil
 	}
-	product := a.pipeline.Config.Product
-	store := artifact.Store{
-		RepositoryRoot: a.pipeline.Repository,
-		Homes:          []string{product.Specifications, product.Designs, product.Decisions},
-		// The invariants carry the identity scheme this one was modeled on rather
-		// than this one, so they are not artifacts in the set. They are the
-		// architect's either way, and an invariant is amended through its own
-		// lifecycle.
-		Excluded: []string{product.Invariants},
-	}
+	// The homes and what is excluded from them are assembled in one place rather
+	// than restated here, so a proposal resolves against exactly the set every
+	// other reader sees. The invariants are excluded there: they carry the
+	// identity scheme this one was modeled on rather than this one, and an
+	// invariant is amended through its own lifecycle either way.
+	store := artifact.StoreFor(a.pipeline.Repository, a.pipeline.Config.Product)
 	set, err := store.Load()
 	if err != nil {
 		return artifact.Set{}, fmt.Errorf("load the recorded artifacts to resolve the proposal against: %w", err)
