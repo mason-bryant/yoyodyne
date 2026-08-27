@@ -2937,7 +2937,12 @@ lives: both travel with the repository, and neither needs the Yoyodyne source.
 Yoyodyne ships the explicit shape because its operator edits agent properties
 often and wants the effect of an edit obvious. A fleet of projects that should
 improve together is the case `extends` is for. A more portable configuration
-system than either is still wanted, and is not designed yet.
+system than either is still wanted, and neither shape is it.
+[Portable agent configuration](portable-agent-configuration.md) is the draft
+that answers what a project should own versus inherit, how the two shapes
+convert into each other, and how a bundle improvement reaches a project that
+materialized its defaults. It is a draft the architect has not ratified, so
+nothing in it is implemented and none of the commands it names exist.
 
 ### Converting an inheriting configuration to an explicit one
 
