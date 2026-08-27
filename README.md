@@ -554,11 +554,17 @@ was red, and leaves nothing to undo. It also refuses a tag that is not
 `vMAJOR.MINOR.PATCH` or that already exists, a dirty working tree, a checkout
 that is not on `main`, and a `HEAD` that is not where `origin/main` is; where
 origin is unreachable it says that last one went unchecked rather than passing
-over it. It stops at the tag: publishing is the `git push`, which is the
+over it. The tracker's own exports — `.beads/interactions.jsonl` and
+`.beads/issues.jsonl`, which the walkthrough rewrites on its way through — do
+not count as a dirty tree: the cut commits them as their own housekeeping
+commit once every gate is green, so the tag still names a tree with nothing
+uncommitted in it, and on a day it had to it prints
+`git push --atomic origin main <tag>` instead, because the branch has to carry
+that commit. It stops at the tag: publishing is the `git push`, which is the
 irreversible half and what the release workflow acts on, so it stays something
 you do deliberately.
 [`scripts/cut-release-test.sh`](scripts/cut-release-test.sh) executes every one
-of those refusals against fabricated repositories.
+of those refusals against fabricated repositories, and `make test` runs it.
 
 ## The conversation
 

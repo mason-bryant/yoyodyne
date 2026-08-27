@@ -188,6 +188,22 @@ type Counters struct {
 	// what an item with a decision already standing looks like from the outside.
 	RepairGrants    int `json:"repair_grants"`
 	RepairGrantsCap int `json:"repair_grants_cap"`
+	// GrantedRounds is what those grants came to, and TruncatedGrants how many of
+	// them the round cap cut down on the way. They are the detail the harness
+	// reports back as it records a grant — cut from two rounds to the one the cap
+	// still had room for — and the count alone cannot carry it: a grant that was
+	// halved and one given in full are different facts about how close this item
+	// is to the end of what it will be given, and the entry that shows only "1 of
+	// 1" is the entry that sends a development manager to `yoyo status` for the
+	// rest.
+	GrantedRounds   int `json:"granted_rounds"`
+	TruncatedGrants int `json:"truncated_grants"`
+	// CommittedRounds is what this item's grants have committed it to, which is
+	// the figure the round budget is actually refused against. It exceeds the
+	// rounds counted exactly while a grant is recorded and not yet spent, and that
+	// window is where a view reporting the rounds alone shows room the guard does
+	// not have.
+	CommittedRounds int `json:"committed_rounds"`
 	Reruns          int `json:"reruns"`
 	RerunsCap       int `json:"reruns_cap"`
 	MergeRearms     int `json:"merge_rearms"`
@@ -215,10 +231,41 @@ type Rerun struct {
 	RunID     string    `json:"run_id,omitempty"`
 }
 
-// Exhausted reports an item that has already accumulated the configured review
-// rounds, which is the one counter that decides something on its own: past it,
-// another repair is not triage's to grant.
-func (c Counters) Exhausted() bool { return c.ReviewRounds >= c.ReviewRoundsCap }
+// Committed is the round figure the budget is measured against: what this item
+// has cost, or what a recorded grant has promised it, whichever is greater. The
+// two are not added, for the reason the record that keeps them does not add
+// them — a grant's rounds turn into counted rounds as the attempts it bought are
+// judged, so a sum would charge a carried-out grant twice.
+func (c Counters) Committed() int {
+	if c.CommittedRounds > c.ReviewRounds {
+		return c.CommittedRounds
+	}
+	return c.ReviewRounds
+}
+
+// RoundsUncommitted is the room the round cap has left for a decision that buys
+// rounds. It is the arithmetic the guards refuse against rather than a second
+// reading of the same numbers: a view measuring against the rounds counted would
+// show room a recorded grant has already spoken for, which is a development
+// manager deciding a repair the guard then refuses.
+func (c Counters) RoundsUncommitted() int {
+	if remaining := c.ReviewRoundsCap - c.Committed(); remaining > 0 {
+		return remaining
+	}
+	return 0
+}
+
+// GrantOutstanding reports a repair grant recorded whose rounds the item has not
+// spent yet. It is what Decided reports for a re-run: the decision is already
+// spent, so deciding a second is a second decision rather than a repeat of this
+// one.
+func (c Counters) GrantOutstanding() bool { return c.CommittedRounds > c.ReviewRounds }
+
+// Exhausted reports an item with no round left for a decision that buys one,
+// which is the counter that decides something on its own: past it, another
+// repair is not triage's to grant. It asks what the item is committed to rather
+// than only what it has cost, because that is what the guard asks.
+func (c Counters) Exhausted() bool { return c.RoundsUncommitted() == 0 }
 
 // Entry is one durable docket entry. It is keyed rather than only identified:
 // what makes two entries the same is the event they describe, not when
@@ -430,7 +477,7 @@ func (e Entry) Render() string {
 		rendered.WriteString(e.renderPublication())
 	}
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %d review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
-		e.Counters.ReviewRounds, e.Counters.ReviewRoundsCap, exhaustedNote(e.Counters),
+		e.Counters.ReviewRounds, e.Counters.ReviewRoundsCap, roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
 	rendered.WriteString(e.renderDecisions())
 	return rendered.String()
@@ -447,12 +494,53 @@ func (e Entry) renderDecisions() string {
 			e.CountersProblem+"\nThis says nothing about what has been decided: read the record before deciding anything that spends a budget.")
 	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %d repair grant(s); %d of %d re-run(s), %d carried out; %d of %d merge re-arm(s)\n",
-		e.Counters.RepairGrants, e.Counters.RepairGrantsCap,
+	fmt.Fprintf(&rendered, "      Triage decisions recorded: %d of %d repair grant(s)%s; %d of %d re-run(s), %d carried out; %d of %d merge re-arm(s)\n",
+		e.Counters.RepairGrants, e.Counters.RepairGrantsCap, grantedNote(e.Counters),
 		e.Counters.Reruns, e.Counters.RerunsCap, e.Counters.RerunsCarriedOut,
 		e.Counters.MergeRearms, e.Counters.MergeRearmsCap)
+	rendered.WriteString(e.renderGrantStanding())
 	rendered.WriteString(e.renderRerunStanding())
+	rendered.WriteString(e.renderRearmStanding())
 	return rendered.String()
+}
+
+// renderGrantStanding says where this item stands with the repair grants triage
+// may still give it, in the figures the grant guard reads. The counts above
+// cannot answer it: the grant counter is a total nothing clears, and the round
+// budget refuses against what the item is committed to rather than what it has
+// cost, so an entry that stopped at the counts leaves a development manager to
+// find out by deciding a repair and being refused. Which is the round-trip this
+// says out loud instead.
+func (e Entry) renderGrantStanding() string {
+	counters := e.Counters
+	if counters.RepairGrants == 0 {
+		return ""
+	}
+	if counters.RepairGrants >= counters.RepairGrantsCap {
+		return fmt.Sprintf("      A further repair grant for %s is refused: %d of %d permitted grant(s) are already recorded, so deciding another spends nothing and is an escalation rather than a larger budget.\n",
+			e.WorkItemID, counters.RepairGrants, counters.RepairGrantsCap)
+	}
+	if counters.RoundsUncommitted() == 0 {
+		return fmt.Sprintf("      A further repair grant for %s is refused by the review round budget: %d of %d round(s) are spent or committed, so there is nothing left to grant.\n",
+			e.WorkItemID, counters.Committed(), counters.ReviewRoundsCap)
+	}
+	if counters.GrantOutstanding() {
+		return fmt.Sprintf("      A repair grant of %s is recorded and its rounds are not spent, so this stoppage may be handed back on the decision that stands; deciding another would spend a further one rather than repeat it.\n",
+			e.WorkItemID)
+	}
+	return ""
+}
+
+// renderRearmStanding says when the merge re-arms are gone. It is silent until
+// one has been recorded, because a re-arm is not the decision a stopped run is
+// about and an entry that announced an untouched budget on every stoppage would
+// be a line every reader learns to skip.
+func (e Entry) renderRearmStanding() string {
+	if e.Counters.MergeRearms == 0 || e.Counters.MergeRearms < e.Counters.MergeRearmsCap {
+		return ""
+	}
+	return fmt.Sprintf("      A further merge re-arm for %s is refused: %d of %d permitted re-arm(s) are already recorded, and a merge the forge keeps dropping is a repository somebody has to look at.\n",
+		e.WorkItemID, e.Counters.MergeRearms, e.Counters.MergeRearmsCap)
 }
 
 // renderRerunStanding says where this stoppage stands with the one re-run it
@@ -538,11 +626,41 @@ func (e Entry) renderPublication() string {
 	return rendered.String()
 }
 
-func exhaustedNote(counters Counters) string {
-	if counters.Exhausted() {
+// roundsNote qualifies the rounds an item has used with what it stands
+// committed to, where the two differ. The rounds counted are what the item has
+// cost and the commitment is what the cap refuses against, so an entry that
+// stated the first alone reports room the guard does not have for exactly as
+// long as a grant is waiting to be spent — which is the whole of the window a
+// development manager reads a docket in.
+func roundsNote(counters Counters) string {
+	committed := counters.Committed()
+	switch {
+	case counters.Exhausted() && counters.GrantOutstanding():
+		return fmt.Sprintf(" (%d of %d are committed by a grant not yet spent, so the cap is reached: another repair is not triage's to grant)",
+			committed, counters.ReviewRoundsCap)
+	case counters.Exhausted():
 		return " (the cap is reached: another repair is not triage's to grant)"
+	case counters.GrantOutstanding():
+		return fmt.Sprintf(" (%d of %d are committed by a grant not yet spent)", committed, counters.ReviewRoundsCap)
+	default:
+		return ""
 	}
-	return ""
+}
+
+// grantedNote is what the recorded grants actually came to, which the count of
+// them does not say. A grant the round cap cut is the fact that says this item
+// is at the end of what it will be given, and it is reported to whoever records
+// the decision at the moment they record it — so an entry that dropped it is an
+// entry that disagrees with what the harness already told them.
+func grantedNote(counters Counters) string {
+	if counters.GrantedRounds == 0 {
+		return ""
+	}
+	if counters.TruncatedGrants > 0 {
+		return fmt.Sprintf(" worth %d review round(s), %d of them cut down to the room the cap still had",
+			counters.GrantedRounds, counters.TruncatedGrants)
+	}
+	return fmt.Sprintf(" worth %d review round(s)", counters.GrantedRounds)
 }
 
 // indented writes one labelled block of provider or forge prose under the
