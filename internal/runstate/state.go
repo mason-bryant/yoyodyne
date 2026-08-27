@@ -1091,10 +1091,18 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("pull_request branch %q does not match the run branch %q", s.PullRequest.Branch, s.Branch))
 		}
 		// The forge is only asked to merge a pull request once the promotion it
-		// carries has been made locally, so a merged request cannot be recorded
-		// before the promotion that authorized it is.
-		if s.PullRequest.Merged && s.Integration == nil {
-			problems = append(problems, errors.New("a merged pull request requires recorded integration"))
+		// carries has been made locally, so a merge this run asked for cannot be
+		// recorded before the promotion that authorized it is. The merge method is
+		// what says the run asked: it is written where the harness makes the merge
+		// request, which never runs without an integration in hand.
+		//
+		// A merged request with no method is the other thing entirely — a merge
+		// nobody here asked for, which somebody made on the forge after the run was
+		// over. Recording it is an observation of what the forge did rather than a
+		// claim that this run promoted anything, and refusing to store it is what
+		// froze a failed run's publication at its death-moment state for good.
+		if s.PullRequest.Merged && s.PullRequest.MergeMethod != "" && s.Integration == nil {
+			problems = append(problems, errors.New("a merged pull request the run asked the forge for requires recorded integration"))
 		}
 	}
 	// A removal is only ever recorded with the evidence that earned it. There are

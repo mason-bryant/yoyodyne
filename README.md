@@ -3285,6 +3285,23 @@ exercise judgement: it reports and leaves the decision where it belongs.
 Reconcile never invokes a provider either: a lost process handle is not a
 reason to start a second developer for an item.
 
+Every other publication is re-asked about on the same sweep. A run that ended
+without its publication settled — one that failed before it integrated
+anything, or one whose request the forge merged after the harness had stopped
+watching — used to keep whatever the forge last said at the moment the run
+ended, for good: a pull request somebody merged days later stayed recorded open
+and unmerged, and the triage docket and the status surfaces read that rather
+than the truth. Reconcile now asks the forge about each of those and records
+the answer — merged, closed, or still open. It only writes the record: nothing
+is merged, nothing is closed, no branch moves, and the work item is not
+touched, so a request that turns out to have merged outside the harness leaves
+its publication outstanding for triage rather than being finished behind your
+back. A record the forge agrees with is left exactly as it is, and a merged one
+is never asked about again — merged is the one answer a forge does not take
+back. A record left alone for a reason, such as a branch the forge answers
+about with some other request, is reported and is not a failure; a forge that
+could not be reached is, and the next sweep asks the same question again.
+
 Once the runs are settled it converges local state, which is the rest of the
 post-merge hygiene you would otherwise do by hand. Every target branch the
 harness knows about is caught up onto its remote counterpart — the same
