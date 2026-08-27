@@ -54,6 +54,11 @@ func (a *activeRun) developmentPhase() runstate.SpendPhase {
 // reads the configuration in force rather than a run's record because a branch
 // review has no run: the review is being made now, so what is configured now is
 // what makes it.
+//
+// It is charged to the review itself rather than to a run, and says so in the
+// field that means that. A branch review is not a run and serves no work item,
+// so a line that carried its identifier as a run id would read as evidence
+// about a run nothing ever made.
 func (b BranchReviewer) spendAttribution(reviewID string) spend.Attribution {
 	return spend.Attribution{
 		ProductID:      b.Config.Product.ID,
@@ -62,6 +67,6 @@ func (b BranchReviewer) spendAttribution(reviewID string) spend.Attribution {
 		AccountAlias:   b.Config.AccountAlias(),
 		ConfigRevision: b.Config.Revision(),
 		Backend:        Pipeline{Config: b.Config}.agentForRole(domain.RoleReviewer).Backend,
-		RunID:          reviewID,
+		BranchReviewID: reviewID,
 	}
 }

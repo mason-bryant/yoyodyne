@@ -2,6 +2,8 @@ package chat
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
@@ -64,12 +66,52 @@ func TestEveryTurnRecordsWhatItSpentAgainstTheConversation(t *testing.T) {
 	}
 }
 
-// recordingSpendLog is the cost log as a test reads it back.
+// A turn the cost log will not take still answers. The provider has already
+// written the answer and already charged for it, so failing the turn over the
+// bookkeeping behind it would cost the operator both; the answer comes back and
+// what is missing from the log is named beside it.
+//
+// This is the one place the harness makes that trade. A run takes the failure,
+// because its answer is a change in a worktree the next attempt starts from.
+func TestATurnWhoseSpendCannotBeRecordedStillAnswers(t *testing.T) {
+	t.Parallel()
+
+	provider := &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", ResolvedModel: "claude-opus-5", FinalText: "The brief is thin on goals.", CostUSD: 0.0125, CostReported: true},
+	}}
+	log := &recordingSpendLog{failure: errors.New("the disk is full")}
+	options := testOptions(t, provider)
+	options.Spend = log
+	options.AccountAlias = "default"
+	options.ConfigRevision = "cfg-0123456789ab"
+	session := openTestSession(t, options)
+
+	reply, err := session.Send(context.Background(), "What is missing from the brief?")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if !strings.Contains(reply.Text, "thin on goals") {
+		t.Fatalf("the answer was dropped with the record: %q", reply.Text)
+	}
+	if !strings.Contains(reply.SpendProblem, "the disk is full") {
+		t.Fatalf("SpendProblem = %q, want what stopped the line being kept", reply.SpendProblem)
+	}
+	// The line was produced and offered; what failed is keeping it. A turn that
+	// recorded nothing at all would be a different defect and this would not
+	// tell the two apart.
+	if len(log.lines) != 1 {
+		t.Fatalf("offered %d line(s), want the turn's one", len(log.lines))
+	}
+}
+
+// recordingSpendLog is the cost log as a test reads it back, and one that
+// refuses everything when a failure is set.
 type recordingSpendLog struct {
-	lines []runstate.Spend
+	lines   []runstate.Spend
+	failure error
 }
 
 func (l *recordingSpendLog) Append(line runstate.Spend) error {
 	l.lines = append(l.lines, line)
-	return nil
+	return l.failure
 }

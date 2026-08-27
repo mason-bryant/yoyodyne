@@ -131,6 +131,44 @@ func TestSpendsAreRefusedWhenNobodyCouldAttributeThem(t *testing.T) {
 	}
 }
 
+// A branch review is charged to the review itself rather than to a run. The
+// store takes that as one subject like any other, and refuses a line naming a
+// branch review and a run both — a reader joining these lines to run records
+// would otherwise have to decide which of the two the line meant.
+func TestABranchReviewIsItsOwnSubjectRatherThanARun(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSpendStore(t, t.TempDir())
+	line := testSpend(SpendPhaseReview, 1.25)
+	line.Role = "reviewer"
+	line.Agent = "reviewer"
+	line.RunID = ""
+	line.WorkItemID = ""
+	line.BranchReviewID = "review-0123456789abcdef0123456789abcdef"
+	if err := store.Append(line); err != nil {
+		t.Fatalf("Append() error = %v", err)
+	}
+	reloaded, err := store.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(reloaded) != 1 || reloaded[0].BranchReviewID != line.BranchReviewID || reloaded[0].RunID != "" {
+		t.Fatalf("List() = %#v, want one line naming the branch review and no run", reloaded)
+	}
+
+	both := line
+	both.RunID = "run-0123456789abcdef0123456789abcdef"
+	if err := store.Append(both); err == nil {
+		t.Error("Append() accepted a line naming both a run and a branch review")
+	}
+	// A branch review serves no assigned work either, so it may not name one.
+	claiming := line
+	claiming.WorkItemID = "yoyodyne-ifd.182"
+	if err := store.Append(claiming); err == nil {
+		t.Error("Append() accepted a branch review claiming a work item")
+	}
+}
+
 func TestListingSpendsBeforeAnythingWasSpentIsNotAFailure(t *testing.T) {
 	t.Parallel()
 

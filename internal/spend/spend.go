@@ -58,11 +58,14 @@ type Attribution struct {
 	Backend domain.Backend
 	// Exactly one of these names what the invocation belongs to, and a run also
 	// names the work item it served. The store refuses a line that names none or
-	// more than one.
+	// more than one. A branch review takes the last of them rather than the run
+	// identifier: it is not a run, and a line saying it was would be a run id
+	// naming no run to whatever later reads these lines back.
 	RunID          string
 	WorkItemID     string
 	ConversationID string
 	ExchangeID     string
+	BranchReviewID string
 }
 
 // Metered is one provider with the cost log wired behind it. Every invocation it
@@ -74,6 +77,20 @@ type Metered struct {
 	Log         Log
 	Attribution Attribution
 	Clock       execution.Clock
+	// RecordFailure, where a caller sets it, is handed a line that could not be
+	// made durable instead of the invocation failing with it.
+	//
+	// It exists for the one caller whose answer is not reproducible from its own
+	// record. A run's answer is a change in a worktree the next attempt starts
+	// from, so failing the invocation costs an attempt and loses nothing; a
+	// conversation turn's answer is prose the provider has already written and
+	// already charged for, and failing it throws that away to report that the
+	// bookkeeping behind it did not land. The operator would lose the answer as
+	// well as the record, which is a worse trade than the one this makes.
+	//
+	// A caller that leaves it nil takes the failure, which is what everything but
+	// the conversation does.
+	RecordFailure func(error)
 }
 
 // Run makes the invocation and records what it spent.
@@ -95,6 +112,9 @@ type Metered struct {
 // What is left is a state root that cannot be written, and that is a root whose
 // run state and event log are failing in the same breath; the run is lost either
 // way, and the alternative is losing the money silently as well.
+//
+// A caller for which that trade comes out the other way sets RecordFailure and
+// is handed the failure instead of it being joined on.
 func (m Metered) Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error) {
 	result, err := m.Provider.Run(ctx, request)
 	// A provider with nowhere to record what it spends is one nothing is
@@ -104,7 +124,14 @@ func (m Metered) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		return result, err
 	}
 	if recordErr := m.Log.Append(m.line(request, result, err)); recordErr != nil {
-		return result, errors.Join(err, fmt.Errorf("record what the %s invocation spent: %w", request.Role, recordErr))
+		recordErr = fmt.Errorf("record what the %s invocation spent: %w", request.Role, recordErr)
+		// Either way the failure is reported and never swallowed. What the caller
+		// chooses is whether it costs the invocation as well as the record.
+		if m.RecordFailure != nil {
+			m.RecordFailure(recordErr)
+			return result, err
+		}
+		return result, errors.Join(err, recordErr)
 	}
 	return result, err
 }
@@ -124,6 +151,7 @@ func (m Metered) line(request backend.RunRequest, result backend.RunResult, err 
 		WorkItemID:     m.Attribution.WorkItemID,
 		ConversationID: m.Attribution.ConversationID,
 		ExchangeID:     m.Attribution.ExchangeID,
+		BranchReviewID: m.Attribution.BranchReviewID,
 		Backend:        m.Attribution.Backend,
 		Model:          request.Model,
 		ResolvedModel:  result.ResolvedModel,

@@ -129,6 +129,25 @@ func TestALineThatCannotBeMadeDurableIsReportedRatherThanLost(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "developer backend failed") || !strings.Contains(err.Error(), "the disk is full") {
 		t.Fatalf("Run() error = %v, want both failures", err)
 	}
+
+	// A caller for which that trade comes out the other way says so, and is
+	// handed the failure rather than having it cost the invocation. The answer
+	// the provider already gave and already charged for still comes back.
+	var handed error
+	metered = testMetered(log, func(backend.RunRequest) (backend.RunResult, error) {
+		return backend.RunResult{Backend: "claude-code", FinalText: "an answer", CostUSD: 1, CostReported: true}, nil
+	})
+	metered.RecordFailure = func(err error) { handed = err }
+	result, err = metered.Run(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("Run() error = %v, want the invocation to survive the failure to record it", err)
+	}
+	if result.FinalText != "an answer" {
+		t.Fatalf("the answer was dropped with the record: %#v", result)
+	}
+	if handed == nil || !strings.Contains(handed.Error(), "the disk is full") {
+		t.Fatalf("the failure to record reached nobody: %v", handed)
+	}
 }
 
 func TestAProviderWithNowhereToRecordSpendsExactlyAsItWould(t *testing.T) {

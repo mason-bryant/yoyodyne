@@ -144,13 +144,19 @@ type Spend struct {
 	// with nowhere to put it.
 	AccountAlias   string `json:"account_alias"`
 	ConfigRevision string `json:"config_revision"`
-	// Exactly one of these three names what the invocation belongs to, and it is
+	// Exactly one of these four names what the invocation belongs to, and it is
 	// the same identifier that invocation's event log is named by. A run also
 	// names the work item it served, which is what an item's spend is read by.
+	//
+	// A branch review has one of its own rather than borrowing run_id. It is not
+	// a run and has no run behind it, so a line that put its identifier there
+	// would hand anything joining these lines to run records a run id naming no
+	// run — and the join is exactly what a later read model over this log is.
 	RunID          string `json:"run_id,omitempty"`
 	WorkItemID     string `json:"work_item_id,omitempty"`
 	ConversationID string `json:"conversation_id,omitempty"`
 	ExchangeID     string `json:"exchange_id,omitempty"`
+	BranchReviewID string `json:"branch_review_id,omitempty"`
 	// What served the invocation. The backend and the requested model are what
 	// the harness asked for; the resolved model is what the provider reported
 	// actually serving it, which is the only durable evidence where the requested
@@ -215,13 +221,13 @@ func (s Spend) Validate() error {
 // two is a spend that would be counted twice by whoever reads it by either.
 func (s Spend) subjectProblem() error {
 	named := 0
-	for _, id := range []string{s.RunID, s.ConversationID, s.ExchangeID} {
+	for _, id := range []string{s.RunID, s.ConversationID, s.ExchangeID, s.BranchReviewID} {
 		if strings.TrimSpace(id) != "" {
 			named++
 		}
 	}
 	if named != 1 {
-		return errors.New("a spend names exactly one of run_id, conversation_id, and exchange_id")
+		return errors.New("a spend names exactly one of run_id, conversation_id, exchange_id, and branch_review_id")
 	}
 	// A work item belongs to a run and to nothing else: an invocation with no run
 	// behind it served no assigned work, and saying it did would put money on an

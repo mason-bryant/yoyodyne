@@ -127,6 +127,87 @@ func TestADeveloperAttemptAfterTheFirstIsChargedToRepair(t *testing.T) {
 	}
 }
 
+// The same split, driven through a whole run rather than by setting the counter
+// by hand: a failing check sends the change back, and the attempt that answers
+// it is recorded as a repair.
+//
+// This is the half the unit test above cannot reach. developmentPhase() reads
+// the repair count at the moment the invocation is made, so which phase a real
+// repair lands in is decided by whether the run increments that counter before
+// or after it invokes the developer. It increments before, in activeRun.repair,
+// and nothing in that function mentions the cost log — so an edit that moved the
+// increment after the invocation would write every first repair as development,
+// would make docs/reporting.md's new section false, and would pass every other
+// test in this file.
+func TestARepairAttemptIsChargedToRepairThroughAWholeRun(t *testing.T) {
+	t.Parallel()
+
+	repository := pipelineRepository(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	attempts := 0
+	provider := roleBackend(func(request backend.RunRequest) error {
+		attempts++
+		// The first attempt leaves the check failing; the repair attempt makes it
+		// pass in the same worktree.
+		if attempts == 1 {
+			return nil
+		}
+		return os.WriteFile(filepath.Join(request.WorkingDirectory, "feature.txt"), []byte("implemented\n"), 0o600)
+	}, approveVerdict)
+	priceInvocations(provider, 1.5)
+	command := `test -f feature.txt || { echo "feature.txt is missing" >&2; exit 3; }`
+	pipeline, _ := newAutomaticPipeline(t, repository, tracker, provider, []string{command})
+	log := &recordingSpendLog{}
+	pipeline.Spend = log
+	pipeline.Reviewer = review.Reviewer{Backend: provider, Model: testReviewerModel, Spend: log}
+
+	outcome, err := pipeline.Run(context.Background(), tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if outcome.RepairAttempts != 1 || outcome.Integration == nil {
+		t.Fatalf("the run did not repair and then integrate: %#v", outcome)
+	}
+
+	// The first attempt, the attempt that answered the failing check, and the
+	// review of what passed — one line each, in the order they were made. The
+	// reviewer only ever saw the change whose checks passed, so there is exactly
+	// one review.
+	want := []runstate.SpendPhase{
+		runstate.SpendPhaseDevelopment,
+		runstate.SpendPhaseRepair,
+		runstate.SpendPhaseReview,
+	}
+	recorded := make([]runstate.SpendPhase, 0, len(log.lines))
+	for _, line := range log.lines {
+		recorded = append(recorded, line.Phase)
+	}
+	if len(recorded) != len(want) {
+		t.Fatalf("recorded %v, want one line per invocation: %v", recorded, want)
+	}
+	for index, phase := range want {
+		if recorded[index] != phase {
+			t.Fatalf("recorded %v, want %v", recorded, want)
+		}
+	}
+
+	// The repair is the same developer asked again for the same item, and it is
+	// its own line rather than an amendment to the first attempt's.
+	repair := log.lines[1]
+	if repair.Role != domain.RoleDeveloper || repair.Agent != "developer" {
+		t.Errorf("repair line = %#v, want the developer's", repair)
+	}
+	if repair.RunID != outcome.RunID || repair.WorkItemID != tracker.item.ID {
+		t.Errorf("repair line = %#v, want the run and the item it served", repair)
+	}
+	if !repair.Known() || repair.AmountUSD != 1.5 {
+		t.Errorf("repair line = %#v, want the provider's own figure", repair)
+	}
+	if err := repair.Validate(); err != nil {
+		t.Errorf("recorded line does not satisfy the durable contract: %v", err)
+	}
+}
+
 // A branch review is a provider invocation with neither a run nor a work item
 // behind it, so it is charged to the review itself. Nothing else in the harness
 // would ever say what one cost.
@@ -156,8 +237,14 @@ func TestABranchReviewRecordsWhatItSpentAgainstTheReview(t *testing.T) {
 	if line.Phase != runstate.SpendPhaseReview || line.Role != domain.RoleReviewer {
 		t.Errorf("line = %#v, want a review", line)
 	}
-	if line.RunID != outcome.ReviewID || line.WorkItemID != "" {
-		t.Errorf("line = %#v, want the review itself and no work item", line)
+	// The review is what it belongs to, in the field that means a branch review.
+	// Putting it in the run id would read as a run to whatever joins these lines
+	// to run records, and there is no such run.
+	if line.BranchReviewID != outcome.ReviewID {
+		t.Errorf("line = %#v, want the review it was made for", line)
+	}
+	if line.RunID != "" || line.WorkItemID != "" {
+		t.Errorf("line = %#v, want no run and no work item behind it", line)
 	}
 	if !line.Known() || line.AmountUSD != 1.25 {
 		t.Errorf("line = %#v, want the provider's own figure", line)

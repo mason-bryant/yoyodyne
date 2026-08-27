@@ -196,17 +196,28 @@ and every round of an inter-role exchange.
 
 Each line carries the role and the configured agent that spent it, the phase, the
 amount and its classification, the account alias and the configuration revision
-in force, the run, conversation, or exchange the invocation belonged to — and the
-work item, where the invocation was made for one — the backend, the requested and
-resolved models, and when it happened.
+in force, the one thing the invocation belonged to — and the work item, where the
+invocation was made for one — the backend, the requested and resolved models, and
+when it happened.
 
-Two things it does deliberately. An invocation the provider ended without pricing
-is classified `unknown` rather than recorded as zero or left out, because a zero
-meaning "nobody was told" understates every total it enters by however much was
-really spent. And nothing here aggregates: adding the lines up is yours, and any
-later query builds on the same lines rather than on a rollup something decided
-for you in advance — which is also what makes the log evidence about what each
-model charges rather than only about what they charge together.
+That one thing is a run, a conversation, an exchange, or a branch review, and a
+line names exactly one of the four. A branch review has a field of its own rather
+than borrowing the run's: it is not a run and nothing ever made one for it, so a
+line that carried its identifier as a run id would hand anything joining these
+lines back to run records an id naming no run.
+
+Three things it does deliberately. An invocation the provider ended without
+pricing is classified `unknown` rather than recorded as zero or left out, because
+a zero meaning "nobody was told" understates every total it enters by however
+much was really spent. Nothing here aggregates: adding the lines up is yours, and
+any later query builds on the same lines rather than on a rollup something
+decided for you in advance — which is also what makes the log evidence about what
+each model charges rather than only about what they charge together. And a line
+that cannot be made durable fails the invocation it belonged to, the same weight
+an unrecordable event log carries, with one exception: a conversation turn comes
+back anyway and says on the reply what could not be recorded. The provider has
+already written that answer and already charged for it, and losing the answer to
+report that the bookkeeping missed would cost you both.
 
 None of the prices above change with it. `yoyo cost` still reads a run's event
 log, which is what lets it answer for runs that finished long before this log

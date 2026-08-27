@@ -351,6 +351,10 @@ type Session struct {
 	// from, and it is the first thing to check against a real bill.
 	turnCostUSD    float64
 	sessionCostUSD float64
+	// spendProblem is what went wrong recording the cost of the invocation just
+	// taken. It is per-invocation like the cost beside it and is cleared as each
+	// one starts, so what a round reports is that round's own.
+	spendProblem string
 	// lastInvocationCostUSD is what the provider charged for the invocation just
 	// taken, kept apart from both totals because an exchange is charged per
 	// invocation rather than per message: the round that carried an answer back
@@ -502,6 +506,12 @@ type Reply struct {
 	// could not be kept, because a lost report would otherwise be silence.
 	Reports       []report.Report `json:"reports,omitempty"`
 	ReportProblem string          `json:"report_problem,omitempty"`
+	// SpendProblem names what went wrong recording this answer's cost in the
+	// durable cost log. The turn is not failed over it: the provider has already
+	// answered and already charged, and throwing the answer away to report that
+	// the bookkeeping missed would cost the operator both. So the answer comes
+	// back and this says what is missing from the log beside it.
+	SpendProblem string `json:"spend_problem,omitempty"`
 	// Exchanges are the rounds of asking another role this reply conducted, in
 	// the order they happened. Like the actions they already happened, so they
 	// are reported to the operator rather than put to them — and reported at all
@@ -644,6 +654,10 @@ func (s *Session) Send(ctx context.Context, message string) (Reply, error) {
 		// before anything is decided about what it said: it was paid for either way.
 		s.chargeExchange(chargeTo, s.lastInvocationCostUSD)
 		chargeTo = ""
+		// What the log would not take is carried on the reply whichever way the
+		// turn went, and accumulated across the rounds of one message the way a
+		// lost report is: a second round's loss must not overwrite the first's.
+		reply.SpendProblem = appendProblem(reply.SpendProblem, s.spendProblem)
 		reply.Evidence = s.Evidence()
 		if err != nil {
 			reply.Text = appendProse(reply.Text, answer)
@@ -861,11 +875,18 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 	// The invocation goes through the meter, so this turn's spend is one line in
 	// the cost log whichever way the turn went — a turn the provider failed was
 	// charged for exactly as one that answered.
+	s.spendProblem = ""
 	provider := spend.Metered{
 		Provider:    s.options.Backend,
 		Log:         s.options.Spend,
 		Attribution: s.spendAttribution(),
 		Clock:       s.options.Clock,
+		// A turn the provider has already answered is not thrown away because the
+		// cost log would not take the line. The answer comes back and what is
+		// missing from the log is named on the reply instead.
+		RecordFailure: func(err error) {
+			s.spendProblem = singleLine(err.Error(), maxTrackerFailureBytes)
+		},
 	}
 	result, err := provider.Run(ctx, backend.RunRequest{
 		RunID:            s.state.ConversationID,
