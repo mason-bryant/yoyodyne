@@ -45,7 +45,9 @@ const goalsTrackerTimeout = 30 * time.Second
 type goalsOutput struct {
 	Goals []goal.Goal `json:"goals,omitempty"`
 	// BriefGoals are what the goals above link upward to, listed so a reader
-	// resolving a link by hand has both ends of it.
+	// resolving a link by hand has both ends of it. It is the listing's to carry
+	// and only the listing's, because that is the report the goals themselves are
+	// in — see attributionOutput for why the audit carries neither half.
 	BriefGoals   []goal.BriefGoal   `json:"brief_goals,omitempty"`
 	Problems     []goal.Problem     `json:"problems,omitempty"`
 	LinkProblems []goal.LinkProblem `json:"link_problems,omitempty"`
@@ -215,13 +217,7 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 
 	attributions := attributionsOf(admitted, goals)
 	if *flags.jsonOutput {
-		if code := writeJSON(stdout, stderr, goalsOutput{
-			Attributions: attributions,
-			Problems:     goals.Problems,
-			BriefGoals:   goals.BriefGoals,
-			LinkProblems: goals.LinkProblems,
-			WrapProblems: goals.WrapProblems,
-		}); code != 0 {
+		if code := writeJSON(stdout, stderr, attributionOutput(attributions, goals)); code != 0 {
 			return code
 		}
 	} else {
@@ -229,6 +225,23 @@ func reportAttribution(ctx context.Context, args []string, stdout, stderr io.Wri
 		printGoalsProblems(stderr, goals)
 	}
 	return attributionExitCode(attributions)
+}
+
+// attributionOutput is what the audit says when it is read by a program: the
+// items and what each is for, beside everything that was wrong with reading the
+// goals it judged them against.
+//
+// It carries no brief goals, which the listing carries. The pair is worth
+// printing where both ends of the link are, and this report holds neither the
+// goals the link points from nor anything that resolves against it — the
+// upstream half alone is a list a reader has nothing to read it against.
+func attributionOutput(attributions []itemAttribution, goals goal.Set) goalsOutput {
+	return goalsOutput{
+		Attributions: attributions,
+		Problems:     goals.Problems,
+		LinkProblems: goals.LinkProblems,
+		WrapProblems: goals.WrapProblems,
+	}
 }
 
 // witnessRecordedGoals records, on every work item whose notes state a goal and
