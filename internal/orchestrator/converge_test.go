@@ -12,6 +12,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
@@ -552,6 +553,7 @@ func settledRunWithCheckout(t *testing.T, worktrees *gitworktree.Manager, store 
 		ProductID:     "yoyodyne",
 		RepositoryID:  "repository",
 		WorkItemID:    workItemID,
+		Backend:       domain.BackendClaudeCode,
 		Status:        runstate.StatusFailed,
 		Phase:         runstate.PhaseDeveloping,
 		StartedAt:     settledAt,
