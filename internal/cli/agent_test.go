@@ -410,6 +410,36 @@ func TestAConversationLeaseThatCannotBeAskedIsReportedAsAProblem(t *testing.T) {
 	}
 }
 
+// Asking whether a conversation is in use takes its lease and lets it go again,
+// so asking must leave the conversation exactly as free as it found it. A
+// release that did not happen leaves this process holding the lock, and every
+// later question — the next agent in the same listing, the next listing, the
+// operator's own chat — is answered "held by another process" about a
+// conversation nobody is in.
+func TestAskingWhetherAConversationIsInUseDoesNotKeepIt(t *testing.T) {
+	t.Parallel()
+
+	store, err := runstate.NewConversationStore(t.TempDir(), "yoyodyne")
+	if err != nil {
+		t.Fatalf("NewConversationStore() error = %v", err)
+	}
+	identity := runstate.ConversationIdentity{Agent: "architect", Role: domain.RoleArchitect}
+	for ask := 1; ask <= 3; ask++ {
+		if inUse, problem := conversationInUse(store, identity); inUse || problem != "" {
+			t.Fatalf("ask %d reported in use = %v, problem = %q, want a conversation nobody holds", ask, inUse, problem)
+		}
+	}
+	// Having been asked about is not having been taken: a conversation somebody
+	// now wants to have must still be there to take.
+	lease, err := store.Hold(identity)
+	if err != nil {
+		t.Fatalf("Hold() after asking error = %v, want the conversation still free", err)
+	}
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release() error = %v", err)
+	}
+}
+
 // Two agents on one role are two identities in the listing as well as in the
 // store: the conversation one of them has had is reported against that one, and
 // the sibling is reported as never spoken to. Printing one record twice would

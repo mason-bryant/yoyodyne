@@ -88,13 +88,23 @@ type Lease struct {
 
 // Release drops the lease. Releasing twice is a no-op, so a caller can defer it
 // unconditionally.
+//
+// The lock is dropped explicitly before the file is closed, rather than left to
+// the close that would drop it anyway. Closing is the step that can fail with
+// nothing left to try again: Go does not retry an interrupted close and marks
+// the descriptor closed regardless, so a lease that released only by closing
+// could keep its lock with no handle left to let go of it — and every later
+// question about the thing it owns would answer that another process holds it,
+// which is the one answer nobody could act on. Unlocking first makes a failed
+// close a leaked descriptor at worst, never a lock nobody can see.
 func (l *Lease) Release() error {
 	if l == nil || l.file == nil {
 		return nil
 	}
 	file := l.file
 	l.file = nil
-	if err := file.Close(); err != nil {
+	unlocked := unlockStateFile(file)
+	if err := errors.Join(unlocked, closeStateFile(file)); err != nil {
 		return fmt.Errorf("release %s lease: %w", l.label, err)
 	}
 	return nil

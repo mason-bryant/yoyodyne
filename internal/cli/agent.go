@@ -354,10 +354,16 @@ func conversationInUse(store *runstate.ConversationStore, identity runstate.Conv
 	case err != nil:
 		return false, err.Error()
 	}
-	// A lease that cannot be released leaves this process holding it until it
-	// exits, which is the safe direction: a one-shot command exits immediately
-	// and the operating system drops the lock with it.
-	_ = lease.Release()
+	// A release that could not be taken is another failure to ask, not an
+	// answer. The lease drops its lock before it closes, so what is left is a
+	// descriptor rather than a held conversation — but a release this process
+	// could not complete is exactly the state in which its own answers about
+	// this conversation stop being trustworthy, and a listing that keeps asking
+	// would report every later question against it as somebody else's
+	// conversation. Saying so is what tells the operator the difference.
+	if err := lease.Release(); err != nil {
+		return false, err.Error()
+	}
 	return false, ""
 }
 
