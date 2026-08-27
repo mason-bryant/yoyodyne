@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
+	"github.com/mason-bryant/yoyodyne/internal/protectedpath"
 	"github.com/mason-bryant/yoyodyne/internal/report"
 )
 
@@ -159,6 +160,17 @@ var trackerActionNames = []string{
 	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire, actionTriage,
 	actionHandle,
 }
+
+// providerPathClause is what every role that writes an item's text is told
+// about the grants that are not worth writing. It is one constant carried by
+// both contracts rather than a paragraph in each, because the two would drift
+// and the paths it names are the same paths either way.
+//
+// It names the paths and the provider rather than saying a set exists, so the
+// answer is available where the item is being written. A conformance test keeps
+// this list equal to the one the refusal is decided from, which is the only
+// thing standing between the contract and a role told the wrong set.
+const providerPathClause = `A work item's text can admit one of the harness's protected paths into a run's scope, by naming that path after "` + protectedpath.GrantMarker + `" on a line of its own. Two paths are beyond any such grant, and the harness refuses a creation, an update, or a proposal whose text names one: ".claude/settings.json" and ".claude/settings.local.json". Claude Code refuses an agent's writes to those files above anything this harness permits, so a grant admits nothing there — what it admits is work no run can do, and the run finds that out by spending its whole repair budget against it. Where work genuinely needs one of those files changed, say in the item what has to be in it and that the operator puts it there by hand, and admit the rest of the work as ordinary work. A grant that reaches an item some other way is refused too, one step later: a run reads the item's design guidance and acceptance criteria as well, and refuses to start on it rather than spending an attempt.`
 
 // TrackerAction is one bounded operation on the work tracker. It carries
 // authority, unlike a proposal: the harness runs it as asked, so every argument
@@ -485,6 +497,28 @@ func (a TrackerAction) validateArguments() []error {
 			problems = append(problems, fmt.Errorf("handle report %q is not a report identifier; a report is named exactly as it was listed to you", reported))
 		}
 	}
+	// A grant naming a path the provider refuses is refused wherever an item's
+	// authored text is written, which is admitting work and rewriting it. The
+	// harness's grant lifts the harness's own refusal and never a provider's, so
+	// such a grant admits work no run can do and the run finds that out by
+	// spending its repair rounds against it. Catching it on the update as well as
+	// the creation is what keeps the gate at admission rather than at one door of
+	// it: an item admitted clean and then rewritten to carry the grant is the same
+	// item, and the run reads its text as it stands.
+	//
+	// A grant is honoured from four fields and this action carries two of them.
+	// The other two are not an omission here: nothing in the harness writes an
+	// item's design guidance or acceptance criteria — no action takes them and no
+	// creation sets them, so they are written with the tracker's own command and
+	// there is no door here for a grant in one of them to arrive through. What
+	// covers those is the run itself, which reads all four before it claims the
+	// item and refuses to start rather than spending an attempt; see
+	// orchestrator.refuseProviderGrant, which asks this same predicate.
+	//
+	// The note is excluded rather than unreachable, and for the reason a run does
+	// not read one: the harness appends each run's own record there, so a grant
+	// read from it could be an agent's own prose.
+	problems = append(problems, protectedpath.GrantProblems(a.Title, a.Description)...)
 	// The arguments an operation does accept are checked wherever they appear, so
 	// a value that could not be applied is refused before anything is run.
 	if a.Title != "" && strings.ContainsAny(a.Title, "\r\n") {

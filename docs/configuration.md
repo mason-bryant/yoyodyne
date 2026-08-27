@@ -868,6 +868,43 @@ The practical consequence: **a grant written into the notes silently does not
 count.** A run refused despite an item that plainly names the path is usually
 this. Both the refusal and the blocker name the fields a grant is read from.
 
+**The paths a grant does not reach.** A grant is an exception to *this harness's*
+refusal, and to nothing else's. Claude Code refuses an agent's writes to its own
+settings files above anything yoyodyne permits — the editing tools are denied
+there however the run is configured, and the shell sandbox names the file and
+cannot be disabled by policy — so an item that grants one of them has admitted
+work no run can do, and the run discovers that by spending its repair budget
+against it. One item spent three rounds there before this was recorded anywhere.
+
+| Beyond any grant | Refused by |
+| --- | --- |
+| `.claude/settings.json` | Claude Code |
+| `.claude/settings.local.json` | Claude Code |
+
+So the harness refuses a creation, an update, or a proposal whose text grants one
+of these, and the refusal names the provider: what is wrong is not the item's
+judgement about the path, but that the change is a person's to make by hand
+rather than a run's to be given. Only the marker is refused — prose that names
+one of these files grants nothing and admits fine, which is what lets an item
+*about* this boundary exist at all.
+
+**And once more, where all four fields are read.** Those three doors carry an
+item's title and description; a grant is honoured from its design guidance and
+acceptance criteria too, and nothing in the harness writes either of those — they
+reach an item through the tracker's own command. So the run asks the same
+question itself, over all four fields, before the item is claimed: a run that
+would start on such an item refuses to start, which is the same refusal one step
+later and still before a single repair round is spent. That is also what covers
+an item admitted before this gate existed. The developer contract names the same
+paths for the case no gate can catch — an item that describes the work without
+granting anything, whose developer would otherwise spend attempts looking for a
+way in.
+
+The list is short and evidenced rather than a guess at a provider's whole
+posture: an entry refuses work at admission, so a path added on suspicion costs
+items nobody needed to refuse. It grows the same way it started — something meets
+the wall and reports it.
+
 **What a grant does not do.** It admits the path; it does not decide what is
 written into it. The legitimate use of the exception is recording a change
 somebody already decided — an approved amendment, an operator's decision — never
