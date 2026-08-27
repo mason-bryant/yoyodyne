@@ -31,6 +31,12 @@ func TestARealTerminalIsRecognizedAndHandedBack(t *testing.T) {
 	if width := terminalWidth(terminal.Fd()); width < minimumColumns {
 		t.Fatalf("terminal width = %d, want at least %d", width, minimumColumns)
 	}
+	// A pseudo-terminal nobody has sized answers with nothing, which is the
+	// answer the region is bounded by: it has to be a window the region can
+	// still be drawn in rather than none at all.
+	if height := terminalHeight(terminal.Fd()); height < minimumRows {
+		t.Fatalf("terminal height = %d, want at least %d", height, minimumRows)
+	}
 	// A file is not a terminal, which is what keeps cursor control out of a
 	// redirected transcript.
 	plainFile, err := os.CreateTemp(t.TempDir(), "transcript")

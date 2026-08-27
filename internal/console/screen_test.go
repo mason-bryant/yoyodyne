@@ -13,15 +13,28 @@ import (
 // writes cursor control and expects a terminal to interpret it, so a test that
 // only reads the bytes back proves nothing about what the operator sees; this
 // interprets them the way a terminal would and leaves the rows to assert on.
+//
+// A screen with a height is a window: rows written past the bottom of it scroll
+// the ones at the top off, into a scrollback the console can no longer address.
+// A height of nothing is a screen that goes on for as far as anything is
+// written, which is all a test needs where nothing is tall enough to scroll.
 type screen struct {
-	width  int
-	rows   []string
-	row    int
-	column int
+	width      int
+	height     int
+	rows       []string
+	scrollback []string
+	row        int
+	column     int
 }
 
 func newScreen(width int) *screen {
 	return &screen{width: width, rows: []string{""}}
+}
+
+// newWindow is a screen of a fixed height, which is what a terminal actually
+// is: what is drawn past the bottom of it costs the top of it.
+func newWindow(width, height int) *screen {
+	return &screen{width: width, height: height, rows: []string{""}}
 }
 
 func (s *screen) write(text string) {
@@ -107,6 +120,14 @@ func (s *screen) fit() {
 	for len(s.rows) <= s.row {
 		s.rows = append(s.rows, "")
 	}
+	if s.height <= 0 {
+		return
+	}
+	for len(s.rows) > s.height {
+		s.scrollback = append(s.scrollback, s.rows[0])
+		s.rows = append([]string(nil), s.rows[1:]...)
+		s.row--
+	}
 }
 
 // lines is the screen as text, with the trailing blank rows dropped.
@@ -122,6 +143,18 @@ func (s *screen) lines() []string {
 }
 
 func (s *screen) text() string { return strings.Join(s.lines(), "\n") }
+
+// scrolled is everything the window has held, in the order it held it: what has
+// scrolled off the top followed by what is still on it. The conversation the
+// operator can scroll back to is this, so it is what says whether an erase took
+// a line of it.
+func (s *screen) scrolled() []string {
+	lines := make([]string, 0, len(s.scrollback))
+	for _, line := range s.scrollback {
+		lines = append(lines, strings.TrimRight(line, " "))
+	}
+	return append(lines, s.lines()...)
+}
 
 // lastLine is the bottom of the screen, which is where the composing region
 // lives.
@@ -188,6 +221,16 @@ func (r *recorder) screen() *screen {
 	return rendered
 }
 
+// window replays everything written so far onto a screen this tall, so a test
+// can see what a region and a conversation cost each other for room.
+func (r *recorder) window(height int) *screen {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	rendered := newWindow(r.width, height)
+	rendered.write(r.buffer.String())
+	return rendered
+}
+
 // await waits for the screen to say something, which is how a test watches a
 // console that is being driven by the goroutine reading the operator's
 // keystrokes rather than by the test itself.
@@ -225,5 +268,24 @@ func TestScreenInterpretsWhatTheConsoleWrites(t *testing.T) {
 	wrapped.write("abcdefg")
 	if got := wrapped.lines(); len(got) != 2 || got[0] != "abcd" || got[1] != "efg" {
 		t.Fatalf("wrapped = %#v", got)
+	}
+
+	// A window is a screen with a bottom: rows written past it scroll the ones at
+	// the top off, where they are still the operator's scrollback.
+	window := newWindow(6, 2)
+	window.write("first\nsecond\nthird")
+	if got := window.scrolled(); strings.Join(got, "|") != "first|second|third" {
+		t.Fatalf("window = %#v", got)
+	}
+	if got := window.lines(); strings.Join(got, "|") != "second|third" {
+		t.Fatalf("window rows = %#v", got)
+	}
+	// Climbing further than the window is tall stops at the top of it rather than
+	// following what scrolled away, so clearing from there clears rows that were
+	// never meant to be climbed over. This is what a region drawn taller than the
+	// window does to the conversation above it.
+	window.write("\x1b[9A\r\x1b[J")
+	if got := window.scrolled(); strings.Join(got, "|") != "first" {
+		t.Fatalf("a clamped climb left %#v", got)
 	}
 }

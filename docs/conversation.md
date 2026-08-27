@@ -1071,7 +1071,11 @@ this terminal supports rather than listing all of them at you. The price of the
 backslash is that a message ending in one cannot be typed: the backslash is what
 carries the line on. What you compose is drawn in the same region, over as many
 rows as it has lines, and reaches the product manager with its lines where you
-put them.
+put them. A message with more lines than your window has rows is drawn as the
+part of it that fits — the end of it, where you are typing, or wherever you have
+moved the cursor to — because a region drawn past the top of the window could no
+longer be erased without taking the conversation above it. Only the drawing is
+bounded: the message you send is all of it.
 
 Ctrl-C still interrupts the way it always did, and Ctrl-Z still stops the
 conversation. A terminal that has agreed to report shift-return stops raising

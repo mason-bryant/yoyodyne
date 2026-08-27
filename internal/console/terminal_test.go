@@ -2,12 +2,17 @@ package console
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// windowRows is the height a console under test has unless it is being asked
+// about one: tall enough that nothing here is bounded by it.
+const windowRows = 24
 
 // terminalUnderTest is a console over a pipe, which is as close to a terminal
 // as a test needs: the console never asks the descriptor anything once it is
@@ -17,7 +22,7 @@ func terminalUnderTest(t *testing.T, width int) (*terminal, *io.PipeWriter, *rec
 
 	reader, keys := io.Pipe()
 	out := newRecorder(width)
-	console := newTerminal(reader, out, func() int { return width }, nil)
+	console := newTerminal(reader, out, func() int { return width }, func() int { return windowRows }, nil)
 	t.Cleanup(func() {
 		console.Close()
 		keys.Close()
@@ -219,7 +224,7 @@ func TestAResizedWindowIsErasedAtTheSizeItIsNow(t *testing.T) {
 	}
 	reader, keys := io.Pipe()
 	out := newRecorder(20)
-	console := newTerminal(reader, out, current, nil)
+	console := newTerminal(reader, out, current, func() int { return windowRows }, nil)
 	t.Cleanup(func() {
 		console.Close()
 		keys.Close()
@@ -403,6 +408,81 @@ func TestADressedPromptIsMeasuredByWhatItShows(t *testing.T) {
 	}
 }
 
+// TestARegionTallerThanTheWindowIsDrawnInsideIt is the reported problem: a
+// message of thirty lines on a window of twenty-four rows. The region was drawn
+// whole, so its top scrolled off the window, and the erase — which climbs from
+// the cursor by the rows the region drew — ran off the top of the window and
+// cleared from there, taking the conversation with it and leaving a copy of the
+// region in the scrollback for every keystroke that redrew it.
+func TestARegionTallerThanTheWindowIsDrawnInsideIt(t *testing.T) {
+	t.Parallel()
+
+	const rows = 24
+	reader, keys := io.Pipe()
+	out := newRecorder(40)
+	console := newTerminal(reader, out, func() int { return 40 }, func() int { return rows }, nil)
+	t.Cleanup(func() {
+		console.Close()
+		keys.Close()
+	})
+
+	// Something is already in the conversation, so an erase that climbs out of
+	// the region takes a line of it.
+	io.WriteString(console, "product-manager> Two goals, then.\n")
+	answers := prompting(context.Background(), console, "you> ", nil)
+
+	// Thirty lines composed on a window of twenty-four rows: six more than there
+	// is room for, which is the case the report named.
+	var typed strings.Builder
+	var message []string
+	for number := 1; number <= 30; number++ {
+		if number > 1 {
+			typed.WriteString("\x1b[13;2u")
+		}
+		fmt.Fprintf(&typed, "line %d", number)
+		message = append(message, fmt.Sprintf("line %d", number))
+	}
+	keys.Write([]byte(typed.String()))
+	out.await(t, "the composed message", func(s *screen) bool { return s.lastLine() == "line 30" })
+	io.WriteString(console, "harness> yoyodyne-1 finished.\n")
+
+	// Everything the window has held, in order: the conversation, each line of it
+	// once and whole, and under it the last twenty-four rows of what is being
+	// composed. The region left nothing in the scrollback, because none of it was
+	// ever drawn outside the window.
+	want := append([]string{
+		"product-manager> Two goals, then.",
+		"harness> yoyodyne-1 finished.",
+	}, message[6:]...)
+	if got := out.window(rows).scrolled(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the window held\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// The cursor sent back to the start of a message the window cannot hold: what
+	// is drawn slides up to keep the cursor on screen, and the erase still stops
+	// where the region began rather than at the top of the window.
+	keys.Write([]byte("\x01"))
+	out.await(t, "the top of the message", func(s *screen) bool { return s.lastLine() == "line 24" })
+	io.WriteString(console, "development-manager> It is blocked.\n")
+
+	want = append([]string{
+		"product-manager> Two goals, then.",
+		"harness> yoyodyne-1 finished.",
+		"development-manager> It is blocked.",
+		"you> line 1",
+	}, message[1:rows]...)
+	if got := out.window(rows).scrolled(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("the window held\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Only what is drawn was bounded: the message the operator sends is all
+	// thirty lines of it, in the order they typed them.
+	keys.Write([]byte("\r"))
+	if line := answers.line(t); line != strings.Join(message, "\n") {
+		t.Fatalf("line = %q", line)
+	}
+}
+
 // TestEditingAMultiLineMessage keeps the small editing the region has working
 // once there is more than one line to do it on.
 func TestEditingAMultiLineMessage(t *testing.T) {
@@ -470,7 +550,7 @@ func TestSuspendingHandsTheTerminalOverAndTakesItBack(t *testing.T) {
 
 	reader, keys := io.Pipe()
 	out := newRecorder(40)
-	console := newTerminal(reader, out, func() int { return 40 }, nil)
+	console := newTerminal(reader, out, func() int { return 40 }, func() int { return windowRows }, nil)
 	t.Cleanup(func() {
 		console.Close()
 		keys.Close()
@@ -541,7 +621,7 @@ func TestTheTerminalIsHandedBackOnClose(t *testing.T) {
 	t.Parallel()
 
 	restored := 0
-	console := newTerminal(strings.NewReader(""), newRecorder(40), func() int { return 40 }, func() error {
+	console := newTerminal(strings.NewReader(""), newRecorder(40), func() int { return 40 }, func() int { return windowRows }, func() error {
 		restored++
 		return nil
 	})
