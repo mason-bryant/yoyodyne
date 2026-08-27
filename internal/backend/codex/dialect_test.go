@@ -120,8 +120,8 @@ func TestEveryAnswerIsOneTheContractNames(t *testing.T) {
 			t.Fatalf("Observe(%q) = %#v, want one of %s", message, observation, backendapi.DescribeAnswers())
 		}
 	}
-	if Dialect{}.Name() != sourceName {
-		t.Fatalf("Name() = %q, want %q", Dialect{}.Name(), sourceName)
+	if (Dialect{}).Name() != sourceName {
+		t.Fatalf("Name() = %q, want %q", (Dialect{}).Name(), sourceName)
 	}
 }
 

@@ -531,8 +531,8 @@ func TestCapabilitiesAreTheOnesTheHarnessValidatesAgainst(t *testing.T) {
 	if !known {
 		t.Fatal("this build ships no description of the Codex backend")
 	}
-	if Backend{}.Capabilities() != descriptor.Capabilities {
-		t.Fatalf("Capabilities() = %#v, want %#v", Backend{}.Capabilities(), descriptor.Capabilities)
+	if (Backend{}).Capabilities() != descriptor.Capabilities {
+		t.Fatalf("Capabilities() = %#v, want %#v", (Backend{}).Capabilities(), descriptor.Capabilities)
 	}
 	// Codex enforces no schema on what an agent finally says, so the description
 	// must not claim it does: a capability nobody has is how a role comes to be
