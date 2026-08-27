@@ -53,6 +53,17 @@ func (i ignoredConfiguration) shared() bool {
 	return !filepath.IsAbs(i.Source) && filepath.Base(i.Source) == ".gitignore"
 }
 
+// configuredRepository is the repository a loaded configuration describes, and
+// nothing when it cannot be resolved -- which is a question that cannot be asked
+// rather than a failure of the command asking it.
+func configuredRepository(resolved config.Resolved) string {
+	repository, err := resolvePath(config.ProjectDirectory(resolved.Path), resolved.Config.Product.Repository)
+	if err != nil {
+		return ""
+	}
+	return repository
+}
+
 // configurationIgnored asks Git whether the ignore rules in force exclude the
 // project's configuration.
 //
@@ -66,15 +77,23 @@ func (i ignoredConfiguration) shared() bool {
 // `check-ignore` consults the index for exactly that reason. A project that
 // committed its configuration and later added the rule is therefore left alone,
 // which is right -- what is committed is what the other machines get.
-func configurationIgnored(ctx context.Context, runner execution.ProcessRunner, configPath string) ignoredConfiguration {
-	project := config.ProjectDirectory(configPath)
-	named := configPath
-	if relative, err := filepath.Rel(project, configPath); err == nil {
-		named = filepath.ToSlash(relative)
+func configurationIgnored(ctx context.Context, runner execution.ProcessRunner, repository, configPath string) ignoredConfiguration {
+	// A configuration outside the repository it describes is not something an
+	// ignore rule can reach, and asking anyway would put the question to whatever
+	// repository happens to contain the file instead: a home directory kept in
+	// Git is common enough that the answer would be somebody else's rule about
+	// somebody else's file.
+	if repository == "" {
+		return ignoredConfiguration{}
 	}
+	named, err := filepath.Rel(repository, configPath)
+	if err != nil || named == ".." || strings.HasPrefix(named, ".."+string(filepath.Separator)) {
+		return ignoredConfiguration{}
+	}
+	named = filepath.ToSlash(named)
 	result, err := runner.Run(ctx, execution.Command{
 		Name:    "git",
-		Args:    []string{"-C", project, "check-ignore", "--verbose", "--", named},
+		Args:    []string{"-C", repository, "check-ignore", "--verbose", "--", named},
 		Timeout: ignoreCommandTimeout,
 	}, nil)
 	if err != nil || result.Status != execution.ProcessSucceeded {
@@ -99,18 +118,20 @@ func configurationIgnored(ctx context.Context, runner execution.ProcessRunner, c
 // the supported thing, and telling them to commit it is telling them to do what
 // they came here unable to do. Both forms name the same way out, because a
 // configuration outside the repository is what makes a project runnable by
-// something other than the checkout that was configured.
+// something other than the checkout that was configured -- and `--external`
+// rather than a hand-placed file, because a configuration in the place discovery
+// looks for one is a configuration nothing has to be told about again.
 func describeIgnoredConfiguration(ignored ignoredConfiguration) string {
 	if ignored.shared() {
 		return fmt.Sprintf("warning: %s is ignored by %s, so nothing commits it -- this checkout keeps working from disk while clones, "+
 			"collaborators, and dev worktrees, which check out tracked files only, get an unconfigured project; commit %s if this "+
-			"repository is yours to commit tool config to, and if it is not, keep the configuration outside the repository and name it "+
-			"with --config, ignoring it in .git/info/exclude rather than in a tracked .gitignore",
+			"repository is yours to commit tool config to, and if it is not, keep the configuration outside the repository with "+
+			"`yoyo init --external`, ignoring this one in .git/info/exclude rather than in a tracked .gitignore",
 			ignored.Path, ignored.Rule, config.DirectoryName)
 	}
 	return fmt.Sprintf("warning: %s is ignored by %s, which is local to this checkout rather than committed -- the supported way to keep "+
 		"tool config out of a repository that is not yours; it is still uncommitted, so clones, collaborators, and dev worktrees, which "+
 		"check out tracked files only, get an unconfigured project, and anything but this checkout that has to run work here needs the "+
-		"configuration kept outside the repository and named with --config",
+		"configuration kept outside the repository with `yoyo init --external`, which yoyo finds from this repository without --config",
 		ignored.Path, ignored.Rule)
 }

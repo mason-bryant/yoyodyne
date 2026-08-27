@@ -34,7 +34,7 @@ func TestRunInitWarnsWhenTheConfigurationIsIgnored(t *testing.T) {
 		// What it costs, and the two supported ways out.
 		"unconfigured project",
 		"commit " + config.DirectoryName,
-		"--config",
+		"yoyo init --external",
 		".git/info/exclude",
 	} {
 		if !strings.Contains(warning, want) {
@@ -77,7 +77,7 @@ func TestALocalIgnoreIsAcknowledgedRatherThanArguedWith(t *testing.T) {
 		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
 	}
 	warning := stderr.String()
-	for _, want := range []string{".git/info/exclude:1:.yoyodyne/", "local to this checkout", "--config"} {
+	for _, want := range []string{".git/info/exclude:1:.yoyodyne/", "local to this checkout", "yoyo init --external"} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("stderr = %q, want it to mention %q", warning, want)
 		}

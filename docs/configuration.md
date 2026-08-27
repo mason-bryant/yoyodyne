@@ -79,10 +79,13 @@ project that committed its configuration and later added the rule is left alone.
 A rule that is local to the checkout, in `.git/info/exclude` or a
 `core.excludesFile`, is reported differently: that is the supported way to keep
 tool config out of a repository that is not yours to commit it to, so it is
-acknowledged rather than argued with, and what the warning names is `--config`
-for keeping the configuration outside the repository. Nothing is said where Git
+acknowledged rather than argued with, and what the warning names is
+[`init --external`](#keeping-the-configuration-outside-the-repository) for
+keeping the configuration outside the repository. Nothing is said where Git
 could not be asked — a project that is not a repository, a configuration kept
-outside the one it describes, a Git that would not run.
+outside the one it describes, a Git that would not run. An external
+configuration is not asked about at all: it is outside the repository by
+construction, and there is nothing there for an ignore rule to reach.
 
 `init --json` and `config validate --json` both report it under `ignored`, with
 the `path` that was asked about, the `rule` Git answered with, and the `source`
@@ -151,7 +154,9 @@ Committing it is the default rather than a requirement, and a contributor to a
 repository they do not own has two supported ways not to: the README's
 [Keeping the configuration out of the repository](../README.md#keeping-the-configuration-out-of-the-repository)
 covers a `.yoyodyne` listed in `.git/info/exclude` and a configuration kept
-outside the repository behind `--config`.
+outside the repository entirely, which
+[`yoyo init --external`](#keeping-the-configuration-outside-the-repository)
+writes and discovery finds without anything being passed to it.
 
 What `init` writes looks like this, with the explanatory comments trimmed:
 
@@ -237,14 +242,32 @@ the table itself.
 Yoyodyne looks for a configuration in this order:
 
 1. the path given to `--config`, if present;
-2. otherwise `.yoyodyne/config.yaml`, searching from the current directory
+2. otherwise the configuration `YOYODYNE_CONFIG` names;
+3. otherwise `.yoyodyne/config.yaml`, searching from the current directory
    upwards to the filesystem root;
-3. otherwise `.yoyodyne.yaml` in the same directories.
+4. otherwise `.yoyodyne.yaml` in the same directories;
+5. otherwise this machine's own configuration for the repository the current
+   directory is in, under
+   [the configurations home](#keeping-the-configuration-outside-the-repository).
 
 Because the search walks upwards, `yoyo run` works from the project root or
 from any directory beneath it. When both forms exist in one directory, the
 directory form wins, so a half-finished migration cannot silently keep using the
 old file.
+
+The project's own configuration is looked for before this machine's, and that
+order is the point rather than an implementation detail: a repository that
+describes itself is what every collaborator gets, and a file one person wrote on
+one machine must not quietly win over it. A project that carries a `.yoyodyne`
+behaves exactly as it did before external configurations existed.
+
+`YOYODYNE_CONFIG` is `--config` for a whole shell: export it and every command
+run there reads that configuration. It must be an absolute path, and it names
+either the configuration file or a directory holding a `config.yaml`. A variable
+that is set and names nothing readable is a failure rather than a step that is
+skipped — it is an instruction exactly as `--config` is, and falling through to a
+different configuration than the one that was named is how a command does the
+right thing to the wrong project.
 
 Relative paths inside the configuration — `product.repository` and a non-`auto`
 `execution.worktree_root` — resolve against the project directory, which is the
@@ -270,7 +293,58 @@ for a different reason, because the harness lists what a home holds without
 following links and reports one that is a link as not being a directory. The same
 holds of the `.yoyodyne` directory `yoyo init` writes: a project
 whose `.yoyodyne` leads out of the project is refused with the project untouched
-rather than scaffolded somewhere nothing commits.
+rather than scaffolded somewhere nothing commits. And of the configurations home
+below, which is a declared root like any other: a write that resolves out of it
+is refused rather than landing where nothing looks for it.
+
+## Keeping the configuration outside the repository
+
+A contributor to a repository they do not own has the configuration as theirs
+rather than the project's, and a pull request adding a tool directory nobody
+asked for is a pull request about the tool. `yoyo init --external` writes the
+configuration this machine keeps for that repository, and nothing at all into
+the repository:
+
+```sh
+cd ~/src/theirproject
+yoyo init --external
+yoyo doctor
+```
+
+It writes into `~/.config/yoyodyne/projects/<key>/`, where `<key>` names the
+checkout — its directory name, then a digest of where it is — and everything
+`init` ordinarily writes into `.yoyodyne/` goes there instead, personas
+included. `$XDG_CONFIG_HOME/yoyodyne` is used when that variable is set, and
+`YOYODYNE_CONFIG_HOME` overrides both.
+
+Four things are worth knowing about it:
+
+- **Nothing is passed on later commands.** The configuration is keyed by the
+  repository, so `yoyo` finds it from the repository root, from any directory
+  beneath it, and from a worktree Git added from it — a run's worktree, and a
+  check or a hook that shells out to `yoyo` from inside one, resolve to the
+  repository they came from rather than being read as projects of their own.
+  That is what separates this from moving `.yoyodyne` somewhere by hand and
+  passing `--config` on everything thereafter.
+- **The key is the checkout, not the project.** Two checkouts of one project on
+  one machine are two configurations, because they are two things to configure.
+  Moving a checkout leaves its configuration behind under the old key; run
+  `init --external` again, or move the directory to the key the refusal names.
+- **`product.repository` is written absolute.** An external configuration has no
+  project directory above it for a relative path to resolve against. The
+  artifact directories are unaffected: `specifications`, `invariants`,
+  `designs`, and `decisions` resolve against `product.repository` and go on
+  naming directories inside the repository being worked on.
+- **It writes no artifact-home indexes.** `init` ordinarily puts a `README.md` at
+  the door of each of the five artifact homes, and in a repository you are a
+  guest in those are five untracked files in somebody else's `docs/` tree.
+  `yoyo doctor` reports each home without an index as a warning rather than a
+  problem, so an installation configured this way runs work exactly as one with
+  them does.
+
+The project stops describing itself, which in this scenario is the intent:
+another clone, another machine, and anybody else working on it get no
+configuration at all, and `yoyo` there reports that it found none.
 
 ## Precedence
 

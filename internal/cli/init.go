@@ -28,6 +28,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	product := flags.String("product", "", "product id (default: the project directory name)")
 	trackerRemote := flags.String("tracker-remote", "", "URL the tracker syncs through (default: this project's Git remote)")
 	force := flags.Bool("force", false, "overwrite files that already exist")
+	external := flags.Bool("external", false, "write the configuration outside the repository, where only this machine reads it")
 	jsonOutput := flags.Bool("json", false, "emit machine-readable JSON")
 	if err := flags.Parse(args); err != nil {
 		return 2
@@ -37,7 +38,12 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	written, detection, err := initializeProject(*directory, *product, *force)
+	initialization, err := initializeProject(initializeOptions{
+		Directory: *directory,
+		ProductID: *product,
+		Force:     *force,
+		External:  *external,
+	})
 	if err != nil {
 		// A reported failure exits nonzero whichever form it was reported in,
 		// so a script reading the JSON does not have to parse it to notice.
@@ -51,37 +57,42 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// The project root is named from what was written rather than resolved a
-	// second time: the configuration is the first file written, and it is always
-	// at <root>/.yoyodyne/config.yaml.
-	tracker := configureTrackerRemote(ctx, filepath.Dir(filepath.Dir(written[0])), *trackerRemote, execution.OSProcessRunner{})
+	tracker := configureTrackerRemote(ctx, initialization.repository, *trackerRemote, execution.OSProcessRunner{})
 	// A configuration the repository ignores is one this machine has and no
 	// other will, and the moment it was written is the moment somebody can still
-	// decide about it cheaply.
-	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, written[0])
+	// decide about it cheaply. An external configuration is not in the repository
+	// for a rule to reach, and answers no without Git being asked.
+	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, initialization.repository, initialization.config)
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{
 			"status": "written",
 			"bundle": config.BuiltinV1,
-			"config": written[0],
-			"files":  written,
+			"config": initialization.config,
+			"files":  initialization.written,
+			// Where the configuration went, and what it configures, are reported
+			// apart because an external one is the case where they differ.
+			"external":   initialization.external,
+			"repository": initialization.repository,
 			// What was written, and what was detected, are reported separately:
 			// a candidate is detected and deliberately not written, and a caller
 			// that could not tell them apart could not check either. The three
 			// detected lists are kept apart for the same reason -- they ask the
 			// operator for a decision, for an optional one, and for nothing.
-			"checks":   detection.Commands(),
-			"detected": detection,
+			"checks":   initialization.detection.Commands(),
+			"detected": initialization.detection,
 			"tracker":  tracker,
 			"ignored":  ignored,
 		})
 	}
-	for _, path := range written {
+	for _, path := range initialization.written {
 		fmt.Fprintf(stdout, "wrote %s\n", path)
 	}
 	fmt.Fprintln(stdout, "the configuration is complete and inherits nothing")
-	fmt.Fprintln(stdout, describeDetection(detection, written[0]))
+	if initialization.external {
+		fmt.Fprintln(stdout, describeExternalConfiguration(initialization))
+	}
+	fmt.Fprintln(stdout, describeDetection(initialization.detection, initialization.config))
 	// The tracker step is reported on the stream its outcome belongs to and
 	// never changes the exit code. The configuration is written and valid either
 	// way, and an init that failed after writing it would be describing a
@@ -259,76 +270,129 @@ func countOf(count int, noun string) string {
 	return fmt.Sprintf("%d %ss", count, noun)
 }
 
+// initializeOptions is what an initialization was asked for: which project to
+// configure, what to call the product, whether an existing file may be
+// overwritten, and whether the configuration is kept outside the repository.
+type initializeOptions struct {
+	Directory string
+	ProductID string
+	Force     bool
+	External  bool
+}
+
+// initialized is what an initialization produced. Where the configuration went
+// and what it configures are separate fields because an external configuration
+// is the case where they are different directories, and every caller that
+// reports one of them means one of them in particular.
+type initialized struct {
+	// config is the configuration file, which is the first file written.
+	config string
+	// repository is the project the configuration describes.
+	repository string
+	// written is everything the initialization wrote, configuration first.
+	written []string
+	// detection is what reading the project proposed as checks, so a caller can
+	// report what was found alongside what was written.
+	detection config.Detection
+	external  bool
+}
+
 // initializeProject renders the scaffold and writes it, configuration file
 // first. Every target is checked before anything is written, so a refusal to
 // overwrite leaves the project exactly as it was rather than half-configured.
-// The detection it returns is what the generated file proposed as checks, so the
-// command can report what was found alongside what was written.
-func initializeProject(directory, productID string, force bool) ([]string, config.Detection, error) {
-	var detection config.Detection
-	// The project is the repository this writes into, and everything it writes is
-	// confined to it: a scaffold that landed outside is a configuration the
-	// operator was told about and cannot find, in a place nothing reviews.
-	project, err := repowrite.NewRoot(directory)
+func initializeProject(options initializeOptions) (initialized, error) {
+	var result initialized
+	// The project is the repository this reads and, ordinarily, writes into. What
+	// it writes there is confined to it: a scaffold that landed outside is a
+	// configuration the operator was told about and cannot find, in a place
+	// nothing reviews.
+	project, err := repowrite.NewRoot(options.Directory)
 	if err != nil {
-		return nil, detection, fmt.Errorf("open project directory %q: %w", directory, err)
+		return result, fmt.Errorf("open project directory %q: %w", options.Directory, err)
 	}
 	root := project.Path()
 	// What the operator called the project, which is what the files it wrote are
 	// reported as. Confinement is decided against the resolved root, but a person
 	// who typed one path and is told about another has to work out for themselves
 	// that the two are the same directory.
-	named, err := filepath.Abs(directory)
+	named, err := filepath.Abs(options.Directory)
 	if err != nil {
-		return nil, detection, fmt.Errorf("resolve project directory %q: %w", directory, err)
+		return result, fmt.Errorf("resolve project directory %q: %w", options.Directory, err)
+	}
+	// An external configuration is keyed by the repository it describes, and the
+	// key is what discovery looks it up by from anywhere inside that repository.
+	// So the repository is settled first, and a directory that is in none is
+	// refused before anything is generated: a configuration nothing could find
+	// again is worse than one that was never written.
+	repository := named
+	if options.External {
+		found, err := config.RepositoryRoot(root)
+		if err != nil {
+			return result, err
+		}
+		if found == "" {
+			return result, fmt.Errorf("%s is not inside a Git repository, and a configuration kept outside a repository is keyed by the "+
+				"repository it describes; name a checkout with --directory, or write the configuration into the project without --external", named)
+		}
+		repository, root = found, found
 	}
 
-	identifier := strings.TrimSpace(productID)
+	identifier := strings.TrimSpace(options.ProductID)
 	if identifier == "" {
 		identifier = defaultProductID(root)
 	}
 	if err := domain.ValidateIdentifier("product id", identifier); err != nil {
-		return nil, detection, fmt.Errorf("%w; name one with --product", err)
+		return result, fmt.Errorf("%w; name one with --product", err)
 	}
 
 	// The project's own files are read before anything is generated, so what the
 	// scaffold proposes for `checks` comes from this repository rather than from
 	// the template. Reading is all that happens: no command here is executed.
-	detection = config.DetectChecks(root)
+	detection := config.DetectChecks(root)
+	// A project configuration describes the repository that contains it, and
+	// relative paths resolve against that repository rather than against the
+	// .yoyodyne directory, so "." is the project root. An external one has no
+	// repository above it to resolve against, so it names the checkout outright.
+	repositoryValue := "."
+	if options.External {
+		repositoryValue = repository
+	}
 	scaffold, err := config.NewScaffold(config.BuiltinV1, config.ScaffoldOptions{
-		ProductID: identifier,
-		// The configuration describes the repository that contains it, and
-		// relative paths resolve against that repository rather than against
-		// the .yoyodyne directory, so "." is the project root.
-		Repository: ".",
+		ProductID:  identifier,
+		Repository: repositoryValue,
 		Detection:  detection,
 	})
 	if err != nil {
-		return nil, detection, err
+		return result, err
+	}
+
+	destination, prefix, reported, err := scaffoldDestination(project, named, repository, options.External)
+	if err != nil {
+		return result, err
 	}
 
 	files := scaffold.Files()
 	// Every target is resolved before anything is written, so a scaffold that
-	// would leave the project — through a `.yoyodyne` somebody symlinked
-	// elsewhere, or a directory above it — is refused with the project untouched
-	// rather than half of it written somewhere nobody looks.
+	// would leave the directory it belongs in — through a `.yoyodyne` somebody
+	// symlinked elsewhere, or a directory above it — is refused with nothing
+	// touched rather than half of it written somewhere nobody looks.
 	targets := make([]string, 0, len(files))
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		target := config.DirectoryName + "/" + file.Path
-		path := filepath.Join(named, filepath.FromSlash(target))
+		target := prefix + file.Path
+		path := filepath.Join(reported, filepath.FromSlash(target))
 		// Where the bytes would actually land, which is what an existing file has to
-		// be looked for at: a target the project does not contain is refused here,
-		// with nothing written.
-		resolved, err := project.Resolve(target)
+		// be looked for at: a target the destination does not contain is refused
+		// here, with nothing written.
+		resolved, err := destination.Resolve(target)
 		if err != nil {
-			return nil, detection, fmt.Errorf("write %s into %q: %w", target, directory, err)
+			return result, fmt.Errorf("write %s into %q: %w", target, destination.Path(), err)
 		}
-		if !force {
+		if !options.Force {
 			if _, err := os.Lstat(resolved); err == nil {
-				return nil, detection, fmt.Errorf("%s already exists; pass --force to overwrite it", path)
+				return result, fmt.Errorf("%s already exists; pass --force to overwrite it", path)
 			} else if !os.IsNotExist(err) {
-				return nil, detection, fmt.Errorf("inspect %q: %w", path, err)
+				return result, fmt.Errorf("inspect %q: %w", path, err)
 			}
 		}
 		targets = append(targets, target)
@@ -336,17 +400,34 @@ func initializeProject(directory, productID string, force bool) ([]string, confi
 	}
 
 	for index := range files {
-		if _, err := project.WriteFile(targets[index], files[index].Content); err != nil {
-			return nil, detection, fmt.Errorf("write %s into %q: %w", targets[index], directory, err)
+		if _, err := destination.WriteFile(targets[index], files[index].Content); err != nil {
+			return result, fmt.Errorf("write %s into %q: %w", targets[index], destination.Path(), err)
 		}
 	}
 
 	// Loading what was just written is the only proof that it is usable: the
-	// personas have to resolve from the project directory they were copied into,
-	// not from the bundle they came from.
+	// personas have to resolve from the directory they were copied into, not from
+	// the bundle they came from.
 	loaded, err := config.Load(paths[0])
 	if err != nil {
-		return nil, detection, fmt.Errorf("the generated configuration does not load: %w", err)
+		return result, fmt.Errorf("the generated configuration does not load: %w", err)
+	}
+
+	result = initialized{
+		config:     paths[0],
+		repository: repository,
+		written:    paths,
+		detection:  detection,
+		external:   options.External,
+	}
+	// An external configuration writes nothing into the repository at all, which
+	// is the whole of what it is for: an index at the door of somebody else's
+	// `docs/` tree is exactly the untracked file a guest in that repository came
+	// here unable to add. `yoyo doctor` reports each home without one, so an
+	// installation configured this way is told what it is missing rather than
+	// left to find out.
+	if options.External {
+		return result, nil
 	}
 
 	// The artifact homes the configuration just named each get an index saying
@@ -356,9 +437,55 @@ func initializeProject(directory, productID string, force bool) ([]string, confi
 	// where its designs actually are.
 	indexes, err := writeArtifactHomeIndexes(project, named, loaded)
 	if err != nil {
-		return nil, detection, err
+		return initialized{}, err
 	}
-	return append(paths, indexes...), detection, nil
+	result.written = append(result.written, indexes...)
+	return result, nil
+}
+
+// scaffoldDestination is where an initialization's files go: the root every one
+// of them is confined to, what a scaffold file is called inside it, and the
+// directory the operator is told the paths relative to.
+//
+// The external root is the configurations home rather than the project's own
+// directory inside it, so the `projects/<key>` path is resolved through the
+// primitive like any other: a root declared at the leaf would resolve a symlink
+// standing where that leaf goes and confine the write to wherever it pointed,
+// which is exactly the escape the primitive exists to refuse.
+func scaffoldDestination(project repowrite.Root, named, repository string, external bool) (repowrite.Root, string, string, error) {
+	if !external {
+		return project, config.DirectoryName + "/", named, nil
+	}
+	home, err := config.ExternalHome(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		return repowrite.Root{}, "", "", err
+	}
+	// The home is created before it is declared as a write root rather than
+	// through one: confinement is decided against a root that already exists, and
+	// this is the directory that root will be. Everything written inside it goes
+	// through the primitive.
+	if err := os.MkdirAll(home, externalHomePermissions); err != nil {
+		return repowrite.Root{}, "", "", fmt.Errorf("create the configurations directory %q: %w", home, err)
+	}
+	root, err := repowrite.NewRoot(home)
+	if err != nil {
+		return repowrite.Root{}, "", "", fmt.Errorf("open the configurations directory %q: %w", home, err)
+	}
+	return root, config.ExternalDirectory(repository) + "/", home, nil
+}
+
+// externalHomePermissions is what the configurations home is created as: the
+// mode the run-state root this machine keeps beside it is created with, because
+// it is the same kind of directory — one user's own, under their home, created
+// by the harness rather than checked out.
+const externalHomePermissions = 0o700
+
+// describeExternalConfiguration says what an external configuration is and what
+// finds it, because the one thing an operator cannot see from the paths that
+// were just printed is that nothing has to be passed to use them.
+func describeExternalConfiguration(initialization initialized) string {
+	return fmt.Sprintf("this configuration is on this machine only and nothing was written into %s; yoyo finds it from anywhere in that repository, "+
+		"and its worktrees, without --config", initialization.repository)
 }
 
 // writeArtifactHomeIndexes writes the README each artifact home gets, and

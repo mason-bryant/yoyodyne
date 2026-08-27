@@ -414,8 +414,9 @@ else: this checkout keeps working from disk while clones, collaborators, and dev
 worktrees — which check out tracked files only — get an unconfigured project. The
 warning names the rule and does not fail the command. If the repository is not
 yours to commit tool config to, that is a real case rather than a mistake: keep
-the configuration outside it and pass `--config`, and exclude it in
-`.git/info/exclude` rather than in a tracked `.gitignore`. See
+the configuration outside it with `yoyo init --external`, which yoyo finds
+without `--config`, and exclude what is already there in `.git/info/exclude`
+rather than in a tracked `.gitignore`. See
 [When the repository ignores the configuration](docs/configuration.md#when-the-repository-ignores-the-configuration).
 
 **Then check the whole installation, not only the file:**
@@ -681,39 +682,36 @@ tracker is worth the same treatment if you are keeping the whole adoption local:
 `bd init` writes `.beads/` and a set of agent instruction files, and each of
 those is another untracked path a run would refuse over.
 
-**Or keep it outside the repository entirely.** Every command that reads a
-configuration takes `--config`, which names the configuration *file* rather than
-a directory, so nothing about the arrangement has to sit inside the checkout:
+**Or keep it outside the repository entirely.** `yoyo init --external` writes
+the configuration into this machine's own home for one instead of into the
+checkout, and writes nothing into the repository at all:
 
 ```sh
-yoyo init                                       # in the repository, so `checks` detection reads its toolchain
-mv .yoyodyne ~/yoyo/theirproject/.yoyodyne      # personas resolve beside the file, so move the directory
-yoyo doctor --config ~/yoyo/theirproject/.yoyodyne/config.yaml
+cd ~/src/theirproject
+yoyo init --external      # writes ~/.config/yoyodyne/projects/<key>/, and nothing here
+yoyo doctor
 ```
 
-Run `init` inside the repository first: detection reads the project's Makefile
-targets, manifests, and lockfiles to propose `checks`, and pointed at an empty
-directory it has nothing to read. After the move, set `product.repository` to
-the checkout — relative paths in the file resolve against the parent of
-`.yoyodyne`, which is no longer the project — and pass `--config` on every
-command thereafter. The artifact directories are unaffected: `specifications`,
-`designs`, `decisions`, and `invariants` resolve against `product.repository`
-and go on naming directories inside the repository being worked on. So moving
-`.yoyodyne/` out does not move the five indexes with it — they were written into
-that repository's `docs/` tree by the `init` above and are still there, and the
-paragraph above is the same decision to make about them.
+Run it from inside the repository: detection reads the project's Makefile
+targets, manifests, and lockfiles to propose `checks`, and it needs the project
+to read. Nothing is passed on later commands — the configuration is keyed by the
+repository, so `yoyo` finds it from the repository root, from any directory
+beneath it, and from a worktree Git added from it. `product.repository` is
+written as the checkout's own path, and the artifact directories are unaffected:
+`specifications`, `designs`, `decisions`, and `invariants` resolve against
+`product.repository` and go on naming directories inside the repository being
+worked on. The five indexes are not written either, so the paragraph above is a
+decision this arrangement does not ask you to make.
 
-Two things are true of both, and the second is the point rather than a cost:
+`YOYODYNE_CONFIG` names one configuration outright, wherever it is, for a shell
+that would rather say so explicitly; `--config` still names one for a single
+command.
 
-- **Nothing inside a development worktree can see the configuration.** A
-  worktree is a checkout of a branch, and a file Git does not track is not on
-  one. Today nothing there needs it — checks run as commands and agents are
-  given their instructions by the harness — but a check or a hook that shelled
-  out to `yoyo` from inside a worktree would find no configuration and say so.
-- **The project stops describing itself.** Another clone, another machine, and
-  anybody else working on it get no configuration at all, and `yoyo` there
-  reports that it found none. In this scenario that is the intent: the
-  configuration belongs to you and not to a repository you are a guest in.
+One thing is true of both, and it is the point rather than a cost: **the project
+stops describing itself.** Another clone, another machine, and anybody else
+working on it get no configuration at all, and `yoyo` there reports that it found
+none. In this scenario that is the intent: the configuration belongs to you and
+not to a repository you are a guest in.
 
 See the [configuration guide](docs/configuration.md) for the full layout, the
 `init` flags, precedence, merge and removal semantics, persona rules, extending

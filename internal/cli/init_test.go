@@ -575,6 +575,114 @@ func TestRunInitRefusesAProductItCannotName(t *testing.T) {
 	}
 }
 
+// The contributor who cannot commit tool config to somebody else's repository:
+// everything lands on this machine, the repository is left exactly as it was,
+// and `yoyo` run anywhere inside that repository finds the configuration with
+// nothing typed after it.
+func TestRunInitExternalWritesOutsideTheRepositoryAndIsStillFoundFromIt(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.HomeVariable, home)
+	project := externalProject(t)
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--external"}, &stdout, &stderr, "test"); code != 0 {
+		t.Fatalf("Run() code = %d, stderr = %q", code, stderr.String())
+	}
+
+	// Nothing was added to the repository at all -- neither the configuration
+	// directory nor the indexes at the door of its artifact homes, which are the
+	// untracked files a guest in somebody else's repository came here unable to
+	// add.
+	for _, untouched := range []string{config.DirectoryName, "docs"} {
+		if _, err := os.Stat(filepath.Join(project, untouched)); !os.IsNotExist(err) {
+			t.Errorf("an external init wrote %s into the repository", untouched)
+		}
+	}
+
+	path, err := config.ExternalPath(os.Getenv, os.UserHomeDir, project)
+	if err != nil {
+		t.Fatalf("ExternalPath() error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), path) {
+		t.Errorf("stdout = %q, want it to name %q", stdout.String(), path)
+	}
+	loaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	// The configuration is outside the repository it describes, so it names that
+	// repository outright: there is no project above the file for a relative path
+	// to resolve against. It is named as the checkout resolves rather than as it
+	// was typed, which on a machine whose temporary directory is a symlink is not
+	// the same string.
+	checkout, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	if loaded.Product.Repository != checkout {
+		t.Errorf("product.repository = %q, want the checkout %q", loaded.Product.Repository, checkout)
+	}
+	for name, agent := range loaded.Agents {
+		if strings.TrimSpace(agent.Persona.Text) == "" {
+			t.Errorf("agent %q persona did not resolve beside the external configuration", name)
+		}
+	}
+
+	nested := filepath.Join(project, "internal", "deeply", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for _, start := range []string{project, nested} {
+		discovered, err := config.Discover(start)
+		if err != nil {
+			t.Fatalf("Discover(%q) error = %v", start, err)
+		}
+		if discovered != path {
+			t.Errorf("Discover(%q) = %q, want %q", start, discovered, path)
+		}
+	}
+}
+
+// An external configuration is keyed by the repository it describes, so a
+// directory in none is refused before anything is written: a configuration
+// nothing could find again is worse than one that was never written.
+func TestRunInitExternalRefusesADirectoryInNoRepository(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv(config.HomeVariable, home)
+	project := filepath.Join(t.TempDir(), "example-project")
+	if err := os.Mkdir(project, 0o755); err != nil {
+		t.Fatalf("Mkdir() error = %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := Run([]string{"init", "--directory", project, "--external"}, &stdout, &stderr, "test"); code != 1 {
+		t.Fatalf("Run() code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "--external") {
+		t.Errorf("stderr = %q, want the refusal to say what --external needs", stderr.String())
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("a refused external init left %d entries in the configurations home", len(entries))
+	}
+}
+
+// externalProject is a repository for an external configuration to be keyed by.
+// It needs the marker Git leaves and nothing else: what discovery reads is the
+// filesystem rather than a working Git.
+func externalProject(t *testing.T) string {
+	t.Helper()
+
+	project := filepath.Join(t.TempDir(), "their-project")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	return project
+}
+
 // Inheritance is still a capability rather than the shipped shape: a project
 // that extends the bundle keeps loading exactly as it did.
 func TestExtendingTheBundleStillWorks(t *testing.T) {
