@@ -2049,11 +2049,14 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	a.outcome.PauseCause = runstate.PauseUsageLimit
 	maximum := p.Config.Execution.UsageLimitMaxPause
 	spent := a.state.UsageLimitPaused()
-	wait := limit.ResetsAt.Sub(p.clock().Now())
-	// A reset time the harness cannot believe is no reset time at all: waiting
-	// needs a deadline somebody actually stated, in the future, that fits inside
-	// what this run is still allowed to spend waiting. Anything else stops the
-	// run instead of becoming a guessed wait.
+	now := p.clock().Now()
+	wait := limit.ResetsAt.Sub(now)
+	// What a reset time is worth is the provider contract's answer rather than
+	// this run's: the two cases that are not simply a time in the future were
+	// each learned at the cost of a run, and every provider inherits both rather
+	// than rediscovering them. What the harness decides is what each one earns,
+	// which is here, because a wait spends an account.
+	reset := backend.ReadReset(limit.ResetsAt, now)
 	// A limit with no reset time is unknown rather than unwaitable. The overage
 	// allowance reports this way while the ordinary rolling window keeps
 	// resetting on its usual schedule, so the work resumes -- the harness simply
@@ -2061,13 +2064,13 @@ func (a *activeRun) pauseForUsageLimit(ctx context.Context, limit backend.UsageL
 	// and reattempts, and because that wait spends the same budget as any other,
 	// a provider that keeps refusing walks into the maximum instead of polling
 	// forever.
-	unknownReset := limit.ResetsAt.IsZero()
+	unknownReset := reset == backend.ResetUnknown
 	if unknownReset {
 		wait = p.Config.Execution.UsageLimitUnknownResetPause.Duration()
 		limit.ResetsAt = p.clock().Now().Add(wait)
 	}
 	switch {
-	case wait <= 0:
+	case reset == backend.ResetMalformed:
 		// A limit still refusing work while naming a reset that has already
 		// passed is not describing a wait. Honoring it would mean reissuing
 		// immediately into the same refusal, over and over, with nothing bounding

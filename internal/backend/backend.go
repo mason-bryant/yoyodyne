@@ -10,12 +10,17 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
+// Capabilities is what a backend can do, stated by the backend rather than
+// assumed of it. The yaml spelling is here because a user-supplied provider
+// declares its own capabilities in configuration, and a capability nobody
+// declared is one the harness must not assume: an unsupported combination is
+// refused where the configuration is validated, before any work is assigned.
 type Capabilities struct {
-	StructuredEvents  bool `json:"structured_events"`
-	SessionResumption bool `json:"session_resumption"`
-	StructuredOutput  bool `json:"structured_output"`
-	ToolControl       bool `json:"tool_control"`
-	LocalAuth         bool `json:"local_auth"`
+	StructuredEvents  bool `yaml:"structured_events" json:"structured_events"`
+	SessionResumption bool `yaml:"session_resumption" json:"session_resumption"`
+	StructuredOutput  bool `yaml:"structured_output" json:"structured_output"`
+	ToolControl       bool `yaml:"tool_control" json:"tool_control"`
+	LocalAuth         bool `yaml:"local_auth" json:"local_auth"`
 }
 
 type Availability struct {
@@ -240,8 +245,16 @@ const maxFailureDetailBytes = 512
 // category does not, so a provider that only names the category still reads as
 // one reason rather than as the same words twice.
 func (r RunResult) DescribeFailure() string {
-	reason := strings.TrimSpace(r.StopReason)
-	detail := boundFailureDetail(r.FinalText)
+	return DescribeFailure(r.StopReason, r.FinalText)
+}
+
+// DescribeFailure is the same description built from the two pieces alone, for a
+// dialect that has the provider's reason and its message but no result to read
+// them off: the contract's answers are decided from an event, and the event is
+// what a dialect is handed.
+func DescribeFailure(stopReason, finalText string) string {
+	reason := strings.TrimSpace(stopReason)
+	detail := boundFailureDetail(finalText)
 	switch {
 	case reason == "" && detail == "":
 		return "unknown provider failure"

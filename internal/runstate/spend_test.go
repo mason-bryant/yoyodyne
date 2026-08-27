@@ -98,7 +98,7 @@ func TestSpendsAreRefusedWhenNobodyCouldAttributeThem(t *testing.T) {
 		"a revision of no digest":         func(s *Spend) { s.ConfigRevision = "yesterday's" },
 		"a phase nothing runs":            func(s *Spend) { s.Phase = "integrating" },
 		"a role nobody fills":             func(s *Spend) { s.Role = "auditor" },
-		"a backend nothing runs":          func(s *Spend) { s.Backend = "handwritten" },
+		"a backend nothing could name":    func(s *Spend) { s.Backend = "hand written" },
 		"nothing to charge it to":         func(s *Spend) { s.RunID = "" },
 		"two things to charge it to":      func(s *Spend) { s.ConversationID = "conversation-1" },
 		"another product's spend":         func(s *Spend) { s.ProductID = "elsewhere" },

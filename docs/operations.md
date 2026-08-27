@@ -146,6 +146,13 @@ where the reason for it can be recorded with it.
 
 ## Waiting out a provider usage limit
 
+None of what follows is specific to one provider. What a provider said is read by
+that provider's dialect and reduced to one of six answers — served, retrying,
+limit-reached, unavailable, interrupted, refused — and every wait below is driven
+by those and by nothing provider-specific. A project that declares a provider of
+its own gets exactly this behaviour, including the two reset-time rules, without
+restating any of it: see [provider plugins](provider-plugins.md).
+
 When the provider reports that a usage limit is exhausted, the run pauses
 instead of failing — for either provider invocation a run makes, the developer
 attempt or the review. The reset time the provider named is recorded in durable

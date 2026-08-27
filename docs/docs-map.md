@@ -39,6 +39,7 @@ document whose reader needs it, not to the one whose subsystem it names.
 | `docs/reporting.md` | An operator asking what the work cost and what came back | 244 lines |
 | `docs/operations.md` | An operator recovering from a stall, a crash, or a provider refusal | 454 lines |
 | `docs/developing-yoyo.md` | Someone changing yoyo itself | 30 lines |
+| [`docs/provider-plugins.md`](provider-plugins.md) | Someone running yoyo on a coding CLI or harness it does not ship an adapter for | 240 lines |
 | [`docs/configuration.md`](configuration.md) | Anyone arriving at a configuration link — an index and the frozen anchors | 120 lines |
 | `docs/configuration/setup.md` | Someone writing, inheriting, or validating a project configuration | 524 lines |
 | `docs/configuration/artifacts.md` | Someone configuring artifact homes, approval, and ownership | 549 lines |

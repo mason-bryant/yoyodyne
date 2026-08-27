@@ -66,19 +66,16 @@ const readOnlyPermissionMode = "plan"
 var readOnlyTools = []string{}
 
 // readOnlyRole reports whether a role reasons over supplied evidence rather than
-// reaching outside it. Such a role gets no tools and cannot be given them. Of
-// the roles this backend serves, every one but the developer is such a role: the
-// developer is the only one whose work is editing a worktree, and each of the
-// others decides something the harness then performs on its behalf. The roles
-// are listed rather than inverted so that a role nobody has decided a posture
-// for reaches the refusal in Run instead of inheriting one.
+// reaching outside it. Such a role gets no tools and cannot be given them.
+//
+// Which roles those are is the contract's to say rather than this adapter's: it
+// is the same statement a backend makes when it declares which postures it can
+// hold, and a provider validated against one table and run against another is a
+// provider whose configuration says nothing. A role nobody has decided a posture
+// for has no posture at all, so it is neither read-only here nor supported by
+// this backend, and it reaches the refusal in Run.
 func readOnlyRole(role domain.AgentRole) bool {
-	switch role {
-	case domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager:
-		return true
-	default:
-		return false
-	}
+	return backend.PostureFor(role) == backend.PostureReadOnly
 }
 
 // supportedRole reports whether this backend knows how to assemble an
@@ -132,14 +129,13 @@ func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, e
 	return availability, nil
 }
 
+// Capabilities is what this adapter can do, read from the one description of
+// this backend the harness holds rather than restated here. A configuration is
+// validated against that description, so an adapter that answered differently
+// would be one whose capability check meant nothing.
 func (Backend) Capabilities() backend.Capabilities {
-	return backend.Capabilities{
-		StructuredEvents:  true,
-		SessionResumption: true,
-		StructuredOutput:  true,
-		ToolControl:       true,
-		LocalAuth:         true,
-	}
+	descriptor, _ := backend.BuiltInDescriptor(domain.BackendClaudeCode)
+	return descriptor.Capabilities
 }
 
 func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error) {

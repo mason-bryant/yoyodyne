@@ -197,7 +197,7 @@ func (s Spend) Validate() error {
 		problems = append(problems, fmt.Errorf("phase %q must be one of %s", s.Phase, joinSpendPhases()))
 	}
 	if !s.Backend.Valid() {
-		problems = append(problems, fmt.Errorf("backend %q is not a backend the harness runs", s.Backend))
+		problems = append(problems, fmt.Errorf("backend %q is not a backend identifier", s.Backend))
 	}
 	// The account and the configuration are the attribution, so a line missing
 	// either is refused rather than stored as a spend nobody can attribute. Their

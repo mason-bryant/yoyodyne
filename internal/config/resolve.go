@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/research"
 )
@@ -377,6 +378,18 @@ func (r *resolution) apply(applied layer) error {
 		}
 		r.config.Accounts = accounts
 		r.origins["accounts"] = applied.origin
+	}
+	// A supplied providers mapping replaces the inherited one entirely, for the
+	// reason the accounts mapping above does: which providers a project may name
+	// is one statement, and a dialect assembled from two layers is one nobody
+	// wrote and nobody could review.
+	if document.Providers != nil {
+		providers := make(map[string]backend.ProviderPlugin, len(*document.Providers))
+		for id, plugin := range *document.Providers {
+			providers[id] = plugin
+		}
+		r.config.Providers = providers
+		r.origins["providers"] = applied.origin
 	}
 	// A supplied check list replaces the inherited one entirely: checks are the
 	// gate on integration, and a silently concatenated list is not the gate
