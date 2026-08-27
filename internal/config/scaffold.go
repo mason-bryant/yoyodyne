@@ -621,8 +621,9 @@ func renderScaffoldAccounts(builder *strings.Builder, effective Config) {
 # A second entry pools the work. Active accounts are round-robined a run at a
 # time, a "reserved" one is served from only when no active account can be, and
 # an optional weekly_budget_usd stands an account down once the runs that named
-# it have cost that much in seven days. `+"`bin/yoyo-account`"+` asks the questions and
-# signs the new account in; `+"`yoyo doctor`"+` then says whether each one is authenticated.
+# it have cost that much in seven days. bin/yoyo-account asks the questions and
+# signs the new account in; yoyo doctor then says whether each one is
+# authenticated.
 #
 #   accounts:
 #     default: {}
