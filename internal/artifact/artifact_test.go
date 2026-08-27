@@ -267,18 +267,23 @@ func TestAHomeOutsideTheRepositoryIsRefused(t *testing.T) {
 
 func newStore(t *testing.T) Store {
 	t.Helper()
-	root := t.TempDir()
-	// The repository root is resolved through symlinks, and a temporary directory
-	// on macOS is one, so the store is given what it will resolve to.
-	resolved, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		t.Fatalf("EvalSymlinks() error = %v", err)
-	}
 	return Store{
-		RepositoryRoot: resolved,
+		RepositoryRoot: temporaryRepository(t),
 		Homes:          []string{productHome, designsHome, decisionsHome},
 		Excluded:       []string{invariantsHome},
 	}
+}
+
+// temporaryRepository is an empty repository root a store can be pointed at.
+// The path is resolved through symlinks, and a temporary directory on macOS is
+// one, so the store is given what it will resolve to.
+func temporaryRepository(t *testing.T) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	return resolved
 }
 
 func write(t *testing.T, store Store, relative, content string) {
