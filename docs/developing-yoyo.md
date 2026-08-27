@@ -22,6 +22,87 @@ runs. Those same four are what this project declares as its
 let a change reach review or integration — so anything a run has to exercise has
 to reach one of the four, and for content that is not Go that means `make test`.
 
+## What a surface may do with emphasis
+
+This is the contract for anything that writes output an operator reads — a
+command, a listing, the conversation, a run's closing lines, a message posted to
+Slack, and whatever surface comes after them. It is recorded once, here, because
+it was argued separately for the conversation, for the goals listing, and for the
+reports listing, and three surfaces that agree by coincidence are not a
+discipline. A new surface cites this section rather than deriving the rules
+again.
+
+The goal it serves is stated in [the v1 goals](product/goals/v1-goals.md#goals):
+*the harness's surfaces read clearly: boundaries between topics and speakers are
+visible, important findings stand out, and every distinction survives a terminal
+that cannot render emphasis.* Every rule below is that sentence made checkable.
+
+**A surface asks for a theme; it does not write an escape.**
+`console.ThemeFor(out, os.Getenv)` is the whole of the question for a command,
+and a conversation asks the console it opened. Both answer with a
+`console.Theme` whose zero value dresses nothing, so a surface calls
+`theme.Entry`, `theme.Detail`, `theme.State`, `theme.Severity`, `theme.Card`, or
+`theme.Rule` unconditionally and the theme decides whether that is anything at
+all. That is where a surface inherits the rest of this: no package outside
+`internal/console` writes an escape into its output, and a surface reaching for
+one has found something the theme should be taught rather than a licence to dress
+itself.
+
+**The words carry the meaning; the dressing only makes it findable.** Every
+distinction the dressing draws is one the text already makes — a question ends in
+a question mark, a group says `blocked (2)` in words, a goal that may no longer
+be named is marked `[no longer in force]`, a proposal says what it is proposing.
+The test is mechanical rather than a matter of taste: strip every escape from the
+output and it must say everything it said dressed. If stripping loses a
+distinction, the distinction was never in the text and the layout is what has to
+change.
+
+**Where the words will not carry it, put a mark in them.** A report's severity is
+`!!` for critical and `!` for warning, in the column before the identifier, so a
+pile can be scanned down its margin and a critical report does not read like a
+note on a terminal that may not be dressed at all. Reaching for a louder colour
+instead is how a distinction ends up living only in the decoration.
+
+**Emphasis is spent, not spread.** A note is dressed as nothing on purpose: a
+listing where every line is coloured has no emphasis left for the line that
+matters. The same reasoning is why structure is weighted rather than recoloured —
+a heading, a bold run, and a listing's entries are the text's own emphasis, not a
+kind of thing the harness is telling apart, so they leave the colours to mean
+what they mean.
+
+**The vocabulary is named, and the theme decides what it looks like.** A surface
+names `console.StateBlocked` or `console.SeverityCritical`; it does not choose an
+orange. That is what keeps blocked work the same colour in `/status`, in a run's
+closing lines, and in a listing, and it is why the set is fixed rather than free
+text.
+
+**Permission is all or nothing, and it is asked rather than assumed.**
+`NO_COLOR`, a `TERM` that says `dumb` or says nothing, and a stream that is not a
+terminal each suppress every escape there is — the colour, the rules, the cards,
+the bell, the window title — and with them anything that depends on there being a
+moment at which something unprompted can be written. Somebody who asked for an
+undecorated conversation asked for all of it, which is why `Theme.Permitted` is
+one question rather than several.
+
+**Machine-readable output carries none of it.** `--json` states a severity as a
+field, and dressing it would be corrupting the field. The same goes for anything
+else written for a program to read.
+
+**A surface that is not a terminal holds the same contract in its own
+materials.** Slack has no ANSI, so severity is said in words there — a `critical`
+says "Critical" — and an ordinary fact carries no marker at all, which is the
+words carrying the meaning and emphasis being spent rather than spread, in a
+medium that renders emoji instead of escapes. A future dashboard inherits the
+reasoning, not the escape codes.
+
+What an operator is told they will see is written where they read it — [the
+conversation on a terminal](conversation.md#what-the-conversation-looks-like-on-a-terminal),
+[the goals listing](artifacts.md#goals-and-what-work-serves-them), [what a
+report looks like](reporting.md#what-agents-report-and-where-it-reaches-you), and
+[severity in Slack](slack/setup.md#what-it-posts). Those describe what
+one surface does; this section is the rule they are each an instance of, and it
+is the one a new surface has to satisfy.
+
 ## What `test` checks besides the code
 
 Some of what `make test` runs is not about the Go code at all: it reads this

@@ -15,6 +15,16 @@
 // the same order a redirected conversation has always had. None of this reaches
 // the recorded reply, the event stream, or --json: what the product manager
 // said is what was said, and this is only how it is shown.
+//
+// The Theme is where every surface inherits one discipline rather than arguing
+// it again: the words carry the meaning and the dressing only makes it findable,
+// emphasis is spent rather than spread, the state and severity vocabularies are
+// named here so one of them looks the same everywhere it is shown, and NO_COLOR,
+// a terminal that says it is dumb, and a stream that is not one suppress every
+// escape there is together. It is recorded in docs/developing-yoyo.md, under
+// "What a surface may do with emphasis", with the legibility goal it serves. A
+// surface that finds itself writing an escape of its own has found something
+// this package should be taught.
 package console
 
 import (

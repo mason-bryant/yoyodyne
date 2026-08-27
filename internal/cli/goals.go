@@ -132,8 +132,10 @@ func listGoals(args []string, stdout, stderr io.Writer) int {
 // goal to an entry, with a blank line between entries, its statement weighted
 // and the lines about it slanted and indented under it.
 //
-// The dressing is an addition and never the meaning, which is the discipline the
-// whole theme holds to. What separates one goal from the next is the blank line,
+// The dressing is an addition and never the meaning, which is the discipline
+// every surface here holds to and is recorded once in docs/developing-yoyo.md
+// rather than re-argued at each of them. What it means for this listing is what
+// is worth saying: what separates one goal from the next is the blank line,
 // what says a line is about the goal above it is the indent and its label, and
 // what says a goal is no longer something work may name is the marker in words —
 // so this listing piped to a file, read where NO_COLOR is set, or shown on a
