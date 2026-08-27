@@ -105,7 +105,8 @@ type AccountEndpoint struct {
 	Directory string `json:"directory,omitempty"`
 }
 
-// AccountConfigDirectory is where an alias authenticates on this machine.
+// AccountConfigDirectory is where one alias of a pool authenticates on this
+// machine.
 //
 // The rule is one line and it is the same line for the harness, `yoyo doctor`,
 // and `bin/yoyo-account`: the default alias uses the machine's own provider home,
@@ -114,6 +115,11 @@ type AccountEndpoint struct {
 // signed in is untouched by the arrival of another — and it is why the mapping
 // in the configuration names no paths: a versioned file must not carry one
 // machine's directories.
+//
+// It answers for a pool, and a project with one account is not one. What a lone
+// account authenticates as is Config.Endpoint's answer rather than this one,
+// because it depends on how many accounts there are and not on the alias.
+//
 // A caller with no state root cannot be told where anything authenticates, so
 // it is answered with the machine's own home rather than with a relative
 // directory that would be created wherever the process happened to be running.
@@ -229,6 +235,15 @@ func (c Config) HasAccountBudgets() bool {
 // this configuration does not declare is refused rather than resolved: an
 // invocation made under a name nothing configured would authenticate somewhere
 // nobody chose.
+//
+// A project with one account authenticates where the machine already does,
+// whatever that account is called. Only a pool gives an alias a provider home of
+// its own, and that is the whole of what "additive" means here: until a second
+// account is declared nothing about where the first one signs in changes, so a
+// project that called its single account `work` rather than `default` is not
+// quietly moved to a home nobody has signed in to. Declaring the second account
+// is what moves the first, and it is a deliberate act with `yoyo doctor` on the
+// other side of it naming every alias that now needs a login.
 func (c Config) Endpoint(stateRoot, alias string) (AccountEndpoint, error) {
 	trimmed := strings.TrimSpace(alias)
 	if trimmed == "" {
@@ -243,6 +258,9 @@ func (c Config) Endpoint(stateRoot, alias string) (AccountEndpoint, error) {
 	if !declared {
 		return AccountEndpoint{}, fmt.Errorf("account %q is not one this configuration declares; it names %s",
 			trimmed, describeAliases(c.AccountAliases()))
+	}
+	if !c.Pooled() {
+		return AccountEndpoint{Alias: trimmed}, nil
 	}
 	return AccountEndpoint{Alias: trimmed, Directory: AccountConfigDirectory(stateRoot, trimmed)}, nil
 }

@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+#
+# yoyo-account - sign a second Claude account in and print the configuration for it.
+#
+# Adding an account by hand is three remembered things: which directory that
+# account's authentication goes in, the one-time login into it, and the entry to
+# put in .yoyodyne/config.yaml. This asks them instead, in the same spirit as
+# `yoyo setup` - remembered commands become asked questions.
+#
+# It changes exactly one thing on this machine: it creates the account's own
+# provider home and runs the provider's login into it. It does not edit your
+# configuration. What it prints at the end is the block to paste, because the
+# configuration is yours and a script that edited it would be one more thing
+# to trust.
+#
+# Read the warning it prints before the browser opens. The OAuth flow binds
+# whichever Claude account that browser is signed in as, so signing a second
+# account in from a browser already signed in as the first one silently gives
+# you the first one twice.
+#
+#   yoyo-account                     ask for everything
+#   yoyo-account --alias personal    name the alias up front
+#   yoyo-account --list              show the accounts this machine has homes for
+#   yoyo-account --check             say whether each home is authenticated
+
+set -euo pipefail
+
+usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; }
+
+alias_arg=""
+pool_arg=""
+list_only=0
+check_only=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --alias) alias_arg="${2:?--alias needs a value}"; shift 2 ;;
+    --pool) pool_arg="${2:?--pool needs a value}"; shift 2 ;;
+    -l|--list) list_only=1; shift ;;
+    --check) check_only=1; shift ;;
+    --) shift; break ;;
+    *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
+  esac
+done
+
+# Mirror runstate.SystemDefaultRoot so this agrees with the harness, exactly as
+# bin/yoyo-status does. An account whose home this script and the harness
+# disagreed about is one the operator signs in and the harness never finds.
+state_root() {
+  if [ -n "${YOYODYNE_STATE_HOME:-}" ]; then printf '%s\n' "$YOYODYNE_STATE_HOME"; return; fi
+  if [ -n "${XDG_STATE_HOME:-}" ]; then printf '%s\n' "$XDG_STATE_HOME/yoyodyne"; return; fi
+  case "$(uname -s)" in
+    Darwin) printf '%s\n' "$HOME/Library/Application Support/Yoyodyne/state" ;;
+    MINGW*|MSYS*|CYGWIN*) printf '%s\n' "${LOCALAPPDATA:-$HOME/AppData/Local}/Yoyodyne/state" ;;
+    *) printf '%s\n' "$HOME/.local/state/yoyodyne" ;;
+  esac
+}
+
+root="$(state_root)"
+accounts="$root/accounts"
+
+# Mirror config.AccountConfigDirectory: the default alias is wherever this
+# machine is already signed in, and every other alias has a home of its own.
+home_for() {
+  case "$1" in
+    default) printf '%s\n' "" ;;
+    *) printf '%s\n' "$accounts/$1" ;;
+  esac
+}
+
+# Whether one provider home is signed in. `claude auth status --json` is what the
+# harness asks, so this reports what the harness would find rather than a second
+# opinion about it.
+authenticated() {
+  local home="$1" out
+  if [ -n "$home" ]; then
+    out="$(CLAUDE_CONFIG_DIR="$home" claude auth status --json 2>/dev/null || true)"
+  else
+    out="$(claude auth status --json 2>/dev/null || true)"
+  fi
+  printf '%s' "$out" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'
+}
+
+describe() {
+  local name="$1" home="$2" where
+  where="${home:-signed in where this machine is}"
+  if authenticated "$home"; then
+    printf '  %-20s authenticated   %s\n' "$name" "$where"
+  else
+    printf '  %-20s NOT signed in   %s\n' "$name" "$where"
+  fi
+}
+
+if [ "$list_only" = 1 ] || [ "$check_only" = 1 ]; then
+  echo "provider homes on this machine:"
+  describe default ""
+  if [ -d "$accounts" ]; then
+    for home in "$accounts"/*/; do
+      [ -d "$home" ] || continue
+      name="$(basename "$home")"
+      describe "$name" "${home%/}"
+    done
+  fi
+  exit 0
+fi
+
+command -v claude >/dev/null 2>&1 || {
+  echo "claude is not on PATH; install it first: npm install -g @anthropic-ai/claude-code" >&2
+  exit 1
+}
+
+ask() {
+  local prompt="$1" default="$2" answer
+  if [ -n "$default" ]; then
+    read -r -p "$prompt [$default]: " answer </dev/tty || true
+    printf '%s\n' "${answer:-$default}"
+  else
+    read -r -p "$prompt: " answer </dev/tty || true
+    printf '%s\n' "$answer"
+  fi
+}
+
+if [ -z "$alias_arg" ]; then
+  echo "An alias is the name every run record and every surface says this account by."
+  echo "It is yours to choose: lower-case letters, digits, and hyphens."
+  alias_arg="$(ask "alias for the new account" "")"
+fi
+case "$alias_arg" in
+  "") echo "an alias is required" >&2; exit 2 ;;
+  default) echo "the alias \"default\" is the account this machine is already signed in as; choose another name" >&2; exit 2 ;;
+  *[!a-z0-9-]*|-*|*-) echo "alias \"$alias_arg\" must be lower-case letters, digits, and hyphens, and must not start or end with one" >&2; exit 2 ;;
+esac
+
+if [ -z "$pool_arg" ]; then
+  echo
+  echo "An active account is round-robined with the other active ones, a run at a time."
+  echo "A reserved account is served from only when no active account can be."
+  pool_arg="$(ask "pool for $alias_arg (active/reserved)" "active")"
+fi
+case "$pool_arg" in
+  active|reserved) ;;
+  *) echo "pool must be \"active\" or \"reserved\"" >&2; exit 2 ;;
+esac
+
+echo
+echo "A weekly budget stands this account down once the runs that named it have"
+echo "cost that much over seven days. Leave it empty for no budget at all, which"
+echo "means spend on it until the provider's own limit stops us."
+budget="$(ask "weekly budget in USD for $alias_arg (empty for none)" "")"
+if [ -n "$budget" ]; then
+  case "$budget" in
+    *[!0-9.]*|.|*.*.*) echo "a budget must be a number of dollars, or empty" >&2; exit 2 ;;
+  esac
+fi
+
+home="$(home_for "$alias_arg")"
+
+cat <<WARNING
+
+  ------------------------------------------------------------------
+  BEFORE YOU CONTINUE: open a NEW BROWSER PROFILE first.
+
+  The login below opens an OAuth flow in your browser, and it binds
+  whichever Claude account that browser is already signed in as. If you
+  use the browser profile you signed the first account in with, you will
+  sign this alias in as that same account and end up with one account
+  under two names -- which looks exactly like a working pool until both
+  halves of it run out of capacity at the same moment.
+
+  Open a fresh profile (or a private window signed in as nobody), sign it
+  in as the SECOND account, and leave it as the default browser for the
+  next step.
+  ------------------------------------------------------------------
+
+WARNING
+
+confirm="$(ask "ready to sign \"$alias_arg\" in? (yes/no)" "no")"
+case "$confirm" in
+  y|yes|Y|YES) ;;
+  *) echo "nothing was changed."; exit 0 ;;
+esac
+
+mkdir -p "$home"
+chmod 700 "$home"
+echo
+echo "signing in, with CLAUDE_CONFIG_DIR=$home"
+CLAUDE_CONFIG_DIR="$home" claude auth login
+
+echo
+if authenticated "$home"; then
+  echo "\"$alias_arg\" is signed in, in $home"
+else
+  echo "\"$alias_arg\" is still not signed in. Run this again, or by hand:" >&2
+  echo "  CLAUDE_CONFIG_DIR=$home claude auth login" >&2
+  exit 1
+fi
+
+cat <<CONFIG
+
+Add this to the accounts mapping in .yoyodyne/config.yaml, keeping the entry
+that is already there:
+
+accounts:
+  default: {}
+  $alias_arg:
+    pool: $pool_arg
+CONFIG
+if [ -n "$budget" ]; then
+  echo "    weekly_budget_usd: $budget"
+fi
+cat <<'NEXT'
+
+Then check both of them:
+
+  yoyo doctor
+
+Every run from then on records the account it was served by, and `yoyo status`
+says it back.
+NEXT

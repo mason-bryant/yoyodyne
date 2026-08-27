@@ -266,6 +266,7 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			config:    cfg,
 			stateRoot: parts.stateRoot,
 			runs:      parts.store,
+			now:       func() time.Time { return time.Now().UTC() },
 		},
 		StateRoot: parts.stateRoot,
 		Backend: claudecode.Backend{

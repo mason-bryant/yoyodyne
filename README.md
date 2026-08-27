@@ -650,8 +650,8 @@ leave it as the default browser for the next step.
 The script asks the three questions and runs the login:
 
 ```sh
-./bin/yoyo-account            # asks for the alias, the pool, and an optional weekly budget
-./bin/yoyo-account --check    # says whether each provider home on this machine is signed in
+bash bin/yoyo-account            # asks for the alias, the pool, and an optional weekly budget
+bash bin/yoyo-account --check    # says whether each provider home on this machine is signed in
 ```
 
 Or by hand, which is the same three steps:

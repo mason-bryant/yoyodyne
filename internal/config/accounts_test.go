@@ -267,6 +267,35 @@ func TestAnAliasResolvesToItsOwnProviderHomeAndTheDefaultToTheMachines(t *testin
 	}
 }
 
+// A project with one account authenticates where the machine already does,
+// whatever that account is called. Only a pool gives an alias a home of its own,
+// which is the whole of what makes a second account additive: a project that
+// called its single account "work" is not quietly moved to a directory nobody
+// has ever signed in to.
+func TestALoneAccountAuthenticatesWhereTheMachineDoesWhateverItIsCalled(t *testing.T) {
+	t.Parallel()
+
+	lone := mustDecodeConfig(t, accountConfig("accounts:\n  work: {}\n"))
+	endpoint, err := lone.Endpoint("/state", "work")
+	if err != nil {
+		t.Fatalf("Endpoint() error = %v", err)
+	}
+	if endpoint.Directory != "" {
+		t.Fatalf("a lone account resolved to %q, want the machine's own provider home", endpoint.Directory)
+	}
+	// Declaring the second account is what moves it, and that is a deliberate act
+	// with `yoyo doctor` on the other side of it naming every alias that now
+	// needs a login.
+	pooled := mustDecodeConfig(t, accountConfig("accounts:\n  work: {}\n  spare: {}\n"))
+	endpoint, err = pooled.Endpoint("/state", "work")
+	if err != nil {
+		t.Fatalf("Endpoint() error = %v", err)
+	}
+	if want := filepath.Join("/state", "accounts", "work"); endpoint.Directory != want {
+		t.Fatalf("under a pool %q authenticates in %q, want %q", endpoint.Alias, endpoint.Directory, want)
+	}
+}
+
 func TestAnAccountAliasDescriptionPoolAndBudgetAreHeldToAShape(t *testing.T) {
 	t.Parallel()
 

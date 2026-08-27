@@ -603,16 +603,21 @@ func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved
 
 // checkAccounts asks each configured account whether it is signed in.
 //
-// It only asks where a project pools. A project with one account is asked about
-// by the provider check above — that account authenticates where the machine
-// does, so the two questions have one answer — and reporting it twice under two
-// names would be a diagnosis that looked longer without saying more.
+// It asks only where a project pools, and that is safe for one reason and not
+// the reason it looks like: a project with one account authenticates where the
+// machine does whatever that account is called — Config.Endpoint says so, and
+// this reads its answer rather than restating it — so the provider check above
+// has already asked the only question there is. Reporting it a second time under
+// a second name would be a diagnosis that looked longer without saying more.
 //
-// Each alias but the default has a provider home of its own, and a home nobody
-// has signed in to is exactly the state this exists to catch: the harness would
-// otherwise discover it as a run refused by a provider, after an item had been
-// claimed and a worktree cut for it. The remedy is the login for that home,
-// which is the command `bin/yoyo-account` runs and the one the README states.
+// Under a pool each alias but the default has a provider home of its own, and a
+// home nobody has signed in to is exactly the state this exists to catch: the
+// harness would otherwise discover it as a run refused by a provider, after an
+// item had been claimed and a worktree cut for it. Declaring a second account is
+// what moves a lone `work` alias into a home of its own, which is why that move
+// is diagnosed here the moment it happens. The remedy is the login for that
+// home, which is the command `bin/yoyo-account` runs and the one the README
+// states.
 func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved) []Finding {
 	if !resolved.Config.Pooled() {
 		return nil
@@ -627,15 +632,34 @@ func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved)
 	aliases := resolved.Config.AccountAliases()
 	findings := make([]Finding, 0, len(aliases))
 	for _, alias := range aliases {
-		findings = append(findings, d.checkAccount(ctx, resolved.Config, root, alias))
+		check := "account:" + alias
+		// Where the account authenticates is asked of the configuration rather
+		// than derived here, so a diagnosis can never probe one home while the
+		// harness invokes in another — which is the one failure this check could
+		// have that nothing downstream would catch. An alias taken from the
+		// configuration's own listing always resolves; the refusal is carried
+		// anyway, because the alternative is diagnosing a home nobody chose.
+		endpoint, err := resolved.Config.Endpoint(root, alias)
+		if err != nil {
+			findings = append(findings, Finding{
+				Check:   check,
+				Status:  StatusProblem,
+				Summary: fmt.Sprintf("account %q could not be resolved to a provider home", alias),
+				Detail:  err.Error(),
+				Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(resolved.Path)),
+			})
+			continue
+		}
+		findings = append(findings, d.checkAccount(ctx, resolved.Config, endpoint))
 	}
 	return findings
 }
 
-func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, root, alias string) Finding {
+func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, endpoint config.AccountEndpoint) Finding {
+	alias := endpoint.Alias
 	check := "account:" + alias
 	membership := cfg.Accounts[alias].Membership()
-	directory := config.AccountConfigDirectory(root, alias)
+	directory := endpoint.Directory
 	login := accountLoginCommand(directory)
 	availability, err := (claudecode.Backend{Runner: d.env.Runner, ConfigDir: directory}).CheckAvailability(ctx)
 	switch {

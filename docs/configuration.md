@@ -2653,19 +2653,26 @@ lives on this machine, and the alias is what everything else refers to. Every ru
 record and every surface that reports one names the account it ran under — `yoyo
 status` says it, and so does the message that opens a run's Slack thread.
 
-**Where an alias authenticates follows from the alias.** `default` is wherever
-this machine is already signed in, which is what `claude` uses when nothing says
-otherwise. Every other alias has a provider home of its own, at
-`<state root>/accounts/<alias>`, which the harness sets `CLAUDE_CONFIG_DIR` to
+**A project with one account authenticates where this machine already is**,
+whatever that account is called. Nothing about a single-account project changes
+because pooling exists: `claude` reads the home it always read, and the alias is
+still only a name for the record.
+
+**Under a pool, where an alias authenticates follows from the alias.** `default`
+stays the machine's own home. Every other alias has a provider home of its own,
+at `<state root>/accounts/<alias>`, which the harness sets `CLAUDE_CONFIG_DIR` to
 when it invokes under that account. That is one rule, and the harness,
 `yoyo doctor`, and `bin/yoyo-account` all read it the same way. It is a rule
 rather than a setting because this file is versioned with the repository, and a
 directory belonging to one machine has no business in it.
 
-The consequence worth knowing: a project whose single account is aliased
-something other than `default` now authenticates in a home of its own rather than
-in the machine's. `yoyo doctor` says so and names the login, and renaming the
-alias back to `default` is the other way to settle it.
+The consequence worth knowing is at the moment you declare the second account,
+not before it. A project whose single account was aliased `work` was
+authenticating in this machine's home; adding a second account gives `work` a
+home of its own, which nobody has signed in to yet. `yoyo doctor` reports it as
+`account:work` with the exact login to run, and `bin/yoyo-account` is the other
+way to settle it. Aliasing the account you are already signed in as `default`
+avoids the step entirely.
 
 ### Pooling work across several accounts
 

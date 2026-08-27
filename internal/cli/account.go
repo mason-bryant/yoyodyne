@@ -44,7 +44,9 @@ type accountPool struct {
 	config    config.Config
 	stateRoot string
 	runs      *runstate.Store
-	now       func() time.Time
+	// now is when the budget window is measured back from. It is a field because
+	// a budget that can only be exercised by waiting a week is one nothing tests.
+	now func() time.Time
 }
 
 // ChooseAccount rotates the active half of the pool and honours the weekly
@@ -71,6 +73,10 @@ func (p accountPool) ChooseAccount() (config.AccountEndpoint, error) {
 	return p.config.ChooseAccount(p.stateRoot, lastServed, spent)
 }
 
+// clock reads the field, and falls back rather than panicking on a pool nothing
+// gave one to. Every construction supplies it; the fallback is here because the
+// alternative to a wrong window is a nil dereference in the middle of starting a
+// run, and of those two a correct window is plainly better.
 func (p accountPool) clock() time.Time {
 	if p.now == nil {
 		return time.Now().UTC()
