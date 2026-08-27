@@ -35,11 +35,33 @@ var ErrRemoteTargetDrift = errors.New("remote integration target moved away from
 var ErrRemoteTargetMismatch = errors.New("remote integration target does not carry the promoted commit")
 
 // RemoteConfigured reports whether the repository has the remote publishing
-// would push to. A repository without one is not an error and never becomes a
-// failed run: publishing is skipped and the run behaves exactly as a local-only
-// run does.
+// would open pull requests against. A repository without one is not an error and
+// never becomes a failed run: publishing is skipped and the run behaves exactly
+// as a local-only run does.
 func (m *Manager) RemoteConfigured(ctx context.Context) (bool, error) {
-	result, err := m.run(ctx, "-C", m.repositoryRoot, "remote", "get-url", m.remote)
+	return m.remoteConfigured(ctx, m.remote)
+}
+
+// PushRemoteConfigured reports whether the repository has the remote run
+// branches are pushed to. It is the same question RemoteConfigured asks, about
+// the other half of a fork arrangement, and it is asked separately so a
+// contributor who has configured a fork they have not added yet is told which
+// remote is missing rather than which one is not.
+//
+// A project that names no push remote is asking about the same remote twice,
+// which is what makes this safe to call unconditionally.
+func (m *Manager) PushRemoteConfigured(ctx context.Context) (bool, error) {
+	return m.remoteConfigured(ctx, m.pushRemote)
+}
+
+// PushRemote names the remote run branches are pushed to, so a caller reporting
+// what publishing needs can name it without knowing how it was resolved.
+func (m *Manager) PushRemote() string {
+	return m.pushRemote
+}
+
+func (m *Manager) remoteConfigured(ctx context.Context, remote string) (bool, error) {
+	result, err := m.run(ctx, "-C", m.repositoryRoot, "remote", "get-url", remote)
 	if err != nil {
 		return false, err
 	}
@@ -50,10 +72,11 @@ func (m *Manager) RemoteConfigured(ctx context.Context) (bool, error) {
 }
 
 // PublishBranch commits whatever the developer left in the worktree as one
-// harness-owned commit and pushes the run branch to the configured remote. It
-// is what the developer phase causes and the harness performs: nothing here is
-// routed through an agent, and the commit carries the harness identity rather
-// than the developer's.
+// harness-owned commit and pushes the run branch to the configured push remote,
+// which is the project's fork where it has one and the publishing remote
+// otherwise. It is what the developer phase causes and the harness performs:
+// nothing here is routed through an agent, and the commit carries the harness
+// identity rather than the developer's.
 //
 // The push is an ordinary fast-forward push. A remote branch that somehow moved
 // away from what the harness put there is refused rather than forced, because a
@@ -85,7 +108,7 @@ func (m *Manager) PublishBranch(ctx context.Context, worktree Worktree, message 
 	if commit == worktree.BaseCommit {
 		return Publication{}, ErrNoChanges
 	}
-	publication := Publication{Remote: m.remote, Branch: worktree.Branch, Commit: commit}
+	publication := Publication{Remote: m.pushRemote, Branch: worktree.Branch, Commit: commit}
 	// The commit is reported even when the push fails, because it exists either
 	// way. A caller that could not learn of it would leave the worktree at a HEAD
 	// nothing recorded, which is the one state the ownership check has to be able
@@ -119,14 +142,14 @@ func (m *Manager) RepublishBranch(ctx context.Context, worktree Worktree, previo
 	if err != nil {
 		return Publication{}, err
 	}
-	publication := Publication{Remote: m.remote, Branch: worktree.Branch, Commit: head}
+	publication := Publication{Remote: m.pushRemote, Branch: worktree.Branch, Commit: head}
 	if head == previousCommit {
 		return publication, nil
 	}
 	result, err := m.runRemote(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
 		"push", "--force-with-lease=refs/heads/"+worktree.Branch+":"+previousCommit,
-		m.remote, head+":refs/heads/"+worktree.Branch)
+		m.pushRemote, head+":refs/heads/"+worktree.Branch)
 	if err != nil {
 		return publication, err
 	}
@@ -134,12 +157,12 @@ func (m *Manager) RepublishBranch(ctx context.Context, worktree Worktree, previo
 		return publication, fmt.Errorf("%w: replace %s with %s on %s failed with exit code %d: %s",
 			ErrRemotePushRejected, previousCommit, head, worktree.Branch, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	published, exists, err := m.remoteCommit(ctx, worktree.Branch)
+	published, exists, err := m.remoteCommit(ctx, m.pushRemote, worktree.Branch)
 	if err != nil {
 		return publication, err
 	}
 	if !exists || published != head {
-		return publication, fmt.Errorf("%w: %s on %s is at %q after the push, want %s", ErrRemotePushRejected, worktree.Branch, m.remote, published, head)
+		return publication, fmt.Errorf("%w: %s on %s is at %q after the push, want %s", ErrRemotePushRejected, worktree.Branch, m.pushRemote, published, head)
 	}
 	return publication, nil
 }
@@ -167,7 +190,7 @@ func (m *Manager) VerifyRemoteTarget(ctx context.Context, integration Integratio
 	if !commitPattern.MatchString(integration.PreviousTargetCommit) {
 		return fmt.Errorf("previous target commit %q is invalid", integration.PreviousTargetCommit)
 	}
-	published, exists, err := m.remoteCommit(ctx, integration.TargetBranch)
+	published, exists, err := m.remoteCommit(ctx, m.remote, integration.TargetBranch)
 	if err != nil {
 		return err
 	}
@@ -228,7 +251,7 @@ func (m *Manager) ConfirmRemoteTarget(ctx context.Context, integration Integrati
 	if !commitPattern.MatchString(integration.TargetCommit) {
 		return "", fmt.Errorf("integrated target commit %q is invalid", integration.TargetCommit)
 	}
-	published, exists, err := m.remoteCommit(ctx, integration.TargetBranch)
+	published, exists, err := m.remoteCommit(ctx, m.remote, integration.TargetBranch)
 	if err != nil {
 		return "", err
 	}
@@ -332,11 +355,12 @@ func (m *Manager) resolveCommit(ctx context.Context, revision string) (string, e
 	return resolved, nil
 }
 
-// DeleteRemoteBranch removes a merged run branch from the remote. It is a
-// compare-and-swap on the exact published commit, like the local deletion: a
-// remote branch that carries anything else is left alone for a person. A branch
-// a previous attempt already deleted is reported as done rather than as a
-// failure.
+// DeleteRemoteBranch removes a merged run branch from the remote it was pushed
+// to, which under a fork arrangement is the contributor's fork rather than the
+// repository the work was merged into. It is a compare-and-swap on the exact
+// published commit, like the local deletion: a remote branch that carries
+// anything else is left alone for a person. A branch a previous attempt already
+// deleted is reported as done rather than as a failure.
 func (m *Manager) DeleteRemoteBranch(ctx context.Context, worktree Worktree, commit string) error {
 	if !commitPattern.MatchString(commit) {
 		return fmt.Errorf("published commit %q is invalid", commit)
@@ -344,7 +368,7 @@ func (m *Manager) DeleteRemoteBranch(ctx context.Context, worktree Worktree, com
 	if err := validateRef(worktree.Branch); err != nil {
 		return err
 	}
-	published, exists, err := m.remoteCommit(ctx, worktree.Branch)
+	published, exists, err := m.remoteCommit(ctx, m.pushRemote, worktree.Branch)
 	if err != nil {
 		return err
 	}
@@ -356,7 +380,7 @@ func (m *Manager) DeleteRemoteBranch(ctx context.Context, worktree Worktree, com
 	}
 	result, err := m.runRemote(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
-		"push", m.remote, "--delete", "refs/heads/"+worktree.Branch)
+		"push", m.pushRemote, "--delete", "refs/heads/"+worktree.Branch)
 	if err != nil {
 		return err
 	}
@@ -366,37 +390,41 @@ func (m *Manager) DeleteRemoteBranch(ctx context.Context, worktree Worktree, com
 	return nil
 }
 
-// pushBranch advances one remote branch to an exact commit and proves it
-// arrived. The refspec is written out in full so the push never depends on
-// whatever `push.default` or an upstream configuration happens to say.
+// pushBranch advances one branch on the push remote to an exact commit and
+// proves it arrived. The refspec is written out in full so the push never
+// depends on whatever `push.default` or an upstream configuration happens to
+// say.
 func (m *Manager) pushBranch(ctx context.Context, branch, commit string) error {
 	if err := validateRef(branch); err != nil {
 		return err
 	}
 	result, err := m.runRemote(ctx, "-C", m.repositoryRoot,
 		"-c", "core.hooksPath="+os.DevNull,
-		"push", m.remote, commit+":refs/heads/"+branch)
+		"push", m.pushRemote, commit+":refs/heads/"+branch)
 	if err != nil {
 		return err
 	}
 	if result.Status != execution.ProcessSucceeded {
 		return fmt.Errorf("%w: push %s to %s on %s failed with exit code %d: %s",
-			ErrRemotePushRejected, commit, branch, m.remote, result.ExitCode, strings.TrimSpace(result.Stderr))
+			ErrRemotePushRejected, commit, branch, m.pushRemote, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
-	published, exists, err := m.remoteCommit(ctx, branch)
+	published, exists, err := m.remoteCommit(ctx, m.pushRemote, branch)
 	if err != nil {
 		return err
 	}
 	if !exists || published != commit {
-		return fmt.Errorf("%w: %s on %s is at %q after the push, want %s", ErrRemotePushRejected, branch, m.remote, published, commit)
+		return fmt.Errorf("%w: %s on %s is at %q after the push, want %s", ErrRemotePushRejected, branch, m.pushRemote, published, commit)
 	}
 	return nil
 }
 
-// remoteCommit resolves one branch on the remote, reporting absence as an
-// observation rather than a failure.
-func (m *Manager) remoteCommit(ctx context.Context, branch string) (string, bool, error) {
-	result, err := m.runRemote(ctx, "-C", m.repositoryRoot, "ls-remote", "--exit-code", "--heads", m.remote, "refs/heads/"+branch)
+// remoteCommit resolves one branch on a named remote, reporting absence as an
+// observation rather than a failure. The remote is named by the caller because
+// the two it can be are not interchangeable: a run branch lives on the push
+// remote and a target branch on the one the work is published into, and under a
+// fork arrangement those are different repositories.
+func (m *Manager) remoteCommit(ctx context.Context, remote, branch string) (string, bool, error) {
+	result, err := m.runRemote(ctx, "-C", m.repositoryRoot, "ls-remote", "--exit-code", "--heads", remote, "refs/heads/"+branch)
 	if err != nil {
 		return "", false, err
 	}
@@ -404,7 +432,7 @@ func (m *Manager) remoteCommit(ctx context.Context, branch string) (string, bool
 	case result.ExitCode == 2:
 		return "", false, nil
 	case result.Status != execution.ProcessSucceeded:
-		return "", false, fmt.Errorf("resolve %s on %s failed with exit code %d: %s", branch, m.remote, result.ExitCode, strings.TrimSpace(result.Stderr))
+		return "", false, fmt.Errorf("resolve %s on %s failed with exit code %d: %s", branch, remote, result.ExitCode, strings.TrimSpace(result.Stderr))
 	}
 	fields := strings.Fields(result.Stdout)
 	if len(fields) == 0 {

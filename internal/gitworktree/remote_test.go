@@ -120,6 +120,124 @@ func TestManagerPublishesEachAttemptAndThenObservesTheMerge(t *testing.T) {
 	}
 }
 
+// A contributor who cannot push to the repository they are publishing into
+// pushes run branches to their fork instead. Everything about the target branch
+// stays a question for the repository the work is going into: only the run
+// branch moves, and it moves somewhere else entirely.
+func TestManagerPublishesRunBranchesToTheForkAndKeepsTheTargetUpstream(t *testing.T) {
+	t.Parallel()
+
+	repository, upstream := newPublishedRepository(t)
+	fork := newForkRemote(t, repository, "fork")
+	manager := newForkManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin", "fork")
+	for name, configured := range map[string]func(context.Context) (bool, error){
+		"RemoteConfigured":     manager.RemoteConfigured,
+		"PushRemoteConfigured": manager.PushRemoteConfigured,
+	} {
+		present, err := configured(context.Background())
+		if err != nil || !present {
+			t.Fatalf("%s() = %t, %v", name, present, err)
+		}
+	}
+
+	worktree, err := manager.Create(context.Background(), CreateRequest{
+		RunID:        testRunID,
+		WorkItemID:   "yoyodyne-fork",
+		BaseRef:      "HEAD",
+		TargetBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	writeFile(t, worktree.Path, "feature.txt", "a contributor's work\n")
+	publication, err := manager.PublishBranch(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("PublishBranch() error = %v", err)
+	}
+	if publication.Remote != "fork" {
+		t.Errorf("publication remote = %q, want the fork the branch was pushed to", publication.Remote)
+	}
+	if published := gitLine(t, fork, "rev-parse", "refs/heads/"+worktree.Branch); published != publication.Commit {
+		t.Errorf("fork branch = %q, want the published commit %q", published, publication.Commit)
+	}
+	// The repository the work is published into never receives the run branch,
+	// which is the whole point: it is the one the contributor cannot push to.
+	if refs := gitOutput(t, upstream, "for-each-ref", "--format=%(refname)", "refs/heads/"+worktree.Branch); strings.TrimSpace(refs) != "" {
+		t.Errorf("run branch reached the upstream remote: %q", refs)
+	}
+	worktree.HarnessCommit = publication.Commit
+
+	integration, err := manager.Integrate(context.Background(), worktree, "")
+	if err != nil {
+		t.Fatalf("Integrate() error = %v", err)
+	}
+	// Every question about the target branch is asked of the repository the work
+	// is going into, not of the fork the branch happens to sit on.
+	if err := manager.VerifyRemoteTarget(context.Background(), integration); err != nil {
+		t.Fatalf("VerifyRemoteTarget() error = %v", err)
+	}
+	// A forge merging a cross-repository request has the fork's commit in the base
+	// repository before it merges anything — GitHub keeps the head of every pull
+	// request under refs/pull there, whichever repository it was pushed to. Two
+	// bare repositories on a disk do not, so the same thing is done here: the
+	// promoted commit arrives in the upstream repository as a request head rather
+	// than as a branch, which is what makes a merge of it possible at all.
+	runGit(t, upstream, "fetch", fork, "refs/heads/"+worktree.Branch+":refs/pull/1/head")
+	mergeCommit := mergeInRemote(t, upstream, "main", integration.TargetCommit)
+	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
+	if err != nil {
+		t.Fatalf("ConfirmRemoteTarget() error = %v", err)
+	}
+	if confirmed != mergeCommit {
+		t.Fatalf("ConfirmRemoteTarget() = %q, want the upstream merge commit %q", confirmed, mergeCommit)
+	}
+	// The merged run branch is debris on the fork, which is where it has to be
+	// removed from: nothing ever put it anywhere else.
+	if err := manager.DeleteRemoteBranch(context.Background(), worktree, integration.SourceCommit); err != nil {
+		t.Fatalf("DeleteRemoteBranch() error = %v", err)
+	}
+	if refs := gitOutput(t, fork, "for-each-ref", "--format=%(refname)", "refs/heads/"+worktree.Branch); strings.TrimSpace(refs) != "" {
+		t.Errorf("merged fork branch survived: %q", refs)
+	}
+}
+
+// A fork configured before it was added is the contributor's ordinary first
+// mistake, and it degrades the same way an absent publishing remote does — but
+// it has to say which remote is missing, because the other one is right there.
+func TestManagerPushRemoteConfiguredReportsAnAbsentFork(t *testing.T) {
+	t.Parallel()
+
+	repository, _ := newPublishedRepository(t)
+	manager := newForkManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin", "fork")
+	configured, err := manager.RemoteConfigured(context.Background())
+	if err != nil || !configured {
+		t.Fatalf("RemoteConfigured() = %t, %v", configured, err)
+	}
+	pushConfigured, err := manager.PushRemoteConfigured(context.Background())
+	if err != nil {
+		t.Fatalf("PushRemoteConfigured() error = %v", err)
+	}
+	if pushConfigured {
+		t.Fatal("PushRemoteConfigured() = true for a fork the repository does not have")
+	}
+	if manager.PushRemote() != "fork" {
+		t.Errorf("PushRemote() = %q, want the configured fork", manager.PushRemote())
+	}
+}
+
+// A project that names no push remote pushes run branches to the remote it
+// publishes into, which is what every project with push access does and what
+// every project did before forks were publishable at all.
+func TestManagerWithoutAPushRemotePushesToThePublishingRemote(t *testing.T) {
+	t.Parallel()
+
+	repository, _ := newPublishedRepository(t)
+	manager := newRemoteManager(t, repository, filepath.Join(t.TempDir(), "worktrees"), "origin")
+	if manager.PushRemote() != "origin" {
+		t.Fatalf("PushRemote() = %q, want the publishing remote", manager.PushRemote())
+	}
+}
+
 // A repository with no remote is the case publishing has to degrade for: it is
 // an observation about the repository, never a failure.
 func TestManagerRemoteConfiguredReportsAnAbsentRemote(t *testing.T) {
@@ -526,13 +644,35 @@ func newPublishedRepository(t *testing.T) (string, string) {
 	return repository, remote
 }
 
+// newForkRemote gives a repository a second bare remote carrying the same
+// target branch, which is what a contributor's fork is: the same history, a
+// different repository, and the only one they can push to.
+func newForkRemote(t *testing.T, repository, name string) string {
+	t.Helper()
+	fork := filepath.Join(t.TempDir(), name+".git")
+	if err := os.MkdirAll(fork, 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	runGit(t, fork, "init", "--bare", "-b", "main")
+	disableBackgroundMaintenance(t, fork)
+	runGit(t, repository, "remote", "add", name, fork)
+	runGit(t, repository, "push", name, "refs/heads/main:refs/heads/main")
+	return fork
+}
+
 func newRemoteManager(t *testing.T, repository, worktreeRoot, remote string) *Manager {
+	t.Helper()
+	return newForkManager(t, repository, worktreeRoot, remote, "")
+}
+
+func newForkManager(t *testing.T, repository, worktreeRoot, remote, pushRemote string) *Manager {
 	t.Helper()
 	manager, err := New(Options{
 		Runner:         execution.OSProcessRunner{},
 		RepositoryRoot: repository,
 		WorktreeRoot:   worktreeRoot,
 		Remote:         remote,
+		PushRemote:     pushRemote,
 	})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)

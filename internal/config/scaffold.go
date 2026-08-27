@@ -185,10 +185,16 @@ execution:
   # no repair attempt. A run that spends this budget stops and records a blocker.
   transient_relaunches_before_blocking: %d
   worktree_root: %s
-  # The remote publishing pushes to and opens pull requests against. It is only
-  # consulted when approvals.publishing is automatic; a repository with no
-  # remote by this name publishes nothing and stays purely local.
+  # The remote publishing opens pull requests against, and pushes run branches
+  # to unless push_remote names another. It is only consulted when
+  # approvals.publishing is automatic; a repository with no remote by this name
+  # publishes nothing and stays purely local.
   remote: %s
+  # Set push_remote to your fork's remote when you cannot push to the remote
+  # above. Run branches then go to the fork and pull requests are opened across
+  # the two, which is how a contributor without push access publishes at all.
+  # Leaving it out pushes run branches to the remote above.
+  # push_remote: fork
   # A provider usage limit that is exhausted pauses a run rather than failing
   # it. The maximum covers the five-hour limit and deliberately stops short of
   # the seven-day one, so a capacity problem that needs a person reaches one

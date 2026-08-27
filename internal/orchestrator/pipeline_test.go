@@ -2561,6 +2561,10 @@ func (partialWorktreeManager) CleanupIntegrated(context.Context, gitworktree.Cle
 
 func (partialWorktreeManager) RemoteConfigured(context.Context) (bool, error) { return false, nil }
 
+func (partialWorktreeManager) PushRemoteConfigured(context.Context) (bool, error) {
+	return false, nil
+}
+
 func (partialWorktreeManager) PublishBranch(context.Context, gitworktree.Worktree, string) (gitworktree.Publication, error) {
 	return gitworktree.Publication{}, errors.New("partial worktree cannot be published")
 }

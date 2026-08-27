@@ -44,10 +44,15 @@ func (p Pipeline) publishes() bool {
 // ask for it never does. A project that did, but whose repository has no
 // configured remote, degrades to exactly the local behavior it had before
 // publishing existed, and says so; that is a property of the repository rather
-// than a misconfiguration. Everything else — no publisher wired, no forge CLI,
-// no forge authentication — is a configuration failure reported before any work
-// is claimed, because a project that asked to publish and silently did not
-// would have no way to notice.
+// than a misconfiguration. A project publishing from a fork needs two remotes
+// and degrades the same way on either, naming the one that is absent: a
+// contributor who has configured their fork before adding it is looking at a
+// repository that has the project's remote and not their own.
+//
+// Everything else — no publisher wired, no forge CLI, no forge authentication —
+// is a configuration failure reported before any work is claimed, because a
+// project that asked to publish and silently did not would have no way to
+// notice.
 func (p Pipeline) resolvePublishing(ctx context.Context) (bool, string, error) {
 	if !p.publishes() {
 		return false, "", nil
@@ -61,6 +66,13 @@ func (p Pipeline) resolvePublishing(ctx context.Context) (bool, string, error) {
 	}
 	if !configured {
 		return false, fmt.Sprintf("the repository has no %q remote, so this run stays local", p.Config.Execution.Remote), nil
+	}
+	pushConfigured, err := p.Worktrees.PushRemoteConfigured(ctx)
+	if err != nil {
+		return false, "", fmt.Errorf("resolve the remote run branches are pushed to: %w", err)
+	}
+	if !pushConfigured {
+		return false, fmt.Sprintf("the repository has no %q remote to push run branches to, so this run stays local", p.Config.Execution.PushRemote), nil
 	}
 	availability, err := p.Publisher.Availability(ctx)
 	if err != nil {

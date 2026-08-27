@@ -218,6 +218,7 @@ func buildComponents(configPath string) (components, error) {
 		RepositoryRoot:        repository,
 		WorktreeRoot:          worktreeRoot,
 		Remote:                cfg.Execution.Remote,
+		PushRemote:            cfg.Execution.PushRemote,
 		AllowedPrimaryChanges: []string{".beads/interactions.jsonl", ".beads/issues.jsonl"},
 	})
 	if err != nil {
@@ -299,10 +300,13 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		Publisher: publish.GitHub{
 			Runner: processRunner,
 			Dir:    parts.repository,
-			// The forge client speaks about the same remote the push targets,
+			// The forge client speaks about the same remotes the Git side does,
 			// so a checkout with several remotes publishes to the configured
-			// one rather than to whichever the CLI would infer.
+			// one rather than to whichever the CLI would infer — and a project
+			// publishing from a fork opens its request across the same two
+			// repositories its branches are pushed between.
 			Remote:       cfg.Execution.Remote,
+			PushRemote:   cfg.Execution.PushRemote,
 			RedactValues: redactValues,
 		},
 		// What the developer and the reviewer report while their work carries on
@@ -411,6 +415,7 @@ func reconcilerFrom(parts components) orchestrator.Reconciler {
 			Runner:       parts.runner,
 			Dir:          parts.repository,
 			Remote:       parts.config.Execution.Remote,
+			PushRemote:   parts.config.Execution.PushRemote,
 			RedactValues: parts.redactValues,
 		},
 		// A run this sweep stops is docketed as it is settled, so a stoppage the

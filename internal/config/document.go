@@ -60,6 +60,7 @@ type executionDocument struct {
 	TransientRelaunchesBeforeBlocking      *int      `yaml:"transient_relaunches_before_blocking"`
 	WorktreeRoot                           *string   `yaml:"worktree_root"`
 	Remote                                 *string   `yaml:"remote"`
+	PushRemote                             *string   `yaml:"push_remote"`
 	UsageLimitMaxPause                     *Duration `yaml:"usage_limit_max_pause"`
 	UsageLimitInProcessPause               *Duration `yaml:"usage_limit_in_process_pause"`
 	UsageLimitUnknownResetPause            *Duration `yaml:"usage_limit_unknown_reset_pause"`

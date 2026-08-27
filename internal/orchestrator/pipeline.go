@@ -78,6 +78,12 @@ type WorktreeManager interface {
 	// remote target may still be merged into, the other whether the merge put
 	// the promotion there and at which commit it left the branch.
 	RemoteConfigured(ctx context.Context) (bool, error)
+	// PushRemoteConfigured asks the same question about the remote run branches
+	// are pushed to, which is a different repository from the one above whenever
+	// a project publishes from a fork. It is separate so a contributor whose
+	// fork remote is missing is told about the fork rather than about the
+	// project's own remote, which is there.
+	PushRemoteConfigured(ctx context.Context) (bool, error)
 	PublishBranch(ctx context.Context, worktree gitworktree.Worktree, message string) (gitworktree.Publication, error)
 	// RepublishBranch puts a replayed run branch back on the remote, replacing
 	// exactly the commit the harness published there and nothing else.

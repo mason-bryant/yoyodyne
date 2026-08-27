@@ -175,11 +175,20 @@ type Execution struct {
 	// this bound existed: the first transient death ends it.
 	TransientRelaunchesBeforeBlocking int    `yaml:"transient_relaunches_before_blocking" json:"transient_relaunches_before_blocking"`
 	WorktreeRoot                      string `yaml:"worktree_root" json:"worktree_root"`
-	// Remote names the Git remote publishing pushes to and opens pull requests
-	// against. It is only consulted when `approvals.publishing` is automatic, and
-	// a repository that has no remote by this name publishes nothing rather than
-	// failing.
+	// Remote names the Git remote publishing opens pull requests against, and —
+	// unless PushRemote names another — pushes run branches to. It is only
+	// consulted when `approvals.publishing` is automatic, and a repository that
+	// has no remote by this name publishes nothing rather than failing.
 	Remote string `yaml:"remote" json:"remote"`
+	// PushRemote names the Git remote run branches are pushed to when that is not
+	// the repository the work is published into: a contributor's fork. Setting it
+	// is what makes the pull requests cross-repository — the branch goes to the
+	// fork and the request is opened against Remote — which is how somebody
+	// without push access to a project publishes to it at all. Empty means run
+	// branches go to Remote, which is every project that can push to what it
+	// publishes into. A repository that has no remote by this name publishes
+	// nothing rather than failing, exactly as an absent Remote does.
+	PushRemote string `yaml:"push_remote,omitempty" json:"push_remote,omitempty"`
 	// UsageLimitMaxPause bounds how long a run may wait for an exhausted
 	// provider usage limit to reset. A reset further away than this is treated
 	// as no usable reset time at all: the run stops and records a blocker
@@ -592,6 +601,14 @@ func (c Config) Validate() error {
 	}
 	if err := validateRemoteName(c.Execution.Remote); err != nil {
 		problems = append(problems, err.Error())
+	}
+	// An unset push remote is the ordinary arrangement — run branches go to the
+	// remote above — so only a value that names no remote is refused. It is
+	// checked as a name rather than against the repository for the same reason
+	// the remote above is: whether the checkout has it is a question about a
+	// repository, answered where publishing is resolved.
+	if pushRemote := strings.TrimSpace(c.Execution.PushRemote); pushRemote != "" && !remoteNamePattern.MatchString(pushRemote) {
+		problems = append(problems, fmt.Sprintf("push_remote %q must be a plain Git remote name", c.Execution.PushRemote))
 	}
 	// Zero is a deliberate choice — never wait, block on every exhausted limit —
 	// so only a negative bound, which describes no wait anybody could take, is

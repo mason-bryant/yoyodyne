@@ -177,6 +177,57 @@ func TestPipelineWithoutARemoteRunsExactlyAsItDidBefore(t *testing.T) {
 	}
 }
 
+// remoteAnswers answers only the two questions resolvePublishing asks about
+// remotes, which is what lets a fork arrangement be decided without a
+// repository that has one.
+type remoteAnswers struct {
+	WorktreeManager
+	remote     bool
+	pushRemote bool
+}
+
+func (r remoteAnswers) RemoteConfigured(context.Context) (bool, error) { return r.remote, nil }
+
+func (r remoteAnswers) PushRemoteConfigured(context.Context) (bool, error) {
+	return r.pushRemote, nil
+}
+
+// A contributor publishing from a fork needs two remotes, and the one that is
+// missing is the one that has to be named: a run that reported the project's
+// remote when the fork is what is absent would send them to look at the remote
+// that is already there.
+func TestPipelinePublishingNamesWhicheverRemoteIsMissing(t *testing.T) {
+	t.Parallel()
+
+	for name, expectation := range map[string]struct {
+		answers remoteAnswers
+		want    string
+	}{
+		"no publishing remote": {remoteAnswers{remote: false, pushRemote: true}, `no "origin" remote`},
+		"no fork":              {remoteAnswers{remote: true, pushRemote: false}, `no "fork" remote to push run branches to`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			pipeline := Pipeline{Publisher: &fakeForge{}, Worktrees: expectation.answers}
+			pipeline.Config.Approvals.Publishing = domain.ApprovalAutomatic
+			pipeline.Config.Execution.Remote = "origin"
+			pipeline.Config.Execution.PushRemote = "fork"
+
+			publishes, skipped, err := pipeline.resolvePublishing(context.Background())
+			if err != nil {
+				t.Fatalf("resolvePublishing() error = %v", err)
+			}
+			if publishes {
+				t.Fatal("resolvePublishing() = true with a remote the repository does not have")
+			}
+			if !strings.Contains(skipped, expectation.want) {
+				t.Errorf("skipped = %q, want it to name %q", skipped, expectation.want)
+			}
+		})
+	}
+}
+
 // A project that asked to publish and cannot must fail before it claims
 // anything, rather than quietly producing work nobody sees.
 func TestPipelineRefusesPublishingItCannotPerform(t *testing.T) {

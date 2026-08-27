@@ -854,6 +854,36 @@ func TestRemoteMustBeAPlainRemoteName(t *testing.T) {
 	}
 }
 
+// A fork is named the same way the publishing remote is, and it reaches the
+// same command lines — but leaving it out is the ordinary arrangement rather
+// than an omission, so an empty one is the default rather than a refusal.
+func TestPushRemoteIsOptionalAndMustBeAPlainRemoteName(t *testing.T) {
+	t.Parallel()
+
+	inherited := loadProject(t, minimalProjectConfig, nil)
+	if inherited.Config.Execution.PushRemote != "" {
+		t.Fatalf("inherited push_remote = %q, want run branches on the publishing remote", inherited.Config.Execution.PushRemote)
+	}
+
+	forked := loadProject(t, minimalProjectConfig+`execution:
+  remote: upstream
+  push_remote: fork
+`, nil)
+	if forked.Config.Execution.Remote != "upstream" || forked.Config.Execution.PushRemote != "fork" {
+		t.Fatalf("execution = %+v, want the fork arrangement the project named", forked.Config.Execution)
+	}
+	if origin := forked.Origins["execution.push_remote"]; origin == "" {
+		t.Error("execution.push_remote has no recorded origin")
+	}
+
+	for _, pushRemote := range []string{"--upstream", "with space", "/etc/passwd"} {
+		_, err := loadProjectError(t, minimalProjectConfig+"execution:\n  push_remote: \""+pushRemote+"\"\n", nil)
+		if err == nil || !strings.Contains(err.Error(), "push_remote") {
+			t.Errorf("LoadResolved() push_remote %q error = %v", pushRemote, err)
+		}
+	}
+}
+
 // Admitting work without asking is opted in to rather than inherited, the way
 // integration and publishing are. The bundle states the same value the harness
 // default holds, so a project that extends the bundle acquires no autonomy by

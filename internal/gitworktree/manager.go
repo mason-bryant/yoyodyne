@@ -68,6 +68,7 @@ type Manager struct {
 	repositoryRoot        string
 	worktreeRoot          string
 	remote                string
+	pushRemote            string
 	allowedPrimaryChanges map[string]struct{}
 	timeout               time.Duration
 }
@@ -77,9 +78,18 @@ type Options struct {
 	GitBinary      string
 	RepositoryRoot string
 	WorktreeRoot   string
-	// Remote names the Git remote publishing pushes to. It defaults to origin,
-	// and a repository that has no remote by that name is never pushed to.
+	// Remote names the Git remote the target branch lives on: the one a
+	// promotion is published into and every question about the target is asked
+	// of. It defaults to origin, and a repository that has no remote by that
+	// name is never pushed to.
 	Remote string
+	// PushRemote names the Git remote run branches are pushed to, when that is
+	// not the same repository the work is published into. It is what a
+	// contributor without push access to the target repository needs: the branch
+	// goes to their fork and the pull request is opened across the two. Empty
+	// means the run branch is pushed to Remote, which is the arrangement every
+	// project with push access has.
+	PushRemote string
 	// AllowedPrimaryChanges lists repository-relative control-plane files that
 	// may be updated after preflight without becoming part of the worktree base.
 	AllowedPrimaryChanges []string
@@ -324,6 +334,15 @@ func New(options Options) (*Manager, error) {
 	if !remotePattern.MatchString(remote) {
 		return nil, fmt.Errorf("remote %q must be a plain Git remote name", remote)
 	}
+	// An unnamed push remote is the ordinary arrangement rather than a missing
+	// setting: the run branch goes to the same remote the work is published into.
+	pushRemote := strings.TrimSpace(options.PushRemote)
+	if pushRemote == "" {
+		pushRemote = remote
+	}
+	if !remotePattern.MatchString(pushRemote) {
+		return nil, fmt.Errorf("push remote %q must be a plain Git remote name", options.PushRemote)
+	}
 	timeout := options.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
@@ -342,6 +361,7 @@ func New(options Options) (*Manager, error) {
 		repositoryRoot:        repositoryRoot,
 		worktreeRoot:          worktreeRoot,
 		remote:                remote,
+		pushRemote:            pushRemote,
 		allowedPrimaryChanges: allowedPrimaryChanges,
 		timeout:               timeout,
 	}, nil
