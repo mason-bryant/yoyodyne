@@ -1117,16 +1117,42 @@ may state is witnessed without its words rather than stored cut in half.
 **The witness covers a goal only from the moment it is written.** An attribution
 made before this existed carries none, so replacing its notes reads as work
 nobody ever attributed and does not fail the audit. `yoyo goals witness` closes
-that gap over a backlog: it records, on every admitted item whose notes state a
-goal and which carries no witness, the goal those notes already state. It writes
-no attribution and decides nothing — the statement is the item's own, copied to
-where a careless writer cannot reach it — and it is worth running once after
-upgrading, and again after any bulk import of work attributed elsewhere.
+that gap: it records, on every work item whose notes state a goal and which
+carries no witness, the goal those notes already state. It writes no attribution
+and decides nothing — the statement is the item's own, copied to where a careless
+writer cannot reach it — and it is worth running once after upgrading, and again
+after any bulk import of work attributed elsewhere. It sweeps every status the
+tracker holds rather than the queue, because the command that destroys an
+attribution reaches a claimed or closed item just as easily, and most of the
+losses on record were on items that had already closed.
+
+**The sweep is wider than the audit, and what a witness buys differs across that
+line.** `attribution` reads the backlog — `open` and `blocked` — so on those a
+witnessed loss is a `lost` state it reports and exits non-zero for. On claimed
+and closed items the sweep also reaches, nothing reports the loss: what the
+witness buys there is recovery, because the statement is kept where replacing
+the notes cannot reach it and a destroyed attribution can be put back from the
+record rather than judged again.
+
+`yoyo goals guard` is the same loss stopped rather than reported. Wired as a
+`PreToolUse` hook on `Bash`, it reads the command an agent session is about to
+run and refuses `bd update <id> --notes`, which replaces an item's notes and
+takes the goal recorded in them with it; a replacement carrying a
+`Goal served:` line through is allowed, because that one destroys nothing. It
+decides from the command line alone and never reads the item, so it checks such a
+line is present and not that it is the item's own — a substitution passes it, and
+the witness rather than the guard is what holds the words that were replaced. The
+harness gives it to every developer run it makes on the Claude Code backend,
+which is the backend that passes the hook; any other agent session is covered
+only by wiring the same command into that session's own hooks. It is passed to
+the provider rather than enforced by the harness, so where the hook does not fire
+the command runs as it did before and nothing reports that it did.
 
 ```sh
 yoyo goals list          # the goals work may be attributed to, and where each is stated
 yoyo goals attribution   # what each admitted work item says it is for
-yoyo goals witness       # witness the goals already recorded on admitted work
+yoyo goals witness       # witness the goals already recorded on work items
+yoyo goals guard         # refuse a command that would replace notes and destroy a goal
 ```
 
 `attribution` exits non-zero for an item whose attribution is `unresolved` or

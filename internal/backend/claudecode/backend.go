@@ -30,7 +30,20 @@ const defaultTimeout = 4 * time.Hour
 // than the total budget for exactly that reason.
 const defaultIdleTimeout = 5 * time.Minute
 
-const developerSandboxSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false}}`
+// developerSettings is what a developer run is given beyond its tools: the
+// OS-level sandbox that confines Bash, and the guard that stands in front of it.
+//
+// The guard is here rather than only in the repository's own agent settings
+// because this is the settings source the harness owns. A developer run has
+// Bash and is told to record its work with the tracker, so it is the most
+// routine path to `bd update <id> --notes`, which replaces an item's notes and
+// takes the goal recorded in them with it; `yoyo goals guard` reads the command
+// and refuses that one. It rests on `yoyo` being on the PATH of the run, which
+// is where the harness itself was invoked from -- and where it is not, Claude
+// Code reports the hook as failed and runs the command, which is the behaviour
+// there was before this. The guard can therefore be missing, but not wrong.
+const developerSettings = `{"sandbox":{"enabled":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false},` +
+	`"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"yoyo goals guard"}]}]}}`
 
 // developerTools scopes built-in writes to the worktree project root. Bash is
 // separately confined by Claude Code's OS-level sandbox settings below.
@@ -196,7 +209,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		"--name", "yoyodyne-" + shortRunID(request.RunID),
 	}
 	if request.Role == domain.RoleDeveloper {
-		args = append(args, "--settings", developerSandboxSettings)
+		args = append(args, "--settings", developerSettings)
 	} else {
 		// Repository instruction files are evidence, not harness policy. Safe
 		// mode prevents a checked-in CLAUDE.md from entering the provider's
