@@ -12,6 +12,7 @@ package cli
 
 import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -50,26 +51,27 @@ func providerRegistry(cfg config.Config) *backend.Registry {
 // which say so in their own terms and before anything is claimed. Building one
 // here that says nothing is what keeps this from becoming a second place that
 // decides whether work may start.
-func providerBackend(cfg config.Config, named domain.Backend, runner execution.ProcessRunner) claudecode.Backend {
-	adapter := claudecode.Backend{Runner: runner, Provider: named}
+func providerBackend(cfg config.Config, named domain.Backend, runner execution.ProcessRunner) backend.Backend {
 	descriptor, known := providerDescriptor(cfg, named)
-	if !known {
-		return adapter
+	if known {
+		if provider, built := adapters.For(descriptor, named, runner); built {
+			return provider
+		}
 	}
-	// The dialect and the binary are the whole of what a declaration changes
-	// about the invocation. A built-in carries neither, so it runs exactly as it
-	// did: its own dialect, its own executable.
-	adapter.Binary = descriptor.Binary
-	adapter.Dialect = descriptor.Dialect
-	return adapter
+	// Nothing here describes the backend, or nothing in this build launches it.
+	// The default adapter is still handed back so that this does not become a
+	// second place that decides whether work may start; what refuses it is the
+	// run pipeline and the conversation, which say so in their own terms and
+	// before anything is claimed.
+	return claudecode.Backend{Runner: runner, Provider: named}
 }
 
 // providerRuns reports a backend this build can actually launch: one it ships an
-// adapter for, or one the project declared that runs on that adapter. It is what
+// adapter for, or one the project declared that runs on one of those. It is what
 // the surfaces ask before they start a run or open a conversation, so a provider
 // that could never be launched is refused with its own reason rather than
 // failing partway through an invocation.
 func providerRuns(cfg config.Config, named domain.Backend) bool {
 	descriptor, known := providerDescriptor(cfg, named)
-	return known && descriptor.Adapter == domain.BackendClaudeCode
+	return known && descriptor.Runnable()
 }

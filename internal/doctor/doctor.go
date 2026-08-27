@@ -36,7 +36,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
-	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/backend/adapters"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
@@ -638,17 +638,16 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, des
 			Remedy:  providerInstallCommand(descriptor.Adapter),
 		}
 	}
-	if descriptor.Adapter != domain.BackendClaudeCode {
-		// Only Claude Code has an adapter that can be asked about its own
-		// authentication. Saying so is better than reporting an unauthenticated
-		// provider as healthy because nothing here could tell -- and the remedy
-		// is the login rather than a second diagnostic, because what an operator
-		// can act on here is making the answer yes, not asking again.
-		//
-		// Nothing reaches this today, because Claude Code's is the only adapter
-		// this build ships and a provider that runs on no adapter was answered
-		// above. It stands for the second one, whose availability check is its
-		// own to write.
+	// The provider is asked about its own authentication through the same adapter
+	// that would run it, so a project that declared a provider is diagnosed by
+	// whatever reads that provider's answers rather than by whatever this
+	// function happens to know. A descriptor that named no adapter this build
+	// ships was answered above, so nothing reaches the refusal below; it stands
+	// for the day this build grows an adapter with no availability check of its
+	// own, because reporting a provider nothing could ask as healthy is the one
+	// answer that would be worse than saying so.
+	provider, built := adapters.For(descriptor, named, d.env.Runner)
+	if !built {
 		return Finding{
 			Check:   check,
 			Status:  StatusWarning,
@@ -657,7 +656,7 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, des
 			Remedy:  providerLoginCommand(descriptor.Adapter),
 		}
 	}
-	availability, err := (claudecode.Backend{Runner: d.env.Runner, Binary: descriptor.Binary}).CheckAvailability(ctx)
+	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return Finding{
 			Check:   check,

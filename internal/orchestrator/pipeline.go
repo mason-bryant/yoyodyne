@@ -495,7 +495,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	}
 	developer := p.developer()
 	if !p.runsOnCompiledAdapter(developer.Backend) {
-		return Outcome{}, fmt.Errorf("Milestone 0 run pipeline requires a claude-code developer, configured backend is %q", developer.Backend)
+		return Outcome{}, fmt.Errorf("run pipeline requires a developer on a backend this build can launch, configured backend is %q", developer.Backend)
 	}
 	// Every invocation names its own model; the harness never lets a provider
 	// pick one for it, so the run evidence always says what actually ran.
@@ -3916,12 +3916,13 @@ func (p Pipeline) runsOnCompiledAdapter(named domain.Backend) bool {
 	registry, err := p.Config.ProviderRegistry()
 	if err != nil {
 		// A configuration whose providers will not resolve has already been
-		// refused by Config.Validate above, so the only honest answer left is the
-		// one backend this build ships unconditionally.
-		return named == domain.BackendClaudeCode
+		// refused by Config.Validate above, so the only honest answer left is what
+		// this build ships unconditionally.
+		descriptor, shipped := backend.BuiltInDescriptor(named)
+		return shipped && descriptor.Runnable()
 	}
 	descriptor, known := registry.Lookup(named)
-	return known && descriptor.Adapter == domain.BackendClaudeCode
+	return known && descriptor.Runnable()
 }
 
 // validateReviewPolicy refuses automatic integration that is not actually
@@ -3936,7 +3937,7 @@ func (p Pipeline) validateReviewPolicy() error {
 		return errors.New("automatic integration requires a configured reviewer agent")
 	}
 	if !p.runsOnCompiledAdapter(reviewer.Backend) {
-		return fmt.Errorf("run pipeline requires a claude-code reviewer, configured backend is %q", reviewer.Backend)
+		return fmt.Errorf("run pipeline requires a reviewer on a backend this build can launch, configured backend is %q", reviewer.Backend)
 	}
 	if err := config.ValidateModelSelector(reviewer.Model); err != nil {
 		return fmt.Errorf("reviewer agent %s", err)
