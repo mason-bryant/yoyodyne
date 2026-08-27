@@ -2620,15 +2620,15 @@ These are all errors, reported before any work is claimed:
   not have, or binds an identifier a second human already bound — and two humans
   holding `own-intent`, since intent has one owner;
 - an `accounts` alias that is not an identifier, a description longer than 200
-  bytes, an agent whose `account` names an alias the mapping does not declare,
-  or a second account — pooling work across accounts is not implemented, and a
-  project that declared two would have every run recording one of them while
-  both were being spent.
+  bytes, a `pool` that is neither `active` nor `reserved`, a negative
+  `weekly_budget_usd`, an agent whose `account` names an alias the mapping does
+  not declare, or a mapping whose every account is `reserved` — a pool with an
+  empty active half is one every run falls out of.
 
 ## Provider accounts
 
 `accounts` is the provider accounts this project runs its agents under, keyed by
-the alias each one is known by here. Yoyodyne runs one:
+the alias each one is known by here. One is the ordinary case:
 
 ```yaml
 accounts:
@@ -2647,21 +2647,79 @@ The whole mapping is optional. A project that names none runs under the alias
 `default`, every agent is assigned to it, and nothing about a single-account
 project has to be written down for its runs to say what they ran under.
 
-**An entry is a name and nothing else.** There is deliberately no key here that
-selects a login: the harness invokes the provider with the credentials the
-machine is already signed in with, so a `credentials` key would be configuration
-nothing reads. What the alias buys is that every run record and every surface
-that reports one already names the account it ran under — `yoyo status` says it,
-and so does the message that opens a run's Slack thread.
+**An entry names an account and never a credential.** There is deliberately no
+key here that holds a secret or a path: authentication is the provider's own and
+lives on this machine, and the alias is what everything else refers to. Every run
+record and every surface that reports one names the account it ran under — `yoyo
+status` says it, and so does the message that opens a run's Slack thread.
 
-**A second alias is refused, for now.** Running work across a pool of accounts is
-post-v1, and it arrives here: a second entry, and a rule for which roles run on
-which. Everything downstream of that — the per-agent `account`, the run record,
-the listings — is already the shape it needs, so nothing recorded between now and
-then has to be guessed at afterwards.
+**Where an alias authenticates follows from the alias.** `default` is wherever
+this machine is already signed in, which is what `claude` uses when nothing says
+otherwise. Every other alias has a provider home of its own, at
+`<state root>/accounts/<alias>`, which the harness sets `CLAUDE_CONFIG_DIR` to
+when it invokes under that account. That is one rule, and the harness,
+`yoyo doctor`, and `bin/yoyo-account` all read it the same way. It is a rule
+rather than a setting because this file is versioned with the repository, and a
+directory belonging to one machine has no business in it.
 
-**Which roles run where is yours and it is fixed.** An agent runs under the
-account its entry names, and nothing chooses at run time.
+The consequence worth knowing: a project whose single account is aliased
+something other than `default` now authenticates in a home of its own rather than
+in the machine's. `yoyo doctor` says so and names the login, and renaming the
+alias back to `default` is the other way to settle it.
+
+### Pooling work across several accounts
+
+A second entry pools the work:
+
+```yaml
+accounts:
+  default:
+    description: the account this machine was signed in with
+  second:
+    description: the other subscription
+    pool: active
+    weekly_budget_usd: 100
+  spare:
+    pool: reserved
+```
+
+- **`pool`** is `active` or `reserved`, and defaults to `active`. The active
+  accounts are round-robined a run at a time; a reserved one is served from only
+  when no active account can be. A mapping whose every account is reserved is
+  refused, because a pool with an empty active half is one every run falls out
+  of.
+- **`weekly_budget_usd`** is optional. It stands an account down once the runs
+  that named it have cost that much over the seven days behind now, read from
+  what those runs actually cost rather than from a price table. An account with
+  no budget is unbudgeted on purpose: spend on it until the provider's own limit
+  stops us.
+
+**The rotation's cursor is the run records.** Each run already writes down the
+account it spent, so the pool takes the first active alias after the one the last
+run recorded. Nothing else is kept, which is why the rotation survives a crash, a
+second process, and a machine that was off for a week.
+
+**A run is affined to the account it started on.** The account is chosen once,
+before the work item is claimed, and recorded on the run. Every invocation that
+run goes on to make — each repair attempt, the review of the change, and anything
+a later process resumes — reads the alias back off the record. A run that moved
+between accounts mid-flight would leave half its spend on one subscription and
+half on another with nothing saying so.
+
+**Conversations sit still while runs rotate.** A conversation belongs to its
+agent and lasts for weeks, so it is held under the account that agent's entry
+names, or under the first active account where it names none. An agent that moved
+between accounts each turn would have no provider session left to resume.
+
+**Which roles run where is still yours.** An agent whose entry names an `account`
+runs under that one and nothing chooses at run time; the pool is what serves the
+agents that name none.
+
+**Setting the second account up** is [in the
+README](../README.md#running-several-claude-accounts), and `bin/yoyo-account`
+asks the questions and runs the login. `yoyo doctor` then reports each configured
+alias by name — `account:second` — saying whether it is authenticated and which
+half of the pool it is in.
 
 ## Operators
 

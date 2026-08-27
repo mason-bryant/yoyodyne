@@ -239,10 +239,10 @@ func newResolution() *resolution {
 			// nothing, because what is refused is proposed instead and the operator
 			// decides. A project that wants the old behaviour sets `automatic`.
 			Approvals: Approvals{Publishing: domain.ApprovalHuman, WorkItems: domain.ApprovalHuman},
-			// One account, named, is what every project has until pooling exists, so
-			// it is a harness default rather than something a project states: a file
-			// that says nothing about accounts still has runs that say which account
-			// they ran under, and naming a second one is what a project writes.
+			// One account, named, is what a project has until it pools, so it is a
+			// harness default rather than something a project states: a file that
+			// says nothing about accounts still has runs that say which account they
+			// ran under, and naming a second one is what pools the work.
 			Accounts: map[string]Account{DefaultAccountAlias: {}},
 		},
 		origins: map[string]string{
@@ -460,9 +460,10 @@ func (r *resolution) finish(sources []string) (Resolved, error) {
 		// An agent that names no account runs on the project's single one, read
 		// after every layer has had its say so it follows the mapping that will
 		// actually be in force rather than one some layer underneath declared. A
-		// configuration declaring more than one account assigns nothing here, which
-		// keeps the refusal that follows about the accounts rather than about every
-		// agent that did not choose between them.
+		// pooled configuration assigns nothing here, deliberately: which account
+		// serves a run is the pool's to decide as the run starts, and an assignment
+		// written now would be this file answering a question it does not have the
+		// evidence for.
 		if _, supplied := agent.origins["account"]; !supplied {
 			if alias := effective.AccountAlias(); alias != "" {
 				effectiveAgent.Account = alias

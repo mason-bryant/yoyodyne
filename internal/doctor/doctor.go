@@ -598,7 +598,101 @@ func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved
 	for _, named := range backends {
 		findings = append(findings, d.checkProvider(ctx, named, resolved.Path))
 	}
+	return append(findings, d.checkAccounts(ctx, resolved)...)
+}
+
+// checkAccounts asks each configured account whether it is signed in.
+//
+// It only asks where a project pools. A project with one account is asked about
+// by the provider check above — that account authenticates where the machine
+// does, so the two questions have one answer — and reporting it twice under two
+// names would be a diagnosis that looked longer without saying more.
+//
+// Each alias but the default has a provider home of its own, and a home nobody
+// has signed in to is exactly the state this exists to catch: the harness would
+// otherwise discover it as a run refused by a provider, after an item had been
+// claimed and a worktree cut for it. The remedy is the login for that home,
+// which is the command `bin/yoyo-account` runs and the one the README states.
+func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved) []Finding {
+	if !resolved.Config.Pooled() {
+		return nil
+	}
+	root, err := runstate.DefaultRoot(d.getenv, d.homeDir, d.env.GOOS)
+	if err != nil {
+		// The state root has already been reported as unresolvable by its own
+		// check, and every account's home is under it, so there is nothing further
+		// to say that would not be the same finding a second time.
+		return nil
+	}
+	aliases := resolved.Config.AccountAliases()
+	findings := make([]Finding, 0, len(aliases))
+	for _, alias := range aliases {
+		findings = append(findings, d.checkAccount(ctx, resolved.Config, root, alias))
+	}
 	return findings
+}
+
+func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, root, alias string) Finding {
+	check := "account:" + alias
+	membership := cfg.Accounts[alias].Membership()
+	directory := config.AccountConfigDirectory(root, alias)
+	login := accountLoginCommand(directory)
+	availability, err := (claudecode.Backend{Runner: d.env.Runner, ConfigDir: directory}).CheckAvailability(ctx)
+	switch {
+	case err != nil:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("claude would not say whether account %q is authenticated", alias),
+			Detail:  err.Error(),
+			Remedy:  login,
+		}
+	case !availability.Installed:
+		// The provider check above has already said claude is not there, and
+		// saying it once per alias would bury that under the accounts it stopped
+		// this from answering. What is added here is which account went unasked.
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("account %q could not be asked, because claude did not run", alias),
+			Detail:  accountHomeDetail(directory),
+			Remedy:  providerInstallCommand(domain.BackendClaudeCode),
+		}
+	case !availability.Authenticated:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("account %q is in the %s pool and is not authenticated, so every run the pool sends there would be refused", alias, membership),
+			Detail:  accountHomeDetail(directory),
+			Remedy:  login,
+		}
+	}
+	return Finding{
+		Check:   check,
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("account %q is authenticated and in the %s pool", alias, membership),
+		Detail:  strings.TrimSpace(accountHomeDetail(directory) + " " + availability.AuthMethod),
+	}
+}
+
+// accountLoginCommand is what signs one account in. The default alias
+// authenticates where the machine already does, so its command is the
+// provider's own; every other alias names the home it is signing in to.
+func accountLoginCommand(directory string) string {
+	if strings.TrimSpace(directory) == "" {
+		return "claude auth login"
+	}
+	return fmt.Sprintf("mkdir -p %s && CLAUDE_CONFIG_DIR=%s claude auth login",
+		shellQuote(directory), shellQuote(directory))
+}
+
+// accountHomeDetail says where an account authenticates, which is the one thing
+// about it a reader cannot derive from the alias.
+func accountHomeDetail(directory string) string {
+	if strings.TrimSpace(directory) == "" {
+		return "signed in where this machine is"
+	}
+	return directory
 }
 
 func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, configPath string) Finding {

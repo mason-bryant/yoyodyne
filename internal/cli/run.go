@@ -258,6 +258,16 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
+		// Which account serves a run is chosen once, as the run starts, and every
+		// invocation the run goes on to make reads the alias back off the record.
+		// The backend below carries no account of its own for that reason: it is
+		// the same value for every run this process starts, and the account is not.
+		Accounts: accountPool{
+			config:    cfg,
+			stateRoot: parts.stateRoot,
+			runs:      parts.store,
+		},
+		StateRoot: parts.stateRoot,
 		Backend: claudecode.Backend{
 			Runner: processRunner,
 		},

@@ -631,6 +631,68 @@ configuration resolves to and where each value came from:
 ./bin/yoyo config show --effective --origins
 ```
 
+### Running several Claude accounts
+
+One Claude subscription runs out of capacity, and the harness waits it out rather
+than routing around it. Signing a second account in and pooling the two is what
+turns that wait into work: runs are round-robined between the active accounts a
+run at a time, each run records the account it was served by, and `yoyo status`
+says it back.
+
+**Do this in a new browser profile.** The login below opens an OAuth flow, and it
+binds whichever Claude account that browser is already signed in as. Signing the
+second account in from the browser you signed the first one in with gives you one
+account under two names — which looks exactly like a working pool until both
+halves of it run out of capacity at the same moment. Open a fresh browser profile
+(or a private window signed in as nobody), sign it in as the second account, and
+leave it as the default browser for the next step.
+
+The script asks the three questions and runs the login:
+
+```sh
+./bin/yoyo-account            # asks for the alias, the pool, and an optional weekly budget
+./bin/yoyo-account --check    # says whether each provider home on this machine is signed in
+```
+
+Or by hand, which is the same three steps:
+
+```sh
+# 1. the account's own provider home. `default` is the one this machine is
+#    already signed in as; every other alias gets a home of its own.
+home="$HOME/Library/Application Support/Yoyodyne/state/accounts/second"   # macOS
+mkdir -p "$home" && chmod 700 "$home"
+
+# 2. the one-time login into it, in the browser profile signed in as that account
+CLAUDE_CONFIG_DIR="$home" claude auth login
+
+# 3. the configuration entry
+```
+
+```yaml
+accounts:
+  default:
+    description: the account this machine was signed in with
+  second:
+    description: the other subscription
+    pool: active               # active is round-robined; reserved is fallback only
+    weekly_budget_usd: 100     # optional; leave it out to spend to the provider's own limit
+```
+
+Then check both of them. `yoyo doctor` reports each configured alias by name,
+saying whether it is authenticated and which half of the pool it is in, and it
+names the exact login to run for one that is not:
+
+```sh
+yoyo doctor
+```
+
+The state directory is `$YOYODYNE_STATE_HOME`, `$XDG_STATE_HOME/yoyodyne`,
+`~/Library/Application Support/Yoyodyne/state` on macOS, or
+`~/.local/state/yoyodyne` on Linux — the same one `bin/yoyo-status` reads. See
+[provider accounts](docs/configuration.md#provider-accounts) for what the pool
+does with a budget it has spent, why a run stays on the account it started on,
+and why conversations do not rotate.
+
 ### Keeping the configuration out of the repository
 
 Committing `.yoyodyne/` is the default because it is what makes a project

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -95,6 +96,30 @@ type Backend struct {
 	Runner execution.ProcessRunner
 	Binary string
 	Clock  execution.Clock
+	// ConfigDir is the provider configuration directory this backend value asks
+	// about and, where a request names none of its own, invokes under. It is what
+	// lets a diagnosis ask one configured account whether it is authenticated:
+	// CheckAvailability takes no request, so the account it is asking about has to
+	// be on the value being asked. Empty is the machine's own provider home.
+	ConfigDir string
+}
+
+// providerConfigDirVariable is how Claude Code is told which provider home to
+// read. It is the provider's own variable rather than anything the harness
+// invented, which is the whole of why an account is a directory here: the
+// provider already keeps one account's authentication per home, so pooling is
+// naming the homes rather than handling anybody's credentials.
+const providerConfigDirVariable = "CLAUDE_CONFIG_DIR"
+
+// environmentFor is the environment one invocation is made in. Naming no
+// directory returns nil, which leaves the process environment exactly as it is —
+// so an installation with one account runs byte for byte the command it always
+// did, and the account plumbing costs it nothing.
+func environmentFor(configDir string) []string {
+	if strings.TrimSpace(configDir) == "" {
+		return nil
+	}
+	return append(os.Environ(), providerConfigDirVariable+"="+configDir)
 }
 
 func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, error) {
@@ -102,7 +127,8 @@ func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, e
 		return backend.Availability{}, errors.New("Claude Code process runner is required")
 	}
 	binary := b.binary()
-	versionResult, err := b.Runner.Run(ctx, execution.Command{Name: binary, Args: []string{"--version"}, Timeout: 10 * time.Second}, nil)
+	environment := environmentFor(b.ConfigDir)
+	versionResult, err := b.Runner.Run(ctx, execution.Command{Name: binary, Args: []string{"--version"}, Env: environment, Timeout: 10 * time.Second}, nil)
 	if err != nil {
 		if errors.Is(err, exec.ErrNotFound) {
 			return backend.Availability{Installed: false}, nil
@@ -114,7 +140,7 @@ func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, e
 	}
 	availability := backend.Availability{Installed: true, Version: strings.TrimSpace(versionResult.Stdout)}
 
-	authResult, err := b.Runner.Run(ctx, execution.Command{Name: binary, Args: []string{"auth", "status", "--json"}, Timeout: 10 * time.Second}, nil)
+	authResult, err := b.Runner.Run(ctx, execution.Command{Name: binary, Args: []string{"auth", "status", "--json"}, Env: environment, Timeout: 10 * time.Second}, nil)
 	if err != nil {
 		return availability, fmt.Errorf("check Claude Code authentication: %w", err)
 	}
@@ -247,10 +273,19 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	redactor := execution.NewRedactor(request.RedactValues...)
 	parser := newStreamParser(request.RunID, request.Role, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink)
 	var parseErrors []error
+	// The account this invocation is made under is the request's, falling back to
+	// the one this backend value was built for. A request that names neither runs
+	// where the machine is already signed in, which is what a single-account
+	// installation has always done.
+	configDir := request.AccountConfigDir
+	if strings.TrimSpace(configDir) == "" {
+		configDir = b.ConfigDir
+	}
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name:  b.binary(),
 		Args:  args,
 		Dir:   request.WorkingDirectory,
+		Env:   environmentFor(configDir),
 		Stdin: strings.NewReader(request.Prompt),
 		// The stream this invocation is asked for is the liveness signal: every
 		// line the process writes is an event, so the gap between lines is
