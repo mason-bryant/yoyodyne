@@ -122,11 +122,33 @@ without the reordering; every run started after it assembled them with it.
 | Before — started 2026-08-23 00:00–09:59Z | 26 | 119 | 464,562,608 | 12,424,485 | 23,924 | **97.39%** |
 | After — started 2026-08-24 00:00–23:59Z | 31 | 137 | 613,259,701 | 19,998,749 | 16,407 | **96.84%** |
 
-Both windows clear the twenty runs the harm comparison asks for. There is no
-gap to fill between them: no run was started on 2026-08-21 or 2026-08-22, and
-the runs of 2026-08-23 after the promotion are left out rather than split,
+Both windows clear the twenty runs the harm comparison asks for. Each is a whole
+day of run history taken as it stands, adjacent to the promotion on its own side,
+and where a run is left out the reason is below.
+
+Before the promotion, the window is the morning of the 23rd, which is the run
+history nearest to it: no run was started on 2026-08-21 or on 2026-08-22. Older
+runs do exist, on the 20th and before, and are not in the window — 26 runs
+already clears the twenty asked for, and the nearest day is the most comparable
+one. Adding older days would widen the window away from the change, not towards
+it. The runs of the 23rd after the promotion are left out rather than split,
 because a run that starts in the same hour a promotion lands is a run nobody can
 say which prompt it was given.
+
+After it, the window is a single day because a single day is all there is. No run
+was started on 2026-08-25 or on 2026-08-26 either. Six were started on the 27th,
+the day this measurement was taken, and all six are left out for one reason: they
+were still open when it was taken — one of them is the run that took it — so
+their logs were still being written and their figures would not be the same
+figures if anybody re-read them. A permanent record is worth more closed than
+current.
+
+Leaving them out does not decide anything. To lift the after window to the before
+window's 97.39%, those six would have to add at least 134 million input tokens
+read *entirely* from the cache — and more than that at any share a real run
+reaches, since a session has to write to the cache before it can read from it.
+The whole after window is 633 million across thirty-one runs. Six more can move
+the size of this result; they cannot turn it around.
 
 **The share did not rise. It fell, by 0.55 points.** By the clause above that is
 a null result, the change failed at its purpose, and it is to be reverted. The
@@ -144,8 +166,12 @@ windows reads between three and forty-seven million cached tokens; the entire
 block of text this change moved onto the shared prefix is a few thousand. The
 lever is four orders of magnitude below the noise, and the difference between the
 two windows is the mix of session lengths in each — the after window wrote
-proportionally more cache (3.26% of input against 2.67%), which is what a window
-with more, shorter sessions looks like.
+proportionally more cache, 3.16% of its input against the before window's 2.60%,
+which is what a window with more, shorter sessions looks like. That pair is
+`cache_creation / (fresh input + cache_read + cache_creation)` on the table's own
+figures, over the same denominator the share above uses and `yoyo cost` reports;
+it is the cache-read share's own complement, less the fresh input, which is why
+it accounts for the 0.55 points almost exactly.
 
 Beside that there is a structural finding the aggregate hides, and it is the one
 worth keeping. The short one-shot invocations — the reviewer's, which is the case
