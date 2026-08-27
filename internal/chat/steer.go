@@ -13,6 +13,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
@@ -57,10 +58,79 @@ Anything that does not begin with a slash is said to the agent you are talking t
 // carries out rather than something said to the product manager. It is one rule
 // in one place because a single message follows it too: `/reports` typed at
 // `yoyo chat --message` is the operator asking the harness for something, and
-// passing it to the product manager would spend a turn asking her to carry out
-// a command she has no way to reach.
+// passing it to the product manager would spend a turn asking it to carry out
+// a command it has no way to reach.
 func IsCommand(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "/")
+}
+
+// splitCommand separates what the operator typed into the command's name and
+// its argument. It is the one place that rule lives, because the refusal a
+// single message makes and the dispatcher that carries the command out have to
+// agree about what was typed, and two copies of a parsing rule agree only until
+// somebody changes one of them.
+//
+// It splits on the first whitespace rather than on a space, so `/stop` followed
+// by a tab names the item it plainly names instead of arriving as a command
+// nobody recognizes, and it lowercases the name, so a command means the same
+// thing however it was capitalized.
+func splitCommand(line string) (name, argument string) {
+	trimmed := strings.TrimSpace(line)
+	cut := strings.IndexFunc(trimmed, unicode.IsSpace)
+	if cut < 0 {
+		return strings.ToLower(trimmed), ""
+	}
+	return strings.ToLower(trimmed[:cut]), strings.TrimSpace(trimmed[cut:])
+}
+
+// singleMessageRule is what one command means outside a conversation.
+type singleMessageRule struct {
+	// why is the reason the command needs a conversation, and what does the same
+	// job from a command line. It is empty for a command that answers a single
+	// message exactly as it answers a conversation, which is every command that
+	// is read-only or durable.
+	why string
+	// onlyBare marks a refusal that is about the bare form of the command alone,
+	// so an argument makes it mean the same thing in a single message as it
+	// means in a conversation.
+	onlyBare bool
+}
+
+// singleMessage records, for every command the conversation dispatches, what it
+// means in a single message. It is a table of decisions rather than a list of
+// refusals because a list of refusals is a decision nobody makes: a command
+// added to the dispatcher would be permitted at `yoyo chat --message` by
+// nothing but nobody having thought about it. Every command below is a decision
+// somebody made, and TestEveryDispatchedCommandRecordsWhatASingleMessageMeans
+// reads the dispatcher's own switch and fails on a command missing from here.
+var singleMessage = map[string]singleMessageRule{
+	"/status":          {},
+	"/backlog":         {},
+	"/show":            {},
+	"/diff":            {},
+	"/reports":         {},
+	"/refresh":         {},
+	"/help":            {},
+	"/hold":            {},
+	"/release":         {},
+	"/intake":          {},
+	"/stop-everything": {},
+	"/redirect":        {},
+	"/directives":      {},
+	"/directive":       {},
+	"/resolve":         {},
+	"/exit":            {why: "ends a conversation, and a single message is not one"},
+	"/quit":            {why: "ends a conversation, and a single message is not one"},
+	"/work":            {why: "runs a work item in the background of the conversation that started it, and this process exits before such a run could finish; `yoyo run <beads-id>` runs one from a command line"},
+	"/wait":            {why: "acts on the run the conversation started, and a single message never started one"},
+	// Stopping a named item reads durable state and asks whichever process is
+	// working on it, so it means exactly the same thing in a single message as it
+	// does in a conversation. Only the bare form is about a run this process
+	// started, and a single message never started one.
+	"/stop": {
+		why:      "with no work item acts on the run the conversation started, and a single message never started one; name the item to stop, as /stop <beads-id>",
+		onlyBare: true,
+	},
 }
 
 // Command carries out one operator command outside the interactive loop, which
@@ -70,39 +140,29 @@ func IsCommand(line string) bool {
 // starts or acts on a run this process owns is refused with what to reach for
 // instead rather than half-carried-out.
 func (s *Session) Command(ctx context.Context, line string, out io.Writer) error {
-	trimmed := strings.TrimSpace(line)
-	name, argument, _ := strings.Cut(trimmed, " ")
-	if why := needsConversation(strings.ToLower(name), strings.TrimSpace(argument)); why != "" {
-		return fmt.Errorf("%s %s", strings.ToLower(name), why)
+	name, argument := splitCommand(line)
+	if why := needsConversation(name, argument); why != "" {
+		return fmt.Errorf("%s %s", name, why)
 	}
 	// Only /exit and /quit end the loop, and both are refused above, so there is
 	// nothing here for the exit to mean.
-	_, err := s.command(ctx, trimmed, out)
+	_, err := s.command(ctx, line, out)
 	return err
 }
 
 // needsConversation says why a command means nothing in a single message, and
-// what does the same job from a command line. Everything it does not name is
-// either read-only or durable, and answers a single message exactly as it
-// answers a conversation.
+// what does the same job from a command line. It reads the decision recorded
+// against the command rather than deciding anything itself, so a command with
+// no decision recorded cannot be permitted here by omission.
 func needsConversation(name, argument string) string {
-	switch name {
-	case "/exit", "/quit":
-		return "ends a conversation, and a single message is not one"
-	case "/work":
-		return "runs a work item in the background of the conversation that started it, and this process exits before such a run could finish; `yoyo run <beads-id>` runs one from a command line"
-	case "/wait":
-		return "acts on the run the conversation started, and a single message never started one"
-	case "/stop":
-		// Stopping a named item reads durable state and asks whichever process is
-		// working on it, so it means exactly the same thing in a single message as
-		// it does in a conversation. Only the bare form is about a run this process
-		// started, and a single message never started one.
-		if argument == "" {
-			return "with no work item acts on the run the conversation started, and a single message never started one; name the item to stop, as /stop <beads-id>"
-		}
+	rule := singleMessage[name]
+	if rule.why == "" {
+		return ""
 	}
-	return ""
+	if rule.onlyBare && argument != "" {
+		return ""
+	}
+	return rule.why
 }
 
 // command runs one operator command. Commands are executed here rather than
@@ -117,9 +177,11 @@ func (s *Session) command(ctx context.Context, line string, out io.Writer) (bool
 	// what forgets there was one.
 	s.reportMilestones(out)
 	s.reportFinishedWork(out)
-	name, argument, _ := strings.Cut(line, " ")
-	argument = strings.TrimSpace(argument)
-	switch strings.ToLower(name) {
+	// The line is read the way Session.Command reads it, so what a single
+	// message refuses and what the conversation carries out are decisions about
+	// the same command rather than about two readings of one line.
+	name, argument := splitCommand(line)
+	switch name {
 	case "/exit", "/quit":
 		return true, nil
 	case "/help":
