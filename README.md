@@ -117,6 +117,15 @@ rather than after:
 - **Claude Code is the backend that runs.** `codex` exists as a name in the
   configuration vocabulary; the adapter behind it is designed and not built, and
   a run refuses a developer configured for anything but `claude-code`.
+- **One harness against the repository, and as many committers as you like.**
+  The git layer already survives teammates contributing the ordinary way: run
+  branches are namespaced, the forge is what merges, and a run whose target moved
+  underneath it replays and is reviewed again. Two people each running their own
+  `yoyo` against one repository is what is not supported yet — `init` shares the
+  backlog, but claims, reports, directives, per-item budgets, and the lease that
+  keeps two promotions off one branch each stay on the machine that made them.
+  [Team mode scope](docs/team-mode-scope.md#what-v1-supports-meanwhile) has the
+  boundary and what closing it needs.
 - **Your project need not be Go**, or any particular language. The harness's
   only contact with your toolchain is the list of shell commands you declare as
   `checks` and the exit codes they return.
@@ -317,7 +326,11 @@ it, which is how a project configured before these existed gets them.
 rather than one per machine. Beads moves its data over an ordinary Git remote
 under refs of Dolt's own, so `init` reads `origin` and configures the tracker to
 sync there — one repository, one permission model, nothing to stand up — and
-prints what it configured. A tracker that already has an `origin` remote is left
+prints what it configured. A shared backlog is not yet a shared harness: two
+people each running their own `yoyo` against one repository is
+[not supported](docs/team-mode-scope.md#what-v1-supports-meanwhile), and the
+tracker syncing is one operator's backlog surviving their machine rather than a
+team sharing one. A tracker that already has an `origin` remote is left
 alone, `--tracker-remote <url>` replaces it for the atypical case of a tracker
 kept in a repository of its own, and a project with no Git remote is told what
 to run once it has one rather than failing over it. Two consequences
