@@ -75,7 +75,9 @@ persona guidance, so a project that wants a different opening
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
-the product ships today**, which is this README, the configuration guide, and
+the product ships today**, which is the README, the documents it links to under
+[Further reading](../README.md#further-reading) — this one among them — the
+configuration guide, and
 the help every command prints. It is labeled as exactly that — a description of
 the implementation as built, never authority about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist

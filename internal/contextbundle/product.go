@@ -77,7 +77,25 @@ const maxIntentPathBytes = 80
 // architect's decision records, which say how the product is built and are the
 // half of docs/ that made description reachable as intent in the first place. A
 // path that names nothing in a given repository is simply not there.
-var shippedDocumentation = []string{"README.md", "docs/configuration.md"}
+//
+// The README's siblings are named individually because the README no longer
+// carries their content: it was reduced to the value proposition, the quick
+// start, and an index, and what it used to say about the conversation, the work,
+// the artifacts, the reporting, and recovery moved into the documents below it
+// links to. Naming only the README after that reduction would narrow the product
+// manager's view of what the product ships to a landing page — the same
+// narrowing that cost ifd.20 a work item drafted against surfaces it could not
+// see. docs/docs-map.md is the enumeration this set is kept against.
+var shippedDocumentation = []string{
+	"README.md",
+	"docs/conversation.md",
+	"docs/work.md",
+	"docs/reporting.md",
+	"docs/artifacts.md",
+	"docs/operations.md",
+	"docs/developing-yoyo.md",
+	"docs/configuration.md",
+}
 
 // maxCommandHelpBytes bounds the help a caller supplies. Help text is compiled
 // into the product rather than growing at runtime, so this is a bound on a

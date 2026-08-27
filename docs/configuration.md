@@ -221,8 +221,8 @@ the role is allowed to do. The set of role names is fixed for the same reason �
 every posture the harness derives, a reviewer's absent tools included, is derived
 from the name — so `role` must be one of `product-manager`, `architect`,
 `development-manager`, `developer`, or `reviewer`, and anything else is
-[refused when the configuration loads](#what-fails-closed). The README's
-[Talking to the other agents](../README.md#talking-to-the-other-agents) states
+[refused when the configuration loads](#what-fails-closed).
+[Talking to the other agents](conversation.md#talking-to-the-other-agents) states
 the table itself.
 
 ## Discovery
@@ -425,7 +425,8 @@ any other part of the persona.
 ### What the product manager sees besides them, and what it does not
 
 **The specifications directory, the tracker, and a description of what the
-product ships today.** That last part is `README.md`, this file, and the help
+product ships today.** That last part is `README.md`, each of the documents it
+links to under its further-reading index, this file, and the help
 every command prints — carried in a section of its own, labeled as description
 of the implementation as built and never as authority about intent. No source,
 no design document, and no way to run a command.
