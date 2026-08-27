@@ -655,10 +655,13 @@ as a reason you had already looked at rather than as one nobody wrote.
 
 The `ran under` line beneath it is the same shape of fact and is printed for the
 same reason: which provider account the run spent, and the revision of the
-configuration that set it up. Yoyodyne runs one account today, so the line
-usually reads `ran under default` — the point of recording it now is that every
-run made before there is a second account can still be attributed to the one it
-actually spent. The revision is a digest of the effective configuration, so two
+configuration that set it up. A project with one account reads `ran under
+default` on every run; a project that
+[pools several](../README.md#running-several-claude-accounts) reads the alias the
+pool actually served that run from, which is the account its whole cost — the
+developer's attempts and the review of them — landed on. The line is on every run
+either way, so runs made before there was a second account are still attributed
+to the one they spent. The revision is a digest of the effective configuration, so two
 runs carrying the same one were configured identically and a run whose
 configuration was edited under it is distinguishable from one that was not;
 `yoyo config show` prints the revision in force. A run recorded before either was

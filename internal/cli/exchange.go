@@ -163,8 +163,13 @@ type exchangeVoice struct {
 	// met here would stop an exchange and leave no trace anywhere — and an
 	// exhausted limit is hours in which nothing happens anywhere, which is exactly
 	// what somebody not watching this conversation needs to be told.
-	usageLimits  *runstate.UsageLimitStore
-	productID    domain.ProductID
+	usageLimits *runstate.UsageLimitStore
+	productID   domain.ProductID
+	// stateRoot is where the answering account's provider home is found. A voice
+	// built without one answers where the machine is already signed in, which is
+	// the single-account arrangement and is what a test wiring the voice directly
+	// gets.
+	stateRoot    string
 	redactValues []string
 }
 
@@ -179,6 +184,13 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderQuestion(question))
+	// The round is answered under the account the answering agent is configured
+	// for, which is the account its conversation is held under: an exchange is
+	// that role speaking, and what it costs belongs on that role's subscription.
+	account, err := v.config.Endpoint(v.stateRoot, v.config.AgentAccountAlias(name))
+	if err != nil {
+		return exchange.Spoken{}, fmt.Errorf("resolve the account the %s agent %s answers under: %w", question.Role, name, err)
+	}
 	result, err := v.provider.Run(ctx, backend.RunRequest{
 		// The exchange is the record this invocation belongs to, so it is what the
 		// provider is told the invocation is: an answering round has no run and no
@@ -192,10 +204,12 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 		Model:            agent.Model,
 		// No tools at all, exactly as a conversation gets none. What separates this
 		// from a conversation is only that there is no authority behind it either.
-		PermissionMode: "plan",
-		AllowedTools:   []string{},
-		Timeout:        exchangeAnswerTimeout,
-		RedactValues:   v.redactValues,
+		PermissionMode:   "plan",
+		AllowedTools:     []string{},
+		Timeout:          exchangeAnswerTimeout,
+		RedactValues:     v.redactValues,
+		AccountAlias:     account.Alias,
+		AccountConfigDir: account.Directory,
 	})
 	spoken := exchange.Spoken{Agent: name, SessionID: result.SessionID, CostUSD: result.CostUSD}
 	// The refusal is recorded before the round is failed, because it is a fact
@@ -298,6 +312,7 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 			repository:   parts.repository,
 			usageLimits:  parts.usageLimits,
 			productID:    parts.config.Product.ID,
+			stateRoot:    parts.stateRoot,
 			redactValues: parts.redactValues,
 		},
 		Reports:      parts.reports,

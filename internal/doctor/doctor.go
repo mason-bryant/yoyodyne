@@ -598,7 +598,125 @@ func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved
 	for _, named := range backends {
 		findings = append(findings, d.checkProvider(ctx, named, resolved.Path))
 	}
+	return append(findings, d.checkAccounts(ctx, resolved)...)
+}
+
+// checkAccounts asks each configured account whether it is signed in.
+//
+// It asks only where a project pools, and that is safe for one reason and not
+// the reason it looks like: a project with one account authenticates where the
+// machine does whatever that account is called — Config.Endpoint says so, and
+// this reads its answer rather than restating it — so the provider check above
+// has already asked the only question there is. Reporting it a second time under
+// a second name would be a diagnosis that looked longer without saying more.
+//
+// Under a pool each alias but the default has a provider home of its own, and a
+// home nobody has signed in to is exactly the state this exists to catch: the
+// harness would otherwise discover it as a run refused by a provider, after an
+// item had been claimed and a worktree cut for it. Declaring a second account is
+// what moves a lone `work` alias into a home of its own, which is why that move
+// is diagnosed here the moment it happens. The remedy is the login for that
+// home, which is the command `bin/yoyo-account` runs and the one the README
+// states.
+func (d *diagnosis) checkAccounts(ctx context.Context, resolved config.Resolved) []Finding {
+	if !resolved.Config.Pooled() {
+		return nil
+	}
+	root, err := runstate.DefaultRoot(d.getenv, d.homeDir, d.env.GOOS)
+	if err != nil {
+		// The state root has already been reported as unresolvable by its own
+		// check, and every account's home is under it, so there is nothing further
+		// to say that would not be the same finding a second time.
+		return nil
+	}
+	aliases := resolved.Config.AccountAliases()
+	findings := make([]Finding, 0, len(aliases))
+	for _, alias := range aliases {
+		check := "account:" + alias
+		// Where the account authenticates is asked of the configuration rather
+		// than derived here, so a diagnosis can never probe one home while the
+		// harness invokes in another — which is the one failure this check could
+		// have that nothing downstream would catch. An alias taken from the
+		// configuration's own listing always resolves; the refusal is carried
+		// anyway, because the alternative is diagnosing a home nobody chose.
+		endpoint, err := resolved.Config.Endpoint(root, alias)
+		if err != nil {
+			findings = append(findings, Finding{
+				Check:   check,
+				Status:  StatusProblem,
+				Summary: fmt.Sprintf("account %q could not be resolved to a provider home", alias),
+				Detail:  err.Error(),
+				Remedy:  fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(resolved.Path)),
+			})
+			continue
+		}
+		findings = append(findings, d.checkAccount(ctx, resolved.Config, endpoint))
+	}
 	return findings
+}
+
+func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, endpoint config.AccountEndpoint) Finding {
+	alias := endpoint.Alias
+	check := "account:" + alias
+	membership := cfg.Accounts[alias].Membership()
+	directory := endpoint.Directory
+	login := accountLoginCommand(directory)
+	availability, err := (claudecode.Backend{Runner: d.env.Runner, ConfigDir: directory}).CheckAvailability(ctx)
+	switch {
+	case err != nil:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("claude would not say whether account %q is authenticated", alias),
+			Detail:  err.Error(),
+			Remedy:  login,
+		}
+	case !availability.Installed:
+		// The provider check above has already said claude is not there, and
+		// saying it once per alias would bury that under the accounts it stopped
+		// this from answering. What is added here is which account went unasked.
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("account %q could not be asked, because claude did not run", alias),
+			Detail:  accountHomeDetail(directory),
+			Remedy:  providerInstallCommand(domain.BackendClaudeCode),
+		}
+	case !availability.Authenticated:
+		return Finding{
+			Check:   check,
+			Status:  StatusProblem,
+			Summary: fmt.Sprintf("account %q is in the %s pool and is not authenticated, so every run the pool sends there would be refused", alias, membership),
+			Detail:  accountHomeDetail(directory),
+			Remedy:  login,
+		}
+	}
+	return Finding{
+		Check:   check,
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("account %q is authenticated and in the %s pool", alias, membership),
+		Detail:  strings.TrimSpace(accountHomeDetail(directory) + " " + availability.AuthMethod),
+	}
+}
+
+// accountLoginCommand is what signs one account in. The default alias
+// authenticates where the machine already does, so its command is the
+// provider's own; every other alias names the home it is signing in to.
+func accountLoginCommand(directory string) string {
+	if strings.TrimSpace(directory) == "" {
+		return "claude auth login"
+	}
+	return fmt.Sprintf("mkdir -p %s && CLAUDE_CONFIG_DIR=%s claude auth login",
+		shellQuote(directory), shellQuote(directory))
+}
+
+// accountHomeDetail says where an account authenticates, which is the one thing
+// about it a reader cannot derive from the alias.
+func accountHomeDetail(directory string) string {
+	if strings.TrimSpace(directory) == "" {
+		return "signed in where this machine is"
+	}
+	return directory
 }
 
 func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, configPath string) Finding {

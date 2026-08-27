@@ -129,10 +129,17 @@ func branchReviewerFrom(parts components, model string) orchestrator.BranchRevie
 	if model != "" {
 		reviewerModel = model
 	}
+	// A branch review has no run to be affined to — that is the point of it — so
+	// it is made under the account the reviewer agent is configured for. The
+	// account is on the backend value rather than on the request because this
+	// reviewer serves one account for as long as the command runs. A validated
+	// configuration always resolves here, and one that somehow does not leaves the
+	// zero endpoint, which reviews where the machine is already signed in.
+	reviewerAccount, _ := cfg.Endpoint(parts.stateRoot, cfg.AgentAccountAlias(agentNameForRole(cfg, domain.RoleReviewer)))
 	return orchestrator.BranchReviewer{
 		Worktrees: parts.worktrees,
 		Reviewer: review.Reviewer{
-			Backend: claudecode.Backend{Runner: parts.runner},
+			Backend: claudecode.Backend{Runner: parts.runner, ConfigDir: reviewerAccount.Directory},
 			Model:   reviewerModel,
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 		},

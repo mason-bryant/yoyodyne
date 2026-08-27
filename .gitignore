@@ -10,6 +10,10 @@
 # Release archives written by "make dist"
 /dist/
 # Ignore build output inside bin/, but not the directory itself: git cannot
-# re-include a file when its parent directory is excluded.
+# re-include a file when its parent directory is excluded. Every tool that lives
+# here has to be re-included by name, and one that is not is invisible rather
+# than refused: it stays on the disk of the machine that wrote it, out of the
+# diff, out of the review, and out of the commit.
 /bin/*
 !/bin/yoyo-status
+!/bin/yoyo-account

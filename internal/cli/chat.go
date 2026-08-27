@@ -375,7 +375,15 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	}
 
 	processRunner := parts.runner
-	provider := claudecode.Backend{Runner: processRunner}
+	// The conversation is held under the account its agent is configured for, and
+	// the availability below is asked of that same account: a check made against
+	// the machine's own login would report a conversation ready to open on an
+	// account nobody had signed in to.
+	account, err := cfg.Endpoint(parts.stateRoot, cfg.AgentAccountAlias(name))
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve the account %s agent %s runs under: %w", role, name, err)
+	}
+	provider := claudecode.Backend{Runner: processRunner, ConfigDir: account.Directory}
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -384,7 +392,8 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		return nil, nil, errors.New("Claude Code is not installed")
 	}
 	if !availability.Authenticated {
-		return nil, nil, fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before starting a conversation (auth method: %s)", availability.AuthMethod)
+		return nil, nil, fmt.Errorf("Claude Code is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
+			account.Alias, accountLoginCommand(account), availability.AuthMethod)
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
