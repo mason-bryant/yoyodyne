@@ -176,6 +176,13 @@ func TestManagerPublishesRunBranchesToTheForkAndKeepsTheTargetUpstream(t *testin
 	if err := manager.VerifyRemoteTarget(context.Background(), integration); err != nil {
 		t.Fatalf("VerifyRemoteTarget() error = %v", err)
 	}
+	// A forge merging a cross-repository request has the fork's commit in the base
+	// repository before it merges anything — GitHub keeps the head of every pull
+	// request under refs/pull there, whichever repository it was pushed to. Two
+	// bare repositories on a disk do not, so the same thing is done here: the
+	// promoted commit arrives in the upstream repository as a request head rather
+	// than as a branch, which is what makes a merge of it possible at all.
+	runGit(t, upstream, "fetch", fork, "refs/heads/"+worktree.Branch+":refs/pull/1/head")
 	mergeCommit := mergeInRemote(t, upstream, "main", integration.TargetCommit)
 	confirmed, err := manager.ConfirmRemoteTarget(context.Background(), integration)
 	if err != nil {
