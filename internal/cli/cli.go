@@ -167,7 +167,7 @@ func runConfigValidate(ctx context.Context, args []string, stdout, stderr io.Wri
 	// one command an operator runs to be told whether it is right says so. It is
 	// not a validity failure and does not become one: the exit code is what it
 	// would have been, and the warning is on the stream a warning belongs on.
-	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, resolved.Path)
+	ignored := configurationIgnored(ctx, execution.OSProcessRunner{}, configuredRepository(resolved), resolved.Path)
 
 	if *jsonOutput {
 		return writeJSON(stdout, stderr, map[string]any{

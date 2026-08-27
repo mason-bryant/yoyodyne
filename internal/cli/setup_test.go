@@ -658,7 +658,7 @@ func TestSetupJSONAsksNothingAndChangesNothing(t *testing.T) {
 		},
 		"a project configured before the artifact-home indexes existed": {
 			arrange: func(t *testing.T, project string) {
-				if _, _, err := initializeProject(project, "calc", false); err != nil {
+				if _, err := initializeProject(initializeOptions{Directory: project, ProductID: "calc"}); err != nil {
 					t.Fatalf("initializeProject() error = %v", err)
 				}
 				if err := os.RemoveAll(filepath.Join(project, "docs")); err != nil {

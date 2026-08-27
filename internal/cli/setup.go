@@ -431,7 +431,7 @@ func (s *setup) ensureConfiguration(ctx context.Context) setupStep {
 		}
 	}
 
-	written, detection, err := initializeProject(s.directory, s.product, false)
+	initialization, err := initializeProject(initializeOptions{Directory: s.directory, ProductID: s.product})
 	if err != nil {
 		return setupStep{
 			Step:    stepConfiguration,
@@ -444,10 +444,10 @@ func (s *setup) ensureConfiguration(ctx context.Context) setupStep {
 	return setupStep{
 		Step:    stepConfiguration,
 		Status:  setupDone,
-		Summary: fmt.Sprintf("wrote %s and the personas beside it", written[0]),
+		Summary: fmt.Sprintf("wrote %s and the personas beside it", initialization.config),
 		// What the operator still owes on the checks is the one thing about a
 		// fresh configuration that is not visible in the file itself.
-		Detail: describeDetection(detection, written[0]),
+		Detail: describeDetection(initialization.detection, initialization.config),
 	}
 }
 
