@@ -131,10 +131,10 @@ func (b conversationTriageBudgets) RecordMergeRearm(ctx context.Context, workIte
 }
 
 // conversationStoppages wires the durable run records a triage decision is
-// checked against, for the role that records one and for no other. It is the
-// same store the docket was built from, so what a decision says it is about and
-// what the entry it came from said can never be two different accounts of one
-// run.
+// checked against, and that a decomposition's substrate gate is decided from,
+// for the role that does both and for no other. It is the same store the docket
+// was built from, so what a decision says it is about and what the entry it came
+// from said can never be two different accounts of one run.
 func conversationStoppages(parts components, role domain.AgentRole) chat.Stoppages {
 	if role != domain.RoleDevelopmentManager {
 		return nil
@@ -142,10 +142,10 @@ func conversationStoppages(parts components, role domain.AgentRole) chat.Stoppag
 	return conversationStoppedRuns{store: parts.store}
 }
 
-// conversationStoppedRuns answers one question about a run: which work item it
-// was made for. The run record is the harness's own, written when the run was
-// reserved, so it is evidence about the stoppage rather than anything the
-// conversation asserted about it.
+// conversationStoppedRuns answers two questions from the run records: which
+// work item a run was made for, and where a work item's own change actually is.
+// The records are the harness's own, written as the run went, so both are
+// evidence rather than anything the conversation asserted.
 type conversationStoppedRuns struct {
 	store *runstate.Store
 }
@@ -156,6 +156,62 @@ func (r conversationStoppedRuns) WorkItemOf(_ context.Context, runID string) (st
 		return "", err
 	}
 	return state.WorkItemID, nil
+}
+
+// UnlandedChange reports the change an item's own work produced that never
+// reached the integration target, which is the substrate a child decomposed out
+// of that item would be written against.
+//
+// It walks the item's runs newest first rather than reading the newest one,
+// because the newest run is not always the run that says where the change is.
+// The question is what the item's work has left lying off the target branch, and
+// a run answers it in one of four ways.
+//
+// A recorded integration is the promotion itself, and it ends the walk: the
+// change is on the target branch, and nothing an earlier run did is missing any
+// more. A run still going has not failed to land anything yet, so it is not
+// evidence either way and the walk carries on past it — holding a decomposition
+// against work in flight would hold it against a state that resolves itself,
+// while stopping there would report an older stopped run's branch as though
+// nothing were being done about it. A terminal run with no recorded change and
+// no commit produced nothing, so it says nothing at all about where the work is,
+// and the walk carries on past that too; reading it as "nothing is missing" is
+// exactly the hole that let a child be carved against a previous run's branch
+// while a re-run that wrote no code sat in front of it. What is left is a
+// terminal run that made a change and did not promote it, which is the answer.
+//
+// An item whose every run falls through — never run, only ever in flight, only
+// ever empty — has nothing off the target branch, which is nearly every
+// decomposition and every item whose execution is a conversation rather than a
+// run at all.
+func (r conversationStoppedRuns) UnlandedChange(_ context.Context, workItemID string) (chat.UnlandedChange, bool, error) {
+	runs, err := r.store.Runs(workItemID)
+	if err != nil {
+		return chat.UnlandedChange{}, false, err
+	}
+	for _, state := range runs {
+		if state.Integration != nil {
+			return chat.UnlandedChange{}, false, nil
+		}
+		if !state.Status.Terminal() || (state.Changes == nil && state.HarnessCommit == "") {
+			continue
+		}
+		// The branch is named whether or not the harness has since removed it. A
+		// removed branch does not make the change any more findable, and a reader
+		// deciding which vehicle lands it is owed the name either way.
+		unlanded := chat.UnlandedChange{
+			RunID:        state.RunID,
+			Branch:       state.Branch,
+			TargetBranch: state.TargetBranch,
+		}
+		if state.PullRequest != nil {
+			unlanded.PullRequest = state.PullRequest.Number
+		}
+		return unlanded, true, nil
+	}
+	// Work the harness has never run, and work whose runs left nothing behind,
+	// are both a plain answer about the item rather than a failure to look.
+	return chat.UnlandedChange{}, false, nil
 }
 
 // roleDocumentSets names the documents a role reads beyond the specifications.

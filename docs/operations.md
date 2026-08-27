@@ -281,6 +281,19 @@ attached, because there is no condition to wait out: a dropped connection is
 already gone, and the provider's own retries are spent before the harness sees
 the terminal.
 
+The provider contradicting itself is in the same class. A stream that ends one
+invocation twice — two terminal results, where there was only ever one ending —
+judges nothing either, and the second of them is quite often the real one: a
+subagent's completion carrying a terminal's marks is read as the invocation's,
+so the run's own ending arrives looking like the duplicate. Because neither
+ending can be told apart from the other, the invocation is not trusted to have
+produced an answer at all, and it is asked again in the same session rather than
+published. That used to fail the run outright as a malformed stream, which is
+how a change that was all but finished came to be recovered by a triage rerun.
+Both endings stay in the run's event log, so what the provider's dialect drifted
+into is diagnosable afterwards. A stream the harness genuinely cannot read still
+fails the run.
+
 One budget covers both provider invocations a run makes. A review the provider
 killed is asked for again on the same count, without redeveloping the change,
 because what the budget bounds is how much of the provider's weather one run
@@ -308,7 +321,9 @@ A refusal that *would* stand is not relaunched. A terminal `api_error` quoting a
 provider is enforcing — would earn the identical answer on the next attempt, so
 it fails the run exactly as it always did. So does a 529, which is
 [a wait](#waiting-out-an-overloaded-provider) rather than a relaunch, and so does
-any terminal the API did not report at all.
+any terminal the API did not report at all. The invocation ended twice is the one
+thing outside the API's own errors that still relaunches, because it is not a
+verdict on anything — it is the provider failing to say what its verdict was.
 
 ## When a provider stalls or runs out of budget
 
@@ -353,14 +368,19 @@ earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded, remote branch deleted, and your local
-target branch caught up onto the merge commit the forge made. Settling a merge
+target branch caught up onto the merge commit the forge made — and closes the
+work item, which the run deliberately left open because a queued merge is a
+publication nothing has confirmed. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
 
 Two settle-path outcomes leave a publication outstanding for a person, each
 with its own line on the work item. A merge the forge **dropped** is the
 first: something the base branch required went unmet, the harness does not
-merge past a requirement, and nothing about that publication is confirmed. A
+merge past a requirement, and nothing about that publication is confirmed — so
+the item is handed back to you with a blocker rather than closed as integrated,
+which is also what puts it where a bounded re-arm of the dropped merge can be
+decided. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
 promotion, recording the merge commit, retiring the consumed branch — failed,
@@ -375,6 +395,23 @@ exercise judgement: it reports and leaves the decision where it belongs.
 Reconcile never invokes a provider either: a lost process handle is not a
 reason to start a second developer for an item.
 
+Every other publication is re-asked about on the same sweep. A run that ended
+without its publication settled — one that failed before it integrated
+anything, or one whose request the forge merged after the harness had stopped
+watching — used to keep whatever the forge last said at the moment the run
+ended, for good: a pull request somebody merged days later stayed recorded open
+and unmerged, and the triage docket and the status surfaces read that rather
+than the truth. Reconcile now asks the forge about each of those and records
+the answer — merged, closed, or still open. It only writes the record: nothing
+is merged, nothing is closed, no branch moves, and the work item is not
+touched, so a request that turns out to have merged outside the harness leaves
+its publication outstanding for triage rather than being finished behind your
+back. A record the forge agrees with is left exactly as it is, and a merged one
+is never asked about again — merged is the one answer a forge does not take
+back. A record left alone for a reason, such as a branch the forge answers
+about with some other request, is reported and is not a failure; a forge that
+could not be reached is, and the next sweep asks the same question again.
+
 Once the runs are settled it converges local state, which is the rest of the
 post-merge hygiene you would otherwise do by hand. Every target branch the
 harness knows about is caught up onto its remote counterpart — the same
@@ -382,7 +419,9 @@ fast-forward the settle paths make, for a target left behind by something no run
 is going to finish, or a catch-up that was held at the time — and every settled
 run's leftover branch whose work the target already carries is deleted. Both
 refuse on evidence rather than on a record: a remote that has diverged from
-your local branch is reported for you to decide rather than reconciled, a
+your local branch is reported for you to decide rather than reconciled — the
+steps for deciding it are
+[here](#unwedging-a-target-branch-that-diverged-from-the-forge) — a
 branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
@@ -441,11 +480,110 @@ directive](conversation.md#directives-and-the-work-they-pause), or one parked on
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
 
-## What became of the runs, and why one failed
+## Unwedging a target branch that diverged from the forge
+
+Every catch-up and every promotion here is fast-forward-or-nothing, so a local
+target branch and the remote's having both moved is the one repository state the
+harness will not decide. You see it as the same line on every sweep:
+
+```
+main not caught up: main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right
+```
+
+and until it is resolved every run that reaches integration for that target
+stops with both branch positions named rather than promoting into it. That
+refusal is deliberate — the alternative is a promotion nobody can publish and an
+item closed as integrated against it — but it does mean the branch does no more
+work until you say which history is right. Nothing sweeps it away in the
+meantime, and no later `yoyo reconcile` resolves it.
+
+Runs that predate the fix in `yoyodyne-ifd.177` could produce this by losing a
+cross-machine race after promoting, and a repository still standing in that state
+is what this section is for. A run today cannot produce it that way: it settles
+where the remote target stands before promoting, and stops without closing
+anything if the remote moves afterwards. Reaching it now takes somebody pushing
+to the target directly, or the window a queued merge leaves open. The recovery is
+the same either way, and it is yours to run.
+
+**Which side is which.** The remote is the shared truth: the forge has it, and so
+does every other checkout of the project. The commits your local branch has that
+the remote does not are promotions this repository made and never published —
+reviewed and integrated here, and nowhere else. Keeping the remote's history and
+preserving those commits on a branch of their own is the only resolution that
+discards nothing, and it is the one below. Do not resolve it the other way by
+force-pushing your local branch over the remote: that throws away whatever the
+remote gained, which is by definition work this repository has never seen.
+
+1. **Stop the harness spending, and check nothing is mid-promotion.**
+
+   ```sh
+   ./bin/yoyo pause
+   ./bin/yoyo status
+   ```
+
+   `pause` keeps new attempts from starting. `status` is what tells you no run is
+   in the `integrating` phase: a promotion already under way holds that target's
+   promotion lease, and moving the branch underneath it is exactly the race the
+   lease exists to prevent. Wait for anything integrating to finish.
+
+2. **See what each side has that the other does not**, so you are deciding about
+   named commits rather than two hashes:
+
+   ```sh
+   git -C <repository> fetch origin main
+   git -C <repository> log --oneline origin/main..main   # promotions the remote never received
+   git -C <repository> log --oneline main..origin/main   # what the remote gained meanwhile
+   ```
+
+3. **Preserve the local-only commits on their own branch**, so nothing you are
+   about to move away from becomes unreachable. Naming it after the commit makes
+   the step safe to repeat:
+
+   ```sh
+   git -C <repository> branch diverged/main-$(git -C <repository> rev-parse --short main) main
+   ```
+
+4. **Put the target back onto the shared truth.** When the primary checkout is not
+   on the branch, move the ref as a compare-and-swap on the commit you read in
+   step 2, so a branch that moved since loses the race rather than being
+   overwritten:
+
+   ```sh
+   git -C <repository> update-ref refs/heads/main <remote-commit> <local-commit>
+   ```
+
+   When the checkout is on the branch, confirm there is nothing uncommitted first,
+   because the move discards changes to tracked files:
+
+   ```sh
+   git -C <repository> status --porcelain    # empty, or only your declared exports
+   git -C <repository> reset --hard origin/main
+   ```
+
+5. **Let the harness go again, and confirm the wedge is gone.**
+
+   ```sh
+   ./bin/yoyo resume
+   ./bin/yoyo reconcile
+   ```
+
+   The held catch-up should be absent from the sweep, and runs for that target
+   promote again. That is the state this recovery is for: resolvable, and back
+   under the harness.
+
+6. **Decide what happens to the preserved branch.** Its commits carry work a
+   reviewer approved and this repository integrated, which the shared remote never
+   received; the work items behind them carry a `Publication outstanding` line
+   naming the pull request that was never merged. Open a pull request from the
+   branch yourself, or file work to redo it, and delete the branch once you have.
+   Nothing sweeps it for you: it is preserved work, and the convergence sweep only
+   ever removes a branch whose work the target provably carries.
+
+## What became of the runs, and what remains of them
 
 `yoyo status` reads back what the runs themselves recorded — newest first, the
-work item, the status and the phase the run reached, what it cost, why the item
-was chosen, and the reasons its record kept:
+work item, the outcome and the phase the run reached, what remains of it, what it
+cost, why the item was chosen, and the reasons its record kept:
 
 ```sh
 ./bin/yoyo status                    # the twenty most recent runs
@@ -458,18 +596,57 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
-run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved] $4.62
   selected by the operator: the operator ran this item by name from the command line
   ran under default, configuration cfg-9f2c41ab7e05
-  reason: developer reported failure: api_error: API Error: 529 Overloaded.
-run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  reason: the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)
+  preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
+  preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
+  preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
   ran under an account the record does not name, configuration a configuration the record does not name
-  reason: verification failed: make test exited with 2
-  failing check: make test exited 2
+  reason: create isolated worktree: primary checkout is not ready for integration
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
 each reason is shown as one line; --json carries what the record holds in full
 ```
+
+The word in the brackets is what became of the *work*, not of the attempt, and it
+comes from a small fixed set:
+
+| word | what it means |
+| --- | --- |
+| `succeeded` | the work landed |
+| `stopped` | it ended on a durable blocker: the item carries it, a person decides what happens next, and nothing was discarded |
+| `cancelled` | something stopped it rather than judged it — the operator, or a killed process |
+| `timed out` | the harness stopped it on time, leaving nobody anything to act on |
+| `failed` | it ended without succeeding and without leaving anybody a blocker |
+| `pending`, `running` | it has not finished |
+
+`stopped` covers every ending the harness hands to somebody: an unrepaired
+review, a check that kept failing, refused protected paths, a replay the target
+branch outran, and a provider that would not carry the run. The phase beside the
+word says where it stopped and the `reason` under it says what stopped it, so the
+one word never has to carry all five. This used to be one word — `failed` — for
+all of them and for the two below it, which is how three preserved runs came to
+read as three discarded ones.
+
+Beside it, every run that did not succeed says what remains: `work preserved`,
+`work removed` where the harness recorded removing the artifacts, or `no
+artifacts recorded` where the record names neither. The preserved branch,
+worktree, and developer session are then named under the run, so looking at the
+change is not a trip through the run's JSON for a path. A successful run removes
+what it made by design, so it says nothing about preservation at all; a run still
+in flight holds everything it has.
+
+The third phrase states an absence rather than claiming the run made nothing —
+the same discipline as the `selected: no reason recorded` and `an account the
+record does not name` lines below, and for the same reason: a listing that turns
+an empty field into a reassurance is the failure this one exists to remove. In
+practice it is a run that broke before it got a worktree, which is also why the
+second run above has no phase between the two words: the phase is only recorded
+once the worktree exists, so any run carrying one has a branch and a worktree and
+reports `work preserved` or `work removed` with the paths underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
@@ -488,9 +665,9 @@ configuration was edited under it is distinguishable from one that was not;
 carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
-what it is, because the records keep them apart deliberately. Only `reason` says
-the work itself failed. An `outstanding publication`, an `outstanding cleanup`, a
-`failing check`, and a `completion recorded late` are recorded around the work,
+what it is, because the records keep them apart deliberately. Only `reason` is the
+run's own account of why it ended. An `outstanding publication`, an `outstanding
+cleanup`, a `failing check`, and a `completion recorded late` are recorded around the work,
 and a run can carry one of them with its change already promoted. The last of
 those is the class whose work-item note is itself unreliable — recording that
 note is part of what was failing — so the run record this verb reads is its
@@ -588,6 +765,12 @@ mode covers all of them and the default never asks which kind you meant.
 Selecting one by id or by a unique id prefix works the same for each. `--runs`,
 `--chats`, and `--reviews` narrow it to one kind when that is what you want.
 
+An [exchange](conversation.md#roles-asking-each-other-things) is the fourth thing
+priced and the only one that is never followed: its record is the thread itself,
+revised as it goes, rather than a stream of events, so it appears in the cost
+report and in no other mode. Naming one by id prices it like anything else, and
+each of the three flags above narrows it out along with the kinds they exclude.
+
 A run's listed status is the status it recorded. A conversation has no such
 record of its own, so its status is derived and says what an operator is
 actually asking: `answering` while an agent is working on a turn, `waiting`
@@ -604,10 +787,20 @@ identical, and this is the one place an operator is already looking.
 It resolves the state directory the same way the harness does, so it keeps
 working under `YOYODYNE_STATE_HOME` or `XDG_STATE_HOME`. `--help` lists the rest
 of its options. It shapes its output with `jq` when `jq` is installed, and cost
-reporting requires it. What it prices is every run, every conversation, and
-every branch review, and a mixed total says how much of it was each — a
-conversation turn and a branch review are each a provider invocation like any
-other, and leaving either out understated every total it belonged in.
+reporting requires it. What it prices is every run, every conversation, every
+branch review, and every exchange, and a mixed total says how much of it was
+each — a conversation turn, a branch review, and a round of one role asking
+another something are each a provider invocation like any other, and leaving any
+of them out understated every total it belonged in. An exchange counts each round
+on the day it was answered, so a thread that ran over two days lands in both of
+their totals; its record keeps what the provider charged and not what it used, so
+its rows say nothing in the token columns rather than saying none. An exchange
+record that cannot be read is counted and named under the report rather than
+dropped: every exchange beside it is still priced, and the total it is missing
+from is marked `≥`. [`yoyo cost`](reporting.md#what-the-work-cost) answers the
+same way for the same record — it counts it in the ask row's `unpriced` column,
+prices the rest, and marks its own total — because two surfaces disagreeing about
+what an unknown figure is would be a disagreement only you could settle.
 
 The rows are grouped by the local-timezone day the money was spent on, each
 day's group closing with that day's spend and today's group coming last: what an
@@ -618,19 +811,22 @@ appears under today for the turn it was asked this morning and under each
 earlier day it spent on — one row per day it spent, each with the shape a row
 has always had. A report covers the last seven such days, today counting as the
 first of them. A number asks for a different count — `-c 30` — and naming a run,
-a conversation, or a review prices that one whatever day it ran on, because an
-id has already chosen what to show; an id prefix that is all digits has to carry
-its `run-`, `chat-`, or `review-` prefix to be read as an id rather than as a
-count of days. A window with nothing in it says so and says since when, rather
-than reading like a machine that spent nothing.
+a conversation, a review, or an exchange prices that one whatever day it ran on,
+because an id has already chosen what to show; an id prefix that is all digits
+has to carry its `run-`, `chat-`, `review-`, or `exchange-` prefix to be read as
+an id rather than as a count of days. A window with nothing in it says so and
+says since when, rather than reading like a machine that spent nothing.
 
 [`yoyo cost`](reporting.md#what-the-work-cost) is the same run spending grouped by the work
 item the runs were for, which is what answers "what did that piece of work
-cost"; it leaves conversations and branch reviews out, deliberately and for the
-same reason — a conversation that discussed five items, and a review of a branch
-that carried a dozen, cannot be attributed to any one of them.
+cost"; it leaves conversations and branch reviews out of the *items*, deliberately
+and for the same reason — a conversation that discussed five items, and a review
+of a branch that carried a dozen, cannot be attributed to any one of them. What it
+does not leave out of its total is what the roles spent asking each other, which
+sits on a row of its own above it.
 
 [`scripts/yoyo-status-test.sh`](../scripts/yoyo-status-test.sh) checks these claims
-against a fabricated state directory holding runs, conversations, and branch
-reviews, without a provider or a repository and without reading your real
-state.
+against a fabricated state directory holding runs, conversations, branch reviews,
+and exchanges, without a provider or a repository and without reading your real
+state. `make test` runs it, so the tool is held to them by the same command as
+everything else in the repository rather than by one somebody remembers.

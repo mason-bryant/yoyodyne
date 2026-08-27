@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	backendapi "github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 )
@@ -342,6 +343,154 @@ func TestAnOperatorRecordsAndSettlesADirectiveFromTheConversation(t *testing.T) 
 	}
 }
 
+// The founding case, in the one place the link is actually made: work admitted
+// because somebody directed it names the directive, and the directive's own
+// record is told which item it became. Without both halves an operational
+// directive stands open forever — it pauses nothing, so nothing ever resolves it
+// — and the thread it was said in is never told the work exists.
+func TestAdmittingWorkForADirectiveRecordsWhatTheDirectiveBecame(t *testing.T) {
+	t.Parallel()
+
+	directives := &fakeDirectives{}
+	recorded, err := directives.Record(context.Background(), DirectiveRequest{
+		Kind: directive.KindOperational,
+		Text: "also make the integration retry budget configurable",
+	})
+	if err != nil {
+		t.Fatalf("Record() error = %v", err)
+	}
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting what you asked for.",
+			`{"action":"create","title":"Make the integration retry budget configurable","description":"Read it from the project configuration.","goal":"`+recordedGoal+
+				`","directive":"`+recorded.ID+`","reason":"the operator directed it"}`)},
+		{SessionID: "session-1", FinalText: "It is in the queue."},
+	}})
+	options.Tracker = tracker
+	options.Goals = recordedGoals(recordedGoal)
+	options.Directives = directives
+
+	reply, err := openTestSession(t, options).Send(context.Background(), "admit it")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || !reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the creation carried out", reply.Actions)
+	}
+	if reply.Actions[0].DirectiveID != recorded.ID || reply.Actions[0].DirectiveUnrecorded != "" {
+		t.Fatalf("outcome = %#v, want it to name the directive it answered and nothing unrecorded", reply.Actions[0])
+	}
+	// The queue says which of its work somebody asked for, in the operator's own
+	// words, rather than only what the work is for.
+	if len(tracker.created) != 1 || !strings.Contains(tracker.created[0].Notes, recorded.ID) {
+		t.Fatalf("notes = %#v, want the admitted item to name the directive it answers", tracker.created)
+	}
+	// And the directive learns what it became, which is the only account of an
+	// operational directive's disposition there ever is.
+	settled := directives.recorded[0]
+	if !settled.Resolved() {
+		t.Fatalf("directive = %#v, want it settled by having been carried out", settled)
+	}
+	if !strings.Contains(settled.Resolution, "yoyodyne-1") {
+		t.Fatalf("outcome = %q, want it to name the work item it became", settled.Resolution)
+	}
+}
+
+// What the operator is shown groups by what still applies, not by what has an
+// account of it. An operational directive somebody carried out is both — it is
+// accounted for and it is still the instruction — and listing it among the
+// directives that are over would tell the operator something they never decided.
+func TestTheDirectiveListingKeepsACarriedOutInstructionInForce(t *testing.T) {
+	t.Parallel()
+
+	standing := directive.Directive{
+		SchemaVersion: directive.SchemaVersion,
+		ID:            "directive-" + strings.Repeat("a", 32),
+		ProductID:     "yoyodyne",
+		Kind:          directive.KindOperational,
+		ReceivedBy:    domain.RoleProductManager,
+		ReceivedAt:    settledAt,
+		Text:          "stop opening pull requests for documentation-only changes",
+	}
+	carried, err := standing.CarryOut("admitted yoyodyne-ifd.170 to the backlog", settledAt)
+	if err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	lifted := standing
+	lifted.ID = "directive-" + strings.Repeat("b", 32)
+	lifted.Kind = directive.KindAmbiguous
+	lifted.Unresolved = "which of the two readings was meant"
+	resolved, err := lifted.Resolve("the second reading", settledAt)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+
+	rendered := renderDirectives([]directive.Directive{carried, resolved})
+	inForce, over, found := strings.Cut(rendered, "no longer in force")
+	if !found {
+		t.Fatalf("listing = %q, want it to separate what applies from what is over", rendered)
+	}
+	if !strings.Contains(inForce, carried.ID) || !strings.Contains(inForce, "carried out") {
+		t.Fatalf("in force = %q, want the standing instruction with what it produced under it", inForce)
+	}
+	if !strings.Contains(over, resolved.ID) {
+		t.Fatalf("no longer in force = %q, want the lifted pause", over)
+	}
+	if strings.Contains(over, carried.ID) {
+		t.Fatalf("listing = %q, want a carried-out instruction never filed as no longer in force", rendered)
+	}
+}
+
+// A creation naming a directive nobody recorded is refused before anything is
+// created. An item whose notes claim a directive that does not exist says
+// something untrue about where the work came from, and the outcome it was about
+// to write would have nowhere to land.
+func TestAdmittingWorkForADirectiveNobodyRecordedIsRefusedWhole(t *testing.T) {
+	t.Parallel()
+
+	tracker := &fakeTracker{}
+	options := testOptions(t, &fakeBackend{results: []backendapi.RunResult{
+		{SessionID: "session-1", FinalText: trackerReply("Admitting it.",
+			`{"action":"create","title":"Make the retry budget configurable","description":"Read it from the configuration.","goal":"`+recordedGoal+
+				`","directive":"directive-3f2a","reason":"the operator directed it"}`)},
+		{SessionID: "session-1", FinalText: "It was refused; no directive says that."},
+	}})
+	options.Tracker = tracker
+	options.Goals = recordedGoals(recordedGoal)
+	options.Directives = &fakeDirectives{}
+
+	reply, err := openTestSession(t, options).Send(context.Background(), "admit it")
+	if err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if len(reply.Actions) != 1 || reply.Actions[0].Applied {
+		t.Fatalf("actions = %#v, want the creation refused", reply.Actions)
+	}
+	if len(tracker.created) != 0 {
+		t.Fatalf("created = %#v, want nothing admitted against a directive nobody recorded", tracker.created)
+	}
+}
+
+// A reference that was never going to name a directive is refused where the
+// action is read, before the durable records are touched at all.
+func TestACreationNamingSomethingThatIsNotADirectiveIsRefused(t *testing.T) {
+	t.Parallel()
+
+	action := TrackerAction{
+		Action:      actionCreate,
+		Title:       "Make the retry budget configurable",
+		Description: "Read it from the configuration.",
+		Goal:        recordedGoal,
+		Directive:   "yoyodyne-ifd.170",
+		Reason:      "the operator directed it",
+	}
+	err := action.Validate()
+	if err == nil || !strings.Contains(err.Error(), "is not a directive identifier") {
+		t.Fatalf("Validate() error = %v, want it to refuse the reference", err)
+	}
+}
+
 func directiveSession(t *testing.T, directives Directives, work Work) *Session {
 	t.Helper()
 	options := testOptions(t, &fakeBackend{})
@@ -389,21 +538,49 @@ func (f *fakeDirectives) List(context.Context) ([]directive.Directive, error) {
 	return append([]directive.Directive(nil), f.recorded...), nil
 }
 
+func (f *fakeDirectives) Find(_ context.Context, reference string) (directive.Directive, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, candidate := range f.recorded {
+		if strings.HasPrefix(candidate.ID, reference) {
+			return candidate, nil
+		}
+	}
+	return directive.Directive{}, errNoSuchDirective
+}
+
 func (f *fakeDirectives) Resolve(_ context.Context, reference, resolution string) (directive.Directive, error) {
+	return f.settle(reference, func(candidate directive.Directive) (directive.Directive, error) {
+		return candidate.Resolve(resolution, settledAt)
+	})
+}
+
+func (f *fakeDirectives) CarryOut(_ context.Context, reference, outcome string) (directive.Directive, error) {
+	return f.settle(reference, func(candidate directive.Directive) (directive.Directive, error) {
+		return candidate.CarryOut(outcome, settledAt)
+	})
+}
+
+func (f *fakeDirectives) settle(reference string, apply func(directive.Directive) (directive.Directive, error)) (directive.Directive, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for index, candidate := range f.recorded {
 		if !strings.HasPrefix(candidate.ID, reference) {
 			continue
 		}
-		resolved, err := candidate.Resolve(resolution, time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC))
+		settled, err := apply(candidate)
 		if err != nil {
 			return directive.Directive{}, err
 		}
-		f.recorded[index] = resolved
-		return resolved, nil
+		f.recorded[index] = settled
+		return settled, nil
 	}
-	return directive.Directive{}, errors.New("no directive is recorded under that reference")
+	return directive.Directive{}, errNoSuchDirective
 }
+
+var (
+	settledAt          = time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC)
+	errNoSuchDirective = errors.New("no directive is recorded under that reference")
+)
 
 var _ Directives = (*fakeDirectives)(nil)

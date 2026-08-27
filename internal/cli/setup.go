@@ -42,11 +42,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
@@ -57,11 +59,12 @@ const setupSchemaVersion = 1
 // The steps, named stably so a caller keying on one -- the JSON report, a test,
 // a script walking this path -- keys on a name rather than on prose.
 const (
-	stepTracker       = "tracker"
-	stepConfiguration = "configuration"
-	stepTrackerRemote = "tracker-remote"
-	stepSlack         = "slack"
-	stepSlackSecrets  = "slack-secrets"
+	stepTracker         = "tracker"
+	stepConfiguration   = "configuration"
+	stepTrackerRemote   = "tracker-remote"
+	stepArtifactReadmes = "artifact-readmes"
+	stepSlack           = "slack"
+	stepSlackSecrets    = "slack-secrets"
 )
 
 // setupStatus is what became of one step. Four values rather than two, because
@@ -127,14 +130,19 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 		return 2
 	}
 
+	// Exit 1 belongs to the diagnosis and to nothing else, which is what lets
+	// anything reading this exit 1 read the report on stdout rather than work out
+	// which kind of 1 it got. Being pointed at a directory that is not there is
+	// the command being used wrongly, like the positional argument above it, so it
+	// says so on stderr and exits the way that does.
 	root, err := filepath.Abs(*directory)
 	if err != nil {
 		fmt.Fprintf(stderr, "resolve project directory %q: %v\n", *directory, err)
-		return 1
+		return 2
 	}
 	if info, err := os.Stat(root); err != nil || !info.IsDir() {
 		fmt.Fprintf(stderr, "%s is not a directory to set up\n", root)
-		return 1
+		return 2
 	}
 
 	walk := &setup{
@@ -164,8 +172,12 @@ func runSetup(ctx context.Context, args []string, stdin io.Reader, stdout, stder
 	report := walk.converge(ctx)
 
 	if *jsonOutput {
-		if code := writeJSON(stdout, stderr, report); code != 0 {
-			return code
+		if writeJSON(stdout, stderr, report) != 0 {
+			// Nothing readable reached stdout, so this is not the diagnosis
+			// exiting 1 with a report to act on. It is the command failing to do
+			// what it was asked, which is what 2 says -- and what keeps anything
+			// reading an exit 1 sure there is a report under it.
+			return 2
 		}
 	} else {
 		renderSetup(stdout, report)
@@ -240,6 +252,12 @@ func (s *setup) converge(ctx context.Context) setupReport {
 	// reporting on top of it would be inventing them about a project nothing
 	// here can see.
 	if resolved, err := s.load(); err == nil {
+		// The indexes come before the optional tier because they are about the
+		// project itself: a repository configured before these existed has homes
+		// full of governed documents and nothing at the door of any of them, and
+		// this is the step that closes that for an installation that already
+		// works. `yoyo init` writes them for one that does not exist yet.
+		s.record(s.ensureArtifactHomeIndexes(resolved))
 		s.record(s.ensureSlackReporting(resolved))
 		// Reloaded rather than reused: the step above may have just turned
 		// reporting on, and the secrets are namespaced by a product id that only
@@ -527,6 +545,133 @@ func (s *setup) ensureTrackerRemote(ctx context.Context, tracker setupStep) setu
 		Summary: fmt.Sprintf("the tracker now syncs through %s: %s", remote.Name, remote.URL),
 		Detail:  "the backlog is shared over this project's own Git remote rather than one per machine",
 	}
+}
+
+// ensureArtifactHomeIndexes gives every directory of governed documents the
+// README that says what is filed there, whose it is, and whether the operator
+// may edit one by hand. It is the repair half of what `yoyo doctor` reports.
+//
+// It writes an index that is missing and asks separately about one that is there
+// and has stopped answering, because those are two different things to consent
+// to. Writing a file nobody wrote loses nothing. Replacing one somebody did write
+// loses their prose, which is why that question defaults to no and says what it
+// would cost -- setup does not overwrite what is already there without being told
+// to, and an index somebody customized is exactly the case that rule is for.
+func (s *setup) ensureArtifactHomeIndexes(resolved config.Resolved) setupStep {
+	repository := s.repository()
+	root, err := repowrite.NewRoot(repository)
+	if err != nil {
+		return setupStep{
+			Step:    stepArtifactReadmes,
+			Status:  setupHandedOff,
+			Summary: "the artifact homes could not be looked at, so nothing was written at the door of any of them",
+			Detail:  err.Error(),
+			Remedy:  s.setupCommand(),
+		}
+	}
+
+	var missing, incomplete, unreadable []artifacthome.Status
+	for _, status := range artifacthome.Inspect(root, resolved.Config) {
+		switch status.State {
+		case artifacthome.StateMissing:
+			missing = append(missing, status)
+		case artifacthome.StateIncomplete:
+			incomplete = append(incomplete, status)
+		case artifacthome.StateUnreadable:
+			unreadable = append(unreadable, status)
+		}
+	}
+	if len(missing) == 0 && len(incomplete) == 0 && len(unreadable) == 0 {
+		return setupStep{
+			Step:    stepArtifactReadmes,
+			Status:  setupAlready,
+			Summary: "every artifact home already says what is filed there, who owns it, and the hand-edit policy",
+			Detail:  repository,
+		}
+	}
+
+	var written []string
+	var left []artifacthome.Status
+	left = append(left, unreadable...)
+	if len(missing) > 0 {
+		question := fmt.Sprintf("Write %s into %s? Each says what is filed there, who owns it, and whether you may edit one by hand", countOf(len(missing), "README"), joinPaths(missing))
+		if s.ask.confirm(question, true) {
+			written, left = writeIndexes(root, missing, written, left)
+		} else {
+			left = append(left, missing...)
+		}
+	}
+	if len(incomplete) > 0 {
+		question := fmt.Sprintf("Replace %s that no longer answer all three? Whatever you wrote in them is replaced: %s", countOf(len(incomplete), "README"), joinPaths(incomplete))
+		if s.ask.confirm(question, false) {
+			written, left = writeIndexes(root, incomplete, written, left)
+		} else {
+			left = append(left, incomplete...)
+		}
+	}
+
+	remedy := s.setupCommand()
+	if len(left) > 0 && len(missing) == 0 && len(unreadable) == 0 {
+		// Nothing was missing and nothing was unreadable, so what is left is an
+		// index somebody wrote and setup was told not to replace. Running setup
+		// again would ask the same question; the file itself is theirs to finish.
+		remedy = "${EDITOR:-vi} " + strings.Join(resolvedPaths(repository, left), " ")
+	}
+	switch {
+	case len(written) == 0 && len(left) > 0:
+		return setupStep{
+			Step:    stepArtifactReadmes,
+			Status:  setupSkipped,
+			Summary: fmt.Sprintf("%s left without an index that answers all three", countOf(len(left), "artifact home")),
+			Detail:  artifacthome.Describe(left),
+			Remedy:  remedy,
+		}
+	case len(left) > 0:
+		summary := fmt.Sprintf("wrote %s; %s still without one that answers all three", countOf(len(written), "README"), countOf(len(left), "artifact home"))
+		return setupStep{
+			Step:    stepArtifactReadmes,
+			Status:  setupDone,
+			Summary: summary,
+			Detail:  artifacthome.Describe(left),
+			Remedy:  remedy,
+		}
+	default:
+		return setupStep{
+			Step:    stepArtifactReadmes,
+			Status:  setupDone,
+			Summary: fmt.Sprintf("wrote %s at the door of the artifact homes", countOf(len(written), "README")),
+			Detail:  strings.Join(written, ", "),
+		}
+	}
+}
+
+// writeIndexes writes what was agreed to and keeps whatever refused to be
+// written, so one home the filesystem would not take never hides the rest.
+func writeIndexes(root repowrite.Root, candidates []artifacthome.Status, written []string, left []artifacthome.Status) ([]string, []artifacthome.Status) {
+	for _, candidate := range candidates {
+		if _, err := artifacthome.Write(root, candidate.Home); err != nil {
+			candidate.State = artifacthome.StateUnreadable
+			candidate.Detail = err.Error()
+			left = append(left, candidate)
+			continue
+		}
+		written = append(written, candidate.Path)
+	}
+	return written, left
+}
+
+func joinPaths(statuses []artifacthome.Status) string {
+	return strings.Join(artifacthome.Paths(statuses), ", ")
+}
+
+// resolvedPaths names the indexes as an operator would open them, which is the
+// repository-relative path joined onto the repository the remedy is about.
+func resolvedPaths(repository string, statuses []artifacthome.Status) []string {
+	paths := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		paths = append(paths, shellQuote(filepath.Join(repository, filepath.FromSlash(status.Path))))
+	}
+	return paths
 }
 
 // ensureSlackReporting is the optional tier, and it is optional in the sense
@@ -1126,18 +1271,21 @@ Walk this project from a binary on PATH to an installation that can run work,
 asking before each step. It initializes the tracker, writes the project its own
 configuration and personas with its checks proposed from what the repository
 already declares, points the tracker at this project's Git remote so the backlog
-is not one per machine, and then offers reporting into Slack -- which is
-optional, because an installation without it runs work exactly as one with it
-does.
+is not one per machine, writes the index every artifact home gets -- what is
+filed there, who owns it, and whether you may edit one by hand -- and then offers
+reporting into Slack, which is optional, because an installation without it runs
+work exactly as one with it does.
 
 Nothing here is remembered between runs, which is what makes it safe to run
 again: every step looks at the installation first, a step that is already true
 is reported as already true, and an interrupted setup is resumed by running it
 again. Nothing already there is overwritten. A configuration that does not load
 is handed back with the command to edit it, a sync remote the tracker already
-holds is left pointing where it points, and a Slack token already in the keychain
-is left alone -- one person running several harnesses is the ordinary case, and
-the names carry the product so a second install keeps its own pair.
+holds is left pointing where it points, an artifact home's index that is there
+and has stopped answering is a separate question that defaults to no, and a Slack
+token already in the keychain is left alone -- one person running several
+harnesses is the ordinary case, and the names carry the product so a second
+install keeps its own pair.
 
 The tokens are typed at the keychain's own prompt, so no token reaches this
 program, its arguments, or your shell history -- which is also why `+"`--json`"+` leaves
@@ -1148,6 +1296,10 @@ It ends by running `+"`yoyo doctor`"+`, which is what decides whether the instal
 actually works: every step setup could not carry out itself is left as a finding
 with the command that fixes it, and this command's exit status is the
 diagnosis's. It exits 1 when something would stop work running, and 0 otherwise.
+Exit 1 is that diagnosis and never anything else, so it always comes with the
+report. Anything it could not do -- a flag it does not have, a directory that is
+not there, a report it could not write -- exits 2 instead, says why on standard
+error, and reports nothing.
 
 Options:
   --directory <path>        project directory to set up (default: here)

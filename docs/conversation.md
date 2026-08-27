@@ -75,7 +75,9 @@ persona guidance, so a project that wants a different opening
 persona.
 
 One more section sits below those, and it is a different kind of thing: **what
-the product ships today**, which is this README, the configuration guide, and
+the product ships today**, which is the README, the documents it links to under
+[Further reading](../README.md#further-reading) — this one among them — the
+configuration guide, and
 the help every command prints. It is labeled as exactly that — a description of
 the implementation as built, never authority about what the product is for — so
 that the role deciding what to build next can say which surfaces already exist
@@ -388,7 +390,7 @@ everything else is said to the product manager:
 /intake                  whether the harness may start work on its own, and why not
 /stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
-/directives              what you have directed, and what is still unresolved
+/directives              what you have directed, and what is still in force
 /directive <what you have decided>
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
@@ -584,8 +586,28 @@ unresolved.
 `/resolve <id> <how it was settled>` lifts the pause. The release is the record
 changing rather than anything done to a run: the next time the item is started,
 in whichever process, the same run continues from the gate it stopped at.
-`/directives` lists what is recorded and what is still unresolved. An identifier
-may be shortened to any prefix that names exactly one directive.
+`/directives` lists what is recorded, in force first and no longer in force
+after it. An identifier may be shortened to any prefix that names exactly one
+directive.
+
+An operational directive has nothing to resolve — it was in force from the
+moment it was recorded and held nothing up — so what settles one is somebody
+carrying it out. Where that means admitting work, the product manager names the
+directive as it admits the item: the item's notes record which directive it
+answers and in your words, and the directive's own record is told which item it
+became. `/directives` then shows it as carried out, with the identifier of the
+work, so what came of a directive is readable from the record rather than from
+whoever remembers. A directive you gave in a
+[Slack thread](reporting.md#reporting-into-slack) is answered in that thread at
+the same moment, tagging you, which is how a reply that turned into a work item
+tells you which one.
+
+Carrying one out does not withdraw it. A standing instruction like "prefer
+smaller pull requests" is still the instruction after the work it prompted is
+admitted, so it stays in force and stays in the listing, now with an account of
+what it produced under it. What ends a directive is superseding or retiring it,
+and neither is built yet — the two kinds that pause work are the only ones
+anything takes out of force today, by being resolved.
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:
@@ -692,6 +714,23 @@ elsewhere it says to you, for the product manager to admit. It is also the role
 that decides what becomes of work that stopped moving, which is the [triage
 docket](#deciding-what-becomes-of-stopped-work) below.
 
+Work carved out of a run that failed is the one decomposition the harness adds
+a dependency to. Such a child is written against the change that run made, and
+that change is on the branch the run preserved rather than on the branch a fresh
+worktree is cut from — so an item assuming files that exist only there is not
+ready, however clean it reads, and the run that pulled it would start in a
+worktree without them. Where the harness's own run records say the parent's
+change never reached the integration target, a creation under it is linked to
+wait for the parent, the child's notes say which run made that change, which
+branch it is on and which pull request published it, and the result of the
+creation says so to you and to the development manager. The child comes free
+however the change lands: the preserved branch cherry-picked, the pull request
+revived, or the substrate rebuilt from nothing. Which of those is cheapest is
+your decision and the product manager's — the development manager says what it
+thinks and records none of it as scope. Decomposition of work whose change is on
+the target branch is untouched, and so is the dependency structure the
+development manager records itself.
+
 The architect owns the designs, the decision records, and the invariants, and it
 cannot edit any of them from a conversation, because no conversation has tools.
 Decide the change with it and then record it yourself — `yoyo invariant` for an
@@ -768,6 +807,18 @@ read. Rounds alone say how long a conversation went on and cost alone says what
 it came to; the question you actually have — was that worth it — is answerable
 only from the two together.
 
+It is also in what the harness spent altogether, rather than only beside its own
+rounds. [`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review)
+counts each round on the day it was answered, alongside the runs, conversations,
+and branch reviews of that day, and [`yoyo cost`](reporting.md#what-the-work-cost)
+carries the exchanges into its total on a row of their own rather than into any
+item's price. What the record holds is the product, the repository, the two roles,
+and the conversation the asker spoke from — nothing that says which piece of work
+the question was for — and the conversation is no stand-in for one, since a role
+stays in the same conversation across everything it discusses. That is also why
+the membership above matters here: the roles on this channel own documents and
+queues, and the two that work inside a run are not on it.
+
 The development manager is given one more thing: the **triage docket**, the work
 that has stopped moving. It reaches that conversation the way the backlog
 reaches the product manager's — carried in the context rather than by you
@@ -786,6 +837,18 @@ whether they still exist, what the forge says about the merge, and the counters
 saying how many review rounds the item has accumulated against the configured
 cap and what a repair grant would be worth. A decision made without those last
 ones is a decision the cap then contradicts.
+
+It carries what triage has already decided about the item too, joined from the
+durable record the guards spend and refuse against at the moment the docket is
+read rather than frozen into the entry when the work stopped: the repair grants,
+re-runs, and merge re-arms recorded beside the caps that refuse the next one,
+what a grant came to and whether the round cap cut it down, what the item now
+stands committed to, and which of those decisions the harness has carried out.
+Where a further decision would be refused, the entry says so and says which
+budget refuses it. That is what stops a decision already recorded from reading
+as an entry nobody has looked at — the reading that had one authorized recovery
+decided a second time, and then paid for by a round-trip on every docket after
+it.
 
 An entry states that something stopped; it decides nothing, and nothing decides
 it for the development manager. Docketing is keyed to what stopped, so a run
@@ -937,13 +1000,13 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Five things refuse it, and every one of them is asked before either of those
+Six things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
 run has to be really over. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
-to be there and not already carried out. And **the preserved worktree has to be
+to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
 committed — refuses to a person, leaves the item blocked, and says so. A checkout
@@ -951,7 +1014,22 @@ the [convergence sweep](operations.md#recovering-interrupted-runs) retired
 refuses here too, and for the same reason: there is nothing left to hand back.
 That is what the sweep's tail is for — a recent stoppage still has its checkout,
 and an old one is replanned or re-run instead, from its branch and from the
-preserved-work ref the sweep recorded before it took the directory.
+preserved-work ref the sweep recorded before it took the directory. And **the
+change has to still be in it**: a worktree the harness would call its own and that
+holds nothing passes the check above and fails this one, and a developer handed
+the reviewer's findings and an empty directory delivers an empty repair or
+reinvents the change from them.
+
+The run asks that last question again itself, on every resume whose worktree is
+supposed to hold a change already — one picked up inside its repair loop, and one
+picked up at the checks or the review, which has a developer attempt behind it
+and nothing else for those steps to judge. Only the run owed its first attempt is
+exempt. And a **fresh run is refused where a repair is owed**: an item whose last
+run stopped with its change preserved on a branch does not get started over from
+nothing, because a clean worktree off the target branch looks perfectly valid and
+is caught by nothing downstream. The refusal names the branch and both ways out,
+and `yoyo triage rerun` is the one that starts over deliberately — a claimed
+re-run is exactly what lets a fresh run through.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

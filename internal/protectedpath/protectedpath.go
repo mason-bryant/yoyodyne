@@ -99,14 +99,7 @@ func (s Set) Directories() []string {
 // alone, which is what lets an item admit one design document without admitting
 // the design home.
 func (s Set) Refused(changed, granted []string) []string {
-	grants := make([]string, 0, len(granted))
-	for _, grant := range granted {
-		clean, ok := normalize(grant)
-		if !ok {
-			continue
-		}
-		grants = append(grants, clean)
-	}
+	grants := normalizeAll(granted)
 	var refused []string
 	for _, candidate := range changed {
 		clean, ok := normalize(candidate)
@@ -194,6 +187,21 @@ func normalize(value string) (string, bool) {
 		return "", false
 	}
 	return clean, true
+}
+
+// normalizeAll is the written paths a caller was handed, in the form both sides
+// of every comparison here are in, with whatever could not name a file inside
+// the repository dropped. It is shared because a grant read one way in one
+// comparison and another way in the next is a grant that admits a path in one
+// place and not the other.
+func normalizeAll(values []string) []string {
+	normalized := make([]string, 0, len(values))
+	for _, value := range values {
+		if clean, ok := normalize(value); ok {
+			normalized = append(normalized, clean)
+		}
+	}
+	return normalized
 }
 
 // within reports whether a normalized path is one of the prefixes or sits inside

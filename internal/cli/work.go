@@ -109,8 +109,21 @@ func (d conversationDirectives) List(_ context.Context) ([]directive.Directive, 
 	return d.store.List()
 }
 
+func (d conversationDirectives) Find(_ context.Context, reference string) (directive.Directive, error) {
+	return d.store.Find(reference)
+}
+
 func (d conversationDirectives) Resolve(_ context.Context, reference, resolution string) (directive.Directive, error) {
 	return d.store.Resolve(reference, resolution, time.Now())
+}
+
+// CarryOut records what came of a directive that paused nothing, in the same
+// product-scoped store every run and every other surface reads. What became of a
+// directive is a fact about the product rather than about the conversation that
+// happened to record it, which is why it lands here and not in the conversation's
+// own log.
+func (d conversationDirectives) CarryOut(_ context.Context, reference, outcome string) (directive.Directive, error) {
+	return d.store.CarryOut(reference, outcome, time.Now())
 }
 
 // Survey reads what the harness has in flight from durable run state and what
@@ -349,6 +362,8 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 	case state.DirectivePause != nil:
 		snapshot.Detail = fmt.Sprintf("paused for unresolved directive %s: %s",
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
+	case state.DependencyPause != nil:
+		snapshot.Detail = "paused waiting on unfinished work it depends on: " + state.DependencyPause.Summary()
 	case state.UsageLimitResetsAt != nil:
 		snapshot.Detail = fmt.Sprintf("paused for %s until %s",
 			runstate.DescribePause(state.PauseCause, state.UsageLimitKind), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
@@ -412,6 +427,7 @@ func priceOf(price runstate.ItemPrice) chat.ItemPrice {
 		projected.Runs = append(projected.Runs, chat.RunPrice{
 			RunID:       run.RunID,
 			Status:      string(run.Status),
+			Outcome:     string(run.Outcome),
 			Phase:       string(run.Phase),
 			StartedAt:   run.StartedAt,
 			Integrated:  run.Integrated,
@@ -500,6 +516,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	// is where the directive itself is read.
 	if outcome.PausedByDirective != nil {
 		report.DirectivePause = outcome.PausedByDirective.Summary()
+	}
+	// A dependency pause is carried the same way and for the same reason: what a
+	// conversation says about it is which work is being waited on, and the items
+	// themselves are read with /show.
+	if outcome.PausedByDependency != nil {
+		report.DependencyPause = outcome.PausedByDependency.Summary()
 	}
 	// The operator's own pause is carried as the moment they placed it, which is
 	// the whole of what a conversation has to say about it: what lifts it is one

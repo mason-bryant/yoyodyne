@@ -18,6 +18,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 )
@@ -97,6 +98,14 @@ func (s Store) Load() (Set, error) {
 			continue
 		}
 		if !entry.Type().IsRegular() || strings.ToLower(filepath.Ext(entry.Name())) != ".md" {
+			continue
+		}
+		// The directory index is not a constraint and is not reported as a
+		// malformed one. Every artifact home carries one and `yoyo doctor` reports
+		// this one missing, so a file the harness asks for must not also be the
+		// file the harness calls unreadable on every load. It is the same
+		// exemption by name that the artifacts and the specifications make.
+		if strings.EqualFold(entry.Name(), artifacthome.FileName) {
 			continue
 		}
 		loaded, err := s.read(filepath.Join(base, entry.Name()), relative)
@@ -546,6 +555,12 @@ func (s Store) path(id string) (absolute, relative string, err error) {
 	trimmed := strings.TrimSpace(id)
 	if err := domain.ValidateIdentifier("invariant id", trimmed); err != nil {
 		return "", "", err
+	}
+	// The one name a constraint cannot have, because Load skips it: an invariant
+	// written there would be a constraint the harness holds nobody to and nobody
+	// can see is missing.
+	if strings.EqualFold(trimmed+".md", artifacthome.FileName) {
+		return "", "", fmt.Errorf("%s is the directory index rather than an invariant, and is not read as one", artifacthome.FileName)
 	}
 	root, directory, err := s.resolve()
 	if err != nil {

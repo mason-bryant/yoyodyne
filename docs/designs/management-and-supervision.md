@@ -10,6 +10,10 @@ revisions:
       by: architect
       at: 2026-08-23T16:33:34Z
       reason: promoted from the operator's management-and-supervision brief under the 2026-08-22 mandate, discharging amendments aab3b51c and 9fafa81a; reconciles yoyodyne-ifd.99 and the yoyodyne-ifd.130 work under one contract, and is the gating input for yoyodyne-ifd.142
+    - action: amended
+      by: architect
+      at: 2026-08-23T18:42:25Z
+      reason: the autonomous-management-loop brief promoted as the companion management-loop-protocol design; this contract now points at it as the owner of the protocol vocabulary, keeping one dispatcher and one contract with the detail one level down
 ---
 
 # Management and supervision: the typed request contract and process residency
@@ -23,6 +27,8 @@ The management roles need enough autonomy to inspect upcoming work, flag implica
 Roles communicate through persisted, typed requests. A request carries a stable id, its conversation or topic id, requesting and target roles, authority-relevant intent, durable references, the expected revision of what it refers to, urgency, budget, cycle limit, causation, and reply state. An inbox transition makes it eligible; **the harness acquires a lease and invokes the target role itself** — delivery is retryable and deduplicated, and a request is complete only when durable state records its outcome, never merely because a message was emitted.
 
 The inter-role ask channel is one request type under this contract, keeping the three properties already decided for it: judgment-only, decisionless, durable-and-visible, with its configurable round cap, unresolved-escalation, and per-exchange cost reporting. The ask design and this one share the machinery; there is exactly one dispatcher, and the Slack echo of exchanges remains a notifier consumer.
+
+The request kinds, readiness vocabulary, outcome summaries, execution profiles, and demonstration scenarios are specified in [management-loop-protocol](management-loop-protocol.md), which runs under this contract.
 
 ## Wakeups
 

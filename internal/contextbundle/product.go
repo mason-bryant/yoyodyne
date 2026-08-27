@@ -12,6 +12,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/triage"
@@ -76,7 +77,25 @@ const maxIntentPathBytes = 80
 // architect's decision records, which say how the product is built and are the
 // half of docs/ that made description reachable as intent in the first place. A
 // path that names nothing in a given repository is simply not there.
-var shippedDocumentation = []string{"README.md", "docs/configuration.md"}
+//
+// The README's siblings are named individually because the README no longer
+// carries their content: it was reduced to the value proposition, the quick
+// start, and an index, and what it used to say about the conversation, the work,
+// the artifacts, the reporting, and recovery moved into the documents below it
+// links to. Naming only the README after that reduction would narrow the product
+// manager's view of what the product ships to a landing page — the same
+// narrowing that cost ifd.20 a work item drafted against surfaces it could not
+// see. docs/docs-map.md is the enumeration this set is kept against.
+var shippedDocumentation = []string{
+	"README.md",
+	"docs/conversation.md",
+	"docs/work.md",
+	"docs/reporting.md",
+	"docs/artifacts.md",
+	"docs/operations.md",
+	"docs/developing-yoyo.md",
+	"docs/configuration.md",
+}
 
 // maxCommandHelpBytes bounds the help a caller supplies. Help text is compiled
 // into the product rather than growing at runtime, so this is a bound on a
@@ -259,6 +278,9 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	var specifications strings.Builder
 	var omitted []string
 	var intent recordedIntent
+	// The references that are specifications, counted apart from the references
+	// themselves: a directory index is carried and is not one. See below.
+	stated := 0
 	bundle := Bundle{Bytes: reserved}
 	for _, specificationPath := range specificationPaths {
 		reference, err := readReference(root, specificationPath, maxBytes-bundle.Bytes)
@@ -272,7 +294,17 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 			}
 			return Bundle{}, err
 		}
-		section := fmt.Sprintf("\n## Specification: %s\n\n%s", reference.Path, reference.Content)
+		// A directory index arrives under a heading of its own rather than as a
+		// specification, because it is not one and saying so is cheaper than
+		// leaving the reader to notice. It is still carried: what is filed in a
+		// directory, and whose it is, is worth knowing to whoever is about to
+		// write the first document into it.
+		heading := "Specification"
+		index := directoryIndex(reference.Path)
+		if index {
+			heading = "Directory index"
+		}
+		section := fmt.Sprintf("\n## %s: %s\n\n%s", heading, reference.Path, reference.Content)
 		if !strings.HasSuffix(section, "\n") {
 			section += "\n"
 		}
@@ -284,6 +316,22 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 		bundle.Bytes += len(section)
 		bundle.References = append(bundle.References, reference)
 		intent.add(reference)
+		// An index is also not held to the shape a specification is held to. The
+		// artifact contract says so normatively — an index is ungoverned by
+		// design, and index documents are not malformed for lacking goals — and
+		// it follows from what an index is: it describes what is filed beside it
+		// and states no intent, which is the same reason artifact identity skips
+		// it and the same reason intentKind reads it as neither the brief nor the
+		// goals. Checking one produces a report that is always true and never
+		// actionable: `docs/product/goals/README.md` was reported for opening
+		// with its goals because its title reads "Goals directory", and an index
+		// rewritten to say what is filed there instead would be reported for
+		// stating none. Either way the report is about a file the contract was
+		// never written for.
+		if index {
+			continue
+		}
+		stated++
 		if reason := specificationStructureProblem(reference.Content); reason != "" {
 			bundle.SpecificationProblems = append(bundle.SpecificationProblems, SpecificationProblem{Path: reference.Path, Reason: reason})
 		}
@@ -293,7 +341,15 @@ func AssembleProduct(request ProductRequest) (Bundle, error) {
 	// references are no longer only specifications and the question this answers
 	// — does this repository record any product intent at all — is still about
 	// the specifications alone.
-	bundle.SpecificationsIncluded = len(bundle.References)
+	//
+	// The indexes are counted out of it for that same question's sake. `yoyo
+	// init` writes one into the specifications directory and one into the goals
+	// directory beneath it, so a repository that has recorded nothing at all now
+	// has two Markdown files there; counting those as specifications would answer
+	// "does this product record any intent" with yes on every freshly configured
+	// project, and the conversation that opens by saying intent is not written
+	// down and asking what the product is for is exactly what that would lose.
+	bundle.SpecificationsIncluded = stated
 	if bundle.SpecificationsIncluded == 0 {
 		// Saying that intent is not written down is part of the context whether or
 		// not there was room for anything else, so it is charged before the
@@ -578,6 +634,14 @@ func intentKind(documentPath, content string) string {
 	}
 }
 
+// directoryIndex reports whether a path is a directory's index rather than a
+// document stating anything. It is the same name artifact identity exempts, and
+// it is exempt here for the same reason: an index describes what is filed beside
+// it and is navigation rather than authority.
+func directoryIndex(documentPath string) bool {
+	return strings.EqualFold(path.Base(documentPath), artifacthome.FileName)
+}
+
 // namedIntentKind reads a document's kind from where it is filed. Only the
 // document's own name and the directory holding it are read: a goals document
 // is called goals or lives in a directory of them, and both are conventions a
@@ -586,7 +650,7 @@ func namedIntentKind(documentPath string) string {
 	base := strings.ToLower(strings.TrimSuffix(path.Base(documentPath), path.Ext(documentPath)))
 	directory := strings.ToLower(path.Base(path.Dir(documentPath)))
 	switch {
-	case base == "readme":
+	case directoryIndex(documentPath):
 		// A directory index describes what is filed beside it and states no intent
 		// of its own, which is how artifact identity treats one too.
 		return ""
@@ -892,7 +956,15 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 				}
 				return "", nil, err
 			}
-			section := fmt.Sprintf("\n## %s: %s\n\n%s", set.Label, reference.Path, reference.Content)
+			// An index is labeled as one here for the reason it is above: it says
+			// what would be filed in the directory rather than being one of the
+			// documents the label names.
+			label := set.Label
+			index := directoryIndex(documentPath)
+			if index {
+				label = "Directory index"
+			}
+			section := fmt.Sprintf("\n## %s: %s\n\n%s", label, reference.Path, reference.Content)
 			if !strings.HasSuffix(section, "\n") {
 				section += "\n"
 			}
@@ -903,6 +975,14 @@ func readRoleDocuments(root string, sets []DocumentSet, bundle *Bundle, maxBytes
 			rendered.WriteString(section)
 			bundle.Bytes += len(section)
 			bundle.References = append(bundle.References, reference)
+			if index {
+				// An index is not one of this role's documents, so a home holding
+				// only the index `yoyo init` wrote has still recorded nothing and
+				// the role is told to treat it as unwritten. Counting it would tell
+				// an architect its designs are here on every freshly configured
+				// project, which is the one thing that note exists to prevent.
+				continue
+			}
 			// A directory whose documents were all carried by an earlier set, or
 			// were all too large to fit, has told the reader nothing, so it counts
 			// as found only where something of it actually arrived.

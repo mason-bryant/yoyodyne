@@ -20,10 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
@@ -34,9 +36,10 @@ import (
 var pricedEvents = []execution.EventType{execution.EventRunCompleted, execution.EventRunFailed}
 
 // spendEvidenceEvents are every event the phase split is read from: the priced
-// terminals above, and the review that brackets one of them. A review announcing
-// itself costs nothing and is decoded anyway, because it is what says the next
-// terminal is the reviewer's rather than the developer's.
+// terminals above, which say whose invocation they ended, and the review that
+// brackets one of them. A review announcing itself costs nothing and is decoded
+// anyway, because it is what says the next terminal is the reviewer's in a log
+// recorded before a terminal named its own role.
 var spendEvidenceEvents = append([]execution.EventType{execution.EventReviewStarted}, pricedEvents...)
 
 // PhaseCost is what one part of a run cost and how many provider invocations it
@@ -89,9 +92,12 @@ func (w *Waits) merge(other Waits) {
 // over, or because it had to be repaired -- which is the difference between a
 // number to look at and a number to act on.
 //
-// Every priced invocation in a run's log lands in exactly one of the three, so
+// Every priced invocation in a run's log lands in exactly one of the four, so
 // the money always adds back up to the total beside it. That is what makes this
-// a decomposition of the price rather than a second opinion about it.
+// a decomposition of the price rather than a second opinion about it. Three of
+// the four are the phases; the fourth is what an invocation that does not say
+// which phase it served costs, and it is a bucket rather than a phase precisely
+// so that no such invocation can be quietly charged to one.
 type PhaseSpend struct {
 	// Development is the developer's first attempt at the change, including any
 	// invocation reissued into it after the provider refused or killed one: what
@@ -105,19 +111,34 @@ type PhaseSpend struct {
 	// each is the same thing from the money's point of view: the change being made
 	// again because it was not right the first time.
 	Repair PhaseCost `json:"repair"`
+	// Unattributed is every priced invocation in the log that did not say which
+	// phase it served: a role the split has no place for, and anything else that
+	// reached a run's log without announcing itself. It exists so that the answer
+	// to an unrecognized invocation is a figure nobody can mistake for a phase,
+	// rather than the phase the surrounding terminals happen to imply -- which
+	// would put somebody else's money in the repair column of exactly the runs
+	// being measured, and leave nothing to read that says so.
+	//
+	// It is expected to be zero. Anything in it is money the harness spent that
+	// nothing in the record accounts for, which is a defect in whatever wrote the
+	// log rather than a cost of the work.
+	Unattributed PhaseCost `json:"unattributed"`
 	// Waits is time rather than money, and is here rather than beside this because
 	// it answers the same question: where a piece of work went.
 	Waits Waits `json:"waits"`
 }
 
 // TotalUSD is what the split adds up to, which is the total it was split from.
+// The unattributed money is in it because it was spent: leaving it out would
+// make an invocation nobody can place cost nothing, which is the one answer
+// about it that is certainly wrong.
 func (p PhaseSpend) TotalUSD() float64 {
-	return p.Development.CostUSD + p.Review.CostUSD + p.Repair.CostUSD
+	return p.Development.CostUSD + p.Review.CostUSD + p.Repair.CostUSD + p.Unattributed.CostUSD
 }
 
 // Invocations is how many provider invocations the split covers.
 func (p PhaseSpend) Invocations() int {
-	return p.Development.Invocations + p.Review.Invocations + p.Repair.Invocations
+	return p.Development.Invocations + p.Review.Invocations + p.Repair.Invocations + p.Unattributed.Invocations
 }
 
 // Merge adds another split into this one, which is what an aggregate across
@@ -126,14 +147,20 @@ func (p *PhaseSpend) Merge(other PhaseSpend) {
 	p.Development.merge(other.Development)
 	p.Review.merge(other.Review)
 	p.Repair.merge(other.Repair)
+	p.Unattributed.merge(other.Unattributed)
 	p.Waits.merge(other.Waits)
 }
 
 // RunPrice is what one recorded run cost, as its own event log reports it.
 type RunPrice struct {
-	RunID       string     `json:"run_id"`
-	WorkItemID  string     `json:"work_item_id"`
-	Status      Status     `json:"status"`
+	RunID      string `json:"run_id"`
+	WorkItemID string `json:"work_item_id"`
+	Status     Status `json:"status"`
+	// Outcome is what became of the run, in the fixed vocabulary a listing says
+	// it in. It is read from the same derivation the run history uses rather than
+	// from the status here, so a run a reader meets in a price breakdown and in
+	// `yoyo status` is described in one word rather than two.
+	Outcome     RunOutcome `json:"outcome"`
 	Phase       Phase      `json:"phase,omitempty"`
 	StartedAt   time.Time  `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
@@ -182,6 +209,118 @@ func (i ItemPrice) Priced() bool { return i.UnknownRuns == 0 }
 // ever run for it, or the runs that were are no longer recorded, and neither is
 // a thing to charge somebody nothing for.
 func (i ItemPrice) Recorded() bool { return len(i.Runs) > 0 }
+
+// ExchangeSpend is what this product's roles have spent asking each other
+// things, summed over every exchange recorded for it. The invocation that
+// answers a round is money the harness spent on the operator's behalf like any
+// other, so leaving it out of what the harness has spent altogether would
+// understate that total by exactly as much as the ask channel is used.
+//
+// It is summed per product rather than per work item because that is as far as
+// the record goes. An exchange names a product, a repository, the two roles in
+// it, and the conversation the asker spoke from, and nothing that identifies a
+// piece of work: not a work item and not a run. The conversation it does name is
+// no substitute — a role's conversation is long-lived and discusses whatever it
+// is discussing that day, which is the same reason a conversation turn is left
+// unattributed rather than charged to whichever item it last mentioned.
+//
+// The membership of the channel is why that is not an oversight waiting to be
+// fixed here: the roles on it own documents and queues, and the two roles that
+// work inside a run — the developer and the reviewer — are not on it, so there
+// is no exchange today taken in the course of one item. If that changes, the
+// join belongs on ItemPrice beside the runs rather than in this figure, and
+// TestAnExchangeRecordNamesNoWorkItemToAttributeItsSpendTo fails the moment the
+// record can carry one.
+type ExchangeSpend struct {
+	// Exchanges is how many threads the figure covers and Rounds how many
+	// provider invocations they came to between them. The two travel together for
+	// the reason a phase's invocation count travels with its money: one long
+	// thread and ten short ones are different things to be looking at.
+	Exchanges int     `json:"exchanges,omitempty"`
+	Rounds    int     `json:"rounds,omitempty"`
+	CostUSD   float64 `json:"cost_usd"`
+	// Unreadable counts the records that could not be read, and is the exchange
+	// side of ItemPrice.UnknownRuns: those records are left out of the total
+	// rather than counted as nothing, and while this is non-zero the total is a
+	// lower bound. What it must never do is take the exchanges beside them with
+	// it — money that was read is money the operator is owed a figure for.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Unknown says why, and is empty only when nothing went wrong. It carries the
+	// first record's reason where records failed, and the directory's own where
+	// the exchanges could not even be enumerated — which is the one case with no
+	// count to give, because how many are missing is itself unknown.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// Known reports a figure every recorded exchange is in.
+func (e ExchangeSpend) Known() bool { return e.Unreadable == 0 && e.Unknown == "" }
+
+// Enumerated reports records that could at least be counted, which is what
+// separates a total that is a lower bound from no total at all: an exchange
+// directory nothing can list leaves not even a floor, because what is missing
+// from it is unknown in number as well as in amount.
+func (e ExchangeSpend) Enumerated() bool { return e.Exchanges > 0 || e.Unreadable > 0 }
+
+// Recorded reports that there is something here to say: exchanges to price, or
+// a reason there is no figure for them. A product whose roles have never asked
+// each other anything has neither, and reporting it would be reporting the
+// absence of something nobody did.
+func (e ExchangeSpend) Recorded() bool { return e.Exchanges > 0 || !e.Known() }
+
+// ExchangeSpend reports what conducting this product's inter-role exchanges has
+// cost, as the provider reported each round. Every round carries the provider's
+// own figure, so this is a sum rather than an estimate, exactly as a run's price
+// is.
+//
+// It never fails, for the reason pricing a run never fails: exchanges that
+// cannot be read are a price nobody knows rather than an error, and reporting
+// one would take the runs beside them down with it.
+//
+// The records are read one at a time for the same reason a run is. One that
+// cannot be read is counted and left out, and the exchanges beside it are still
+// priced: a corrupt file must not be able to reduce this to nothing, because
+// nothing is exactly the answer that produced the undercount this figure exists
+// to remove. What it will not do either way is call an unread record free — a
+// caller holding a figure with anything unread holds a floor.
+func (s *Store) ExchangeSpend() ExchangeSpend {
+	store := s.exchanges()
+	ids, err := store.Records()
+	if err != nil {
+		// The directory itself could not be listed, so not even how many
+		// exchanges are missing from the figure is known — which is a different
+		// answer from a floor, and is given as itself.
+		return ExchangeSpend{Unknown: err.Error()}
+	}
+	var spend ExchangeSpend
+	for _, id := range ids {
+		recorded, err := store.Load(id)
+		if err != nil {
+			spend.Unreadable++
+			// The first reason stands for all of them. A caller reports the count
+			// beside it, and the reason is there to say what kind of broken this is
+			// rather than to enumerate every instance of it.
+			if spend.Unknown == "" {
+				spend.Unknown = err.Error()
+			}
+			continue
+		}
+		spend.Exchanges++
+		spend.Rounds += recorded.Spent()
+		spend.CostUSD += recorded.CostUSD()
+	}
+	return spend
+}
+
+// exchanges is this product's exchange store. Exchanges sit beside the runs
+// rather than inside them, so the store is reached from the run store's own root
+// rather than from a state root every caller of the read model would otherwise
+// have to carry a second time.
+func (s *Store) exchanges() *ExchangeStore {
+	return &ExchangeStore{
+		root:      filepath.Join(filepath.Dir(s.root), "exchanges"),
+		productID: s.productID,
+	}
+}
 
 // Price reports what every recorded run of one work item cost. Reading the
 // record decides nothing about the runs, so a run another process is executing
@@ -259,6 +398,7 @@ func (s *Store) priceRun(state State) RunPrice {
 		RunID:       state.RunID,
 		WorkItemID:  state.WorkItemID,
 		Status:      state.Status,
+		Outcome:     state.Outcome(),
 		Phase:       state.Phase,
 		StartedAt:   state.StartedAt,
 		CompletedAt: state.CompletedAt,
@@ -316,17 +456,34 @@ func scanEventCost(path string) (float64, int, error) {
 // review, because an event log is mostly the invocation's own chatter and
 // pricing a run must not mean decoding all of it.
 //
-// The split comes out of the log's own shape rather than out of a phase the
-// harness had to remember to write down beside each invocation. A review is
-// bracketed: the reviewer announces itself and then makes exactly one
-// invocation, so the terminal after a review.started is the reviewer's and no
-// other terminal is. Every remaining terminal is a developer invocation, and
-// those group into attempts by how each one ended. An attempt that reached a
-// terminal of its own is over, so the next developer invocation is the next
-// attempt; an attempt the provider refused for want of capacity or killed
-// mid-flight is reissued in the same session, so the invocation after it is the
-// same attempt still being made and its cost belongs to that attempt. The first
-// attempt is the development and every attempt after it is a repair.
+// Which phase an invocation served is read from the invocation itself: every
+// terminal names the role it was made as. A reviewer's is the review, a
+// developer's is one of the developer's attempts, and a terminal naming anything
+// else -- or naming nothing at all, at a schema whose terminals carry a role --
+// is money this split will not place. It goes to Unattributed, where a reader
+// can see it, rather than into the phase its neighbours suggest. That is the
+// whole of why the role is written down: an invocation nobody anticipated,
+// landing in a run's log without saying whose it is, used to be indistinguishable
+// from a repair attempt and was charged as one.
+//
+// The developer's terminals still group into attempts by how each one ended. An
+// attempt that reached a terminal of its own is over, so the next developer
+// invocation is the next attempt; an attempt the provider refused for want of
+// capacity or killed mid-flight is reissued in the same session, so the
+// invocation after it is the same attempt still being made and its cost belongs
+// to that attempt. The first attempt is the development and every attempt after
+// it is a repair.
+//
+// Runs recorded before execution.TerminalRoleSchemaVersion had no role to omit,
+// so their terminals are read the way they were written: the reviewer announces
+// itself with a review.started and then makes exactly one invocation, so the
+// terminal after that announcement is the reviewer's and every other terminal is
+// a developer's. Those runs are priced exactly as they always were, because
+// nothing can now be added to a log that is already closed, and the schema
+// version is what keeps that reading confined to them. What made the inference
+// sound for those runs is that the only two things that ever wrote into a run's
+// log were the developer's attempts and the reviewer, each announcing itself;
+// the role on the terminal is what stops that from having to stay true.
 func scanEventSpend(path string) (PhaseSpend, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -343,7 +500,8 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 		// invocation it makes rather than by the review closing, because a review
 		// the provider never answered closes with nothing at all -- and a bracket
 		// waiting for a close that never comes would charge the developer
-		// invocations after it to the reviewer.
+		// invocations after it to the reviewer. It decides nothing for a terminal
+		// that names its own role, and is kept for the logs that predate one.
 		reviewing bool
 		// attempt is which developer attempt the log has reached and ended says
 		// the last one finished being made. Together they are what puts a reissued
@@ -373,20 +531,27 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 		if !priced.priced() {
 			continue
 		}
-		if reviewing {
+		// An open bracket is spent by the first terminal that arrives whatever that
+		// terminal turns out to be, because the review that opened it has by then
+		// made the one invocation it makes.
+		announced := reviewing
+		reviewing = false
+		switch priced.phase(announced) {
+		case phaseReview:
 			spend.Review.add(priced.Payload.TotalCostUSD)
-			reviewing = false
-			continue
+		case phaseDevelopment:
+			if ended {
+				attempt++
+			}
+			if attempt == 0 {
+				spend.Development.add(priced.Payload.TotalCostUSD)
+			} else {
+				spend.Repair.add(priced.Payload.TotalCostUSD)
+			}
+			ended = priced.Type == execution.EventRunCompleted
+		default:
+			spend.Unattributed.add(priced.Payload.TotalCostUSD)
 		}
-		if ended {
-			attempt++
-		}
-		if attempt == 0 {
-			spend.Development.add(priced.Payload.TotalCostUSD)
-		} else {
-			spend.Repair.add(priced.Payload.TotalCostUSD)
-		}
-		ended = priced.Type == execution.EventRunCompleted
 	}
 	if err := scanner.Err(); err != nil {
 		return PhaseSpend{}, fmt.Errorf("read event log to price the run: %w", err)
@@ -394,13 +559,59 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 	return spend, nil
 }
 
-// pricedEvent is the little of an event pricing needs: which event it is, and
-// what the provider said the invocation cost.
+// pricedEvent is the little of an event pricing needs: which event it is, whose
+// invocation it ended, what the provider said that invocation cost, and the
+// schema it was written at -- which is what says whether a missing role is an
+// omission or a field that did not exist yet.
 type pricedEvent struct {
-	Type    execution.EventType `json:"type"`
-	Payload struct {
+	SchemaVersion int                 `json:"schema_version"`
+	Type          execution.EventType `json:"type"`
+	Payload       struct {
+		Role         string  `json:"role"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
 	} `json:"payload"`
+}
+
+// invocationPhase is which part of a run one priced invocation served. Its zero
+// value is the unattributed one deliberately: a phase this reaches without
+// deciding on is money placed nowhere rather than money placed by default.
+type invocationPhase int
+
+const (
+	phaseUnattributed invocationPhase = iota
+	phaseDevelopment
+	phaseReview
+)
+
+// phase says which part of the run this invocation served, from the role it
+// recorded for itself.
+//
+// A terminal that named no role is the case the schema decides. Recorded at a
+// version whose terminals carry one, it is an invocation that failed to say
+// whose it was -- a summarizer, a shadow reviewer, anything a later feature
+// invokes into a run -- and it is placed nowhere, which is the whole point:
+// there is no phase an unannounced invocation falls into by default. Recorded
+// before that version, the field did not exist to omit, so the log is read the
+// way it was written, and announced -- whether a review had opened a bracket in
+// front of it -- is what decides. That fallback reaches nothing written since,
+// so it can never place a terminal that could have named itself and did not.
+func (p pricedEvent) phase(announced bool) invocationPhase {
+	switch domain.AgentRole(strings.TrimSpace(p.Payload.Role)) {
+	case domain.RoleDeveloper:
+		return phaseDevelopment
+	case domain.RoleReviewer:
+		return phaseReview
+	case "":
+		if p.SchemaVersion >= execution.TerminalRoleSchemaVersion {
+			return phaseUnattributed
+		}
+		if announced {
+			return phaseReview
+		}
+		return phaseDevelopment
+	default:
+		return phaseUnattributed
+	}
 }
 
 func (p pricedEvent) priced() bool {

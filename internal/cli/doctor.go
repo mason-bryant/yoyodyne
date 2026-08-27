@@ -56,8 +56,12 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer, ver
 	})
 
 	if *jsonOutput {
-		if code := writeJSON(stdout, stderr, report); code != 0 {
-			return code
+		if writeJSON(stdout, stderr, report) != 0 {
+			// Nothing readable reached stdout, so this is not the diagnosis
+			// exiting 1 with a report to act on. It is the command failing to do
+			// what it was asked, which is what 2 says -- and what keeps anything
+			// reading an exit 1 sure there is a report under it.
+			return 2
 		}
 	} else {
 		renderDiagnosis(stdout, report, *quiet)
@@ -130,7 +134,8 @@ Usage: yoyo doctor [options]
 
 Check whether this installation can actually run work, and say what would fix it
 where it cannot. It reads the build on PATH against the one running, Git, the
-tracker, the configuration, the deterministic checks, each provider the agents
+tracker, the configuration, the deterministic checks, whether each artifact home
+still says what is filed there and who owns it, each provider the agents
 name -- installed always, and authenticated where the harness has an adapter that
 can ask -- forge access where the project publishes, and, where reporting is on,
 this project's own Slack secrets and the sink that is supposed to be using them.
@@ -144,11 +149,15 @@ It changes nothing. Nothing here installs, authenticates, restarts, or edits a
 configuration, and no credential is read: whether a secret is stored is asked in
 the form that answers without producing the value.
 
-It exits 1 when something would stop work running, and 0 otherwise. A warning is
-not a small problem: it is something about an installation that works. Every
-reporting finding is one, because reporting is an observation and never a gate --
-a sink nobody started leaves every run exactly as it was. It is still named in
-full, with the command that ends it.
+It exits 1 when something would stop work running, and 0 otherwise. That 1 is the
+diagnosis rather than a failure of the command, so it always comes with the report
+and is not worth retrying. Anything it could not do -- a flag it does not have, a
+positional argument, a report it could not write -- exits 2 instead, says why on
+standard error, and reports nothing. A warning is not a small problem: it is
+something about an installation that works. Every reporting finding is one,
+because reporting is an observation and never a gate -- a sink nobody started
+leaves every run exactly as it was. It is still named in full, with the command
+that ends it.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

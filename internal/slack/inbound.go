@@ -28,8 +28,19 @@ package slack
 // some people looks broken rather than closed.
 //
 // Every message this reads is answered in its own thread — the directive as
-// recorded with its identifier, or the refusal with its reason. An operator who
-// steers from a phone has nothing else to tell them whether they were heard.
+// recorded with its identifier, or the refusal with its reason — and the answer
+// tags whoever wrote it. An operator who steers from a phone has nothing else to
+// tell them whether they were heard, and a thread they are not looking at is
+// indistinguishable from silence. The reply itself wears where its directive
+// stands as well: heard while the directive is open, settled once it is, refused
+// where nothing was recorded at all.
+//
+// What is recorded here is also remembered here: which thread each directive was
+// said in, by whom, and in which message. The durable directive record holds none
+// of it, deliberately — it is the product's record of what was directed, the same
+// whichever way it arrived — so the sink keeps its own note, and the delivery pass
+// reads it to say what later became of what somebody asked for, where they asked
+// and to them.
 
 import (
 	"context"
@@ -143,18 +154,73 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 	}
 	topic, err := notify.ParseTopic(key)
 	if err != nil {
-		s.sink.log("a reply arrived in a thread recorded against %q, which names no topic: %v", key, err)
+		// The thread is this sink's — it is in the map — so somebody typed into one
+		// of ours and nothing can be said back: a message is addressed to a topic,
+		// and this thread is recorded against something that names none. The reply
+		// is marked refused rather than left bare, because a reply wearing nothing
+		// is one nobody read, and this one was.
+		s.sink.log("a reply arrived in a thread recorded against %q, which names no topic, so it could only be marked: %v", key, err)
+		s.mark(ctx, message.ts, notify.ReceiptRefused)
 		return
 	}
 
-	s.answer(ctx, threads, s.act(topic, message, time.Now()))
+	// The reply wears where its directive stands, on the message the operator
+	// typed. The thinking face goes on before anything is decided, because the gap
+	// between somebody typing and the answer landing is exactly where silence reads
+	// as not-listening — and it is never a gate, so a workspace that will not take
+	// a mark costs the reply its mark and nothing else.
+	s.mark(ctx, message.ts, notify.ReceiptUnderConsideration)
+	answered := s.act(ctx, topic, message, time.Now())
+	s.answer(ctx, threads, message.user, answered)
+	// Only a disposition that has already landed is marked here. Recording a
+	// directive is not disposing of it: what settles one is somebody carrying it
+	// out or deciding what it asked, which the delivery pass reads out of the
+	// record and marks at the moment it says so in the thread. Until then the
+	// thinking face is the true answer to where it got to.
+	if receipt, settled := disposition(answered); settled {
+		s.mark(ctx, message.ts, receipt)
+	}
+}
+
+// mark puts one receipt on the reply it is about, and says so in the sink's log
+// where the workspace refused. Nothing waits on it: what a reply did is in the
+// thread, in words, and this is the same fact where somebody scrolling their own
+// messages is looking.
+func (s *steering) mark(ctx context.Context, messageTS string, receipt notify.Receipt) {
+	if err := s.sink.receipt(ctx, messageTS, receipt); err != nil {
+		// A sink being shut down mid-mark is not a workspace refusing anything, and
+		// the line below is the one the setup document teaches an operator to read
+		// as a missing scope.
+		if ctx.Err() != nil {
+			return
+		}
+		s.sink.log("a reply could not be marked as %s, so where its directive stands is only said in the thread: %v", receipt, err)
+	}
+}
+
+// disposition is the mark a reply wears now, and whether it has one yet at all.
+//
+// Two of the three land here. A refusal recorded nothing and is over the moment
+// it is said, and a reply that settled a directive is itself the settlement. A
+// reply that recorded one is neither: the directive it wrote down is open, so
+// the thinking face stands and the check mark is the outcome half's to put on
+// when the record says somebody settled it.
+func disposition(answer notify.Notification) (notify.Receipt, bool) {
+	switch answer.Event.Kind {
+	case notify.KindDirectiveRefused:
+		return notify.ReceiptRefused, true
+	case notify.KindDirectiveResolved, notify.KindDirectiveCarriedOut:
+		return notify.ReceiptSettled, true
+	default:
+		return "", false
+	}
 }
 
 // act decides what one reply does, and produces the message that says so. Every
 // branch produces one: the acknowledgment is the whole of what an operator has
 // to go on, and a path that produced nothing would be the channel quietly
 // ignoring somebody.
-func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time) notify.Notification {
+func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundMessage, at time.Time) notify.Notification {
 	// Authority first, and before the reply is even read: what an unlisted person
 	// typed is not something the harness should be parsing, let alone recording.
 	if !s.operators[message.user] {
@@ -176,9 +242,14 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 		if err != nil {
 			return refused(topic, at, err.Error())
 		}
-		return acknowledged(topic, notify.KindDirectiveResolved, resolved, at)
+		// What became of it is said here, by this reply, so the delivery pass must
+		// not say it again when it reads the same settlement out of the record —
+		// unless this is not the thread that asked for it, in which case the thread
+		// that did has still heard nothing and is still owed the outcome.
+		s.said(ctx, resolved.ID, topic)
+		return acknowledged(topic, settledKind(resolved), resolved, at)
 	}
-	recorded, err := s.record(topic, parsed, at)
+	recorded, err := s.record(topic, message, parsed, at)
 	if err != nil {
 		return refused(topic, at, err.Error())
 	}
@@ -190,7 +261,7 @@ func (s *steering) act(topic notify.Topic, message inboundMessage, at time.Time)
 // item's thread is about that item, and an unscoped directive — which is what an
 // empty scope means — would pause the whole product from a message about one
 // piece of it.
-func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (directive.Directive, error) {
+func (s *steering) record(topic notify.Topic, message inboundMessage, parsed steer, at time.Time) (directive.Directive, error) {
 	id, err := directive.NewID()
 	if err != nil {
 		return directive.Directive{}, err
@@ -213,18 +284,93 @@ func (s *steering) record(topic notify.Topic, parsed steer, at time.Time) (direc
 	if err := s.directives.Record(recorded); err != nil {
 		return directive.Directive{}, err
 	}
+	s.remember(recorded, topic, message)
 	return recorded, nil
 }
 
-// answer posts one acknowledgment into the thread the reply arrived in.
+// remember keeps where one directive was said, who said it, and in which
+// message, which is the whole of what the durable directive record deliberately
+// does not hold: it is the product's record of what was directed, the same
+// whichever way it arrived, and a Slack member id is a fact about this workspace.
+//
+// It is what lets the delivery pass answer somebody later — in the thread they
+// asked in, by name — when the record says what became of what they asked for,
+// and what lets the mark on their own message move when it does. Failing to keep
+// it costs exactly that and nothing else: the directive is already recorded and
+// already enforced, so this is said and read past rather than turned into a reply
+// that reports a failure the operator cannot act on.
+//
+// The map is the connection's to write. This runs on the goroutine that reads
+// replies, which is the only thing that writes it, so a read and a write with
+// nothing between them is safe here in the way it would not be for the thread
+// map the delivery pass owns.
+func (s *steering) remember(recorded directive.Directive, topic notify.Topic, message inboundMessage) {
+	steers, err := s.sink.store.LoadSteers()
+	if err != nil {
+		s.sink.log("directive %s was recorded from a thread, but where it was said could not be read, so what becomes of it will not be answered there: %v", recorded.ID, err)
+		return
+	}
+	steers.Record(recorded.ID, Steer{
+		Member:     message.user,
+		Topic:      topic.Key(),
+		Message:    message.ts,
+		RecordedAt: recorded.ReceivedAt,
+	})
+	if err := s.sink.store.SaveSteers(steers); err != nil {
+		s.sink.log("directive %s was recorded from a thread, but where it was said could not be remembered, so what becomes of it will not be answered there: %v", recorded.ID, err)
+	}
+}
+
+// said marks a directive whose outcome this half has already put in the thread
+// that asked for it, so the delivery pass reading the same settlement out of the
+// record leaves it alone — and moves the mark on the message that asked from
+// heard to settled, which is the same flip the pass makes when it is the one
+// that says the outcome.
+//
+// Which thread the settlement was said in is the whole of the test. A directive
+// nothing here recorded is not in the map and needs no mark. One settled from
+// some other item's thread is answered there, where somebody asked about it, and
+// the thread that actually asked for it has heard nothing — so it is left unsaid
+// and the pass still owes it the outcome, which is the case this exists for.
+func (s *steering) said(ctx context.Context, directiveID string, topic notify.Topic) {
+	steers, err := s.sink.store.LoadSteers()
+	if err != nil {
+		s.sink.log("directive %s was settled from a thread, but what this sink has already said could not be read, so the settlement may be said there twice: %v", directiveID, err)
+		return
+	}
+	steer, found := steers.Lookup(directiveID)
+	if !found || steer.Topic != topic.Key() {
+		return
+	}
+	steer.Said = true
+	steers.Record(directiveID, steer)
+	if err := s.sink.store.SaveSteers(steers); err != nil {
+		s.sink.log("directive %s was settled from a thread, but that this sink said so could not be remembered, so it may be said there twice: %v", directiveID, err)
+	}
+	// The reply that asked for it has been wearing the thinking face since it
+	// arrived, and this is the moment it stops being true. It is marked whether or
+	// not the line above could be written down: the settlement is what the mark is
+	// about, and a mark set twice is the same mark.
+	if steer.Message != "" {
+		s.mark(ctx, steer.Message, notify.ReceiptSettled)
+	}
+}
+
+// answer posts one acknowledgment into the thread the reply arrived in,
+// addressed to whoever wrote it.
+//
+// It tags them rather than relying on them to come back and look. A thread is
+// where the narrative belongs, but a thread nobody has open is silence, and this
+// is the one message in the channel that exists because a person said something
+// and is waiting to hear whether it landed.
 //
 // The thread already exists by construction — the reply was correlated through
 // it — so the poster is not given the capability to open one. That is what keeps
 // this goroutine off the thread map the delivery pass owns: the map here is a
 // copy this goroutine loaded, and writing it back over a map that has moved since
 // would lose whatever thread the pass opened in between.
-func (s *steering) answer(ctx context.Context, threads ThreadMap, notification notify.Notification) {
-	into := &poster{sink: s.sink, threads: &threads}
+func (s *steering) answer(ctx context.Context, threads ThreadMap, member string, notification notify.Notification) {
+	into := &poster{sink: s.sink, threads: &threads, mention: member}
 	if err := notification.Notify(ctx, notify.New(into, s.sink.appearance)); err != nil {
 		// The record is already written at this point wherever one was written, so
 		// what failed is the account of it rather than the act. An operator who saw
@@ -443,7 +589,9 @@ func firstWord(value string) (string, string) {
 func acknowledged(topic notify.Topic, kind notify.Kind, recorded directive.Directive, at time.Time) notify.Notification {
 	severity := report.SeverityNote
 	text := recorded.Text
-	if kind == notify.KindDirectiveResolved {
+	if settlement(kind) {
+		// The directive's own words are already in the thread, said by the person
+		// who typed them; what they are owed now is what became of it.
 		text = recorded.Resolution
 	} else if recorded.Pauses() {
 		severity = report.SeverityWarning
@@ -484,6 +632,25 @@ func refused(topic notify.Topic, at time.Time, why string) notify.Notification {
 			Detail:   notify.Detail{Reason: why},
 		},
 	}
+}
+
+// settlement reports the two kinds that say what became of a directive rather
+// than what it said. They are one predicate here because the acknowledgment
+// treats them identically — the account is the disposition, not the operator's
+// words — and only the voice they are said in differs.
+func settlement(kind notify.Kind) bool {
+	return kind == notify.KindDirectiveResolved || kind == notify.KindDirectiveCarriedOut
+}
+
+// settledKind is how a settled directive is reported: as a resolution where it
+// paused work, and as an outcome where it never did. It is read from the record
+// rather than from whoever is posting, so the two halves of this connection can
+// never come to describe one settlement differently.
+func settledKind(recorded directive.Directive) notify.Kind {
+	if recorded.Kind.Pauses() {
+		return notify.KindDirectiveResolved
+	}
+	return notify.KindDirectiveCarriedOut
 }
 
 // unsettled is what a directive is still waiting on, which is nothing at all once

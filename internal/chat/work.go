@@ -151,8 +151,16 @@ type ItemPrice struct {
 // RunPrice is what one run of a work item cost: which attempt it was, how it
 // went, and what the provider charged for the invocations inside it.
 type RunPrice struct {
-	RunID     string    `json:"run_id"`
+	RunID string `json:"run_id"`
+	// Status is the durable status, which is what says whether the attempt has
+	// stopped spending. Outcome is what became of the work, in the fixed
+	// vocabulary the run records derive and every listing says: a conversation
+	// that named the status here would tell an operator "failed" about a run
+	// whose change is preserved and whose item is back with a person, which is
+	// the misreading that vocabulary exists to stop. It is empty on a survey
+	// assembled before the vocabulary existed, and the status stands in.
 	Status    string    `json:"status"`
+	Outcome   string    `json:"outcome,omitempty"`
 	Phase     string    `json:"phase,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	// Integrated reports the attempt that promoted its work, which is what
@@ -281,6 +289,13 @@ type RunReport struct {
 	// is a matter of waiting. It is the one pause that can appear without a run
 	// behind it, on work a directive stopped before it was ever claimed.
 	DirectivePause string `json:"directive_pause,omitempty"`
+	// DependencyPause is set instead of any of the others when what paused the
+	// work was unfinished work the item was made to wait on. It names that work,
+	// because closing it or unlinking it is what makes this continuable — nothing
+	// about it is a matter of waiting on a provider. Like a directive pause it can
+	// appear without a run behind it, on work a dependency stopped before it was
+	// ever claimed.
+	DependencyPause string `json:"dependency_pause,omitempty"`
 	// IntakeHeldSince and IntakeHoldReason are set instead of any of the others
 	// when the work was never started because the operator is holding what the
 	// harness chooses for itself. It never appears on a run: nothing was claimed
@@ -652,10 +667,20 @@ func (p ItemPrice) total() string {
 	return fmt.Sprintf("$%.2f", p.TotalUSD)
 }
 
-// outcome names how the attempt went, the way a survey names a run: its status,
-// the phase it reached, and whether it was the attempt that promoted the work.
+// outcome names how the attempt went, the way a survey names a run: what became
+// of it, the phase it reached, and whether it was the attempt that promoted the
+// work.
+//
+// A survey assembled before the vocabulary existed says so rather than falling
+// back to the status it carries. The status is the word that reads "failed" over
+// a preserved, blocked run, which is the sentence the vocabulary was introduced
+// to stop — substituting it here would put that sentence back in exactly the
+// records nobody can re-derive it for.
 func (r RunPrice) outcome() string {
-	outcome := r.Status
+	outcome := r.Outcome
+	if outcome == "" {
+		outcome = "outcome not recorded"
+	}
 	if r.Phase != "" {
 		outcome += ", " + r.Phase
 	}
@@ -841,6 +866,12 @@ func (r RunReport) Headline() string {
 		// is in flight: a directive can stop work before anything was claimed.
 		return fmt.Sprintf("%s is paused for an unresolved directive and nothing is working on it: %s; /resolve releases it and /work %s carries on",
 			item, r.DirectivePause, item)
+	case r.Paused && r.DependencyPause != "":
+		// A dependency pause is lifted by other work finishing rather than by time,
+		// so this says what to close rather than what to wait for. It never claims a
+		// run is in flight: a dependency can stop work before anything was claimed.
+		return fmt.Sprintf("%s is paused waiting on unfinished work it depends on: %s; closing that work, or unlinking it, is what releases %s and /work %s carries on after that",
+			item, r.DependencyPause, item, item)
 	case r.Paused && r.ProviderStop != "":
 		stopped := "its provider stopped emitting events and was stopped"
 		if r.ProviderStop == ProviderStopBudgetExhausted {

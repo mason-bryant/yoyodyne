@@ -131,20 +131,23 @@ func (s *ExchangeStore) Load(id string) (exchange.Exchange, error) {
 // List returns every recorded exchange, the ones still open first. A directory
 // that does not exist yet is a product whose roles have never asked each other
 // anything, which is not a failure to read.
+//
+// One record it cannot read fails the whole listing, because this answers "show
+// me what the roles said" and an answer quietly missing a thread is worse than
+// no answer. A caller that is totalling rather than reading — where losing the
+// records beside the broken one would lose real money from a total — reads them
+// one at a time through Records and Load instead.
 func (s *ExchangeStore) List() ([]exchange.Exchange, error) {
-	entries, err := os.ReadDir(s.root)
-	if errors.Is(err, os.ErrNotExist) {
+	ids, err := s.Records()
+	if err != nil {
+		return nil, err
+	}
+	if ids == nil {
 		return nil, nil
 	}
-	if err != nil {
-		return nil, fmt.Errorf("read exchange directory: %w", err)
-	}
-	exchanges := make([]exchange.Exchange, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		loaded, err := s.Load(strings.TrimSuffix(entry.Name(), ".json"))
+	exchanges := make([]exchange.Exchange, 0, len(ids))
+	for _, id := range ids {
+		loaded, err := s.Load(id)
 		if err != nil {
 			return nil, err
 		}
@@ -152,6 +155,33 @@ func (s *ExchangeStore) List() ([]exchange.Exchange, error) {
 	}
 	exchange.Sort(exchanges)
 	return exchanges, nil
+}
+
+// Records names every exchange recorded for this product, by identifier and in
+// directory order. It is the enumeration List is built on, separated from it so
+// that reading the records and surviving one that cannot be read are the same
+// walk: a caller that must not lose the readable exchanges to an unreadable one
+// loads them itself and counts what failed.
+//
+// It answers nil for a product whose roles have never asked each other
+// anything, which is how a directory that does not exist yet is told from one
+// that holds no exchanges.
+func (s *ExchangeStore) Records() ([]string, error) {
+	entries, err := os.ReadDir(s.root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read exchange directory: %w", err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		ids = append(ids, strings.TrimSuffix(entry.Name(), ".json"))
+	}
+	return ids, nil
 }
 
 // Find resolves a reference an operator typed, exactly as a directive's is: a

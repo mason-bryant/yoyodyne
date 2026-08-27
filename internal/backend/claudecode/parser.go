@@ -9,13 +9,19 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const maxEventTextBytes = 16 << 10
 
 type streamParser struct {
-	runID    string
+	runID string
+	// role is who this invocation was made as, and it is written onto the
+	// terminal event so the record says whose invocation it priced rather than
+	// leaving that to be inferred from where the terminal sits in the log. See
+	// the terminal event types in internal/execution for what reads it.
+	role     domain.AgentRole
 	sequence *execution.Sequence
 	clock    execution.Clock
 	redactor execution.Redactor
@@ -26,6 +32,13 @@ type streamParser struct {
 	reply     func(string)
 	result    backend.RunResult
 	sawResult bool
+	// duplicateTerminal is what to say about an invocation the provider ended
+	// more than once, and empty when it ended once. It is held rather than
+	// applied because what a duplicate asks the caller for depends on the whole
+	// stream: a refusal can be reported after it, and a refusal already carries
+	// its own answer. Result decides between them when there is nothing left to
+	// arrive.
+	duplicateTerminal string
 }
 
 type streamEnvelope struct {
@@ -229,9 +242,10 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
+func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
 	return &streamParser{
 		runID:    runID,
+		role:     role,
 		sequence: execution.NewSequence(lastSequence),
 		clock:    clock,
 		redactor: redactor,
@@ -272,7 +286,7 @@ func (p *streamParser) ParseLine(line string) error {
 	// diagnosable; they must not disturb the decided result, and the guarded
 	// invariant is that a second terminal result cannot replace the first.
 	if p.sawResult && envelope.Type == "result" {
-		return errors.New("second provider terminal result received after terminal result")
+		return p.recordDuplicateTerminal(envelope)
 	}
 	if !p.sawResult && envelope.SessionID != "" {
 		p.result.SessionID = envelope.SessionID
@@ -547,6 +561,12 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 		eventType = execution.EventRunFailed
 	}
 	return p.emit(eventType, map[string]any{
+		// The role is the invocation saying whose it was. It costs the stream
+		// nothing and it is the whole of what makes the cost beside it
+		// attributable: a log holding several invocations otherwise says only
+		// where each terminal sits, and where a terminal sits is a fact about
+		// the order the harness happened to do things in.
+		"role":            string(p.role),
 		"session_id":      envelope.SessionID,
 		"is_error":        envelope.IsError,
 		"result":          truncate(envelope.Result),
@@ -554,6 +574,76 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 		"usage":           json.RawMessage(envelope.Usage),
 		"terminal_reason": envelope.TerminalReason,
 	})
+}
+
+// duplicateTerminalReason is the harness's own name for an invocation the
+// provider ended twice. Neither of the reasons the provider gave can be it:
+// which of the two endings was this invocation's is precisely what a second
+// terminal makes unanswerable, so the recorded reason says that rather than
+// picking one. Both of the provider's own reasons are kept beside it in the
+// anomaly event, whichever answer the invocation ends up carrying.
+const duplicateTerminalReason = "duplicate_terminal_result"
+
+// recordDuplicateTerminal records a second terminal result and what it makes of
+// the invocation. The answer it leads to is a relaunch against the run's own
+// budget, in the same worktree and the same session — the way every other
+// provider death that judged nothing is answered — but that is settled in
+// Result rather than here, because a refusal reported later carries an answer
+// of its own.
+//
+// The decided result still stands — nothing off the second envelope is written
+// into it, so the guarded invariant that a duplicate cannot replace the first
+// terminal holds — but it stops being trusted as the invocation's outcome. The
+// nested-agent case above is why: a subagent completion that carries a
+// terminal's marks is read as this invocation's terminal, and the real terminal
+// then arrives as the duplicate, so the result already recorded may be a
+// subagent's rather than the run's.
+//
+// This used to fail the stream, which failed the run. Run run-e2b8d016,
+// developing yoyodyne-ifd.117.1 on 2026-08-23, died that way mid-development and
+// its near-complete change had to be recovered by a triage rerun at triage-grant
+// price — for an anomaly that judged nothing about the work and that one
+// relaunch in the same session absorbs. A provider's dialect drifting is a
+// relaunch condition, not a fatality; a stream this parser genuinely cannot read
+// still fails the run with the parse error it always did.
+func (p *streamParser) recordDuplicateTerminal(envelope streamEnvelope) error {
+	duplicate := envelope.TerminalReason
+	if duplicate == "" {
+		duplicate = envelope.StopReason
+	}
+	// The whole of the duplicate goes into the event stream, like every other
+	// envelope arriving after the terminal, because what a dialect drifted into
+	// cannot be diagnosed from a record that kept only the fact that it drifted.
+	if err := p.emit(execution.EventProcessOutput, map[string]any{
+		"provider_type":    envelope.Type,
+		"provider_subtype": envelope.Subtype,
+		"anomaly":          duplicateTerminalReason,
+		"is_error":         envelope.IsError,
+		"result":           truncate(envelope.Result),
+		"terminal_reason":  envelope.TerminalReason,
+		"total_cost_usd":   envelope.TotalCostUSD,
+		"usage":            json.RawMessage(envelope.Usage),
+	}); err != nil {
+		return err
+	}
+	// The decided terminal's own reason is read off the result rather than kept
+	// beside it, which it can be because nothing here writes to the result: a
+	// third terminal names the ending the first one gave, not the anomaly the
+	// second one caused.
+	p.duplicateTerminal = fmt.Sprintf("the provider ended this invocation twice, first with %s and again with %s",
+		terminalReasonName(p.result.StopReason), terminalReasonName(duplicate))
+	return nil
+}
+
+// terminalReasonName names a terminal reason for the record, including the case
+// where the provider named none. An ending nobody named is still one of the two
+// this invocation was given, and dropping it would leave the anomaly reading as
+// though only one terminal had arrived.
+func terminalReasonName(reason string) string {
+	if strings.TrimSpace(reason) == "" {
+		return "no terminal reason"
+	}
+	return fmt.Sprintf("%q", reason)
 }
 
 func (p *streamParser) emit(eventType execution.EventType, payload any) error {
@@ -570,8 +660,34 @@ func (p *streamParser) emit(eventType execution.EventType, payload any) error {
 	return nil
 }
 
+// Result is the invocation's own answer, decided once the stream has ended.
+//
+// Everything but the duplicate terminal is settled as it arrives. That one is
+// not, because the two answers it must not stand beside are both still moving
+// while the stream runs: a usage limit is re-reported as it changes, and a
+// serving report supersedes an exhausted one, so which refusals this invocation
+// is carrying is a fact about the whole stream rather than about the moment the
+// duplicate showed up. Deciding here is what makes the exclusivity a
+// construction instead of a race between two envelopes.
+//
+// An exhausted limit and an overload are the refusals the harness answers with a
+// wait, and a wait costs a relaunch nothing: it reissues into the same worktree
+// and the same session the relaunch would have continued, without spending an
+// attempt on a provider that has already said it will not serve one. So a
+// duplicate that arrives beside either of them leaves the answer to it, and adds
+// only what it alone knows — that this invocation is not to be trusted to have
+// produced one.
 func (p *streamParser) Result() backend.RunResult {
-	return p.result
+	result := p.result
+	if p.duplicateTerminal == "" {
+		return result
+	}
+	result.IsError = true
+	result.StopReason = duplicateTerminalReason
+	if result.UsageLimit == nil && result.ServerOverload == nil {
+		result.TransientFailure = &backend.TransientFailure{Detail: p.duplicateTerminal}
+	}
+	return result
 }
 
 func (p *streamParser) SawResult() bool {

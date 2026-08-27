@@ -481,6 +481,14 @@ func reportRunResult(stdout, stderr io.Writer, jsonOutput bool, outcome orchestr
 			if err != nil {
 				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
 			}
+		} else if outcome.PausedByDependency != nil {
+			// A dependency pause is the fourth that can have no run behind it, and it
+			// is reported on its own terms for the same reason: what lifts it is other
+			// work finishing, and nothing about it is a wait on a provider.
+			reportDependencyPause(stdout, outcome)
+			if err != nil {
+				fmt.Fprintf(stderr, "the pause is recorded, but reporting it failed: %v\n", err)
+			}
 		} else {
 			reportRunPause(stdout, stderr, outcome, err)
 		}
@@ -660,6 +668,25 @@ func reportDirectivePause(stdout io.Writer, outcome orchestrator.Outcome) {
 		held.ID, outcome.WorkItemID)
 }
 
+// reportDependencyPause describes work held up by unfinished work its item was
+// made to wait on. It names that work, because closing it or unlinking it is what
+// lifts the pause, and it says which of the two cases this is: a run that was
+// under way and is preserved, or work that was never started.
+func reportDependencyPause(stdout io.Writer, outcome orchestrator.Outcome) {
+	fmt.Fprintf(stdout, "%s waits on unfinished work and is paused\n", outcome.WorkItemID)
+	fmt.Fprintf(stdout, "waiting on: %s\n", outcome.PausedByDependency.Summary())
+	if outcome.RunID != "" {
+		fmt.Fprintf(stdout, "run: %s\n", outcome.RunID)
+		fmt.Fprintf(stdout, "branch: %s\n", outcome.Branch)
+		fmt.Fprintf(stdout, "worktree: %s\n", outcome.WorktreePath)
+		fmt.Fprintln(stdout, "the item stays claimed and its artifacts are preserved; nothing was cancelled")
+	} else {
+		fmt.Fprintln(stdout, "nothing was started for it, so there is nothing to clean up")
+	}
+	fmt.Fprintf(stdout, "closing that work, or removing the dependency link, lifts the pause; running yoyodyne on %s after that carries on\n",
+		outcome.WorkItemID)
+}
+
 // reportOperatorHold describes work the operator's own pause is holding. It
 // leads with the pause rather than with the item, because the operator paused
 // everything rather than this: whatever they were asking for here, what they
@@ -791,6 +818,7 @@ func reportPullRequest(writer io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintf(writer, "pull request #%d (%s): %s\n", outcome.PullRequest.Number, state, outcome.PullRequest.URL)
 		if outcome.PullRequest.MergeQueued {
 			fmt.Fprintln(writer, "the forge merges it once the required checks pass; `yoyo reconcile` settles the run when it does")
+			fmt.Fprintln(writer, "the work item stays open until that merge is confirmed, and is handed back with a blocker if the forge drops it")
 		}
 	}
 	if outcome.PublishSkipped != "" {

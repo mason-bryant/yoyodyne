@@ -51,10 +51,11 @@
 //
 // A third way to record no goal is to have recorded one and lost it. The
 // attribution lives in the item's notes, and a writer that replaces those notes
-// rather than appending to them takes the goal with them — which has happened,
-// to six items at once, and read afterwards exactly like work admitted before
-// goals were checked. Grandfathering is what made it silent: the state it
-// decayed into is the one state deliberately reported without failing.
+// rather than appending to them takes the goal with them — which has happened
+// twice, to six items at once and then to twelve more, and read afterwards
+// exactly like work admitted before goals were checked. Grandfathering is what
+// made it silent: the state it decayed into is the one state deliberately
+// reported without failing.
 //
 // So an attribution the harness writes is witnessed outside the notes, and this
 // package is told what that witness holds. Notes recording no goal on an item

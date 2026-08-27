@@ -52,7 +52,7 @@ func runDirective(args []string, stdout, stderr io.Writer) int {
 
 func listDirectives(args []string, stdout, stderr io.Writer) int {
 	flags := newDirectiveFlags("directive list", stderr)
-	all := flags.set.Bool("all", false, "include directives that have been resolved")
+	all := flags.set.Bool("all", false, "include directives that are no longer in force")
 	if code, ok := flags.parse(args, 0); !ok {
 		return code
 	}
@@ -66,12 +66,19 @@ func listDirectives(args []string, stdout, stderr io.Writer) int {
 	}
 	listed := recorded
 	if !*all {
-		// What an operator asks for by default is what is still holding work up.
-		// A resolved directive is a record of something that happened, and mixing
-		// the two would bury the ones that still need them.
+		// What an operator asks for by default is what still applies: the
+		// directives holding work up, and the standing instructions in force. A
+		// directive that no longer applies is a record of something that happened,
+		// and mixing the two would bury the ones that still constrain the work.
+		//
+		// This asks whether the directive is in force rather than whether anybody
+		// has accounted for it. An operational directive somebody carried out is
+		// accounted for and still standing, and dropping it here on the strength of
+		// its outcome would retire an instruction the operator never withdrew — from
+		// the one listing they read to find out what is still in force.
 		listed = nil
 		for _, candidate := range recorded {
-			if !candidate.Resolved() {
+			if candidate.InForce() {
 				listed = append(listed, candidate)
 			}
 		}
@@ -83,7 +90,7 @@ func listDirectives(args []string, stdout, stderr io.Writer) int {
 		if *all {
 			fmt.Fprintln(stdout, "no directives are recorded for this product")
 		} else {
-			fmt.Fprintln(stdout, "no unresolved directives are recorded for this product")
+			fmt.Fprintln(stdout, "no directives are in force for this product")
 		}
 		return 0
 	}
@@ -270,9 +277,13 @@ be done against intent that is being rewritten or was never settled:
 A paused run is not cancelled. It keeps its claim, its branch, and its worktree,
 and it continues from where it stopped once the directive is resolved.
 
-  list [--all]                         the unresolved directives, or every one
+  list [--all]                         the directives in force, or every one
   record [options] <what you said>     record one, pausing what it affects
   resolve --resolution <how> <id>      settle one and release the work it paused
+
+A directive that pauses work stops being in force when it is resolved. An
+operational one is in force from the moment it is recorded and stays there:
+recording what came of it says what it produced, and does not withdraw it.
 
 An id may be shortened to any prefix that names exactly one directive.
 

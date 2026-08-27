@@ -11,6 +11,13 @@ package cli
 // document is written against the structure of these reports on purpose — that
 // is what makes an automated repair possible at all — and this is what holds it
 // to them.
+//
+// What is here is the document against the reports' shape. Its claims about the
+// commands themselves — that `yoyo setup --json` asks nothing and changes
+// nothing, that exit 1 is a diagnosis to read rather than a failure to retry,
+// and that the keychain step is left to a terminal somebody is at — are pinned
+// where those commands are exercised, in setup_test.go and doctor_test.go,
+// because comparing prose against a struct cannot reach them.
 
 import (
 	"encoding/json"

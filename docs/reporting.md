@@ -46,20 +46,32 @@ carries no price at all rather than a price of nothing. And what is priced *per
 item* is runs: the conversations that steer them cost money too and are recorded
 just as durably, but attributing a conversation that discussed five items to any
 one of them is a judgement rather than a join, so it is left out here and said
-to be left out. It is not left out of what the harness has spent altogether —
+to be left out. The same holds for an
+[exchange](conversation.md#roles-asking-each-other-things): its record names the
+product, the repository, the two roles in it, and the conversation the asker
+spoke from, and nothing that identifies a piece of work, so there is nothing to
+attribute it to rather than a judgement declined. Neither is left out of
+what the harness has spent altogether —
 [`yoyo-status -c`](operations.md#following-a-run-a-conversation-or-a-branch-review) prices
-conversations and branch reviews beside runs, because a total that skipped
-either would be wrong rather than merely unattributed.
+conversations, branch reviews, and exchanges beside runs, and `yoyo cost` carries
+the exchanges into its total on a row of their own, because a total that skipped
+any of them would be wrong rather than merely unattributed.
 
 `/show` breaks one item's price down by attempt, which is what a single total
 invites:
 
 ```text
 cost: at least $27.93 across 3 run(s)
-  run-0123…  started 2026-08-10T09:14:02Z [failed, reviewing] $8.91 from 3 invocation(s)
+  run-0123…  started 2026-08-10T09:14:02Z [stopped, reviewing] $8.91 from 3 invocation(s)
   run-89ab…  started 2026-08-10T11:02:41Z [succeeded, complete, integrated] $19.02 from 2 invocation(s)
   run-cdef…  started 2026-08-09T18:30:00Z [failed, developing] unknown: the run's event log is no longer recorded
 ```
+
+The word in the brackets is the same fixed vocabulary
+[`yoyo status`](operations.md#what-became-of-the-runs-and-what-remains-of-them) uses,
+read from the same records: `stopped` ended on a blocker somebody has to decide
+about and left its change intact, `failed` left nobody anything to act on, and a
+run met in both places is described the same way in both.
 
 From the command line, `yoyo cost` prices items from the same recorded runs —
 one line per item, or a run-by-run breakdown when you name one — and
@@ -82,19 +94,52 @@ item, and across everything the harness has run:
 ```text
 item                                     runs  unpriced      develop       review       repair         cost    waited
 yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43     3h37m
-TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2731.57    21h01m
+ASKS BETWEEN ROLES                          -         0            -            -            -        $4.12
+TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69    21h01m
 ```
+
+**ASKS BETWEEN ROLES** is what the roles spent asking each other, summed over
+every recorded exchange. It is a row rather than a note under the table because
+the total has to add up: an ask is a provider invocation the harness made and it
+belongs in what the harness spent, and a figure visible only in the total would
+be a difference the reader has to take on trust. It is one row for the product
+rather than a figure per item because the record names no item — and because the
+channel runs between the roles that own documents and queues, with the developer
+and the reviewer, the two that work inside a run, off it. If an exchange ever
+records the work it was taken for, it belongs in that item's price beside the
+runs instead. The columns that split a run's price are left empty rather than
+filled with zeros — an ask is not development, review, or repair — with one
+exception: **unpriced** means on this row exactly what it means on an item's. An
+exchange record that cannot be read is counted there, left out of the figure
+beside it rather than counted as nothing, and every exchange that could be read
+is still priced; the total carries the same `≥` a run's unpriced attempt puts on
+it. That marker goes on the total column alone, since money nobody could read is
+money that belongs to no phase.
+
+Exchanges that cannot even be listed are the one case with no floor to state:
+how much is missing is unknown, and so is how many records it is missing from,
+so the row reads `unknown` rather than a figure.
 
 **develop** is each run's first developer attempt, **review** is every reviewer
 invocation it made, and **repair** is every developer attempt after the first —
 the failing check, the refused path, and the reviewer's findings handed back are
 all repair, because from the money's point of view each is the same thing: the
 change being made again because it was not right the first time. Every priced
-invocation lands in exactly one of the three, so nothing is missing from them
-and the split is a decomposition of the price rather than a second opinion about
-it. An invocation the provider refused or killed and the harness reissued is
+run invocation that says which part of the run it served lands in exactly one of
+the three, so nothing is missing from them and the split is a decomposition of
+the price rather than a second opinion about it. An invocation the provider
+refused or killed and the harness reissued is
 charged to the attempt it was reissuing, not counted as a repair nobody asked
 for: what an attempt cost is what it took to get it made.
+
+An invocation that ends in a run's log without saying which part of the run it
+served is the one thing none of the three will take. It is counted in the total
+and named in a line under the table instead — how many, and what they cost —
+because charging it to a phase would put somebody else's money in a column the
+operator reads to decide something. That line is absent from a healthy record:
+anything in it is a defect in whatever wrote the log rather than a cost of the
+work. What "without saying" means exactly, and why the runs recorded before
+anything could say are unaffected, is below.
 
 **waited** is time rather than money — a provider that would not serve the
 account, and the harness parked on the operator's hold — and it is counted apart
@@ -112,12 +157,33 @@ yoyodyne-ifd.1.5: $49.43 across 4 run(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
 ```
 
-The split is read out of the run's event log rather than out of a phase the
-harness wrote down beside each invocation, which is what makes it answer for
-runs that finished long before it existed. A review announces itself and then
-makes exactly one invocation, so the terminal after it is the reviewer's and no
-other terminal is; the rest are the developer's, and they group into attempts by
-how each one ended.
+The split is read out of the run's event log, which is what makes it answer for
+runs that finished long before it existed. Each invocation's terminal names the
+role it was made as, so the reviewer's invocations are the reviewer's because
+they say so, the developer's are the developer's for the same reason, and they
+group into attempts by how each one ended. An invocation naming any other role,
+or naming none at all, is left unattributed rather than placed.
+
+Runs recorded before event schema version 2 had no role on their terminals to
+omit, and are read the way they were written: a review announces itself with a
+`review.started` and then makes exactly one invocation, so the terminal after
+that announcement is the reviewer's and every other terminal is a developer's.
+The schema version on each event is what confines that reading to those runs, so
+a terminal written today with no role is never read positionally — it is an
+invocation that could have said whose it was and did not, which is unattributed
+money rather than a phase.
+
+That older inference was sound for the runs it covers, and this is the evidence
+it rests on. Only two things have ever written a terminal into a run's log: the
+developer's attempts, and the reviewer, which always announces itself with a
+`review.started` first. Every other provider invocation the harness makes writes
+somewhere else — a conversation turn to its conversation's log, an inter-role ask
+to the exchange record, and a branch review, **including every shadow review of
+the ifd.92 experiment**, to its own log under `branch-reviews/` rather than under
+`runs/`. So the closed shadow experiment polluted no run's phase data, and there
+are no affected runs to name: not because its invocations announced themselves,
+but because none of them was ever written into a run's log at all. The sweep in
+`internal/execution/terminal_test.go` is what keeps that set of writers closed.
 
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is
@@ -428,7 +494,11 @@ Replies go the other way. A reply in a work item's thread, from somebody this
 project granted `direct-work` with a bound Slack member id, is recorded as a
 [directive](conversation.md#directives-and-the-work-they-pause) against that item
 — the same record `yoyo directive record` writes, with the same pause semantics
-and the same resolution, so a run meets it whichever way it arrived. Every reply is answered in its own thread with
-what was recorded or why nothing was, and a project that has granted nobody is
-steered by nobody. What a reply may say is in
+and the same resolution, so a run meets it whichever way it arrived. Every reply
+is answered in its own thread, tagging whoever wrote it, with what was recorded
+or why nothing was; the reply itself is marked with where its directive stands,
+recorded and open or settled; and when the record later says the directive was
+settled, that is said in the same thread, tagged the same way, and the mark on
+the reply moves with it. A project that has granted nobody is steered by nobody.
+What a reply may say is in
 [`docs/slack/setup.md`](slack/setup.md#steering-the-work-from-a-thread).
