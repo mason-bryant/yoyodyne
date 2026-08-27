@@ -14,6 +14,13 @@ import (
 
 type costOutput struct {
 	Prices []runstate.ItemPrice `json:"prices,omitempty"`
+	// Exchanges is what the roles spent asking each other things. It is beside
+	// the item prices rather than in one of them because the exchange record
+	// carries nothing to join an item on -- a product, a repository, the two
+	// roles, and the asker's conversation -- and it is here at all because it is
+	// money the harness spent: a total that skipped it would be wrong rather than
+	// merely unattributed.
+	Exchanges *runstate.ExchangeSpend `json:"exchanges,omitempty"`
 	// Recorded is what was written onto the tracker, and is absent from a report
 	// that only read the records.
 	Recorded []recordedCost `json:"recorded,omitempty"`
@@ -65,6 +72,14 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 		return reportCostFailure(stdout, stderr, *jsonOutput, err)
 	}
 	output := costOutput{Prices: prices}
+	// What the roles spent asking each other is read alongside the runs whenever
+	// the whole ledger is. Naming an item asks what that item's runs cost, and an
+	// exchange is not one of them: adding it to an item's own price would be
+	// attributing to that item money that names no item at all.
+	if workItemID == "" {
+		exchanges := parts.store.ExchangeSpend()
+		output.Exchanges = &exchanges
+	}
 	failed := false
 	if *record {
 		recorded, err := recordPrices(ctx, parts, workItemID)
@@ -82,7 +97,7 @@ func reportCosts(ctx context.Context, args []string, stdout, stderr io.Writer) i
 			return code
 		}
 	} else {
-		printPrices(stdout, prices, workItemID != "")
+		printPrices(stdout, prices, output.Exchanges, workItemID != "")
 		printRecordedPrices(stdout, stderr, output.Recorded)
 	}
 	if failed {
@@ -139,8 +154,8 @@ func recordPrices(ctx context.Context, parts components, workItemID string) ([]r
 // by the runs it took, because a total for one item invites the question of
 // which attempt spent it; asking about everything reports a line per item, which
 // is the ledger.
-func printPrices(writer io.Writer, prices []runstate.ItemPrice, single bool) {
-	if len(prices) == 0 {
+func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runstate.ExchangeSpend, single bool) {
+	if len(prices) == 0 && !recordedExchanges(exchanges) {
 		fmt.Fprintln(writer, "the harness has no recorded runs, so there is nothing to price")
 		return
 	}
@@ -156,23 +171,86 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, single bool) {
 		if !price.Recorded() {
 			continue
 		}
-		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases)
+		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases, false)
 		total += price.TotalUSD
 		runs += len(price.Runs)
 		unpriced += price.UnknownRuns
 		phases.Merge(price.Phases)
 	}
-	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases)
+	// The asks are a row rather than a note under the table, because the total
+	// below has to add up: what one role spent asking another is a provider
+	// invocation the harness made, and a reader who can see it in the total but
+	// not in a row above it is being asked to take the difference on trust.
+	floor := false
+	if recordedExchanges(exchanges) {
+		printAskRow(writer, *exchanges)
+		total += exchanges.CostUSD
+		floor = !exchanges.Known()
+	}
+	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, floor)
 	if unpriced > 0 {
 		fmt.Fprintln(writer, "a run with no surviving record is counted as unpriced and left out of the total,")
 		fmt.Fprintln(writer, "so every total it touches is a floor rather than a price")
 	}
+	printAskNote(writer, exchanges)
 	// The split is said to be exhaustive rather than said to add up, because each
 	// column is rounded to the cent on its own and three of them can land a penny
 	// away from the total they came from. What matters is that nothing is missing
 	// from them, which is the claim the rounding cannot make false.
-	fmt.Fprintln(writer, "develop, review and repair account for every priced invocation; waited is time rather than money")
+	fmt.Fprintln(writer, "develop, review and repair account for every priced run invocation; waited is time rather than money")
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
+}
+
+// recordedExchanges reports exchange spend worth a row: some to price, or a
+// reason there is no figure for it.
+func recordedExchanges(exchanges *runstate.ExchangeSpend) bool {
+	return exchanges != nil && exchanges.Recorded()
+}
+
+// askLedgerLabel names the row the asks land on. It reads as a summary line
+// rather than as an item because that is what it is: money the harness spent
+// that belongs to no work item, sitting above the total it is part of.
+const askLedgerLabel = "ASKS BETWEEN ROLES"
+
+// printAskRow writes what the roles spent asking each other. The columns that
+// split a run's price are left as "-" rather than filled with zeros: an ask is
+// not development, review, or repair, and a zero under one of them would say it
+// was one of the three and cost nothing.
+//
+// The unpriced column is the one an ask does have, and it holds exactly what it
+// holds on an item's row: the records that could not be read, left out of the
+// figure beside them and making it a floor. Records nothing could even
+// enumerate leave no floor to state, so that row says unknown instead.
+func printAskRow(writer io.Writer, exchanges runstate.ExchangeSpend) {
+	unreadable, cost := "-", "unknown"
+	if exchanges.Enumerated() {
+		unreadable = strconv.Itoa(exchanges.Unreadable)
+		cost = renderFloor(exchanges.CostUSD, !exchanges.Known())
+	}
+	fmt.Fprintf(writer, ledgerRow, askLedgerLabel, "-", unreadable, "-", "-", "-", cost, "")
+}
+
+// printAskNote says what the ask row is made of, and what is missing from it.
+// An exchange nobody can read is counted and said out loud rather than counted
+// as nothing, which is the same discipline a run with no surviving log is held
+// to — and, like that run, it never takes the records beside it down with it.
+func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
+	if !recordedExchanges(exchanges) {
+		return
+	}
+	if !exchanges.Enumerated() {
+		fmt.Fprintf(writer, "the recorded exchanges could not be listed (%s), so what the roles spent\n", exchanges.Unknown)
+		fmt.Fprintln(writer, "asking each other is missing from the total entirely rather than counted as nothing")
+		return
+	}
+	fmt.Fprintf(writer, "asks between roles is %d exchange(s) over %d round(s): a question one role put to another,\n",
+		exchanges.Exchanges, exchanges.Rounds)
+	fmt.Fprintln(writer, "recorded naming no work item to charge it to, and in the total because the harness spent it")
+	if exchanges.Unreadable > 0 {
+		fmt.Fprintf(writer, "%d exchange record(s) could not be read and are left out of that figure (%s),\n",
+			exchanges.Unreadable, exchanges.Unknown)
+		fmt.Fprintln(writer, "so the asks and the total are floors; every exchange beside them is priced as usual")
+	}
 }
 
 // ledgerRow is the shape of every line of the ledger, header and total
@@ -180,10 +258,15 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, single bool) {
 const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %9s\n"
 
 // printLedgerRow writes one item's line. Each phase carries the same floor
-// marker the total does, for the reason the total carries it: a column that read
-// as exact because the count saying otherwise is elsewhere on the line is the
-// mistake the marker exists to stop.
-func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend) {
+// marker the total does when it is the runs that went unpriced, for the reason
+// the total carries it: a column that read as exact because the count saying
+// otherwise is elsewhere on the line is the mistake the marker exists to stop.
+//
+// The extra floor is for the total column alone, and is what an unread exchange
+// makes of it. That money belongs to no phase — an ask is not development,
+// review, or repair — so marking the phase columns for it would claim
+// uncertainty in three figures that have none.
+func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend, floor bool) {
 	fmt.Fprintf(writer, ledgerRow,
 		label,
 		strconv.Itoa(runs),
@@ -191,7 +274,7 @@ func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total fl
 		renderTotal(phases.Development.CostUSD, unpriced),
 		renderTotal(phases.Review.CostUSD, unpriced),
 		renderTotal(phases.Repair.CostUSD, unpriced),
-		renderTotal(total, unpriced),
+		renderFloor(total, floor || unpriced > 0),
 		renderWait(phases.Waits.Total()),
 	)
 }
@@ -292,7 +375,14 @@ func printRecordedPrices(stdout, stderr io.Writer, recorded []recordedCost) {
 // the ledger: a row whose own runs went unpriced must not read as exact merely
 // because the count that says so is in the next column.
 func renderTotal(total float64, unpriced int) string {
-	if unpriced > 0 {
+	return renderFloor(total, unpriced > 0)
+}
+
+// renderFloor is the same marker where what makes a figure a lower bound is
+// something other than an unpriced run — exchanges that could not be read leave
+// a total short with no run count to say so.
+func renderFloor(total float64, floor bool) string {
+	if floor {
 		return fmt.Sprintf("≥ $%.2f", total)
 	}
 	return fmt.Sprintf("$%.2f", total)
@@ -345,6 +435,11 @@ cost the provider itself reported. Every price is split by where it went --
 making the change, reviewing it, and repairing it -- with the time the work
 spent waiting on a provider or on the operator beside it. Naming an item breaks
 its price down by run.
+
+What the roles spent asking each other is a row of its own above the total. The
+exchange record names no piece of work to charge it to, so it reaches no item's
+price; it is a provider invocation the harness made, so a total without it would
+be wrong rather than unattributed.
 
 Options:
   --config <path>   configuration file (default: the nearest .yoyodyne/config.yaml)

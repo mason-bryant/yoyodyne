@@ -180,6 +180,87 @@ review_event() {
 cp "$demo/conversations/$waiting_chat.events.jsonl" "$chatty/conversations/"
 conversation_state "$chatty/conversations" product-manager "$waiting_chat"
 
+# An inter-role exchange: one role's question to another, with the provider's own
+# cost beside each round. It has no event log of its own -- the record is the
+# thread, revised as it goes -- so the cost report is the one place it turns up,
+# and each round counts on the day it was answered rather than on the day the
+# thread opened. This one was answered on two days, which is what any exchange
+# that is not settled in a sitting does.
+#
+# It lives under the second product on purpose, so that what the first one's
+# report says is still the report of a product whose roles have never asked each
+# other anything: an exchange must add to a total without changing one.
+asked_exchange="exchange-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+mkdir -p "$chatty/exchanges"
+cat > "$chatty/exchanges/$asked_exchange.json" <<JSON
+{
+  "schema_version": 1,
+  "id": "$asked_exchange",
+  "product_id": "chatty",
+  "asker": {"role": "product-manager", "agent": "product-manager", "conversation": "$waiting_chat"},
+  "answerer": {"role": "architect", "agent": "architect"},
+  "question": "what does this goal cost, and what am I missing?",
+  "max_rounds": 10,
+  "rounds": [
+    {
+      "number": 1,
+      "question": "what does this goal cost, and what am I missing?",
+      "answer": "More than the ordering assumes.",
+      "cost_usd": 0.60,
+      "asked_at": "$(stamp_days_ago 2 1)",
+      "answered_at": "$(stamp_days_ago 2 2)"
+    },
+    {
+      "number": 2,
+      "question": "and what does leaving it until later cost?",
+      "answer": "More again, and the difference is the interest.",
+      "cost_usd": 0.40,
+      "asked_at": "$(stamp_days_ago 0 1)",
+      "answered_at": "$(stamp_days_ago 0 2)"
+    }
+  ],
+  "outcome": "resolved",
+  "settled": "the ordering stands, and what it costs is written down",
+  "opened_at": "$(stamp_days_ago 2 0)",
+  "updated_at": "$(stamp_days_ago 0 2)",
+  "closed_at": "$(stamp_days_ago 0 3)"
+}
+JSON
+
+# A third product, whose roles have only ever asked each other things: one
+# exchange that can be read and one record that cannot. A record nobody can
+# parse did not cost nothing, so what the report must not do is leave it out
+# quietly and print a total that reads as complete.
+asking="$YOYODYNE_STATE_HOME/products/asking"
+readable_exchange="exchange-cccccccccccccccccccccccccccccccc"
+unreadable_exchange="exchange-dddddddddddddddddddddddddddddddd"
+mkdir -p "$asking/exchanges"
+cat > "$asking/exchanges/$readable_exchange.json" <<JSON
+{
+  "schema_version": 1,
+  "id": "$readable_exchange",
+  "product_id": "asking",
+  "asker": {"role": "architect", "agent": "architect"},
+  "answerer": {"role": "product-manager", "agent": "product-manager"},
+  "question": "is that trade-off one a user would accept?",
+  "max_rounds": 10,
+  "rounds": [
+    {
+      "number": 1,
+      "question": "is that trade-off one a user would accept?",
+      "answer": "Not at that price.",
+      "cost_usd": 0.30,
+      "asked_at": "$(stamp_days_ago 0 1)",
+      "answered_at": "$(stamp_days_ago 0 2)"
+    }
+  ],
+  "opened_at": "$(stamp_days_ago 0 0)",
+  "updated_at": "$(stamp_days_ago 0 2)"
+}
+JSON
+printf '{ this was an exchange and is no longer readable\n' \
+  > "$asking/exchanges/$unreadable_exchange.json"
+
 # Newest last, so the listing order is decided rather than left to the order the
 # files happened to be written in. This is when each log was last written, not
 # when its work began: the cost report groups by the moment recorded inside the
@@ -418,6 +499,65 @@ else
       empty="$("$status" --product demo -c --reviews 1 2>&1 || true)"
       contains "$empty" "no completed provider invocations since" \
         "a window with nothing in it says so, and says since when"
+
+      step "the report counts what the roles spent asking each other"
+      # A product whose roles have never asked each other anything reports what
+      # it always reported, which is checked by every claim above: demo has no
+      # exchanges and its totals are unchanged. This product has one.
+      asks="$("$status" --product chatty -c 2>&1 || true)"
+      printf '%s\n' "$asks"
+      contains "$asks" "$asked_exchange" "an exchange is priced beside the conversations"
+      # $1.50 of conversation and $1.00 of asking. A report reading only the
+      # event logs would be short by exactly the second number, which is the
+      # whole of what two roles spent talking to each other.
+      contains "$asks" "cost: \$2.50" "the total covers what the roles spent asking each other"
+      contains "$asks" "conversations: \$1.50 from 2 turn(s)   exchanges: \$1.00 from 2 round(s)" \
+        "a mixed total names the asking as its own kind"
+      # A round counts on the day it was answered, exactly as an invocation
+      # counts on the day it was made, so a thread answered on two days lands in
+      # both of their totals rather than only in the one it opened on.
+      contains "$(printf '%s\n' "$asks" | grep -c "$asked_exchange")" "2" \
+        "an exchange answered on two days gives a row to each of them"
+      contains "$(day_total "$(day_days_ago 2)" "$asks")" "0.60" \
+        "the day a round was answered on totals what that round cost"
+      contains "$(day_total "$today" "$asks")" "1.90" \
+        "and today totals its own round beside the conversation turns"
+      # The record keeps what the provider charged and not what it used, so the
+      # token columns say nothing rather than saying none.
+      ask_row="$(printf '%s\n' "$asks" | grep "$asked_exchange" | head -1 || true)"
+      contains "$(printf '%s\n' "$ask_row" | awk '{ print $(NF-5), $(NF-4), $(NF-3), $(NF-2) }')" \
+        "- - - -" "an exchange row leaves the token columns unstated rather than zero"
+      contains "$(printf '%s\n' "$ask_row" | awk '{ print $NF }')" "resolved" \
+        "and carries how the exchange ended where a run carries its status"
+
+      alone="$("$status" --product chatty -c "$asked_exchange" 2>&1 || true)"
+      contains "$alone" "cost: \$1.00" "one exchange can be priced on its own"
+      contains "$alone" "no token usage is recorded" \
+        "a report of nothing but asking says why it reports no tokens"
+      # Narrowing to a kind that is followed narrows the asking out with it:
+      # somebody who asked what the conversations cost is asking about those.
+      chats_only="$("$status" --product chatty -c --chats 2>&1 || true)"
+      contains "$chats_only" "cost: \$1.50" "--chats prices conversations alone"
+      missing "$chats_only" "$asked_exchange" "and leaves the exchanges out"
+
+      step "an exchange record that cannot be read is counted, not dropped"
+      # A product whose roles have only ever asked each other things, one of
+      # whose records is unreadable. The readable one is still priced, and the
+      # total says it is short rather than reading as complete -- which is the
+      # answer `yoyo cost` gives for the same records, and the two surfaces must
+      # not differ about what an unknown figure is.
+      unread="$("$status" --product asking -c 2>&1 || true)"
+      printf '%s\n' "$unread"
+      contains "$unread" "$readable_exchange" "the readable exchange is still priced beside it"
+      contains "$unread" "1 exchange record(s) could not be read" \
+        "an unreadable record is counted rather than passed over in silence"
+      contains "$unread" "$unreadable_exchange" "and is named, so somebody can go and look at it"
+      contains "$unread" "cost: ≥ \$0.30" \
+        "the total it is missing from is marked as a floor rather than a price"
+      # A product with nothing but exchanges is also a product with no recorded
+      # token usage, which is said rather than divided by.
+      contains "$unread" "no token usage is recorded" \
+        "and a report of nothing but asking still says why it reports no tokens"
       ;;
   esac
 fi

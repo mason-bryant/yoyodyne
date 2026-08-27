@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -187,6 +188,118 @@ func (i ItemPrice) Priced() bool { return i.UnknownRuns == 0 }
 // ever run for it, or the runs that were are no longer recorded, and neither is
 // a thing to charge somebody nothing for.
 func (i ItemPrice) Recorded() bool { return len(i.Runs) > 0 }
+
+// ExchangeSpend is what this product's roles have spent asking each other
+// things, summed over every exchange recorded for it. The invocation that
+// answers a round is money the harness spent on the operator's behalf like any
+// other, so leaving it out of what the harness has spent altogether would
+// understate that total by exactly as much as the ask channel is used.
+//
+// It is summed per product rather than per work item because that is as far as
+// the record goes. An exchange names a product, a repository, the two roles in
+// it, and the conversation the asker spoke from, and nothing that identifies a
+// piece of work: not a work item and not a run. The conversation it does name is
+// no substitute — a role's conversation is long-lived and discusses whatever it
+// is discussing that day, which is the same reason a conversation turn is left
+// unattributed rather than charged to whichever item it last mentioned.
+//
+// The membership of the channel is why that is not an oversight waiting to be
+// fixed here: the roles on it own documents and queues, and the two roles that
+// work inside a run — the developer and the reviewer — are not on it, so there
+// is no exchange today taken in the course of one item. If that changes, the
+// join belongs on ItemPrice beside the runs rather than in this figure, and
+// TestAnExchangeRecordNamesNoWorkItemToAttributeItsSpendTo fails the moment the
+// record can carry one.
+type ExchangeSpend struct {
+	// Exchanges is how many threads the figure covers and Rounds how many
+	// provider invocations they came to between them. The two travel together for
+	// the reason a phase's invocation count travels with its money: one long
+	// thread and ten short ones are different things to be looking at.
+	Exchanges int     `json:"exchanges,omitempty"`
+	Rounds    int     `json:"rounds,omitempty"`
+	CostUSD   float64 `json:"cost_usd"`
+	// Unreadable counts the records that could not be read, and is the exchange
+	// side of ItemPrice.UnknownRuns: those records are left out of the total
+	// rather than counted as nothing, and while this is non-zero the total is a
+	// lower bound. What it must never do is take the exchanges beside them with
+	// it — money that was read is money the operator is owed a figure for.
+	Unreadable int `json:"unreadable,omitempty"`
+	// Unknown says why, and is empty only when nothing went wrong. It carries the
+	// first record's reason where records failed, and the directory's own where
+	// the exchanges could not even be enumerated — which is the one case with no
+	// count to give, because how many are missing is itself unknown.
+	Unknown string `json:"unknown,omitempty"`
+}
+
+// Known reports a figure every recorded exchange is in.
+func (e ExchangeSpend) Known() bool { return e.Unreadable == 0 && e.Unknown == "" }
+
+// Enumerated reports records that could at least be counted, which is what
+// separates a total that is a lower bound from no total at all: an exchange
+// directory nothing can list leaves not even a floor, because what is missing
+// from it is unknown in number as well as in amount.
+func (e ExchangeSpend) Enumerated() bool { return e.Exchanges > 0 || e.Unreadable > 0 }
+
+// Recorded reports that there is something here to say: exchanges to price, or
+// a reason there is no figure for them. A product whose roles have never asked
+// each other anything has neither, and reporting it would be reporting the
+// absence of something nobody did.
+func (e ExchangeSpend) Recorded() bool { return e.Exchanges > 0 || !e.Known() }
+
+// ExchangeSpend reports what conducting this product's inter-role exchanges has
+// cost, as the provider reported each round. Every round carries the provider's
+// own figure, so this is a sum rather than an estimate, exactly as a run's price
+// is.
+//
+// It never fails, for the reason pricing a run never fails: exchanges that
+// cannot be read are a price nobody knows rather than an error, and reporting
+// one would take the runs beside them down with it.
+//
+// The records are read one at a time for the same reason a run is. One that
+// cannot be read is counted and left out, and the exchanges beside it are still
+// priced: a corrupt file must not be able to reduce this to nothing, because
+// nothing is exactly the answer that produced the undercount this figure exists
+// to remove. What it will not do either way is call an unread record free — a
+// caller holding a figure with anything unread holds a floor.
+func (s *Store) ExchangeSpend() ExchangeSpend {
+	store := s.exchanges()
+	ids, err := store.Records()
+	if err != nil {
+		// The directory itself could not be listed, so not even how many
+		// exchanges are missing from the figure is known — which is a different
+		// answer from a floor, and is given as itself.
+		return ExchangeSpend{Unknown: err.Error()}
+	}
+	var spend ExchangeSpend
+	for _, id := range ids {
+		recorded, err := store.Load(id)
+		if err != nil {
+			spend.Unreadable++
+			// The first reason stands for all of them. A caller reports the count
+			// beside it, and the reason is there to say what kind of broken this is
+			// rather than to enumerate every instance of it.
+			if spend.Unknown == "" {
+				spend.Unknown = err.Error()
+			}
+			continue
+		}
+		spend.Exchanges++
+		spend.Rounds += recorded.Spent()
+		spend.CostUSD += recorded.CostUSD()
+	}
+	return spend
+}
+
+// exchanges is this product's exchange store. Exchanges sit beside the runs
+// rather than inside them, so the store is reached from the run store's own root
+// rather than from a state root every caller of the read model would otherwise
+// have to carry a second time.
+func (s *Store) exchanges() *ExchangeStore {
+	return &ExchangeStore{
+		root:      filepath.Join(filepath.Dir(s.root), "exchanges"),
+		productID: s.productID,
+	}
+}
 
 // Price reports what every recorded run of one work item cost. Reading the
 // record decides nothing about the runs, so a run another process is executing
