@@ -280,7 +280,10 @@ you are re-pointing at a new workspace — stop the sink and delete
 and otherwise `~/Library/Application Support/Yoyodyne/state` on macOS or
 `~/.local/state/yoyodyne` elsewhere. The sink takes a new moment on its next pass
 and says which one. Leave `threads.json` beside it alone unless you also want new
-threads.
+threads, and `steers.json` — which is what it remembers about replies that
+steered the work — alone either way: a directive settled before the new moment is
+read past on its age, so starting the cursors over does not answer you again for
+everything you ever steered.
 
 **Do not run two.** One sink per product: two of them hold separate thread maps,
 so the second opens its own threads and posts everything twice. The second to
@@ -557,11 +560,36 @@ attribution rather than routing — the record reaches every run of the item
 whichever role it names — and a reply that mentions nobody is the product
 manager's.
 
-Every reply is answered in its own thread, with the directive as recorded and its
-identifier, or with why nothing was recorded. What that answer says is the whole
-of what happened: there is no other confirmation, and a reply that stopped work is
-shown at the top of the channel as well, because work stopping is what somebody
-who has opened no threads most needs to see.
+Every reply is answered in its own thread, **tagging you**, with the directive as
+recorded and its identifier, or with why nothing was recorded. What that answer
+says is the whole of what happened at that moment: there is no other
+confirmation, and a reply that stopped work is shown at the top of the channel as
+well, because work stopping is what somebody who has opened no threads most needs
+to see.
+
+Your own message then carries where that directive stands, as a reaction, so
+scrolling back through what you said says which of your replies is still open and
+which has been answered without any of them being read:
+
+| Mark | What it means |
+| --- | --- |
+| :thinking_face: | Recorded, and not settled yet. It goes on as the reply arrives and stays while the directive stands. |
+| :white_check_mark: | The directive is settled — carried out, decided, or answered. It lands when the outcome is said in the thread, not when the directive was written down. |
+| :no_entry_sign: | Nothing was recorded. The thread says why. |
+
+The mark is about the directive rather than about the harness having read you:
+recording one is not disposing of it, so a directive nobody has settled keeps
+saying so however long that takes. Those three are the whole vocabulary, they are
+only ever on a reply, and the four status marks are only ever on a thread's
+opener, so no message carries both.
+
+**What later becomes of it is said in the same thread, tagging you** — and that
+is the moment the mark on your message moves. A directive you asked for from a
+thread is remembered against that thread, so when the record says it was settled
+— by you at a terminal, in a conversation, by anybody — the settlement and what
+it was are said where you asked rather than only where it was typed. A directive
+recorded at a terminal has no thread and nobody to tag, so nothing is said about
+it here.
 
 Three things are refused, visibly:
 
@@ -639,6 +667,8 @@ command line whenever the digest is not enough.
 | `slack refused chat.postMessage: not_in_channel` | The app was never invited to the channel. `/invite @yoyodyne` in it. |
 | `slack refused chat.postMessage: channel_not_found` | The channel id or name in `.yoyodyne/config.yaml` is not one this app can see. Check it against the channel's About panel. |
 | `slack refused chat.postMessage: missing_scope` | The app was installed before the manifest's scopes were complete. Reinstall it from *OAuth & Permissions*. |
+| `a reply could not be marked as <mark>` | The same missing scope, on a reply rather than on a thread's opener: the answer in the thread said what happened and the reaction saying where the directive stands could not go on. Reinstall from *OAuth & Permissions*. A mark that is missed is not set later — what carries the account is the thread. |
+| `the reply that asked for this could not be marked as settled` | The outcome was said in the thread and tagged to whoever asked; only the mark on their own message could not be moved. Same remedy, same reason it costs nothing else. |
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
