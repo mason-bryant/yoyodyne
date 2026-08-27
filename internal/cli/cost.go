@@ -292,7 +292,8 @@ func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total fl
 // served from its own cache. Usage nobody reported is a dash rather than a
 // nought, because a run measured at nothing and a run nothing measured are the
 // same figure and opposite facts, and the second is the one that would make a
-// caching change look like it failed.
+// caching change look like it failed. A run the provider really did report as
+// reading nothing keeps its nought, which is a reading and says so.
 func renderCacheShare(tokens runstate.TokenUsage) string {
 	if !tokens.Reported() {
 		return "-"
@@ -368,8 +369,8 @@ func renderTokenSplit(tokens runstate.TokenUsage) string {
 		}
 		return ""
 	}
-	split := fmt.Sprintf("cache-read share %.1f%% of %d input token(s): %d cached, %d fresh, %d written to the cache; %d output",
-		tokens.CacheReadShare()*100, tokens.InputTotal(),
+	split := fmt.Sprintf("cache-read share %.1f%% of %d input token(s) over %d invocation(s): %d cached, %d fresh, %d written to the cache; %d output",
+		tokens.CacheReadShare()*100, tokens.InputTotal(), tokens.Measured,
 		tokens.CacheReadTokens, tokens.InputTokens, tokens.CacheCreationTokens, tokens.OutputTokens)
 	if tokens.Unreported > 0 {
 		split += fmt.Sprintf("; %d priced invocation(s) reported no usage and are outside it", tokens.Unreported)
@@ -396,10 +397,10 @@ func printCacheNote(writer io.Writer, tokens runstate.TokenUsage) {
 		fmt.Fprintln(writer, "cache-read share to report for this window rather than a share of nothing")
 		return
 	}
-	fmt.Fprintf(writer, "cached is the cache-read share of input tokens: %d of %d input token(s) came from the provider's\n",
-		tokens.CacheReadTokens, tokens.InputTotal())
-	fmt.Fprintln(writer, "cache, the rest fresh or written to it, and a change made to share a longer prompt prefix is kept")
-	fmt.Fprintln(writer, "or reverted on whether this rises")
+	fmt.Fprintf(writer, "cached is the cache-read share of input tokens: %d of %d input token(s) over %d priced invocation(s)\n",
+		tokens.CacheReadTokens, tokens.InputTotal(), tokens.Measured)
+	fmt.Fprintln(writer, "came from the provider's cache, the rest fresh or written to it, and a change made to share a")
+	fmt.Fprintln(writer, "longer prompt prefix is kept or reverted on whether this rises")
 	if tokens.Unreported > 0 {
 		fmt.Fprintf(writer, "%d priced invocation(s) reported no token usage at all and are outside that share entirely,\n", tokens.Unreported)
 		fmt.Fprintln(writer, "counted apart rather than added in as nothing")

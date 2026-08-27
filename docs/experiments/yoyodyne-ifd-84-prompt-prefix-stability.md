@@ -3,18 +3,18 @@
 Work item: yoyodyne-ifd.84, lever 5 of the token-efficiency brainstorm.
 Audit performed 2026-08-23 against the tree at that date.
 
-**Status: the change is landed; the instrument is landed; the measurement is
-outstanding and is an operator's to run.** A developer run cannot reach a
-provider, so no developer run produces the before/after window this is decided
-on. What is below is the audit that decided the change, the change itself, the
-command that now reports the criterion, and exactly what would tell the operator
-to keep it or revert it.
+**Status: the change is landed, the instrument is landed, the measurement has
+been taken, and it is a null result. By this document's own clause the change is
+to be reverted.** The numbers, the windows they were taken over, and what they
+do and do not establish are in [The measurement](#the-measurement) below.
 
 The criterion had no tooling behind it until yoyodyne-ifd.171, which is why this
-sat undecided: a null result was supposed to trigger a revert and nothing
-computed the number, so the experiment concluded neither way by default.
-`yoyo cost` now reports the cache-read share, so the decision below is a command
-away rather than a script somebody has to write first.
+sat undecided for four days: a null result was supposed to trigger a revert and
+nothing computed the number, so the experiment concluded neither way by default.
+`yoyo cost` now reports the cache-read share, and the measurement below was taken
+against the runs already recorded — which is the point worth keeping. Nothing new
+had to be run. The evidence had been accumulating in the event logs since the day
+the change landed, and what was missing was only something that would read it.
 
 ## What the lever is
 
@@ -97,11 +97,6 @@ two ends of the table. Invocations whose terminal carried no usage object are
 counted apart and named under the table; where a window is mostly those, it
 cannot answer, and the report says so rather than reporting a share of nought.
 
-**The decision is not yet taken.** Nothing here has been measured: this document
-records that the instrument exists and what to run, and the keep-or-revert call
-belongs to whoever first has a before/after window of real runs either side of
-2026-08-23. Until then the change stays, on the standing terms below.
-
 **Harm.** Compare a window of roughly 20 runs before and after on first-pass
 approval rate, repair attempts per landed item, and cost per landed item, all of
 which are already in the run records. The specific harm to watch for is
@@ -113,6 +108,61 @@ not real.
 **Null result.** If the cache-read share does not rise, the change failed at its
 purpose and is reverted. It buys nothing else — the prose reads no better either
 way — so there is no second reason to keep it.
+
+## The measurement
+
+Taken 2026-08-27 against the recorded run event logs, on the yoyodyne product.
+The boundary is exact rather than a date: `run-bd535e5ee0027b61fc5b190053699e0b`
+is the run that made this change, and it promoted `ee9d8841` onto `main` at
+`2026-08-23T10:41:35Z`. Every run started before that assembled its prompts
+without the reordering; every run started after it assembled them with it.
+
+| Window | Runs | Priced invocations | cache_read | + cache_creation | + fresh input | **Cache-read share** |
+|---|---|---|---|---|---|---|
+| Before — started 2026-08-23 00:00–09:59Z | 26 | 119 | 464,562,608 | 12,424,485 | 23,924 | **97.39%** |
+| After — started 2026-08-24 00:00–23:59Z | 31 | 137 | 613,259,701 | 19,998,749 | 16,407 | **96.84%** |
+
+Both windows clear the twenty runs the harm comparison asks for. There is no
+gap to fill between them: no run was started on 2026-08-21 or 2026-08-22, and
+the runs of 2026-08-23 after the promotion are left out rather than split,
+because a run that starts in the same hour a promotion lands is a run nobody can
+say which prompt it was given.
+
+**The share did not rise. It fell, by 0.55 points.** By the clause above that is
+a null result, the change failed at its purpose, and it is to be reverted. The
+revert is a separate change and is named as work rather than made here.
+
+### Why the number is what it is, and what it does not establish
+
+The fall is not evidence that the change did harm, and the reader should not take
+it as such. It is what a measure looks like when it cannot resolve what it was
+pointed at.
+
+Almost all of the cache-read in both windows is a developer session re-reading
+its own conversation on every turn. A single developer invocation in these
+windows reads between three and forty-seven million cached tokens; the entire
+block of text this change moved onto the shared prefix is a few thousand. The
+lever is four orders of magnitude below the noise, and the difference between the
+two windows is the mix of session lengths in each — the after window wrote
+proportionally more cache (3.26% of input against 2.67%), which is what a window
+with more, shorter sessions looks like.
+
+Beside that there is a structural finding the aggregate hides, and it is the one
+worth keeping. The short one-shot invocations — the reviewer's, which is the case
+the shared cross-run prefix was supposed to pay for — report
+`cache_read_input_tokens` of exactly **0** almost without exception, in both
+windows, while writing 10,000 to 160,000 tokens of fresh cache each time. Those
+invocations are not reading a shared prefix at all; each one pays to write its
+own. Whatever this change did to prefix stability, nothing downstream is
+converting it into a cache read, so the lever cannot pay until that is
+understood.
+
+So the honest reading is two things at once: the criterion as written is met and
+says revert, and the criterion as written could never have said anything else,
+because it was specified at a resolution the effect could not reach. Both belong
+in the record. The second is the precedent — a measurement-based revert clause
+has to be specified so that the measure can resolve the effect, and stating the
+metric is not the same as establishing that it discriminates.
 
 ## What the audit found and did not act on
 

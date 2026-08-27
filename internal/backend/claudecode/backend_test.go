@@ -200,6 +200,108 @@ func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
 	}
 }
 
+// The cache-read share `yoyo cost` reports is decoded off this terminal, by
+// internal/runstate, from one object under "usage" on the payload and by the
+// provider's own key names. Nothing else in the repository states that the two
+// sides agree: a usage object recorded one level deeper, under another key, or
+// flattened into the payload would leave every real run reporting no token usage
+// at all, while every test on the reading side went on passing against a fixture
+// it wrote itself. So the shape is asserted here, where it is written.
+//
+// The usage object is copied verbatim from a recorded invocation — run
+// run-bd535e5ee0027b61fc5b190053699e0b, developing yoyodyne-ifd.84 on
+// 2026-08-23, sequence 439 — so what is pinned is what a provider really sends
+// rather than the four fields the reader happens to want. The nested breakdowns
+// beside them matter: `cache_creation` and each entry of `iterations` repeat the
+// same key names, and a reader that descended into either would count the same
+// tokens two and three times over.
+func TestATerminalCarriesTheProvidersUsageWhereThePriceReaderLooksForIt(t *testing.T) {
+	t.Parallel()
+
+	const usage = `{"cache_creation":{"ephemeral_1h_input_tokens":187181,"ephemeral_5m_input_tokens":0},` +
+		`"cache_creation_input_tokens":187181,"cache_read_input_tokens":7796697,"inference_geo":"not_available",` +
+		`"input_tokens":114,"iterations":[{"cache_creation_input_tokens":31672,"cache_read_input_tokens":118409,` +
+		`"input_tokens":7,"output_tokens":1204}],"output_tokens":58231,"service_tier":"standard"}`
+	stream := `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done",` +
+		`"total_cost_usd":12.5,"usage":` + usage + `,"terminal_reason":"end_turn"}`
+
+	runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: stream + "\n"}}}
+	var terminal *execution.Event
+	if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "do the work",
+		PermissionMode:   "acceptEdits",
+		EventSink: func(event execution.Event) error {
+			if event.Type == execution.EventRunCompleted {
+				recorded := event
+				terminal = &recorded
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if terminal == nil {
+		t.Fatal("no terminal event was recorded")
+	}
+	// Decoded exactly as internal/runstate decodes it: a pointer, so that a
+	// terminal carrying no usage at all stays distinguishable from one reporting
+	// noughts, and by the provider's key names at the top level of the object.
+	var payload struct {
+		Usage *struct {
+			InputTokens         int64 `json:"input_tokens"`
+			OutputTokens        int64 `json:"output_tokens"`
+			CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+			CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(terminal.Payload, &payload); err != nil {
+		t.Fatalf("decode terminal payload: %v", err)
+	}
+	if payload.Usage == nil {
+		t.Fatalf(`terminal payload = %s, want the provider's usage object under "usage"`, terminal.Payload)
+	}
+	if payload.Usage.CacheReadTokens != 7796697 || payload.Usage.CacheCreationTokens != 187181 ||
+		payload.Usage.InputTokens != 114 || payload.Usage.OutputTokens != 58231 {
+		t.Fatalf("usage = %#v, want the recorded invocation's own top-level figures", *payload.Usage)
+	}
+
+	// And a terminal the provider ended without reporting usage records none,
+	// rather than an object of noughts. That is the whole reason the reader holds
+	// a pointer: an invocation nobody measured must not read as one measured at
+	// nothing.
+	unpriced := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":12.5,"terminal_reason":"end_turn"}` + "\n"}}}
+	terminal = nil
+	if _, err := (Backend{Runner: unpriced, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "do the work",
+		PermissionMode:   "acceptEdits",
+		EventSink: func(event execution.Event) error {
+			if event.Type == execution.EventRunCompleted {
+				recorded := event
+				terminal = &recorded
+			}
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if terminal == nil {
+		t.Fatal("no terminal event was recorded")
+	}
+	payload.Usage = nil
+	if err := json.Unmarshal(terminal.Payload, &payload); err != nil {
+		t.Fatalf("decode terminal payload: %v", err)
+	}
+	if payload.Usage != nil {
+		t.Fatalf("terminal payload = %s, want no usage object where the provider reported none", terminal.Payload)
+	}
+}
+
 // What a developer run is given beyond its tools, asserted from the settings
 // themselves rather than against the constant that produced them.
 //

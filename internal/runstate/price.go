@@ -170,13 +170,20 @@ type TokenUsage struct {
 	CacheReadTokens     int64 `json:"cache_read_tokens,omitempty"`
 	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
 	OutputTokens        int64 `json:"output_tokens,omitempty"`
-	// Unreported counts the priced invocations whose terminal carried no usage
-	// object at all. It is the token side of ItemPrice.UnknownRuns: those
-	// invocations are outside every figure here rather than counted as zero, and
-	// while it is non-zero the share is a share of a subset. Counting them as
-	// zero would drag a share towards nothing by exactly the invocations nobody
-	// has a measurement for, which is the one answer about them that is certainly
-	// wrong.
+	// Measured counts the priced invocations whose terminal carried a usage
+	// object, and Unreported the ones that carried none. Both are kept because
+	// the count is the only thing that tells them apart once they are summed: an
+	// invocation the provider reported as reading nothing and an invocation
+	// nobody has a reading for contribute the same nought to every figure above,
+	// and they are opposite facts. The first is a measurement, and belongs in the
+	// share; the second is the absence of one, and while it is non-zero the share
+	// is a share of a subset.
+	//
+	// Unreported is the token side of ItemPrice.UnknownRuns, and is kept out of
+	// the figures for the same reason: counting an unmeasured invocation as zero
+	// would drag a share towards nothing by exactly the invocations the measure
+	// cannot see, which is the one answer about them that is certainly wrong.
+	Measured   int `json:"measured_invocations,omitempty"`
 	Unreported int `json:"unreported_invocations,omitempty"`
 }
 
@@ -189,10 +196,13 @@ func (t TokenUsage) InputTotal() int64 {
 	return t.InputTokens + t.CacheReadTokens + t.CacheCreationTokens
 }
 
-// Reported reports usage there is a share to compute from. A caller separates a
-// genuine share of nothing from no measurement at all with it, because the two
-// are the same float and opposite facts.
-func (t TokenUsage) Reported() bool { return t.InputTotal() > 0 }
+// Reported reports at least one invocation the provider gave a reading for, so
+// that the share below is a measurement rather than the absence of one. It asks
+// whether anything was measured and not whether the measurement came to
+// anything: an invocation that really did read nothing is a share of nought, and
+// an invocation nobody measured has no share, and a caller that could not tell
+// those apart would report the second as the first.
+func (t TokenUsage) Reported() bool { return t.Measured > 0 }
 
 // CacheReadShare is the part of the input the provider served from its own
 // cache, between 0 and 1. It is the measure a prompt-caching change is kept or
@@ -212,6 +222,7 @@ func (t *TokenUsage) Merge(other TokenUsage) {
 	t.CacheReadTokens += other.CacheReadTokens
 	t.CacheCreationTokens += other.CacheCreationTokens
 	t.OutputTokens += other.OutputTokens
+	t.Measured += other.Measured
 	t.Unreported += other.Unreported
 }
 
@@ -665,7 +676,16 @@ type pricedEvent struct {
 
 // usageTokens is the part of the provider's usage object a share is computed
 // from. The field names are the provider's rather than the harness's, because
-// this decodes what the provider wrote.
+// this decodes what the provider wrote: the backend records the object verbatim
+// under "usage" on the terminal's payload, and everything beside these four --
+// the nested cache_creation breakdown, the per-iteration array, the service tier
+// -- is left where it is rather than descended into.
+//
+// That this is where the writer actually puts it is not something this file can
+// state on its own, and a fixture written on this side would agree with itself
+// whatever the writer did. TestATerminalCarriesTheProvidersUsageWhereThePriceReaderLooksForIt
+// in internal/backend/claudecode is what holds the two together, from the side
+// that writes.
 type usageTokens struct {
 	InputTokens         int64 `json:"input_tokens"`
 	OutputTokens        int64 `json:"output_tokens"`
@@ -685,6 +705,7 @@ func (p pricedEvent) tokens() TokenUsage {
 		CacheReadTokens:     usage.CacheReadTokens,
 		CacheCreationTokens: usage.CacheCreationTokens,
 		OutputTokens:        usage.OutputTokens,
+		Measured:            1,
 	}
 }
 

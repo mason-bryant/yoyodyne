@@ -377,11 +377,11 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 			RunID: "run-1", Status: runstate.StatusSucceeded, Outcome: runstate.OutcomeSucceeded,
 			StartedAt: started, CostUSD: 9.00, Invocations: 1,
 			Phases: runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1}},
-			Tokens: runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500},
+			Tokens: runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500, Measured: 4},
 		}},
 		TotalUSD: 9.00,
 		Phases:   runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1}},
-		Tokens:   runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500},
+		Tokens:   runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500, Measured: 4},
 	}}
 
 	var out bytes.Buffer
@@ -391,7 +391,7 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 		"cached",
 		// 2500 of the 4000 input tokens, however the provider billed each of them.
 		"62.5%",
-		"cached is the cache-read share of input tokens: 2500 of 4000 input token(s)",
+		"cached is the cache-read share of input tokens: 2500 of 4000 input token(s) over 4 priced invocation(s)",
 	} {
 		if !strings.Contains(rendered, required) {
 			t.Fatalf("rendered ledger = %q, want it to contain %q", rendered, required)
@@ -407,7 +407,7 @@ func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
 
 	out.Reset()
 	printPrices(&out, prices, nil, true)
-	if !strings.Contains(out.String(), "cache-read share 62.5% of 4000 input token(s): 2500 cached, 1300 fresh, 200 written to the cache; 5500 output") {
+	if !strings.Contains(out.String(), "cache-read share 62.5% of 4000 input token(s) over 4 invocation(s): 2500 cached, 1300 fresh, 200 written to the cache; 5500 output") {
 		t.Fatalf("rendered breakdown = %q, want the share spelled out per item and per run", out.String())
 	}
 }
@@ -439,9 +439,19 @@ func TestCostSaysWhenThereIsNoCacheReadShareRatherThanReportingNought(t *testing
 		t.Fatalf("ledger = %q, want no share where nothing was measured", rendered)
 	}
 
+	// An invocation the provider measured at nothing is the opposite case, and it
+	// keeps its nought: that is a reading, and reporting it as no reading would
+	// lose the one figure the provider actually gave.
+	unmeasured[0].Tokens = runstate.TokenUsage{Measured: 1}
+	out.Reset()
+	printPrices(&out, unmeasured, nil, false)
+	if rendered := out.String(); !strings.Contains(rendered, "0.0%") {
+		t.Fatalf("ledger = %q, want a measured nought reported as the reading it is", rendered)
+	}
+
 	// Where some invocations reported usage and others did not, the share is over
 	// what was measured and the rest is named beside it rather than folded in.
-	unmeasured[0].Tokens = runstate.TokenUsage{InputTokens: 250, CacheReadTokens: 750, Unreported: 1}
+	unmeasured[0].Tokens = runstate.TokenUsage{InputTokens: 250, CacheReadTokens: 750, Measured: 3, Unreported: 1}
 	out.Reset()
 	printPrices(&out, unmeasured, nil, false)
 	rendered = out.String()

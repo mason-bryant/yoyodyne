@@ -165,21 +165,35 @@ as the best cached one. An invocation whose terminal carried no usage object at
 all is counted apart and named under the table rather than added in as nought —
 a run nobody measured and a run measured at nothing are the same figure and
 opposite facts, and folding the first in would read as a caching change that
-achieved nothing. A window where nothing reported usage says so instead of
-reporting a share. The column carries no `≥`: it is a share rather than a sum,
-so an unpriced run does not leave it short, and the ask row leaves it empty
-because an exchange record carries what its rounds cost and no token counts at
-all.
+achieved nothing. The same distinction runs the other way: an invocation the
+provider really did report as reading nothing keeps its `0.0%`, because that is a
+reading, and a window where nothing reported usage says so instead of showing
+one. What separates them is the count of invocations behind the share, which is
+why every line carries it. The column carries no `≥`: it is a share rather than
+a sum, so an unpriced run does not leave it short, and the ask row leaves it
+empty because an exchange record carries what its rounds cost and no token counts
+at all.
+
+The share is over provider invocations rather than over runs, so a window is
+whatever set of runs you take it across — which is what makes it answer a
+before-and-after question about a change to what the harness sends. Whether it
+can answer one is a separate matter, and the ifd.84 experiment is the worked
+example of it not being able to: most of the cache-read in any window is a
+developer session re-reading its own conversation, so a lever worth a few
+thousand tokens of shared prefix does not move an aggregate built from tens of
+millions. See
+[`docs/experiments/yoyodyne-ifd-84-prompt-prefix-stability.md`](experiments/yoyodyne-ifd-84-prompt-prefix-stability.md)
+for the numbers and what they did and did not establish.
 
 Naming an item says the same thing per run, under each attempt:
 
 ```text
 yoyodyne-ifd.1.5: $49.43 across 4 run(s)
   development $29.18 from 4 invocation(s), review $5.78 from 4, repair $14.47 from 3; waited 3h37m for the provider
-  cache-read share 68.4% of 41905311 input token(s): 28663234 cached, 12984077 fresh, 258000 written to the cache; 194422 output
+  cache-read share 68.4% of 41905311 input token(s) over 11 invocation(s): 28663234 cached, 12984077 fresh, 258000 written to the cache; 194422 output
   run-c25525d6…  started 2026-08-18T14:31:34Z [cancelled, developing] $26.93 from 3 invocation(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
-    cache-read share 71.0% of 19218662 input token(s): 13645250 cached, 5461412 fresh, 112000 written to the cache; 88104 output
+    cache-read share 71.0% of 19218662 input token(s) over 3 invocation(s): 13645250 cached, 5461412 fresh, 112000 written to the cache; 88104 output
 ```
 
 The split is read out of the run's event log, which is what makes it answer for
