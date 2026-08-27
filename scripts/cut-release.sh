@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# cut-release.sh - cut one release: gate on the adoption walkthrough and the
-# checks, build the archives and their checksums for the tag, then tag the
-# commit they were built from.
+# cut-release.sh - cut one release: gate on its notes, the adoption walkthrough
+# and the checks, build the archives and their checksums for the tag, then tag
+# the commit they were built from.
 #
 #   make release VERSION=v0.3.0      what an operator runs
 #   scripts/cut-release.sh v0.3.0    the same thing, without make
@@ -20,11 +20,16 @@
 #
 # The order is deliberate: every gate runs before anything is written, and the
 # tag is created last, so a refusal at any point leaves the repository exactly
-# as it was. There is no half-cut release to clean up. The one thing written
-# before the tag is the housekeeping commit for the tracker's derived exports,
-# and it is written after the last gate has passed, for the reason given there.
-# It is held to the same claim: it is made or it is not, and a failure partway
-# through puts the index back rather than leaving the exports staged.
+# as it was. There is no half-cut release to clean up. Two things are written
+# before the tag, and both are held to that claim rather than excepted from it.
+# The housekeeping commit for the tracker's derived exports is written after the
+# last gate has passed, for the reason given there: it is made or it is not, and
+# a failure partway through puts the index back rather than leaving the exports
+# staged. And a release whose notes are missing has them drafted, which is the
+# single exception -- a cut with no story to tell writes docs/releases/<tag>.md
+# from the work items that landed and refuses, so the tag lands on a commit that
+# carries its own notes rather than on one they are added after. That refusal
+# says outright what it wrote.
 #
 # Requires git 2.9 or newer. Two things here have a floor: the `:(exclude)`
 # pathspec the cleanliness check uses needs 1.9, and `core.hooksPath`, which is
@@ -41,6 +46,10 @@ set -euo pipefail
 
 repository="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 walkthrough="$repository/scripts/walk-adoption.sh"
+notes_writer="$repository/scripts/release-notes.sh"
+# Where a release's notes live, versioned beside the code they describe and
+# named for the tag, so the release page and the repository tell one story.
+notes_home="$repository/docs/releases"
 # When this was reached through `make release`, use the same make.
 make_program="${MAKE:-make}"
 # Where `dist` writes, spelled the way the Makefile spells it: DIST ?= dist,
@@ -109,7 +118,7 @@ if [ -n "$dirty" ]; then
   refuse "the working tree has uncommitted changes, so the archives would not be the commit $tag names. Commit or stash them first"
 fi
 if [ -n "$(git -C "$repository" status --porcelain -- "${derived_exports[@]}")" ]; then
-  printf "the tracker's derived exports have changed; they are committed as housekeeping below\n"
+  printf "the tracker's derived exports have changed; they are committed as housekeeping once every gate is green\n"
 fi
 
 # Releases come off the branch integration lands on. A tag on a feature branch
@@ -139,6 +148,28 @@ if git -C "$repository" fetch --quiet origin "$default_branch" 2>/dev/null; then
 else
   printf 'SKIPPED: origin is unreachable, so whether HEAD is current was not checked\n'
 fi
+
+step "gate: this release's notes"
+# A release nobody can read is a release nobody adopts, so the notes are a gate
+# rather than a courtesy -- and they are gated here, before the walkthrough and
+# the cross-compile, because drafting them costs seconds and those cost minutes.
+#
+# The notes are the one thing a cut cannot finish on its own: which work is key
+# functionality, which is an enhancement, and which critical fix belongs at the
+# top is the product manager's judgement. So a missing file is drafted from the
+# items that landed and the cut refuses, leaving the operator a file to read,
+# place, and commit. The tag then names a commit that carries its own notes.
+notes_file="$notes_home/$tag.md"
+if [ ! -f "$notes_file" ]; then
+  printf '%s has no notes yet, so they are drafted here from what landed since\n' "$tag"
+  printf 'the last tag. Nothing else has been written and no tag exists.\n\n'
+  if ! bash "$notes_writer" "$tag"; then
+    refuse "$tag's notes could not be drafted, so $tag was not cut"
+  fi
+  refuse "drafted docs/releases/$tag.md and stopped there. Read it, move each item into the section its work belongs in, commit it, then cut $tag again -- that is the only thing this left behind"
+fi
+printf 'docs/releases/%s.md is present and committed, so %s will name a commit\n' "$tag" "$tag"
+printf 'that carries its own notes\n'
 
 step "gate: the adoption walkthrough"
 printf 'A release is what the install path consumes, so the documented first hour\n'
