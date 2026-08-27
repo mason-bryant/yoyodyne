@@ -3,10 +3,18 @@
 Work item: yoyodyne-ifd.84, lever 5 of the token-efficiency brainstorm.
 Audit performed 2026-08-23 against the tree at that date.
 
-**Status: the change is landed; the measurement is outstanding and is an
-operator's to run.** A developer run cannot reach a provider, so no before/after
-window exists yet. What is below is the audit that decided the change, the
-change itself, and exactly what would tell the operator to keep it or revert it.
+**Status: the change is landed; the instrument is landed; the measurement is
+outstanding and is an operator's to run.** A developer run cannot reach a
+provider, so no developer run produces the before/after window this is decided
+on. What is below is the audit that decided the change, the change itself, the
+command that now reports the criterion, and exactly what would tell the operator
+to keep it or revert it.
+
+The criterion had no tooling behind it until yoyodyne-ifd.171, which is why this
+sat undecided: a null result was supposed to trigger a revert and nothing
+computed the number, so the experiment concluded neither way by default.
+`yoyo cost` now reports the cache-read share, so the decision below is a command
+away rather than a script somebody has to write first.
 
 ## What the lever is
 
@@ -73,9 +81,26 @@ carries `cache_read_input_tokens` and `cache_creation_input_tokens`. The event
 logs are at `state/products/<product>/runs/<run-id>.events.jsonl`. The measure is
 the cache-read share of input tokens — `cache_read / (input + cache_read +
 cache_creation)` — summed over a window of runs. It must rise after this change.
-No `yoyo` command reports it today; `yoyo cost` prices runs in dollars and does
-not read the usage breakdown, so the share has to be computed from the event
-logs directly.
+
+`yoyo cost` reports it, in the `cached` column of the ledger and per run under
+`yoyo cost <item>`, from those same event logs:
+
+```sh
+./bin/yoyo cost                  # the cached column per item, and the share over everything
+./bin/yoyo cost yoyodyne-ifd.84  # per run, with the cached, fresh, and cache-write split
+./bin/yoyo cost --json           # tokens on each run and each item, for a window taken by hand
+```
+
+The runs are in identifier order rather than in date order, so a before/after
+window is cut on each run's `started_at` from the JSON rather than by reading
+two ends of the table. Invocations whose terminal carried no usage object are
+counted apart and named under the table; where a window is mostly those, it
+cannot answer, and the report says so rather than reporting a share of nought.
+
+**The decision is not yet taken.** Nothing here has been measured: this document
+records that the instrument exists and what to run, and the keep-or-revert call
+belongs to whoever first has a before/after window of real runs either side of
+2026-08-23. Until then the change stays, on the standing terms below.
 
 **Harm.** Compare a window of roughly 20 runs before and after on first-pass
 approval rate, repair attempts per landed item, and cost per landed item, all of

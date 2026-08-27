@@ -754,6 +754,138 @@ func TestStoreReportsWhatARunWaitedEvenWhenItCannotBePriced(t *testing.T) {
 	}
 }
 
+// What a change to the assembled prompt bought is not a question dollars can
+// answer -- a provider that changed its prices moves them too -- so the token
+// usage the provider reported on every terminal is read beside the money: per
+// run, and summed across the runs of an item, which is the window a cache-read
+// share is actually measured over.
+func TestStoreReadsTheCacheReadShareOfEveryPricedInvocation(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	first := testState(t, StatusSucceeded)
+	first.WorkItemID = "yoyodyne-ifd.84"
+	first.ProviderSessionID = "session-developer"
+	first.ReviewSessionID = "session-reviewer"
+	if err := store.Create(first); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// A developer attempt served mostly from the cache, and a review served
+	// entirely fresh: the share is over both, because what a window cost in
+	// tokens is what every invocation in it read.
+	appendUsageCostEvents(t, store, first.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0,
+		usageTokens{InputTokens: 100, OutputTokens: 4000, CacheReadTokens: 700, CacheCreationTokens: 200})
+	appendUsageCostEvents(t, store, first.RunID, 2, execution.EventRunCompleted, domain.RoleReviewer, 2.0,
+		usageTokens{InputTokens: 1000, OutputTokens: 500})
+
+	second := testState(t, StatusSucceeded)
+	second.RunID = mustRunID(t)
+	second.WorkItemID = first.WorkItemID
+	second.StartedAt = first.StartedAt.Add(time.Hour)
+	second.UpdatedAt = second.StartedAt
+	second.ProviderSessionID = "session-developer-2"
+	if err := store.Create(second); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendUsageCostEvents(t, store, second.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 5.0,
+		usageTokens{InputTokens: 200, OutputTokens: 1000, CacheReadTokens: 1800})
+
+	price, err := store.Price(first.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	// 700 cached of 1000 input for the attempt, and nothing of 1000 for the
+	// review: 700 of 2000 across the run.
+	if got := price.Runs[0].Tokens; got != (TokenUsage{InputTokens: 1100, CacheReadTokens: 700, CacheCreationTokens: 200, OutputTokens: 4500}) {
+		t.Fatalf("run tokens = %#v, want every invocation in the run", got)
+	}
+	if share := price.Runs[0].Tokens.CacheReadShare(); share != 0.35 {
+		t.Fatalf("run cache-read share = %v, want 0.35", share)
+	}
+	// The denominator is every input token however it was billed, not the fresh
+	// input alone: a prompt served entirely from the cache reports almost no
+	// fresh input, and dividing by that would read as the best cached prompt
+	// there has ever been.
+	if total := price.Tokens.InputTotal(); total != 4000 {
+		t.Fatalf("item input total = %d, want fresh, cached and cache writes across both runs", total)
+	}
+	if share := price.Tokens.CacheReadShare(); share != 0.625 {
+		t.Fatalf("item cache-read share = %v, want 2500 of 4000", share)
+	}
+	if price.Tokens.Unreported != 0 {
+		t.Fatalf("unreported = %d, want none where every terminal carried usage", price.Tokens.Unreported)
+	}
+}
+
+// An invocation whose terminal carried no usage object is one nobody has a
+// measurement for, and it is counted apart rather than added in as zero: folding
+// it in would drag the share down by exactly the invocations the measure cannot
+// see, which is the reading that would revert a caching change on evidence about
+// something else. Every run recorded before the harness kept the provider's
+// usage object is one of these.
+func TestStoreCountsAnInvocationThatReportedNoUsageApartFromTheShare(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.84"
+	state.ProviderSessionID = "session-developer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendUsageCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0,
+		usageTokens{InputTokens: 250, OutputTokens: 3000, CacheReadTokens: 750})
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 4.0)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	tokens := price.Runs[0].Tokens
+	if tokens.Unreported != 1 {
+		t.Fatalf("unreported = %d, want the terminal that carried no usage", tokens.Unreported)
+	}
+	// The share is over what was measured, and the money is over everything: the
+	// unmeasured invocation is priced like any other.
+	if share := tokens.CacheReadShare(); share != 0.75 {
+		t.Fatalf("cache-read share = %v, want 750 of the 1000 tokens anybody measured", share)
+	}
+	if price.TotalUSD != 13.0 {
+		t.Fatalf("total = %v, want the unmeasured invocation priced like any other", price.TotalUSD)
+	}
+
+	// A window where nothing reported usage has no share rather than a share of
+	// nothing, which is what Reported is for: the two are the same float and
+	// opposite facts.
+	legacy := TokenUsage{Unreported: 3}
+	if legacy.Reported() || legacy.CacheReadShare() != 0 {
+		t.Fatalf("legacy usage = %#v, want no share to report", legacy)
+	}
+}
+
+// appendUsageCostEvents records one invocation's terminal the way a backend
+// records it now, carrying the provider's own usage object beside the cost. It
+// is the shape every measurable run has; the two helpers below stand for the
+// runs recorded before there was a role or a usage object to carry.
+func appendUsageCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, role domain.AgentRole, cost float64, usage usageTokens) {
+	t.Helper()
+	// The keys are the provider's own, written out rather than marshalled from
+	// the type that decodes them: a tag renamed on one side of that would rename
+	// itself on the other and this would keep passing.
+	reported := map[string]any{
+		"input_tokens":                usage.InputTokens,
+		"output_tokens":               usage.OutputTokens,
+		"cache_read_input_tokens":     usage.CacheReadTokens,
+		"cache_creation_input_tokens": usage.CacheCreationTokens,
+	}
+	appendEvent(t, store, runID, sequence, eventType, map[string]any{
+		"role":           string(role),
+		"session_id":     "session-" + string(role),
+		"total_cost_usd": cost,
+		"usage":          reported,
+	})
+}
+
 // appendLegacyCostEvents records one invocation's terminal the way the harness
 // wrote them before a terminal named the role that made it: at the schema
 // version of the day, with nothing in the payload to say whose invocation it

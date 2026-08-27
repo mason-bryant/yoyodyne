@@ -151,6 +151,70 @@ func (p *PhaseSpend) Merge(other PhaseSpend) {
 	p.Waits.merge(other.Waits)
 }
 
+// TokenUsage is what the provider said it read and wrote to serve one or more
+// invocations, with the input split by how the provider billed it. It travels
+// beside the money because the money on its own cannot answer the question a
+// token-efficiency change asks of itself: a run that got cheaper because the
+// provider changed its prices and a run that got cheaper because more of its
+// prompt was already cached are the same figure in dollars and opposite facts
+// about the harness.
+//
+// The three input figures are disjoint parts of one input -- the provider bills
+// what it served from its cache at the cached rate, what it wrote into the cache
+// at the write rate, and the remainder fresh -- which is what makes the share
+// below a share rather than a ratio between unrelated numbers.
+type TokenUsage struct {
+	// InputTokens is the fresh input alone, as the provider reports it: the part
+	// of the prompt it neither served from its cache nor wrote into one.
+	InputTokens         int64 `json:"input_tokens,omitempty"`
+	CacheReadTokens     int64 `json:"cache_read_tokens,omitempty"`
+	CacheCreationTokens int64 `json:"cache_creation_tokens,omitempty"`
+	OutputTokens        int64 `json:"output_tokens,omitempty"`
+	// Unreported counts the priced invocations whose terminal carried no usage
+	// object at all. It is the token side of ItemPrice.UnknownRuns: those
+	// invocations are outside every figure here rather than counted as zero, and
+	// while it is non-zero the share is a share of a subset. Counting them as
+	// zero would drag a share towards nothing by exactly the invocations nobody
+	// has a measurement for, which is the one answer about them that is certainly
+	// wrong.
+	Unreported int `json:"unreported_invocations,omitempty"`
+}
+
+// InputTotal is every token the provider billed as input, however it billed it.
+// It is the denominator of the share, and it is the sum of the three rather than
+// the reported fresh input alone: a prompt served entirely from the cache is
+// reported with almost no fresh input, and dividing by that would make the
+// emptiest prompt read as the best cached one.
+func (t TokenUsage) InputTotal() int64 {
+	return t.InputTokens + t.CacheReadTokens + t.CacheCreationTokens
+}
+
+// Reported reports usage there is a share to compute from. A caller separates a
+// genuine share of nothing from no measurement at all with it, because the two
+// are the same float and opposite facts.
+func (t TokenUsage) Reported() bool { return t.InputTotal() > 0 }
+
+// CacheReadShare is the part of the input the provider served from its own
+// cache, between 0 and 1. It is the measure a prompt-caching change is kept or
+// reverted on, and it is zero on usage nothing reported.
+func (t TokenUsage) CacheReadShare() float64 {
+	total := t.InputTotal()
+	if total == 0 {
+		return 0
+	}
+	return float64(t.CacheReadTokens) / float64(total)
+}
+
+// Merge adds another invocation's, run's, or item's usage into this one, which
+// is what a share over a window of runs is made of.
+func (t *TokenUsage) Merge(other TokenUsage) {
+	t.InputTokens += other.InputTokens
+	t.CacheReadTokens += other.CacheReadTokens
+	t.CacheCreationTokens += other.CacheCreationTokens
+	t.OutputTokens += other.OutputTokens
+	t.Unreported += other.Unreported
+}
+
 // RunPrice is what one recorded run cost, as its own event log reports it.
 type RunPrice struct {
 	RunID      string `json:"run_id"`
@@ -175,6 +239,12 @@ type RunPrice struct {
 	// money is zero on a run that could not be priced; its waits are not, because
 	// they come from the run's own state rather than from the log that is gone.
 	Phases PhaseSpend `json:"phases"`
+	// Tokens is what the provider billed this run's invocations for, split by how
+	// it billed the input. It is not split by phase: the question it answers is
+	// about the prompt the harness assembles, which every phase assembles the same
+	// way, and a share per phase would be four small samples where the measure
+	// wants one.
+	Tokens TokenUsage `json:"tokens"`
 	// Unknown says why this run could not be priced, and is empty on one that
 	// was. A run carrying it is not a run that cost nothing: nothing survives to
 	// say what it cost, which is a different fact and is stated as itself.
@@ -195,6 +265,10 @@ type ItemPrice struct {
 	// the split earns its keep: an item that took three attempts is where the
 	// money that went on repair rather than on the change itself is visible.
 	Phases PhaseSpend `json:"phases"`
+	// Tokens is what the provider billed across every run of the item that could
+	// be priced, which is where the cache-read share earns its keep: one run is a
+	// sample and a window of them is the measure.
+	Tokens TokenUsage `json:"tokens"`
 	// UnknownRuns counts the runs whose evidence is gone. While it is non-zero
 	// the total is a lower bound on what the item cost.
 	UnknownRuns int `json:"unknown_runs,omitempty"`
@@ -386,6 +460,7 @@ func (s *Store) price(workItemID string, states []State) ItemPrice {
 			continue
 		}
 		price.TotalUSD += run.CostUSD
+		price.Tokens.Merge(run.Tokens)
 	}
 	return price
 }
@@ -418,7 +493,7 @@ func (s *Store) priceRun(state State) RunPrice {
 		run.Unknown = err.Error()
 		return run
 	}
-	spend, err := scanEventSpend(path)
+	spend, tokens, err := scanEventSpend(path)
 	if err != nil {
 		run.Unknown = err.Error()
 		return run
@@ -433,6 +508,7 @@ func (s *Store) priceRun(state State) RunPrice {
 	}
 	spend.Waits = waits
 	run.Phases = spend
+	run.Tokens = tokens
 	run.CostUSD = spend.TotalUSD()
 	run.Invocations = spend.Invocations()
 	return run
@@ -443,7 +519,7 @@ func (s *Store) priceRun(state State) RunPrice {
 // log with no phases in it is priced by -- a branch review is one reviewer and
 // nothing else -- and it is the split's own total said the short way.
 func scanEventCost(path string) (float64, int, error) {
-	spend, err := scanEventSpend(path)
+	spend, _, err := scanEventSpend(path)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -474,6 +550,13 @@ func scanEventCost(path string) (float64, int, error) {
 // to that attempt. The first attempt is the development and every attempt after
 // it is a repair.
 //
+// The token usage beside the money is read off the same terminals and is not
+// split by phase. What a share of it answers is a question about the prompt the
+// harness assembles rather than about the part of the run it was assembled for,
+// and a terminal that carried no usage object is counted apart rather than added
+// in as zero -- an invocation nobody measured must not be able to drag a share
+// down by exactly itself.
+//
 // Runs recorded before execution.TerminalRoleSchemaVersion had no role to omit,
 // so their terminals are read the way they were written: the reviewer announces
 // itself with a review.started and then makes exactly one invocation, so the
@@ -484,18 +567,19 @@ func scanEventCost(path string) (float64, int, error) {
 // sound for those runs is that the only two things that ever wrote into a run's
 // log were the developer's attempts and the reviewer, each announcing itself;
 // the role on the terminal is what stops that from having to stay true.
-func scanEventSpend(path string) (PhaseSpend, error) {
+func scanEventSpend(path string) (PhaseSpend, TokenUsage, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return PhaseSpend{}, errors.New("the event log is no longer recorded, so what it cost cannot be read")
+		return PhaseSpend{}, TokenUsage{}, errors.New("the event log is no longer recorded, so what it cost cannot be read")
 	}
 	if err != nil {
-		return PhaseSpend{}, fmt.Errorf("open event log to price the run: %w", err)
+		return PhaseSpend{}, TokenUsage{}, fmt.Errorf("open event log to price the run: %w", err)
 	}
 	defer file.Close()
 
 	var (
-		spend PhaseSpend
+		spend  PhaseSpend
+		tokens TokenUsage
 		// reviewing is set by a review announcing itself and cleared by the single
 		// invocation it makes rather than by the review closing, because a review
 		// the provider never answered closes with nothing at all -- and a bracket
@@ -519,7 +603,7 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 		}
 		var priced pricedEvent
 		if err := json.Unmarshal(line, &priced); err != nil {
-			return PhaseSpend{}, fmt.Errorf("decode event log to price the run: %w", err)
+			return PhaseSpend{}, TokenUsage{}, fmt.Errorf("decode event log to price the run: %w", err)
 		}
 		// The quick filter matches text anywhere in the line, so the decoded type
 		// is what decides: an agent quoting an event name is not an invocation and
@@ -531,6 +615,7 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 		if !priced.priced() {
 			continue
 		}
+		tokens.Merge(priced.tokens())
 		// An open bracket is spent by the first terminal that arrives whatever that
 		// terminal turns out to be, because the review that opened it has by then
 		// made the one invocation it makes.
@@ -554,22 +639,53 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return PhaseSpend{}, fmt.Errorf("read event log to price the run: %w", err)
+		return PhaseSpend{}, TokenUsage{}, fmt.Errorf("read event log to price the run: %w", err)
 	}
-	return spend, nil
+	return spend, tokens, nil
 }
 
 // pricedEvent is the little of an event pricing needs: which event it is, whose
-// invocation it ended, what the provider said that invocation cost, and the
-// schema it was written at -- which is what says whether a missing role is an
-// omission or a field that did not exist yet.
+// invocation it ended, what the provider said that invocation cost and read to
+// serve it, and the schema it was written at -- which is what says whether a
+// missing role is an omission or a field that did not exist yet.
 type pricedEvent struct {
 	SchemaVersion int                 `json:"schema_version"`
 	Type          execution.EventType `json:"type"`
 	Payload       struct {
 		Role         string  `json:"role"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
+		// Usage is the provider's own usage object, recorded verbatim on every
+		// terminal. It is a pointer so that a terminal carrying no usage at all is
+		// distinguishable from one that reported zeros: the first is an invocation
+		// nobody has a measurement for, the second is a measurement of nothing, and
+		// a share that treated them alike would be wrong by the first.
+		Usage *usageTokens `json:"usage"`
 	} `json:"payload"`
+}
+
+// usageTokens is the part of the provider's usage object a share is computed
+// from. The field names are the provider's rather than the harness's, because
+// this decodes what the provider wrote.
+type usageTokens struct {
+	InputTokens         int64 `json:"input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+}
+
+// tokens is what this invocation read and wrote, or an invocation counted as
+// unmeasured where its terminal carried no usage object.
+func (p pricedEvent) tokens() TokenUsage {
+	usage := p.Payload.Usage
+	if usage == nil {
+		return TokenUsage{Unreported: 1}
+	}
+	return TokenUsage{
+		InputTokens:         usage.InputTokens,
+		CacheReadTokens:     usage.CacheReadTokens,
+		CacheCreationTokens: usage.CacheCreationTokens,
+		OutputTokens:        usage.OutputTokens,
+	}
 }
 
 // invocationPhase is which part of a run one priced invocation served. Its zero

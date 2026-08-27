@@ -92,10 +92,10 @@ Every price `yoyo cost` reports is split by what the money bought, per run, per
 item, and across everything the harness has run:
 
 ```text
-item                                     runs  unpriced      develop       review       repair         cost    waited
-yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43     3h37m
-ASKS BETWEEN ROLES                          -         0            -            -            -        $4.12
-TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69    21h01m
+item                                     runs  unpriced      develop       review       repair         cost  cached    waited
+yoyodyne-ifd.1.5                            4         0       $29.18        $5.78       $14.47       $49.43   68.4%     3h37m
+ASKS BETWEEN ROLES                          -         0            -            -            -        $4.12       -
+TOTAL                                     176         1   ≥ $1764.42    ≥ $234.41    ≥ $732.75   ≥ $2735.69   61.2%    21h01m
 ```
 
 **ASKS BETWEEN ROLES** is what the roles spent asking each other, summed over
@@ -148,13 +148,38 @@ overnight read as expensive when what it was is slow. It comes from the run's
 own record rather than from its event log, which is why a run nothing can price
 still says how long it was held up.
 
+**cached** is the one column that is not money: the cache-read share of input
+tokens, `cache_read / (input + cache_read + cache_creation)`, read off the same
+terminals the price is. It is here because the money on its own cannot answer
+the question a token-efficiency change asks of itself — a run that got cheaper
+because the provider changed its prices and a run that got cheaper because more
+of its prompt was already cached are the same figure in dollars and opposite
+facts about the harness. It is the measure a change made to share a longer
+prompt prefix is kept or reverted on, and the first instrument any later
+input-token lever has.
+
+The denominator is every input token however the provider billed it, not the
+fresh input alone: a prompt served entirely from the cache is reported with
+almost no fresh input, and dividing by that would make the emptiest prompt read
+as the best cached one. An invocation whose terminal carried no usage object at
+all is counted apart and named under the table rather than added in as nought —
+a run nobody measured and a run measured at nothing are the same figure and
+opposite facts, and folding the first in would read as a caching change that
+achieved nothing. A window where nothing reported usage says so instead of
+reporting a share. The column carries no `≥`: it is a share rather than a sum,
+so an unpriced run does not leave it short, and the ask row leaves it empty
+because an exchange record carries what its rounds cost and no token counts at
+all.
+
 Naming an item says the same thing per run, under each attempt:
 
 ```text
 yoyodyne-ifd.1.5: $49.43 across 4 run(s)
   development $29.18 from 4 invocation(s), review $5.78 from 4, repair $14.47 from 3; waited 3h37m for the provider
+  cache-read share 68.4% of 41905311 input token(s): 28663234 cached, 12984077 fresh, 258000 written to the cache; 194422 output
   run-c25525d6…  started 2026-08-18T14:31:34Z [cancelled, developing] $26.93 from 3 invocation(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
+    cache-read share 71.0% of 19218662 input token(s): 13645250 cached, 5461412 fresh, 112000 written to the cache; 88104 output
 ```
 
 The split is read out of the run's event log, which is what makes it answer for
