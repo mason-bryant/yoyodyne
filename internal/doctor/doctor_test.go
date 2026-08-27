@@ -689,6 +689,70 @@ func TestADeclaredProviderIsDiagnosedByTheExecutableItRuns(t *testing.T) {
 	}
 }
 
+// Codex is a backend this build launches, so a diagnosis has to reach it through
+// its own adapter and route out of it with its own commands. Both ways it can be
+// broken are covered because the remedies differ from the other provider's in
+// both: an operator sent to `npm install -g @anthropic-ai/claude-code` or to
+// `claude auth login` is being told to fix a CLI they are not running, and a
+// diagnosis that does that is worse than one that says nothing.
+func TestCodexIsDiagnosedByItsOwnInstallAndLogin(t *testing.T) {
+	t.Parallel()
+
+	descriptor, known := backend.BuiltInDescriptor(domain.BackendCodex)
+	if !known {
+		t.Fatal("this build ships no description of the Codex backend")
+	}
+
+	t.Run("not installed", func(t *testing.T) {
+		t.Parallel()
+		w := newWorld(t)
+		w.absent("codex")
+
+		finding := diagnoseCodex(t, w, descriptor)
+		if finding.Status != StatusProblem || !strings.Contains(finding.Summary, "codex is not installed") {
+			t.Fatalf("finding = %#v, want the missing Codex CLI reported", finding)
+		}
+		if finding.Remedy != "npm install -g @openai/codex" {
+			t.Fatalf("remedy = %q, want the install that fixes it", finding.Remedy)
+		}
+	})
+
+	t.Run("installed but logged out", func(t *testing.T) {
+		t.Parallel()
+		w := newWorld(t)
+		w.runner.reply("codex --version", succeeded("codex-cli 0.44.0"))
+		w.runner.reply("codex login status", failed("Not logged in"))
+
+		finding := diagnoseCodex(t, w, descriptor)
+		if finding.Status != StatusProblem || !strings.Contains(finding.Summary, "not authenticated") {
+			t.Fatalf("finding = %#v, want the logged-out Codex CLI reported", finding)
+		}
+		if finding.Remedy != "codex login" {
+			t.Fatalf("remedy = %q, want the login that fixes it", finding.Remedy)
+		}
+	})
+
+	t.Run("installed and logged in", func(t *testing.T) {
+		t.Parallel()
+		w := newWorld(t)
+		w.runner.reply("codex --version", succeeded("codex-cli 0.44.0"))
+		w.runner.reply("codex login status", succeeded("Logged in using ChatGPT"))
+
+		finding := diagnoseCodex(t, w, descriptor)
+		if finding.Status != StatusOK {
+			t.Fatalf("finding = %#v, want a working Codex reported as working", finding)
+		}
+	})
+}
+
+func diagnoseCodex(t *testing.T, w *world, descriptor backend.Descriptor) Finding {
+	t.Helper()
+
+	diagnosis := &diagnosis{env: Environment{Runner: w.runner, LookPath: w.lookPath}}
+	return diagnosis.checkProvider(context.Background(), domain.BackendCodex, descriptor,
+		filepath.Join(w.project, config.DirectoryName, "config.yaml"))
+}
+
 // world is one installation, assembled broken or healthy. Everything a
 // diagnosis reads is arranged here, because the states worth being complete
 // over are exactly the ones nobody can arrange on a real machine on demand.
@@ -843,7 +907,7 @@ func (w *world) diagnose() Report {
 // the ordinary way a checks list goes wrong -- is a state a test can arrange by
 // writing the configuration alone.
 func (w *world) lookPath(program string) (string, error) {
-	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "gh": true, "go": true, "security": true}
+	installed := map[string]bool{"yoyo": true, "git": true, "bd": true, "claude": true, "codex": true, "gh": true, "go": true, "security": true}
 	if !installed[program] || w.missing[program] {
 		return "", errors.New("exec: \"" + program + "\": executable file not found in $PATH")
 	}

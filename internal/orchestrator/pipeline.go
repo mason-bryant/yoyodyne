@@ -532,11 +532,18 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
+	// The backend the developer named, not the one this used to assume. A run on
+	// Codex whose CLI is missing has to say so about Codex: sending the operator
+	// to install or log into the other provider is a remedy for a machine that is
+	// not the one in front of them. Which command puts it right is `yoyo doctor`'s
+	// to name, because it is the surface that knows how each provider is installed
+	// and logged into.
 	if !availability.Installed {
-		return Outcome{}, errors.New("Claude Code is not installed")
+		return Outcome{}, fmt.Errorf("the %s backend is not installed; `yoyo doctor` names what to install", developer.Backend)
 	}
 	if !availability.Authenticated {
-		return Outcome{}, fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before handing work to Yoyodyne (auth method: %s)", availability.AuthMethod)
+		return Outcome{}, fmt.Errorf("the %s backend is not authenticated; `yoyo doctor` names the login that fixes it (auth method: %s)",
+			developer.Backend, availability.AuthMethod)
 	}
 
 	item, err := p.Tracker.Show(ctx, workItemID)

@@ -352,13 +352,13 @@ func developerWriteToolIsScoped(tool string) bool {
 	return true
 }
 
+// validPermissionMode is the contract's vocabulary rather than this adapter's
+// own. Every mode in it is one this provider holds directly, which is what makes
+// this the whole of the check here; an adapter that cannot hold one of them
+// refuses it, and the set being named once is what stops a mode existing that
+// some adapter has never decided.
 func validPermissionMode(mode string) bool {
-	switch mode {
-	case "acceptEdits", "auto", "dontAsk", "manual", "plan":
-		return true
-	default:
-		return false
-	}
+	return backend.ValidPermissionMode(mode)
 }
 
 func shortRunID(runID string) string {

@@ -67,6 +67,35 @@ type RunRequest struct {
 	ReplySink func(fragment string)
 }
 
+// PermissionModes is every spelling a caller may put in
+// RunRequest.PermissionMode.
+//
+// The field is the harness's request for how permissive an invocation is, and
+// each adapter reads it in its own terms -- a Claude Code permission mode, a
+// Codex sandbox -- so the set of legal spellings belongs to the contract rather
+// than to whichever adapter happens to run. Every adapter must decide every one
+// of them: map it onto what it means there, or refuse it because that provider
+// cannot hold it. What naming the set prevents is the third thing, an adapter
+// that neither maps nor refuses a mode and so meets it as an invocation that
+// dies after work has already been claimed -- which is the opposite of refusing
+// a policy where the configuration is validated.
+//
+// The spellings are Claude Code's, because that is the vocabulary the harness
+// already emits and a second one would be a translation nobody needs. Adding a
+// mode here without deciding it in every adapter fails those adapters' own
+// tests, which is the point of the list being here rather than in one of them.
+var PermissionModes = []string{"acceptEdits", "auto", "dontAsk", "manual", "plan"}
+
+// ValidPermissionMode reports a spelling the contract names.
+func ValidPermissionMode(mode string) bool {
+	for _, known := range PermissionModes {
+		if mode == known {
+			return true
+		}
+	}
+	return false
+}
+
 // UsageLimit is a provider's report that a usage limit is exhausted. It is
 // deliberately not a failure: the work was never judged, only declined for want
 // of capacity, so what it calls for is a wait rather than a failure record. A

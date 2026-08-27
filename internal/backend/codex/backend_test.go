@@ -283,6 +283,52 @@ func TestTheSandboxIsWhatTheRolesPostureRequires(t *testing.T) {
 	}
 }
 
+// Every permission mode the contract names has to be decided here, one way or
+// the other. A mode this adapter neither maps nor refuses is one an invocation
+// meets only after work has been claimed, which is the opposite of a policy
+// refused where the configuration is validated — and it would be met by every
+// Codex run at once, silently, on the day somebody adds a sixth spelling to the
+// vocabulary for the other adapter's benefit.
+func TestEveryPermissionModeTheContractNamesIsDecided(t *testing.T) {
+	t.Parallel()
+
+	// What each mode becomes here, and empty for one this provider cannot hold.
+	// Refusing a mode is a decision; having no entry for it at all is not.
+	decided := map[string]string{
+		"plan":        sandboxReadOnly,
+		"acceptEdits": sandboxWorkspaceWrite,
+		"auto":        sandboxWorkspaceWrite,
+		"dontAsk":     sandboxWorkspaceWrite,
+		// codex exec is non-interactive and there is nobody to answer an approval
+		// prompt, so a run asking for one would hang until its idle bound killed it.
+		"manual": "",
+	}
+	for _, mode := range backendapi.PermissionModes {
+		want, stated := decided[mode]
+		if !stated {
+			t.Errorf("permission mode %q is in the contract's vocabulary and this adapter neither maps nor refuses it", mode)
+			continue
+		}
+		got, mapped := requestedSandbox(mode)
+		switch {
+		case want == "" && mapped:
+			t.Errorf("permission mode %q is meant to be refused and mapped to %q instead", mode, got)
+		case want != "" && got != want:
+			t.Errorf("permission mode %q mapped to %q, want %q", mode, got, want)
+		}
+	}
+	// The two the harness actually emits today, named so that a change to either
+	// emitter arrives here rather than in a run. internal/orchestrator's
+	// attemptDevelopment sends the first and internal/review's Review the second;
+	// TestARunOnCodexReachesTheProviderWithThePostureItsRolesRequire is what holds
+	// those two ends together through the layers that build the request.
+	for mode, want := range map[string]string{"acceptEdits": sandboxWorkspaceWrite, "plan": sandboxReadOnly} {
+		if got, mapped := requestedSandbox(mode); !mapped || got != want {
+			t.Errorf("the mode the harness emits, %q, mapped to %q (mapped %t), want %q", mode, got, mapped, want)
+		}
+	}
+}
+
 // A role or a policy this adapter cannot hold is refused before the provider is
 // ever started, which is the same claim the configuration makes when it refuses
 // the combination before work is assigned.
