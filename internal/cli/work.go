@@ -349,6 +349,8 @@ func snapshotOf(state runstate.State) chat.RunSnapshot {
 	case state.DirectivePause != nil:
 		snapshot.Detail = fmt.Sprintf("paused for unresolved directive %s: %s",
 			state.DirectivePause.DirectiveID, state.DirectivePause.Unresolved)
+	case state.DependencyPause != nil:
+		snapshot.Detail = "paused waiting on unfinished work it depends on: " + state.DependencyPause.Summary()
 	case state.UsageLimitResetsAt != nil:
 		snapshot.Detail = fmt.Sprintf("paused for %s until %s",
 			runstate.DescribePause(state.PauseCause, state.UsageLimitKind), state.UsageLimitResetsAt.UTC().Format(time.RFC3339))
@@ -500,6 +502,12 @@ func runReportOf(outcome orchestrator.Outcome) chat.RunReport {
 	// is where the directive itself is read.
 	if outcome.PausedByDirective != nil {
 		report.DirectivePause = outcome.PausedByDirective.Summary()
+	}
+	// A dependency pause is carried the same way and for the same reason: what a
+	// conversation says about it is which work is being waited on, and the items
+	// themselves are read with /show.
+	if outcome.PausedByDependency != nil {
+		report.DependencyPause = outcome.PausedByDependency.Summary()
 	}
 	// The operator's own pause is carried as the moment they placed it, which is
 	// the whole of what a conversation has to say about it: what lifts it is one
