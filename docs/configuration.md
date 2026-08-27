@@ -1997,6 +1997,14 @@ started rather than deriving it again. No wait is attached, because there is no
 condition to wait out: a dropped connection is already gone, and the provider's
 own retries are spent before the harness sees the terminal.
 
+A stream that ends one invocation twice spends the same budget. Two terminal
+results where there was only ever one ending judge nothing about the work, and
+neither can be told apart from the other — a subagent's completion carrying a
+terminal's marks is read as the invocation's, so the run's own ending arrives
+looking like the duplicate — so the invocation is asked again rather than
+published. Both endings stay in the run's event log. A stream the harness
+genuinely cannot read still fails the run.
+
 One budget covers both provider invocations a run makes. A review the provider
 killed is asked for again on the same count, without redeveloping the change,
 because what the budget bounds is how much of the provider's weather a single run
@@ -2021,7 +2029,9 @@ A refusal that would stand is never relaunched. A terminal `api_error` quoting a
 4xx status — a malformed request, a key that is not permitted, a limit the
 provider is enforcing — earns the identical answer on the next attempt, so it
 fails the run as it always did; so does a 529, which is a wait rather than a
-relaunch, and so does any terminal the API did not report at all.
+relaunch, and so does any terminal the API did not report at all. The invocation
+ended twice is the one thing outside the API's own errors that still relaunches,
+because it is not a verdict on anything.
 
 ## Losing a race for the target branch
 
