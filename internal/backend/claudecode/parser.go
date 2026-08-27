@@ -9,13 +9,19 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 const maxEventTextBytes = 16 << 10
 
 type streamParser struct {
-	runID    string
+	runID string
+	// role is who this invocation was made as, and it is written onto the
+	// terminal event so the record says whose invocation it priced rather than
+	// leaving that to be inferred from where the terminal sits in the log. See
+	// the terminal event types in internal/execution for what reads it.
+	role     domain.AgentRole
 	sequence *execution.Sequence
 	clock    execution.Clock
 	redactor execution.Redactor
@@ -236,9 +242,10 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
+func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
 	return &streamParser{
 		runID:    runID,
+		role:     role,
 		sequence: execution.NewSequence(lastSequence),
 		clock:    clock,
 		redactor: redactor,
@@ -554,6 +561,12 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 		eventType = execution.EventRunFailed
 	}
 	return p.emit(eventType, map[string]any{
+		// The role is the invocation saying whose it was. It costs the stream
+		// nothing and it is the whole of what makes the cost beside it
+		// attributable: a log holding several invocations otherwise says only
+		// where each terminal sits, and where a terminal sits is a fact about
+		// the order the harness happened to do things in.
+		"role":            string(p.role),
 		"session_id":      envelope.SessionID,
 		"is_error":        envelope.IsError,
 		"result":          truncate(envelope.Result),

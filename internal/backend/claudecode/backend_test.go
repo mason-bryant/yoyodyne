@@ -113,6 +113,93 @@ func TestRunParsesStructuredSuccessAndToolActivity(t *testing.T) {
 	}
 }
 
+// An invocation's terminal is the only event carrying what it cost, and a run's
+// log holds several invocations: the developer's attempts and the reviewer's
+// beside them. So the terminal has to say whose invocation it ended, or the
+// money on it can only be attributed by guessing from where in the log it sits
+// -- which is a fact about the order the harness happened to do things in, and
+// silently wrong for any invocation nobody anticipated. What reads this is the
+// phase split in internal/runstate.
+func TestATerminalNamesTheRoleTheInvocationWasMadeAs(t *testing.T) {
+	t.Parallel()
+
+	for _, testCase := range []struct {
+		name    string
+		role    domain.AgentRole
+		mode    string
+		tools   []string
+		stream  string
+		wanted  execution.EventType
+		isError bool
+	}{
+		{
+			name:   "a developer that finished",
+			role:   domain.RoleDeveloper,
+			mode:   "acceptEdits",
+			stream: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"done","total_cost_usd":12.5,"terminal_reason":"end_turn"}`,
+			wanted: execution.EventRunCompleted,
+		},
+		{
+			// A failed invocation is priced with the money it spent, so its terminal
+			// has to be attributable for the same reason a successful one does.
+			name:    "a developer the provider ended badly",
+			role:    domain.RoleDeveloper,
+			mode:    "acceptEdits",
+			stream:  `{"type":"result","subtype":"error","session_id":"session-1","is_error":true,"result":"API Error","total_cost_usd":1.5,"terminal_reason":"api_error"}`,
+			wanted:  execution.EventRunFailed,
+			isError: true,
+		},
+		{
+			name:   "a reviewer",
+			role:   domain.RoleReviewer,
+			mode:   readOnlyPermissionMode,
+			tools:  []string{},
+			stream: `{"type":"result","subtype":"success","session_id":"session-1","is_error":false,"result":"{}","total_cost_usd":0.75,"terminal_reason":"end_turn"}`,
+			wanted: execution.EventRunCompleted,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+
+			runner := &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessSucceeded, ExitCode: 0, Stdout: testCase.stream + "\n"}}}
+			var terminal *execution.Event
+			if _, err := (Backend{Runner: runner, Clock: fixedClock{}}).Run(context.Background(), backendapi.RunRequest{
+				RunID:            testRunID,
+				Role:             testCase.role,
+				WorkingDirectory: "/worktree",
+				Prompt:           "do the work",
+				PermissionMode:   testCase.mode,
+				AllowedTools:     testCase.tools,
+				EventSink: func(event execution.Event) error {
+					if event.Type == execution.EventRunCompleted || event.Type == execution.EventRunFailed {
+						recorded := event
+						terminal = &recorded
+					}
+					return nil
+				},
+			}); err != nil {
+				t.Fatalf("Run() error = %v", err)
+			}
+			if terminal == nil {
+				t.Fatal("no terminal event was recorded")
+			}
+			if terminal.Type != testCase.wanted {
+				t.Fatalf("terminal type = %q, want %q", terminal.Type, testCase.wanted)
+			}
+			var payload struct {
+				Role    string `json:"role"`
+				IsError bool   `json:"is_error"`
+			}
+			if err := json.Unmarshal(terminal.Payload, &payload); err != nil {
+				t.Fatalf("decode terminal payload: %v", err)
+			}
+			if payload.Role != string(testCase.role) || payload.IsError != testCase.isError {
+				t.Fatalf("terminal payload = %s, want role %q", terminal.Payload, testCase.role)
+			}
+		})
+	}
+}
+
 // What a developer run is given beyond its tools, asserted from the settings
 // themselves rather than against the constant that produced them.
 //

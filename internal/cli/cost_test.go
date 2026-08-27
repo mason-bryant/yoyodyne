@@ -310,6 +310,58 @@ func TestCostBreaksOneItemDownByRunAndSaysWhenNothingWasRun(t *testing.T) {
 	}
 }
 
+// Money that landed in no phase is money the phase columns do not add up to, so
+// the ledger says so out loud rather than leaving the reader to take the
+// difference. It stays silent on a healthy record: an unattributed figure is a
+// defect in whatever wrote the run's log, and a line reporting nought of them
+// every time is a line nobody reads on the day there is one.
+func TestCostSaysWhenPricedInvocationsLandedInNoPhase(t *testing.T) {
+	t.Parallel()
+
+	started := time.Date(2026, 8, 10, 9, 14, 2, 0, time.UTC)
+	stray := runstate.ItemPrice{
+		WorkItemID: "yoyodyne-ifd.172",
+		Runs: []runstate.RunPrice{{
+			RunID: "run-1", Status: runstate.StatusSucceeded, Outcome: runstate.OutcomeSucceeded,
+			Phase: runstate.PhaseComplete, StartedAt: started, CostUSD: 19.00, Invocations: 3,
+			Phases: runstate.PhaseSpend{
+				Development:  runstate.PhaseCost{CostUSD: 9.00, Invocations: 1},
+				Repair:       runstate.PhaseCost{CostUSD: 4.00, Invocations: 1},
+				Unattributed: runstate.PhaseCost{CostUSD: 6.00, Invocations: 1},
+			},
+		}},
+		TotalUSD: 19.00,
+		Phases: runstate.PhaseSpend{
+			Development:  runstate.PhaseCost{CostUSD: 9.00, Invocations: 1},
+			Repair:       runstate.PhaseCost{CostUSD: 4.00, Invocations: 1},
+			Unattributed: runstate.PhaseCost{CostUSD: 6.00, Invocations: 1},
+		},
+	}
+
+	var out bytes.Buffer
+	printPrices(&out, []runstate.ItemPrice{stray}, nil, false)
+	if !strings.Contains(out.String(), "1 priced invocation(s) worth $6.00 named no phase") {
+		t.Fatalf("ledger = %q, want the unplaced money named under the table", out.String())
+	}
+
+	// The per-item breakdown carries it in the split line itself, where the three
+	// phases are already spelled out and a fourth figure is what makes them add up.
+	out.Reset()
+	printPrices(&out, []runstate.ItemPrice{stray}, nil, true)
+	if !strings.Contains(out.String(), "unattributed $6.00 from 1") {
+		t.Fatalf("breakdown = %q, want the unplaced money in the split", out.String())
+	}
+
+	// And nothing is said about it when there is none of it.
+	out.Reset()
+	healthy := stray
+	healthy.Phases.Unattributed = runstate.PhaseCost{}
+	printPrices(&out, []runstate.ItemPrice{healthy}, nil, false)
+	if strings.Contains(out.String(), "named no phase") {
+		t.Fatalf("ledger = %q, want nothing said about money that all landed somewhere", out.String())
+	}
+}
+
 // A backfill that could not reach an item has to say which one, or the ledger
 // reads as complete while part of it was never written.
 func TestCostNamesThePricesItCouldNotRecord(t *testing.T) {

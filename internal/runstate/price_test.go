@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
@@ -191,9 +193,9 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	}
 	// A developer invocation, a repair attempt, and one the provider ended in an
 	// error: the failure cost money too, so it is priced rather than ignored.
-	appendCostEvents(t, store, first.RunID, 1, execution.EventRunCompleted, 6.5)
-	appendCostEvents(t, store, first.RunID, 2, execution.EventRunCompleted, 2.25)
-	appendCostEvents(t, store, first.RunID, 3, execution.EventRunFailed, 0.25)
+	appendLegacyCostEvents(t, store, first.RunID, 1, execution.EventRunCompleted, 6.5)
+	appendLegacyCostEvents(t, store, first.RunID, 2, execution.EventRunCompleted, 2.25)
+	appendLegacyCostEvents(t, store, first.RunID, 3, execution.EventRunFailed, 0.25)
 
 	second := testState(t, StatusSucceeded)
 	second.RunID = mustRunID(t)
@@ -208,7 +210,7 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	if err := store.Create(second); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, second.RunID, 1, execution.EventRunCompleted, 19.0)
+	appendLegacyCostEvents(t, store, second.RunID, 1, execution.EventRunCompleted, 19.0)
 
 	// Another item's run must never reach this item's price.
 	other := testState(t, StatusSucceeded)
@@ -218,7 +220,7 @@ func TestStorePricesEveryRunMadeForAnItem(t *testing.T) {
 	if err := store.Create(other); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, other.RunID, 1, execution.EventRunCompleted, 100)
+	appendLegacyCostEvents(t, store, other.RunID, 1, execution.EventRunCompleted, 100)
 
 	price, err := store.Price(first.WorkItemID)
 	if err != nil {
@@ -265,7 +267,7 @@ func TestStorePricesARunWithNoSurvivingRecordAsUnknown(t *testing.T) {
 	if err := store.Create(kept); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, kept.RunID, 1, execution.EventRunCompleted, 3.5)
+	appendLegacyCostEvents(t, store, kept.RunID, 1, execution.EventRunCompleted, 3.5)
 
 	price, err := store.Price(lost.WorkItemID)
 	if err != nil {
@@ -356,7 +358,7 @@ func TestStorePricesEveryItemItHasRun(t *testing.T) {
 		if err := store.Create(state); err != nil {
 			t.Fatalf("Create() error = %v", err)
 		}
-		appendCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 1.5)
+		appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 1.5)
 	}
 
 	prices, err := store.Prices()
@@ -420,7 +422,7 @@ func TestStorePricesOnlyRealInvocations(t *testing.T) {
 		"text":           `the last "run.completed" event said it was done`,
 		"total_cost_usd": 99.0,
 	})
-	appendCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 4.0)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -450,13 +452,13 @@ func TestStoreSplitsWhatARunSpentByThePhaseItServed(t *testing.T) {
 	}
 	// The change, a review that asked for repair, the repair, and the review that
 	// took it: the shape every run of any length has.
-	appendCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 9.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 9.0)
 	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
-	appendCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, 2.0)
+	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, 2.0)
 	appendEvent(t, store, state.RunID, 4, execution.EventReviewCompleted, nil)
-	appendCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 4.0)
 	appendEvent(t, store, state.RunID, 6, execution.EventReviewStarted, nil)
-	appendCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, 1.5)
+	appendLegacyCostEvents(t, store, state.RunID, 7, execution.EventRunCompleted, 1.5)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -499,11 +501,11 @@ func TestStoreChargesAReissuedInvocationToTheAttemptItReissues(t *testing.T) {
 	}
 	// The provider refused the first attempt for want of capacity, the reissue
 	// finished it, and only then did a review send it back for repair.
-	appendCostEvents(t, store, state.RunID, 1, execution.EventRunFailed, 10.5)
-	appendCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 8.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunFailed, 10.5)
+	appendLegacyCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, 8.0)
 	appendEvent(t, store, state.RunID, 3, execution.EventReviewStarted, nil)
-	appendCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.0)
-	appendCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 3.0)
+	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.0)
+	appendLegacyCostEvents(t, store, state.RunID, 5, execution.EventRunCompleted, 3.0)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -535,11 +537,11 @@ func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
 	if err := store.Create(state); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 6.0)
+	appendLegacyCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, 6.0)
 	appendEvent(t, store, state.RunID, 2, execution.EventReviewStarted, nil)
 	// The reviewer died without a verdict, so nothing closed the review.
-	appendCostEvents(t, store, state.RunID, 3, execution.EventRunFailed, 0.5)
-	appendCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.5)
+	appendLegacyCostEvents(t, store, state.RunID, 3, execution.EventRunFailed, 0.5)
+	appendLegacyCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, 2.5)
 
 	price, err := store.Price(state.WorkItemID)
 	if err != nil {
@@ -551,6 +553,161 @@ func TestStoreClosesAReviewBracketOnTheInvocationItMade(t *testing.T) {
 	}
 	if phases.Repair != (PhaseCost{CostUSD: 2.5, Invocations: 1}) {
 		t.Fatalf("repair = %#v, want the developer invocation after the lost review", phases.Repair)
+	}
+}
+
+// Every invocation says which role made it, so the split reads the phase off
+// the invocation rather than off where its terminal happens to sit. Nothing here
+// announces a review, and the reviewer's money still lands in review: a bracket
+// somebody forgot to open, or a reviewer asked again without re-announcing, no
+// longer moves a review into the developer's columns.
+func TestStoreReadsAnInvocationsPhaseFromTheRoleItRecorded(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.172"
+	state.ProviderSessionID = "session-developer"
+	state.ReviewSessionID = "session-reviewer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	appendRoleCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleReviewer, 2.0)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
+	appendRoleCostEvents(t, store, state.RunID, 4, execution.EventRunCompleted, domain.RoleReviewer, 1.5)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
+	}
+	if phases.Review != (PhaseCost{CostUSD: 3.5, Invocations: 2}) {
+		t.Fatalf("review = %#v, want both reviewer invocations without an announcement", phases.Review)
+	}
+	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want the second developer attempt", phases.Repair)
+	}
+	if phases.Unattributed != (PhaseCost{}) {
+		t.Fatalf("unattributed = %#v, want nothing left over", phases.Unattributed)
+	}
+	if phases.TotalUSD() != price.TotalUSD {
+		t.Fatalf("split = %v, total = %v", phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
+// A phase bucket is somewhere an invocation is put, never somewhere it lands by
+// default. An invocation from a role the split has no place for -- a summarizer,
+// a second reviewer nobody accounted for, anything a later feature invokes into
+// a run -- is money that stays visible as unplaced: it is in the run's total,
+// because the harness spent it, and in none of the three, because charging it to
+// repair would inflate repair on exactly the runs the figure is read from.
+func TestStoreLeavesAnInvocationThatNamedNoPhaseOutOfEveryPhase(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	state := testState(t, StatusSucceeded)
+	state.WorkItemID = "yoyodyne-ifd.172"
+	state.ProviderSessionID = "session-developer"
+	if err := store.Create(state); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, state.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	// An invocation the phase split knows nothing about, sitting exactly where an
+	// unannounced one used to be read as a repair attempt.
+	appendRoleCostEvents(t, store, state.RunID, 2, execution.EventRunCompleted, domain.RoleProductManager, 6.0)
+	appendRoleCostEvents(t, store, state.RunID, 3, execution.EventRunCompleted, domain.RoleDeveloper, 4.0)
+
+	price, err := store.Price(state.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Unattributed != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+		t.Fatalf("unattributed = %#v, want the invocation that named no phase", phases.Unattributed)
+	}
+	if phases.Development != (PhaseCost{CostUSD: 9.0, Invocations: 1}) {
+		t.Fatalf("development = %#v, want the first developer attempt alone", phases.Development)
+	}
+	// The developer attempt after it is still the second attempt, and still the
+	// only repair: an invocation nothing placed does not end an attempt either.
+	if phases.Repair != (PhaseCost{CostUSD: 4.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want only the developer's second attempt", phases.Repair)
+	}
+	if phases.TotalUSD() != price.TotalUSD || price.TotalUSD != 19.0 {
+		t.Fatalf("split = %v, total = %v, want the unplaced money in both", phases.TotalUSD(), price.TotalUSD)
+	}
+}
+
+// The criterion the whole attribution exists for: no priced terminal lands in a
+// phase because of where it sits. An invocation recorded today that says nothing
+// about whose it is has failed to say, and it is placed nowhere -- which is what
+// makes a shadow reviewer, a summarizer, or anything a later feature invokes
+// into a run visible as unplaced money instead of silently inflating repair on
+// the runs the figures are read from.
+//
+// The schema version is what tells that apart from a log written before there
+// was a role to omit. Both terminals below carry no role and sit in exactly the
+// same place; only the version differs, and only one of them is placed.
+func TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	current := testState(t, StatusSucceeded)
+	current.WorkItemID = "yoyodyne-ifd.172"
+	current.ProviderSessionID = "session-developer"
+	if err := store.Create(current); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendRoleCostEvents(t, store, current.RunID, 1, execution.EventRunCompleted, domain.RoleDeveloper, 9.0)
+	// Recorded at today's schema with no role: an invocation that could have said
+	// whose it was and did not.
+	appendEvent(t, store, current.RunID, 2, execution.EventRunCompleted, map[string]any{"total_cost_usd": 6.0})
+
+	price, err := store.Price(current.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	phases := price.Runs[0].Phases
+	if phases.Unattributed != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+		t.Fatalf("unattributed = %#v, want the terminal that named no phase", phases.Unattributed)
+	}
+	if phases.Repair != (PhaseCost{}) {
+		t.Fatalf("repair = %#v, want nothing charged to a phase by position", phases.Repair)
+	}
+	if phases.TotalUSD() != price.TotalUSD || price.TotalUSD != 15.0 {
+		t.Fatalf("split = %v, total = %v, want the unplaced money in both", phases.TotalUSD(), price.TotalUSD)
+	}
+
+	// The same shape at the schema those runs were actually recorded at is a
+	// developer's second attempt, exactly as it always was: nothing can be added
+	// to a log that is already closed, so reading it any other way would rewrite
+	// what the recorded history cost rather than describe it.
+	legacy := testState(t, StatusSucceeded)
+	legacy.RunID = mustRunID(t)
+	legacy.WorkItemID = current.WorkItemID
+	legacy.StartedAt = current.StartedAt.Add(time.Hour)
+	legacy.UpdatedAt = legacy.StartedAt
+	legacy.ProviderSessionID = "session-developer-2"
+	if err := store.Create(legacy); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	appendLegacyCostEvents(t, store, legacy.RunID, 1, execution.EventRunCompleted, 9.0)
+	appendLegacyCostEvents(t, store, legacy.RunID, 2, execution.EventRunCompleted, 6.0)
+
+	price, err = store.Price(current.WorkItemID)
+	if err != nil {
+		t.Fatalf("Price() error = %v", err)
+	}
+	older := price.Runs[1].Phases
+	if older.Repair != (PhaseCost{CostUSD: 6.0, Invocations: 1}) {
+		t.Fatalf("repair = %#v, want the older run read the way it was written", older.Repair)
+	}
+	if older.Unattributed != (PhaseCost{}) {
+		t.Fatalf("unattributed = %#v, want nothing unplaced in a log with no role to omit", older.Unattributed)
 	}
 }
 
@@ -569,7 +726,7 @@ func TestStoreReportsWhatARunWaitedEvenWhenItCannotBePriced(t *testing.T) {
 	if err := store.Create(priced); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, priced.RunID, 1, execution.EventRunCompleted, 4.0)
+	appendLegacyCostEvents(t, store, priced.RunID, 1, execution.EventRunCompleted, 4.0)
 
 	lost := testState(t, StatusFailed)
 	lost.RunID = mustRunID(t)
@@ -597,10 +754,45 @@ func TestStoreReportsWhatARunWaitedEvenWhenItCannotBePriced(t *testing.T) {
 	}
 }
 
-func appendCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, cost float64) {
+// appendLegacyCostEvents records one invocation's terminal the way the harness
+// wrote them before a terminal named the role that made it: at the schema
+// version of the day, with nothing in the payload to say whose invocation it
+// ended. Those runs are most of the recorded history and they are still priced,
+// so what they look like is worth stating explicitly rather than producing by
+// leaving a field out of a current event -- which is a different thing entirely,
+// and is what the test below this one is about.
+func appendLegacyCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, cost float64) {
+	t.Helper()
+	payload, err := json.Marshal(map[string]any{
+		"session_id":     "session-developer",
+		"total_cost_usd": cost,
+	})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	event := execution.Event{
+		SchemaVersion: execution.TerminalRoleSchemaVersion - 1,
+		RunID:         runID,
+		Sequence:      sequence,
+		Timestamp:     time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC),
+		Type:          eventType,
+		Source:        "claude-code",
+		Payload:       payload,
+	}
+	if err := store.AppendEvent(event); err != nil {
+		t.Fatalf("AppendEvent() error = %v", err)
+	}
+}
+
+// appendRoleCostEvents records one invocation's terminal the way a backend
+// records it now: naming the role the invocation was made as beside what the
+// provider said it cost. The helper above deliberately does not, because the
+// runs it stands for are the ones recorded before a terminal said whose it was.
+func appendRoleCostEvents(t *testing.T, store *Store, runID string, sequence uint64, eventType execution.EventType, role domain.AgentRole, cost float64) {
 	t.Helper()
 	appendEvent(t, store, runID, sequence, eventType, map[string]any{
-		"session_id":     "session-developer",
+		"role":           string(role),
+		"session_id":     "session-" + string(role),
 		"total_cost_usd": cost,
 	})
 }

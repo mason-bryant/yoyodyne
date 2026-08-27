@@ -193,11 +193,7 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		fmt.Fprintln(writer, "so every total it touches is a floor rather than a price")
 	}
 	printAskNote(writer, exchanges)
-	// The split is said to be exhaustive rather than said to add up, because each
-	// column is rounded to the cent on its own and three of them can land a penny
-	// away from the total they came from. What matters is that nothing is missing
-	// from them, which is the claim the rounding cannot make false.
-	fmt.Fprintln(writer, "develop, review and repair account for every priced run invocation; waited is time rather than money")
+	printSplitNote(writer, phases)
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
 }
 
@@ -304,15 +300,48 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 // cost nothing, because a review that never happened and a review that was free
 // read identically in a line that leaves the empty ones out, and telling those
 // two apart is what splitting the price up is for.
+//
+// The unattributed money is the exception, and is named only when there is some.
+// It is not a phase — it is invocations the record does not account for — so a
+// zero beside the three would read as a fourth part of the work that happened to
+// be free, which is the opposite of what it says.
 func renderPhaseSplit(phases runstate.PhaseSpend, unpriced int) string {
 	split := fmt.Sprintf("development %s from %d invocation(s), review %s from %d, repair %s from %d",
 		renderTotal(phases.Development.CostUSD, unpriced), phases.Development.Invocations,
 		renderTotal(phases.Review.CostUSD, unpriced), phases.Review.Invocations,
 		renderTotal(phases.Repair.CostUSD, unpriced), phases.Repair.Invocations)
+	if phases.Unattributed.Invocations > 0 {
+		split += fmt.Sprintf(", unattributed %s from %d",
+			renderTotal(phases.Unattributed.CostUSD, unpriced), phases.Unattributed.Invocations)
+	}
 	if waits := renderWaits(phases.Waits); waits != "" {
 		split += "; " + waits
 	}
 	return split
+}
+
+// printSplitNote says what the three phase columns come to as a whole. The
+// split is said to be exhaustive rather than said to add up, because each column
+// is rounded to the cent on its own and three of them can land a penny away from
+// the total they came from. What matters is that nothing is missing from them,
+// which is the claim the rounding cannot make false — and the one case where it
+// is false, it is not made: an invocation that reached a run's log without saying
+// which part of the run it served is money in the total and in none of the three,
+// and the reader is told how much rather than left to take the difference.
+//
+// That case is a defect in whatever wrote the log rather than a cost of the
+// work, and it is expected never to arise, which is why the line is absent
+// instead of reading nought: a figure printed every time is one nobody reads on
+// the day it is not nought.
+func printSplitNote(writer io.Writer, phases runstate.PhaseSpend) {
+	if phases.Unattributed.Invocations == 0 {
+		fmt.Fprintln(writer, "develop, review and repair account for every priced run invocation; waited is time rather than money")
+		return
+	}
+	fmt.Fprintln(writer, "waited is time rather than money")
+	fmt.Fprintf(writer, "%d priced invocation(s) worth %s named no phase: they are in the total and in none of develop,\n",
+		phases.Unattributed.Invocations, renderFloor(phases.Unattributed.CostUSD, false))
+	fmt.Fprintln(writer, "review or repair, which is money the harness spent that nothing in the run record accounts for")
 }
 
 // renderWaits says how long work was held up and by what. The two waits are

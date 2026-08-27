@@ -125,11 +125,21 @@ invocation it made, and **repair** is every developer attempt after the first �
 the failing check, the refused path, and the reviewer's findings handed back are
 all repair, because from the money's point of view each is the same thing: the
 change being made again because it was not right the first time. Every priced
-run invocation lands in exactly one of the three, so nothing is missing from them
-and the split is a decomposition of the price rather than a second opinion about
-it. An invocation the provider refused or killed and the harness reissued is
+run invocation that says which part of the run it served lands in exactly one of
+the three, so nothing is missing from them and the split is a decomposition of
+the price rather than a second opinion about it. An invocation the provider
+refused or killed and the harness reissued is
 charged to the attempt it was reissuing, not counted as a repair nobody asked
 for: what an attempt cost is what it took to get it made.
+
+An invocation that ends in a run's log without saying which part of the run it
+served is the one thing none of the three will take. It is counted in the total
+and named in a line under the table instead — how many, and what they cost —
+because charging it to a phase would put somebody else's money in a column the
+operator reads to decide something. That line is absent from a healthy record:
+anything in it is a defect in whatever wrote the log rather than a cost of the
+work. What "without saying" means exactly, and why the runs recorded before
+anything could say are unaffected, is below.
 
 **waited** is time rather than money — a provider that would not serve the
 account, and the harness parked on the operator's hold — and it is counted apart
@@ -147,12 +157,33 @@ yoyodyne-ifd.1.5: $49.43 across 4 run(s)
     development $22.84 from 1 invocation(s), review $0.96 from 1, repair $3.13 from 1; waited 3h37m for the provider
 ```
 
-The split is read out of the run's event log rather than out of a phase the
-harness wrote down beside each invocation, which is what makes it answer for
-runs that finished long before it existed. A review announces itself and then
-makes exactly one invocation, so the terminal after it is the reviewer's and no
-other terminal is; the rest are the developer's, and they group into attempts by
-how each one ended.
+The split is read out of the run's event log, which is what makes it answer for
+runs that finished long before it existed. Each invocation's terminal names the
+role it was made as, so the reviewer's invocations are the reviewer's because
+they say so, the developer's are the developer's for the same reason, and they
+group into attempts by how each one ended. An invocation naming any other role,
+or naming none at all, is left unattributed rather than placed.
+
+Runs recorded before event schema version 2 had no role on their terminals to
+omit, and are read the way they were written: a review announces itself with a
+`review.started` and then makes exactly one invocation, so the terminal after
+that announcement is the reviewer's and every other terminal is a developer's.
+The schema version on each event is what confines that reading to those runs, so
+a terminal written today with no role is never read positionally — it is an
+invocation that could have said whose it was and did not, which is unattributed
+money rather than a phase.
+
+That older inference was sound for the runs it covers, and this is the evidence
+it rests on. Only two things have ever written a terminal into a run's log: the
+developer's attempts, and the reviewer, which always announces itself with a
+`review.started` first. Every other provider invocation the harness makes writes
+somewhere else — a conversation turn to its conversation's log, an inter-role ask
+to the exchange record, and a branch review, **including every shadow review of
+the ifd.92 experiment**, to its own log under `branch-reviews/` rather than under
+`runs/`. So the closed shadow experiment polluted no run's phase data, and there
+are no affected runs to name: not because its invocations announced themselves,
+but because none of them was ever written into a run's log at all. The sweep in
+`internal/execution/terminal_test.go` is what keeps that set of writers closed.
 
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is

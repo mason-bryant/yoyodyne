@@ -22,7 +22,7 @@ func TestHistoryReportsFailedRunsNewestFirstWithTheirReasons(t *testing.T) {
 	if err := store.Create(succeeded); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, succeeded.RunID, 1, execution.EventRunCompleted, 19.0)
+	appendLegacyCostEvents(t, store, succeeded.RunID, 1, execution.EventRunCompleted, 19.0)
 
 	failed := testState(t, StatusFailed)
 	failed.WorkItemID = "yoyodyne-ifd.2.7"
@@ -37,7 +37,7 @@ func TestHistoryReportsFailedRunsNewestFirstWithTheirReasons(t *testing.T) {
 	if err := store.Create(failed); err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}
-	appendCostEvents(t, store, failed.RunID, 1, execution.EventRunFailed, 8.91)
+	appendLegacyCostEvents(t, store, failed.RunID, 1, execution.EventRunFailed, 8.91)
 
 	cancelled := testState(t, StatusCancelled)
 	cancelled.WorkItemID = "yoyodyne-ifd.2.7"
