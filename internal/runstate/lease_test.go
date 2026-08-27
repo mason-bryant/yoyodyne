@@ -2,6 +2,7 @@ package runstate
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -35,6 +36,30 @@ func TestALeasedPathHasExactlyOneHolder(t *testing.T) {
 	// path that already released it.
 	if err := again.Release(); err != nil {
 		t.Fatalf("second Release() error = %v", err)
+	}
+}
+
+// A release that could not be taken is reported, and says which lease it was
+// about. A caller that discards it goes on answering questions about something
+// it may still be holding, which is the failure this reporting exists to make
+// visible.
+func TestALeaseReportsAReleaseItCouldNotTake(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "sink", ".sink.lock")
+	lease, held, err := TryLeasePath(path, "slack sink")
+	if err != nil || !held {
+		t.Fatalf("TryLeasePath() = %t, %v, want the first holder admitted", held, err)
+	}
+	// Closing the file behind the lease's back leaves it with nothing left to
+	// release, which is a release that cannot be taken without waiting for the
+	// one kind of close failure a test cannot provoke.
+	if err := lease.file.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	err = lease.Release()
+	if err == nil || !strings.Contains(err.Error(), "slack sink") {
+		t.Fatalf("Release() of a lease it cannot let go of = %v, want a failure naming the lease", err)
 	}
 }
 

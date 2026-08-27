@@ -376,7 +376,9 @@ func (s *ConversationStore) Hold(identity ConversationIdentity) (*Lease, error) 
 		file.Close()
 		return nil, fmt.Errorf("the %s conversation is %w", identity, ErrConversationHeld)
 	}
-	return &Lease{file: file}, nil
+	// The label names what is owned, so a release that failed says which
+	// conversation is still held rather than leaving the caller to guess.
+	return &Lease{label: fmt.Sprintf("%s conversation", identity), file: file}, nil
 }
 
 // Load returns the conversation recorded for an agent, reporting
