@@ -7,7 +7,25 @@ import (
 	"time"
 )
 
-const EventSchemaVersion = 1
+// EventSchemaVersion is what a event is written at now, and
+// MinReadableEventSchemaVersion the oldest an event log may be read at. A run's
+// log is append-only and never rewritten, so a repository that has been running
+// holds logs at every version it has ever written; reading is a range for that
+// reason, and writing is one number because there is only one shape to write.
+const (
+	EventSchemaVersion            = 2
+	MinReadableEventSchemaVersion = 1
+)
+
+// TerminalRoleSchemaVersion is the first version whose terminals name the role
+// that made the invocation. It is what lets a reader of a mixed history tell a
+// terminal that failed to say whose it was from one recorded before there was
+// anything to say: below this version the absence means the former did not exist
+// yet, and at or above it the absence is the omission itself. A fixed number is
+// what makes that decidable rather than a guess about when a log was written,
+// and it is separate from EventSchemaVersion so that the next version to be
+// added does not silently move it.
+const TerminalRoleSchemaVersion = 2
 
 type EventType string
 
@@ -15,12 +33,14 @@ const (
 	EventRunStarted EventType = "run.started"
 	// One provider invocation's terminal, whichever way it ended, carrying what
 	// the provider said it cost. A log can hold several of them — the developer's
-	// attempts and the reviewer's invocations share one — so each must name the
-	// role it was made as, under the payload key "role", and a backend that omits
-	// it leaves money nothing can attribute. Where a terminal sits relative to the
-	// others is not a substitute: that is a fact about the order the harness
-	// happened to do things in, and anything reading it as a phase is guessing.
-	// internal/runstate's phase split is what reads this.
+	// attempts and the reviewer's invocations share one — so from
+	// TerminalRoleSchemaVersion each must name the role it was made as, under the
+	// payload key "role". A backend that omits it leaves money nothing can
+	// attribute: the phase split in internal/runstate places such a terminal
+	// nowhere rather than guessing, so the cost stays in the run's total and out
+	// of every phase. Where a terminal sits relative to the others is not a
+	// substitute — that is a fact about the order the harness happened to do
+	// things in, and anything reading it as a phase is guessing.
 	EventRunCompleted     EventType = "run.completed"
 	EventRunFailed        EventType = "run.failed"
 	EventProcessOutput    EventType = "process.output"
@@ -148,8 +168,12 @@ func DecodeEvent(data []byte) (Event, error) {
 
 func (e Event) Validate() error {
 	var problems []error
-	if e.SchemaVersion != EventSchemaVersion {
-		problems = append(problems, fmt.Errorf("schema_version must be %d", EventSchemaVersion))
+	// Reading accepts every version this harness has ever written, because a run
+	// log is appended to and never rewritten: refusing an older one would not
+	// upgrade it, it would lose it, and what is in those logs is the only record
+	// of what the harness has already done.
+	if e.SchemaVersion < MinReadableEventSchemaVersion || e.SchemaVersion > EventSchemaVersion {
+		problems = append(problems, fmt.Errorf("schema_version must be between %d and %d", MinReadableEventSchemaVersion, EventSchemaVersion))
 	}
 	if e.RunID == "" {
 		problems = append(problems, errors.New("run_id is required"))

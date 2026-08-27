@@ -459,9 +459,10 @@ func scanEventCost(path string) (float64, int, error) {
 // Which phase an invocation served is read from the invocation itself: every
 // terminal names the role it was made as. A reviewer's is the review, a
 // developer's is one of the developer's attempts, and a terminal naming anything
-// else is money this split will not place -- it goes to Unattributed, where a
-// reader can see it, rather than into the phase its neighbours suggest. That is
-// the whole of why the role is written down: an invocation nobody anticipated,
+// else -- or naming nothing at all, at a schema whose terminals carry a role --
+// is money this split will not place. It goes to Unattributed, where a reader
+// can see it, rather than into the phase its neighbours suggest. That is the
+// whole of why the role is written down: an invocation nobody anticipated,
 // landing in a run's log without saying whose it is, used to be indistinguishable
 // from a repair attempt and was charged as one.
 //
@@ -473,15 +474,16 @@ func scanEventCost(path string) (float64, int, error) {
 // to that attempt. The first attempt is the development and every attempt after
 // it is a repair.
 //
-// A terminal that names no role at all is a run recorded before invocations said
-// whose they were, and it is read the way it was written: the reviewer announces
+// Runs recorded before execution.TerminalRoleSchemaVersion had no role to omit,
+// so their terminals are read the way they were written: the reviewer announces
 // itself with a review.started and then makes exactly one invocation, so the
 // terminal after that announcement is the reviewer's and every other terminal is
 // a developer's. Those runs are priced exactly as they always were, because
-// nothing can now be added to a log that is already closed. What made that
-// inference sound for them is that the only two things that ever wrote into a
-// run's log were the developer's attempts and the reviewer, each announcing
-// itself; the role on the terminal is what stops that from having to stay true.
+// nothing can now be added to a log that is already closed, and the schema
+// version is what keeps that reading confined to them. What made the inference
+// sound for those runs is that the only two things that ever wrote into a run's
+// log were the developer's attempts and the reviewer, each announcing itself;
+// the role on the terminal is what stops that from having to stay true.
 func scanEventSpend(path string) (PhaseSpend, error) {
 	file, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -558,10 +560,13 @@ func scanEventSpend(path string) (PhaseSpend, error) {
 }
 
 // pricedEvent is the little of an event pricing needs: which event it is, whose
-// invocation it ended, and what the provider said that invocation cost.
+// invocation it ended, what the provider said that invocation cost, and the
+// schema it was written at -- which is what says whether a missing role is an
+// omission or a field that did not exist yet.
 type pricedEvent struct {
-	Type    execution.EventType `json:"type"`
-	Payload struct {
+	SchemaVersion int                 `json:"schema_version"`
+	Type          execution.EventType `json:"type"`
+	Payload       struct {
 		Role         string  `json:"role"`
 		TotalCostUSD float64 `json:"total_cost_usd"`
 	} `json:"payload"`
@@ -579,9 +584,17 @@ const (
 )
 
 // phase says which part of the run this invocation served, from the role it
-// recorded for itself. announced is whether a review had opened a bracket in
-// front of it, and it decides only the terminals that named no role at all --
-// the runs recorded before one was written down.
+// recorded for itself.
+//
+// A terminal that named no role is the case the schema decides. Recorded at a
+// version whose terminals carry one, it is an invocation that failed to say
+// whose it was -- a summarizer, a shadow reviewer, anything a later feature
+// invokes into a run -- and it is placed nowhere, which is the whole point:
+// there is no phase an unannounced invocation falls into by default. Recorded
+// before that version, the field did not exist to omit, so the log is read the
+// way it was written, and announced -- whether a review had opened a bracket in
+// front of it -- is what decides. That fallback reaches nothing written since,
+// so it can never place a terminal that could have named itself and did not.
 func (p pricedEvent) phase(announced bool) invocationPhase {
 	switch domain.AgentRole(strings.TrimSpace(p.Payload.Role)) {
 	case domain.RoleDeveloper:
@@ -589,6 +602,9 @@ func (p pricedEvent) phase(announced bool) invocationPhase {
 	case domain.RoleReviewer:
 		return phaseReview
 	case "":
+		if p.SchemaVersion >= execution.TerminalRoleSchemaVersion {
+			return phaseUnattributed
+		}
 		if announced {
 			return phaseReview
 		}
