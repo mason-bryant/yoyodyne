@@ -82,8 +82,8 @@ type Descriptor struct {
 	ID domain.Backend
 	// Adapter is the backend whose compiled adapter launches this provider, and
 	// is empty for a provider nothing in this build can launch. A built-in that
-	// ships an adapter names itself; one that does not — Codex, today — names
-	// nothing, and a declared provider names the built-in whose adapter runs it.
+	// ships an adapter names itself, and a declared provider names the built-in
+	// whose adapter runs it.
 	//
 	// It exists because a dialect that nothing can attach to is a plugin that
 	// loads and can never fire. A declaration says which compiled adapter starts
@@ -136,10 +136,10 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 }
 
 // BuiltInDescriptors are the providers this build ships. Claude Code serves
-// every role and is the one this build has an adapter for; Codex is documented
-// as not matching every Claude Code feature, serves the two roles inside a run,
-// and has no adapter yet — which is the same statement that used to live as a
-// switch on the backend identifier and is now the one place it is made.
+// every role and is the default for all of them; Codex is documented as not
+// matching every Claude Code feature and serves the two roles inside a run —
+// which is the same statement that used to live as a switch on the backend
+// identifier and is now the one place it is made.
 func BuiltInDescriptors() []Descriptor {
 	return []Descriptor{
 		{
@@ -157,10 +157,14 @@ func BuiltInDescriptors() []Descriptor {
 			BuiltIn:  true,
 		},
 		{
-			ID: domain.BackendCodex,
-			// No adapter: the vocabulary has the name and this build has nothing
-			// that can launch it, which is why a run configured for it is refused
-			// rather than started.
+			ID:      domain.BackendCodex,
+			Adapter: domain.BackendCodex,
+			// Structured output is absent because Codex enforces no schema on what
+			// an agent finally says: the adapter reads the last message and nothing
+			// makes it the shape anybody asked for. Tool control is present in the
+			// sense the harness needs — the sandbox decides what the agent may do —
+			// and not in the sense of naming individual tools, which Codex has no
+			// way to do.
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -212,11 +216,11 @@ func BuiltInDescriptor(id domain.Backend) (Descriptor, bool) {
 // that reads what it says. It is the whole of a user-supplied provider's
 // description, and it holds nothing that decides anything.
 type ProviderPlugin struct {
-	// Adapter is the backend this build ships an adapter for whose adapter
-	// launches this provider and reads its stream. It is required, because a
-	// dialect nothing can attach to is a plugin that loads and can never fire:
-	// naming the adapter is what gives the declared rules an invocation to
-	// observe.
+	// Adapter is the backend whose compiled adapter launches this provider and
+	// reads its stream. It is required, because a dialect nothing can attach to
+	// is a plugin that loads and can never fire: naming the adapter is what gives
+	// the declared rules an invocation to observe. It has to be one this build
+	// ships, which RunnableAdapters names.
 	Adapter domain.Backend `yaml:"adapter" json:"adapter"`
 	// Binary is the executable that adapter runs, and is empty for the adapter's
 	// own default. A fork or a proxy of a provider this build already speaks is

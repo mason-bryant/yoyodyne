@@ -42,8 +42,12 @@ import (
 var terminalEventSites = map[string]string{
 	"internal/execution/event.go": "declares them, and states the contract: from TerminalRoleSchemaVersion a terminal " +
 		"names the role that made the invocation, because where a terminal sits says nothing about whose it is",
-	"internal/backend/claudecode/parser.go": "emits them — the only emitter in the harness. parseResult writes the role " +
-		"the invocation was made as into the payload, asserted by TestATerminalNamesTheRoleTheInvocationWasMadeAs",
+	"internal/backend/claudecode/parser.go": "emits them. parseResult writes the role the invocation was made as into the " +
+		"payload, asserted by TestATerminalNamesTheRoleTheInvocationWasMadeAs",
+	"internal/backend/codex/parser.go": "emits them. parseTerminal writes the role the invocation was made as into the " +
+		"payload, asserted by TestATerminalCarriesTokensAndNoPrice — which also holds the other half of this provider's " +
+		"attribution: Codex reports tokens and never a price, so its terminal carries no total_cost_usd at all rather " +
+		"than a zero that would read as an invocation that spent nothing",
 	"internal/runstate/price.go": "reads them: the phase split places each terminal by the role it names and places " +
 		"one that names none nowhere, asserted by TestStoreWillNotPlaceATerminalThatCouldHaveNamedItsPhaseAndDidNot",
 	"internal/chat/activity.go": "reads them: a conversation's activity line says a turn finished, and attributes no " +

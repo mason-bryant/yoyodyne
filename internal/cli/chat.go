@@ -370,7 +370,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	// whether the backend the agent named resolves to one — which a provider the
 	// project declared does, and a backend nothing can launch does not.
 	if !providerRuns(cfg, agent.Backend) {
-		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
+		return nil, nil, fmt.Errorf("a conversation requires an agent on a backend this build can launch, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
 		return nil, nil, fmt.Errorf("%s agent %s %s", role, name, err)

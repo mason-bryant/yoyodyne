@@ -238,7 +238,22 @@ from the name — so `role` must be one of `product-manager`, `architect`,
 the table itself.
 
 `backend` is `claude-code` or `codex` unless your project declares one of its
-own. A project running a fork, a proxy, or a variant of a provider yoyo already
+own. Claude Code is the default for every role. Codex serves the developer and
+the reviewer only — naming it for a product manager, an architect, or a
+development manager is refused when the configuration loads — and it is
+deliberately thinner than Claude Code in three ways worth knowing before you
+choose it. It reports what an invocation read and wrote but never what it cost,
+so those invocations are recorded with tokens and with the price left unstated
+rather than written down as nothing. It enforces no
+schema on what an agent finally says, so a reviewer's verdict is read out of its
+last message rather than guaranteed by the provider. And it has no per-tool
+control: a role is held to a sandbox — `read-only` for a reviewer,
+`workspace-write` for a developer — rather than to a list of tools, so a
+reviewer on Codex can still read the machine it runs on, where a reviewer on
+Claude Code is given no tools at all. Credentials stay with the CLI: run
+`codex login` yourself, and `yoyo doctor` reports whether it worked.
+
+A project running a fork, a proxy, or a variant of a provider yoyo already
 speaks can describe it under a top-level `providers:` key and name it here: which
 compiled adapter launches it, which executable that adapter runs, which roles it
 serves, which tool postures it can hold them to, and how to read what it says

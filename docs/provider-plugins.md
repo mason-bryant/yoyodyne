@@ -1,20 +1,20 @@
 # Provider plugins
 
 Yoyo runs agents through a provider — a coding CLI or a harness that speaks to a
-model API. Two are in the vocabulary: Claude Code, which serves every role and is
-the one this build ships an adapter for, and Codex, which serves the two roles
-inside a run and has no adapter yet.
+model API. Two are in the vocabulary and this build ships an adapter for both:
+Claude Code, which serves every role and is the default for all of them, and
+Codex, which serves the two roles inside a run.
 
 A project can declare a provider of its own in its configuration, without forking
 this repository or rebuilding the binary. **What a declaration supplies is the
 dialect and the executable, not a new way of launching a process.** Your provider
-runs on a compiled adapter — Claude Code's, today — which starts it and reads its
-stream, and your declaration says which executable that adapter runs and how to
-read what it says about rate limits, retries, and reset times. So a fork of a
-provider yoyo already speaks, a proxy in front of one, or anything that talks the
-same protocol and reports its limits differently is reachable from configuration
-alone. Something that speaks a different protocol needs an adapter, which is a
-change to yoyo.
+runs on a compiled adapter — Claude Code's or Codex's — which starts it and reads
+its stream, and your declaration says which of them runs it, which executable
+that adapter runs, and how to read what it says about rate limits, retries, and
+reset times. So a fork of a provider yoyo already speaks, a proxy in front of one,
+or anything that talks the same protocol and reports its limits differently is
+reachable from configuration alone. Something that speaks a different protocol
+needs an adapter, which is a change to yoyo.
 
 A declaration that names no adapter, or one this build does not ship, is refused
 when the configuration loads. There is deliberately no way to declare a provider
@@ -131,11 +131,12 @@ provider that speaks a different one needs an adapter written in Go, which is a
 change to yoyo rather than to your configuration.
 
 `yoyo doctor` diagnoses a declared provider as what it actually runs on: it looks
-for the executable the declaration named, and reports it installed, missing, or
+for the executable the declaration named, asks the adapter that would launch it
+whether it is authenticated, and reports it installed, missing, or
 unauthenticated the same way it reports a built-in. A backend nothing in this
-build can launch — Codex today, or a declaration that would not load — is
-reported as one this build has no adapter for, with the configuration as the
-remedy, because nothing you could install would give this build one.
+build can launch — a name nothing declares, or a declaration that would not
+load — is reported as one this build has no adapter for, with the configuration
+as the remedy, because nothing you could install would give this build one.
 
 ## Capability validation
 
@@ -167,7 +168,7 @@ the backend identifier your agents will name. See
 providers:
   my-harness:
     # Which compiled adapter launches it and reads its stream. Required, and
-    # `claude-code` is the only one this build ships.
+    # one of `claude-code` or `codex`.
     adapter: claude-code
     # The executable that adapter runs. Omit it for the adapter's own.
     binary: my-harness
@@ -234,7 +235,7 @@ agents:
 
 | Field | Meaning |
 |---|---|
-| `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` is the only one this build ships; naming anything else is refused at load. |
+| `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` and `codex` are the ones this build ships; naming anything else is refused at load. |
 | `binary` | The executable that adapter runs. Omit it for the adapter's own. |
 | `roles` | Which of the harness's roles this provider serves. |
 | `postures` | `read-only`, `worktree-write`, or both. |
@@ -281,8 +282,10 @@ observation a dialect returns, and `ReadReset`, which is the single place the
 unknown and past-reset cases are decided. `internal/backend/declarative.go` is
 the rule format on this page. `internal/backend/registry.go` holds the built-in
 descriptions and turns a declaration into one. `internal/backend/claudecode/dialect.go`
-is the Claude Code dialect, which is one implementation of the same contract and
-gets no special treatment above it — the adapter beside it takes whichever
-dialect it is handed, which is how a declared one comes to read a real stream.
-`internal/cli/provider.go` is where the backend an agent named is resolved into
-the adapter that runs it.
+and `internal/backend/codex/dialect.go` are the two built-in dialects, each one
+implementation of the same contract and neither given any special treatment above
+it — the adapter beside each takes whichever dialect it is handed, which is how a
+declared one comes to read a real stream.
+`internal/backend/adapters/adapters.go` turns the adapter a description names
+into the compiled thing that launches it, and `internal/cli/provider.go` is where
+the backend an agent named is resolved into that adapter.

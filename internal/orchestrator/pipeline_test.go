@@ -673,11 +673,15 @@ func TestPipelineRefusesAutomaticIntegrationThatIsNotGatedByAReviewer(t *testing
 			want:    "automatic integration requires at least one reviewer agent",
 		},
 		{
-			name: "reviewer agent on an unsupported backend",
+			// Every backend this build ships now has an adapter, so a reviewer this
+			// build could not launch is one nothing describes at all — which is
+			// refused before the review policy is reached, and refused for the same
+			// reason: nothing is claimed on a policy that cannot be carried out.
+			name: "reviewer agent on a backend nothing describes",
 			degrade: func(pipeline *Pipeline) {
-				pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.BackendCodex, Model: testReviewerModel, Instances: 1}
+				pipeline.Config.Agents["reviewer"] = config.AgentConfig{Role: domain.RoleReviewer, Backend: domain.Backend("nobody-declared-this"), Model: testReviewerModel, Instances: 1}
 			},
-			want: "requires a claude-code reviewer",
+			want: `unsupported backend "nobody-declared-this"`,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

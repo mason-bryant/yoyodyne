@@ -125,7 +125,7 @@ func TestADeclaredProviderIsRefusedForWhatItDoesNotServe(t *testing.T) {
 			// written rather than loaded and never fired.
 			name: "an adapter this build does not ship",
 			edit: func(input string) string {
-				return strings.Replace(input, "    adapter: claude-code\n", "    adapter: codex\n", 1)
+				return strings.Replace(input, "    adapter: claude-code\n", "    adapter: some-other-harness\n", 1)
 			},
 			wants: []string{"ships no adapter for"},
 		},
