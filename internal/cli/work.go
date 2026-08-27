@@ -414,6 +414,7 @@ func priceOf(price runstate.ItemPrice) chat.ItemPrice {
 		projected.Runs = append(projected.Runs, chat.RunPrice{
 			RunID:       run.RunID,
 			Status:      string(run.Status),
+			Outcome:     string(run.Outcome),
 			Phase:       string(run.Phase),
 			StartedAt:   run.StartedAt,
 			Integrated:  run.Integrated,

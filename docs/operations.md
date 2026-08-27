@@ -503,11 +503,11 @@ remote gained, which is by definition work this repository has never seen.
    Nothing sweeps it for you: it is preserved work, and the convergence sweep only
    ever removes a branch whose work the target provably carries.
 
-## What became of the runs, and why one failed
+## What became of the runs, and what remains of them
 
 `yoyo status` reads back what the runs themselves recorded — newest first, the
-work item, the status and the phase the run reached, what it cost, why the item
-was chosen, and the reasons its record kept:
+work item, the outcome and the phase the run reached, what remains of it, what it
+cost, why the item was chosen, and the reasons its record kept:
 
 ```sh
 ./bin/yoyo status                    # the twenty most recent runs
@@ -520,18 +520,57 @@ The listing below is `./bin/yoyo status --failed --limit 2`:
 
 ```text
 runs that ended without succeeding, 2 of 9 shown (137 run(s) recorded):
-run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [failed, developing] $4.62
+run-19dc9dff153e1eb89a2470f78f02f240 yoyodyne-ifd.1.7 started 2026-08-16T18:02:11Z [stopped, developing, work preserved] $4.62
   selected by the operator: the operator ran this item by name from the command line
   ran under default, configuration cfg-9f2c41ab7e05
-  reason: developer reported failure: api_error: API Error: 529 Overloaded.
-run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, checking] $12.80
+  reason: the provider ended this run without judging the work after 3 of 3 permitted relaunch(es)
+  preserved branch: yoyodyne/yoyodyne-ifd.1.7/19dc9dff
+  preserved worktree: /Users/you/Library/Application Support/Yoyodyne/state/worktrees/yoyodyne/yoyodyne/yoyodyne-ifd-1-7-19dc9dff
+  preserved developer session: 0f2c41ab-7e05-4c3d-9a1b-6e8f0d2a4c71
+run-c81f0a4d7c2b41e6a0f9d3b5e7104c22 yoyodyne-ifd.63 started 2026-08-15T11:47:03Z [failed, no artifacts recorded] $12.80
   selected: no reason recorded
   ran under an account the record does not name, configuration a configuration the record does not name
-  reason: verification failed: make test exited with 2
-  failing check: make test exited 2
+  reason: create isolated worktree: primary checkout is not ready for integration
 7 further run(s) are not listed here; --limit reports more, and 0 reports all of them
 each reason is shown as one line; --json carries what the record holds in full
 ```
+
+The word in the brackets is what became of the *work*, not of the attempt, and it
+comes from a small fixed set:
+
+| word | what it means |
+| --- | --- |
+| `succeeded` | the work landed |
+| `stopped` | it ended on a durable blocker: the item carries it, a person decides what happens next, and nothing was discarded |
+| `cancelled` | something stopped it rather than judged it — the operator, or a killed process |
+| `timed out` | the harness stopped it on time, leaving nobody anything to act on |
+| `failed` | it ended without succeeding and without leaving anybody a blocker |
+| `pending`, `running` | it has not finished |
+
+`stopped` covers every ending the harness hands to somebody: an unrepaired
+review, a check that kept failing, refused protected paths, a replay the target
+branch outran, and a provider that would not carry the run. The phase beside the
+word says where it stopped and the `reason` under it says what stopped it, so the
+one word never has to carry all five. This used to be one word — `failed` — for
+all of them and for the two below it, which is how three preserved runs came to
+read as three discarded ones.
+
+Beside it, every run that did not succeed says what remains: `work preserved`,
+`work removed` where the harness recorded removing the artifacts, or `no
+artifacts recorded` where the record names neither. The preserved branch,
+worktree, and developer session are then named under the run, so looking at the
+change is not a trip through the run's JSON for a path. A successful run removes
+what it made by design, so it says nothing about preservation at all; a run still
+in flight holds everything it has.
+
+The third phrase states an absence rather than claiming the run made nothing —
+the same discipline as the `selected: no reason recorded` and `an account the
+record does not name` lines below, and for the same reason: a listing that turns
+an empty field into a reassurance is the failure this one exists to remove. In
+practice it is a run that broke before it got a worktree, which is also why the
+second run above has no phase between the two words: the phase is only recorded
+once the worktree exists, so any run carrying one has a branch and a worktree and
+reports `work preserved` or `work removed` with the paths underneath.
 
 The `selected` line is on every run, including — in those words — a run that
 recorded no reason at all. That is deliberate: work the harness chose and cannot
@@ -550,9 +589,9 @@ configuration was edited under it is distinguishable from one that was not;
 carried says so, in those words, rather than showing a blank.
 
 Each of the other reasons is printed under the run it belongs to and named for
-what it is, because the records keep them apart deliberately. Only `reason` says
-the work itself failed. An `outstanding publication`, an `outstanding cleanup`, a
-`failing check`, and a `completion recorded late` are recorded around the work,
+what it is, because the records keep them apart deliberately. Only `reason` is the
+run's own account of why it ended. An `outstanding publication`, an `outstanding
+cleanup`, a `failing check`, and a `completion recorded late` are recorded around the work,
 and a run can carry one of them with its change already promoted. The last of
 those is the class whose work-item note is itself unreliable — recording that
 note is part of what was failing — so the run record this verb reads is its

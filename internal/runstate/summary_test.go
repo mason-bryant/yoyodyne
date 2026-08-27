@@ -1,6 +1,7 @@
 package runstate
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -196,6 +197,185 @@ func TestHistoryLimitsWhatItReportsWithoutHidingWhatItSelected(t *testing.T) {
 	if item.Recorded != 4 {
 		t.Fatalf("item history recorded = %d, want 4", item.Recorded)
 	}
+}
+
+// "failed" was one word for four different endings, three of which leave the
+// change intact and the item back in somebody's hands. The vocabulary has to
+// tell them apart from what the records already hold, and it has to carry the
+// artifacts that say the work is still there: an operator who reads a run's line
+// and asks whether the run was discarded has been told the wrong thing by a
+// listing that answered a question nobody asked.
+func TestHistoryTellsAStoppedRunFromACancelledOneAndNamesWhatSurvives(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	// A review nobody repaired: the item carries the blocker, and the branch,
+	// the worktree, the developer session, and the findings are all still there.
+	blocked := stoppedState(t, PhaseReviewing)
+	blocked.Blocker = "Yoyodyne blocked this item: independent review requires repair"
+	blocked.ReviewDecision = ReviewRepair
+	blocked.ReviewFindings = 2
+	blocked.ProviderSessionID = "session-developer"
+	if err := store.Create(blocked); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// A replay the target branch outran, and a provider that would not carry the
+	// run. Both stopped on a blocker, and each says where it stopped.
+	replay := stoppedState(t, PhaseIntegrating)
+	replay.Blocker = "Yoyodyne blocked this item: the change cannot be replayed onto main"
+	if err := store.Create(replay); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	provider := stoppedState(t, PhaseDeveloping)
+	provider.Blocker = "Yoyodyne blocked this item: the provider ended this run without judging the work"
+	if err := store.Create(provider); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// An operator stopping a run is not a verdict on the change, and it leaves
+	// nobody a blocker to act on.
+	cancelled := stoppedState(t, PhaseDeveloping)
+	cancelled.Status = StatusCancelled
+	cancelled.Failure = "the operator stopped this run"
+	if err := store.Create(cancelled); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// And a run that broke before it made anything: nothing was preserved because
+	// nothing was created, which is a different fact from work thrown away.
+	broke := testState(t, StatusFailed)
+	broke.WorkItemID = stoppedItem
+	broke.Failure = "create isolated worktree: primary checkout is not ready"
+	if err := store.Create(broke); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	history, err := store.History(RunQuery{WorkItemID: stoppedItem})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	byRun := make(map[string]RunSummary, len(history.Runs))
+	for _, run := range history.Runs {
+		byRun[run.RunID] = run
+	}
+	if len(byRun) != 5 {
+		t.Fatalf("history = %#v, want all five runs of the item", history.Runs)
+	}
+	for _, want := range []struct {
+		runID     string
+		outcome   RunOutcome
+		preserved bool
+	}{
+		{runID: blocked.RunID, outcome: OutcomeStopped, preserved: true},
+		{runID: replay.RunID, outcome: OutcomeStopped, preserved: true},
+		{runID: provider.RunID, outcome: OutcomeStopped, preserved: true},
+		{runID: cancelled.RunID, outcome: OutcomeCancelled, preserved: true},
+		{runID: broke.RunID, outcome: OutcomeFailed, preserved: false},
+	} {
+		run := byRun[want.runID]
+		if run.Outcome != want.outcome {
+			t.Errorf("run %s outcome = %q, want %q", want.runID, run.Outcome, want.outcome)
+		}
+		if run.Preserved() != want.preserved {
+			t.Errorf("run %s preserved = %v, want %v", want.runID, run.Preserved(), want.preserved)
+		}
+		// Every one of them ended without succeeding, which is what --failed
+		// selects; the vocabulary above is what separates them within that.
+		if !run.Failed() {
+			t.Errorf("run %s did not read as a run that ended without succeeding", want.runID)
+		}
+	}
+	// The preserved change has to be reachable from the listing, or the operator
+	// is sent to the run's JSON for the path — which is the errand this verb
+	// exists to remove.
+	stopped := byRun[blocked.RunID]
+	if stopped.Branch != blocked.Branch || stopped.WorktreePath != blocked.WorktreePath {
+		t.Errorf("stopped run = %#v, want the branch and worktree it preserved", stopped)
+	}
+	if stopped.ProviderSessionID != "session-developer" || stopped.ReviewFindings != 2 {
+		t.Errorf("stopped run = %#v, want the preserved session and the findings against it", stopped)
+	}
+	// Where it stopped is the other half of telling three stoppages apart, and it
+	// is the record's own phase rather than anything read out of the reason.
+	if byRun[replay.RunID].Phase != PhaseIntegrating || byRun[provider.RunID].Phase != PhaseDeveloping {
+		t.Errorf("phases = %q, %q; want each stoppage to say where it stopped",
+			byRun[replay.RunID].Phase, byRun[provider.RunID].Phase)
+	}
+	// A run that landed its work is not described in the stopped-work vocabulary
+	// at all, and its cleaned-up artifacts are not a loss to report.
+	succeeded := integratedState(t, PhaseComplete)
+	succeeded.WorktreeRemoved = true
+	succeeded.BranchRemoved = true
+	if err := store.Create(succeeded); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	landed, err := store.History(RunQuery{WorkItemID: succeeded.WorkItemID})
+	if err != nil {
+		t.Fatalf("History() error = %v", err)
+	}
+	if len(landed.Runs) != 1 || landed.Runs[0].Outcome != OutcomeSucceeded {
+		t.Fatalf("landed run = %#v, want the succeeded outcome", landed.Runs)
+	}
+}
+
+// The vocabulary is closed, so what it maps every recorded status to is stated
+// once here rather than left to whichever cases a rendering test happened to
+// build. The two that are easy to get wrong are the ones spelled out: a blocker
+// outranks the status, because a run stopped at a deadline having handed
+// somebody a decision is a stoppage rather than a clock; and a run with no
+// blocker keeps the word for how it ended, which is what stops "timed out" and
+// "cancelled" collapsing into the failure they are not.
+func TestOutcomeMapsEveryRecordedStatusOntoTheFixedVocabulary(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		name    string
+		status  Status
+		blocker string
+		want    RunOutcome
+	}{
+		{name: "pending", status: StatusPending, want: RunOutcome(StatusPending)},
+		{name: "running", status: StatusRunning, want: RunOutcome(StatusRunning)},
+		{name: "succeeded", status: StatusSucceeded, want: OutcomeSucceeded},
+		{name: "failed with nothing handed to anybody", status: StatusFailed, want: OutcomeFailed},
+		{name: "cancelled", status: StatusCancelled, want: OutcomeCancelled},
+		{name: "timed out", status: StatusTimedOut, want: OutcomeTimedOut},
+		{name: "failed on a blocker", status: StatusFailed, blocker: "the item carries this", want: OutcomeStopped},
+		// The harness stops a provider on time and then blocks the item when its
+		// relaunch budget is spent, so this pairing is one the records really
+		// hold: what became of the work is the stoppage, not the clock.
+		{name: "timed out on a blocker", status: StatusTimedOut, blocker: "the item carries this", want: OutcomeStopped},
+		// Whitespace is not a blocker anybody was handed.
+		{name: "failed on a blank blocker", status: StatusFailed, blocker: "  \n ", want: OutcomeFailed},
+		// A run still in flight is never described as stopped, whatever a blocker
+		// left over from an attempt triage re-entered says.
+		{name: "running with a superseded blocker", status: StatusRunning, blocker: "cleared as it went again", want: RunOutcome(StatusRunning)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			state := State{Status: test.status, Blocker: test.blocker}
+			if outcome := state.Outcome(); outcome != test.want {
+				t.Fatalf("Outcome() = %q, want %q", outcome, test.want)
+			}
+		})
+	}
+}
+
+// The item every run in the test above was made for, named once so the listing
+// can be read back for it.
+const stoppedItem = "yoyodyne-ifd.173"
+
+// stoppedState is a terminal run with a worktree and a branch it did not remove,
+// which is what every stoppage the harness hands to a person leaves behind.
+func stoppedState(t *testing.T, phase Phase) State {
+	t.Helper()
+	state := testState(t, StatusFailed)
+	state.WorkItemID = stoppedItem
+	state.Phase = phase
+	state.WorktreePath = "/state/worktrees/" + string(phase)
+	state.Branch = "yoyodyne/yoyodyne-ifd.173/" + string(phase)
+	state.BaseCommit = strings.Repeat("a", 40)
+	state.TargetBranch = "main"
+	state.Failure = "the run stopped in the " + string(phase) + " phase"
+	return state
 }
 
 // A run whose event log is gone is reported as unpriceable rather than as free,

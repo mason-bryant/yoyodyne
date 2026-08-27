@@ -151,8 +151,16 @@ type ItemPrice struct {
 // RunPrice is what one run of a work item cost: which attempt it was, how it
 // went, and what the provider charged for the invocations inside it.
 type RunPrice struct {
-	RunID     string    `json:"run_id"`
+	RunID string `json:"run_id"`
+	// Status is the durable status, which is what says whether the attempt has
+	// stopped spending. Outcome is what became of the work, in the fixed
+	// vocabulary the run records derive and every listing says: a conversation
+	// that named the status here would tell an operator "failed" about a run
+	// whose change is preserved and whose item is back with a person, which is
+	// the misreading that vocabulary exists to stop. It is empty on a survey
+	// assembled before the vocabulary existed, and the status stands in.
 	Status    string    `json:"status"`
+	Outcome   string    `json:"outcome,omitempty"`
 	Phase     string    `json:"phase,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 	// Integrated reports the attempt that promoted its work, which is what
@@ -659,10 +667,20 @@ func (p ItemPrice) total() string {
 	return fmt.Sprintf("$%.2f", p.TotalUSD)
 }
 
-// outcome names how the attempt went, the way a survey names a run: its status,
-// the phase it reached, and whether it was the attempt that promoted the work.
+// outcome names how the attempt went, the way a survey names a run: what became
+// of it, the phase it reached, and whether it was the attempt that promoted the
+// work.
+//
+// A survey assembled before the vocabulary existed says so rather than falling
+// back to the status it carries. The status is the word that reads "failed" over
+// a preserved, blocked run, which is the sentence the vocabulary was introduced
+// to stop — substituting it here would put that sentence back in exactly the
+// records nobody can re-derive it for.
 func (r RunPrice) outcome() string {
-	outcome := r.Status
+	outcome := r.Outcome
+	if outcome == "" {
+		outcome = "outcome not recorded"
+	}
 	if r.Phase != "" {
 		outcome += ", " + r.Phase
 	}
