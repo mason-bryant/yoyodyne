@@ -388,7 +388,7 @@ everything else is said to the product manager:
 /intake                  whether the harness may start work on its own, and why not
 /stop-everything [reason]  hold intake and stop every run in flight, settling what each left
 /redirect <id> <what to do differently>
-/directives              what you have directed, and what is still unresolved
+/directives              what you have directed, and what is still in force
 /directive <what you have decided>
 /directive ambiguous <what is unresolved> | <what you said>
 /directive artifact <artifact> <what is unresolved> | <what changes>
@@ -584,8 +584,28 @@ unresolved.
 `/resolve <id> <how it was settled>` lifts the pause. The release is the record
 changing rather than anything done to a run: the next time the item is started,
 in whichever process, the same run continues from the gate it stopped at.
-`/directives` lists what is recorded and what is still unresolved. An identifier
-may be shortened to any prefix that names exactly one directive.
+`/directives` lists what is recorded, in force first and no longer in force
+after it. An identifier may be shortened to any prefix that names exactly one
+directive.
+
+An operational directive has nothing to resolve — it was in force from the
+moment it was recorded and held nothing up — so what settles one is somebody
+carrying it out. Where that means admitting work, the product manager names the
+directive as it admits the item: the item's notes record which directive it
+answers and in your words, and the directive's own record is told which item it
+became. `/directives` then shows it as carried out, with the identifier of the
+work, so what came of a directive is readable from the record rather than from
+whoever remembers. A directive you gave in a
+[Slack thread](reporting.md#reporting-into-slack) is answered in that thread at
+the same moment, tagging you, which is how a reply that turned into a work item
+tells you which one.
+
+Carrying one out does not withdraw it. A standing instruction like "prefer
+smaller pull requests" is still the instruction after the work it prompted is
+admitted, so it stays in force and stays in the listing, now with an account of
+what it produced under it. What ends a directive is superseding or retiring it,
+and neither is built yet — the two kinds that pause work are the only ones
+anything takes out of force today, by being resolved.
 
 From the command line the same records are reachable, which is how a directive
 you gave to an agent other than the product manager gets written down:

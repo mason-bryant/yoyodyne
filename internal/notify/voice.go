@@ -183,6 +183,7 @@ var harnessVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}.",
 		KindDirectiveRecorded:   "{directive} was recorded from this thread, received by the {receiver}: {text} — {effect}",
 		KindDirectiveResolved:   "{directive} is resolved: {text}",
+		KindDirectiveCarriedOut: "{directive} was carried out: {text}",
 		KindDirectiveRefused:    "Nothing was recorded from that reply: {why}",
 		KindIntakeHeld:          "Intake is held for this product: {why}",
 		KindIntakeReleased:      "Intake is released for this product.",
@@ -232,6 +233,7 @@ var developerVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}. Back to the change.",
 		KindDirectiveRecorded:   "I've been told something about this item, and it is written down as {directive} rather than left in a thread: {text} — {effect}",
 		KindDirectiveResolved:   "{directive} is settled: {text}. I pick the change up from where it stopped.",
+		KindDirectiveCarriedOut: "What {directive} asked for is done: {text}. Nothing about this item was waiting on it.",
 		KindDirectiveRefused:    "That reply changed nothing about what I'm building: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new reaches me: {why}",
 		KindIntakeReleased:      "Intake is open again; I'll take what I'm given.",
@@ -281,6 +283,7 @@ var reviewerVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}; I judge the change against what that leaves.",
 		KindDirectiveRecorded:   "{directive} is recorded against this item, and I judge the change against it exactly as against one typed at a terminal: {text} — {effect}",
 		KindDirectiveResolved:   "{directive} is settled: {text}. What I judge against is settled with it.",
+		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It stood while I judged this and it stands now.",
 		KindDirectiveRefused:    "Nothing in that reply reaches what I judge this against: {why}",
 		KindIntakeHeld:          "Intake is held, so nothing new will arrive for review: {why}",
 		KindIntakeReleased:      "Intake is open; work will reach me again.",
@@ -329,6 +332,7 @@ var developmentManagerVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}, and the item it held moves accordingly.",
 		KindDirectiveRecorded:   "Direction came in on this thread and is recorded against the item as {directive}: {text} — {effect}",
 		KindDirectiveResolved:   "{directive} is settled: {text}. The item it held moves again.",
+		KindDirectiveCarriedOut: "{directive} was carried out: {text}. It held nothing up, so this is what came of it rather than the queue moving.",
 		KindDirectiveRefused:    "That reply is not direction anything can act on, so nothing about this item moved: {why}",
 		KindIntakeHeld:          "Intake is held, so I pull nothing new until it lifts: {why}",
 		KindIntakeReleased:      "Intake is released; I'm pulling from the top of the backlog again.",
@@ -378,6 +382,7 @@ var productManagerVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}. What it settles is product intent.",
 		KindDirectiveRecorded:   "The operator has directed this work from the thread, and it is recorded as {directive} for the {receiver}: {text} — {effect}",
 		KindDirectiveResolved:   "The operator settled {directive}: {text}",
+		KindDirectiveCarriedOut: "{directive} was carried out, and this is what came of what the operator asked for: {text}",
 		KindDirectiveRefused:    "The operator said something here the harness would not record as a directive rather than guess at it: {why}",
 		KindIntakeHeld:          "The operator holds intake, so nothing new is chosen until they lift it: {why}",
 		KindIntakeReleased:      "The operator released intake; the backlog is being pulled from again.",
@@ -427,6 +432,7 @@ var architectVoice = voice{
 		KindExchangeClosed:      "{exchange} closed {outcome}, which is where the design stops being ambiguous.",
 		KindDirectiveRecorded:   "{directive} arrived through a thread rather than a terminal, and is the same record with the same force either way: {text} — {effect}",
 		KindDirectiveResolved:   "{directive} is settled: {text}. The pause it held is lifted where it stood, rather than the work restarting.",
+		KindDirectiveCarriedOut: "{directive} was carried out: {text}. A directive that pauses nothing still has a disposition, and this is it recorded rather than remembered.",
 		KindDirectiveRefused:    "The channel refused that reply rather than inferring a directive from it: {why}",
 		KindIntakeHeld:          "Intake is held, which stops selection and nothing already running: {why}",
 		KindIntakeReleased:      "Intake is released; selection resumes.",
@@ -530,7 +536,11 @@ var nextMoves = map[Kind]string{
 	// from what the record left unsettled.
 	KindDirectiveRecorded: "the operator's — the work this affects waits until the directive is resolved.",
 	KindDirectiveResolved: "the harness's — the work this held carries on from where it stopped.",
-	KindDirectiveRefused:  "the operator's — nothing was recorded, so nothing about the work has changed.",
+	// A directive that has been carried out is over, and it was holding nothing
+	// up while it stood. Naming somebody's move would invent a wait where the
+	// answer somebody was owed has just arrived.
+	KindDirectiveCarriedOut: "nobody's — what was asked for is done, and nothing was waiting on it.",
+	KindDirectiveRefused:    "the operator's — nothing was recorded, so nothing about the work has changed.",
 	// The operator's switches and the session that chooses work. These are about
 	// the whole line rather than one item, and every one of them is waiting on
 	// somebody by name.

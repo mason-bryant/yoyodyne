@@ -209,7 +209,7 @@ func disposition(answer notify.Notification) (notify.Receipt, bool) {
 	switch answer.Event.Kind {
 	case notify.KindDirectiveRefused:
 		return notify.ReceiptRefused, true
-	case notify.KindDirectiveResolved:
+	case notify.KindDirectiveResolved, notify.KindDirectiveCarriedOut:
 		return notify.ReceiptSettled, true
 	default:
 		return "", false
@@ -247,7 +247,7 @@ func (s *steering) act(ctx context.Context, topic notify.Topic, message inboundM
 		// unless this is not the thread that asked for it, in which case the thread
 		// that did has still heard nothing and is still owed the outcome.
 		s.said(ctx, resolved.ID, topic)
-		return acknowledged(topic, notify.KindDirectiveResolved, resolved, at)
+		return acknowledged(topic, settledKind(resolved), resolved, at)
 	}
 	recorded, err := s.record(topic, message, parsed, at)
 	if err != nil {
@@ -589,7 +589,9 @@ func firstWord(value string) (string, string) {
 func acknowledged(topic notify.Topic, kind notify.Kind, recorded directive.Directive, at time.Time) notify.Notification {
 	severity := report.SeverityNote
 	text := recorded.Text
-	if kind == notify.KindDirectiveResolved {
+	if settlement(kind) {
+		// The directive's own words are already in the thread, said by the person
+		// who typed them; what they are owed now is what became of it.
 		text = recorded.Resolution
 	} else if recorded.Pauses() {
 		severity = report.SeverityWarning
@@ -630,6 +632,25 @@ func refused(topic notify.Topic, at time.Time, why string) notify.Notification {
 			Detail:   notify.Detail{Reason: why},
 		},
 	}
+}
+
+// settlement reports the two kinds that say what became of a directive rather
+// than what it said. They are one predicate here because the acknowledgment
+// treats them identically — the account is the disposition, not the operator's
+// words — and only the voice they are said in differs.
+func settlement(kind notify.Kind) bool {
+	return kind == notify.KindDirectiveResolved || kind == notify.KindDirectiveCarriedOut
+}
+
+// settledKind is how a settled directive is reported: as a resolution where it
+// paused work, and as an outcome where it never did. It is read from the record
+// rather than from whoever is posting, so the two halves of this connection can
+// never come to describe one settlement differently.
+func settledKind(recorded directive.Directive) notify.Kind {
+	if recorded.Kind.Pauses() {
+		return notify.KindDirectiveResolved
+	}
+	return notify.KindDirectiveCarriedOut
 }
 
 // unsettled is what a directive is still waiting on, which is nothing at all once

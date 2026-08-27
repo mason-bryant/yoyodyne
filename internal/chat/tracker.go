@@ -20,6 +20,7 @@ import (
 
 	"github.com/mason-bryant/yoyodyne/internal/backlog"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
+	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/goal"
@@ -140,7 +141,7 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "directive"},
 	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note", "executor"},
 	actionReparent:     {"parent"},
@@ -209,6 +210,21 @@ type TrackerAction struct {
 	// was written for were admitted before anything could say what executes them.
 	// It is optional in both places, and work that names none is a developer run.
 	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
+	// Directive names the durable directive this admission answers, where the
+	// work is being admitted because somebody directed it. It is taken by a
+	// creation and by nothing else, and it is optional there: most work is
+	// admitted because the operator and the product manager talked about it
+	// rather than because a directive asked for it.
+	//
+	// It is what closes the loop on a directive that pauses nothing. Such a
+	// directive is in force from the moment it is recorded and has nothing to
+	// resolve, so before this there was no way at all to say what came of one:
+	// the reply that asked for it was acknowledged, the work it prompted was
+	// admitted, and the two were connected only in whoever remembered. Naming it
+	// here is what writes that connection down — onto the item, and as the
+	// directive's own outcome, which is what the thread it was said in is finally
+	// told.
+	Directive string `json:"directive,omitempty"`
 	// Note is text appended to the item's notes, which is how the product
 	// manager writes on an item without replacing what is already there.
 	Note string `json:"note,omitempty"`
@@ -267,6 +283,15 @@ type TrackerOutcome struct {
 	// premise that had gone stale instead of acting on it silently.
 	TargetStatus string `json:"target_status,omitempty"`
 	TargetUnread string `json:"target_unread,omitempty"`
+	// DirectiveID names the directive an admission answered, as the record holds
+	// it rather than as the action referred to it, and DirectiveUnrecorded is why
+	// that directive could not be told what came of it. Both are on the outcome
+	// rather than left to be read off the action, because the action carries
+	// whatever reference was typed and this carries what actually happened: an
+	// admission that answers a directive whose own record never learned so is
+	// exactly the silence in the originating thread that naming one is for.
+	DirectiveID         string `json:"directive_id,omitempty"`
+	DirectiveUnrecorded string `json:"directive_unrecorded,omitempty"`
 	// Summary says in one line what happened, and Detail carries the item text a
 	// read returned or the queue a survey returned.
 	Summary string `json:"summary,omitempty"`
@@ -461,6 +486,13 @@ func (a TrackerAction) validateArguments() []error {
 		if a.Class != "" && !a.Class.Valid() {
 			problems = append(problems, fmt.Errorf("class %q is not one the harness recognizes; the classes there are: %s", a.Class, namedWorkItemClasses()))
 		}
+		// A reference that was never going to name a directive is refused here,
+		// where nothing has been created yet. Whether any directive answers to it
+		// needs the records rather than the action, so that is asked as the
+		// creation is carried out.
+		if named := strings.TrimSpace(a.Directive); named != "" && !directive.ValidReference(named) {
+			problems = append(problems, fmt.Errorf("directive %q is not a directive identifier; name one exactly as it was recorded, or by any prefix of it that names exactly one", named))
+		}
 	case actionAttribute:
 		problems = append(problems, a.goalProblems()...)
 	case actionUpdate:
@@ -600,6 +632,9 @@ func (a TrackerAction) arguments() []string {
 	}
 	if strings.TrimSpace(string(a.Executor)) != "" {
 		carried = append(carried, "executor")
+	}
+	if strings.TrimSpace(a.Directive) != "" {
+		carried = append(carried, "directive")
 	}
 	if strings.TrimSpace(a.Note) != "" {
 		carried = append(carried, "note")
@@ -915,14 +950,27 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// there. Recording both as an admission would say the development manager
 		// did the one thing the harness refuses to let it do.
 		creation := s.creationVerb(action.parent())
+		// A creation that answers a directive names one that exists, and it is
+		// looked up before anything is created rather than after: an item whose
+		// notes claim a directive nobody recorded says something about where the
+		// work came from that is not true, and the outcome this creation is about
+		// to write would have nowhere to land.
+		prompting, err := s.promptingDirective(ctx, action)
+		if err != nil {
+			outcome.fail(err)
+			return
+		}
 		created, err := s.options.Tracker.Create(ctx, beads.NewWorkItem{
 			Title:       strings.TrimSpace(action.Title),
 			Description: strings.TrimSpace(action.Description),
 			Type:        proposedIssueType,
 			// The goal is written onto the item rather than only checked as it goes
 			// past, because an item in the queue that does not say what it is for is
-			// exactly the work nobody can later decide to stop doing.
-			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class),
+			// exactly the work nobody can later decide to stop doing. The directive is
+			// written on for the same reason and a second one: it is the only thing
+			// that says this work was asked for rather than proposed, and whoever
+			// asked is owed the item's identifier back.
+			Notes:  s.trackerProvenance(creation.note, action.Reason) + "\n\n" + goal.Note(action.Goal) + s.classNote(action.Class) + directiveNote(prompting),
 			Parent: action.parent(),
 			// The executor is set as the item is admitted rather than after it,
 			// because the harness may choose an item the moment it is in the queue: a
@@ -937,12 +985,19 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		}
 		outcome.WorkItemID = created.ID
 		outcome.WorkItemTitle = strings.TrimSpace(created.Title)
+		// The directive learns what it became, which is what its own thread is
+		// eventually told. It is written after the item exists because the outcome
+		// names the item, and a failure to write it is reported beside a creation
+		// that happened rather than as one that did not: the item is in the queue
+		// either way, and saying otherwise would be worse than saying nothing.
+		s.recordDirectiveOutcome(ctx, outcome, prompting, creation, created)
+		answering := outcome.answeringClause()
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes))
+			outcome.applied("%s at priority %d: %s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), answering)
 			return
 		}
-		outcome.applied("%s: %s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes))
+		outcome.applied("%s: %s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), answering)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -1124,6 +1179,96 @@ func (s *Session) creationVerb(parent string) creation {
 		note:    "Created under " + parent + ", decomposing it",
 		applied: func(id string) string { return "decomposed " + parent + " into " + id },
 	}
+}
+
+// promptingDirective is the recorded directive an admission answers, and is the
+// zero directive where it answers none, which is most admissions.
+//
+// The reference is resolved against the durable record before anything is
+// created rather than taken as typed. An item whose notes name a directive
+// nobody recorded says something untrue about where the work came from, and it
+// is the kind of untrue nothing downstream can catch: the outcome this creation
+// is about to write would have nowhere to land, and the thread that asked would
+// go on hearing nothing, which is the failure naming a directive exists to end.
+// So the creation is refused instead, having changed nothing, and the reference
+// is the product manager's to correct.
+//
+// What it does not judge is whether the directive can take an outcome. That is
+// the record's own to refuse — a pausing directive is settled by resolving what
+// it left unresolved, and one already settled has its account already — and
+// refusing the admission for either would lose work over the state of a
+// directive rather than over anything about the work.
+func (s *Session) promptingDirective(ctx context.Context, action TrackerAction) (directive.Directive, error) {
+	named := strings.TrimSpace(action.Directive)
+	if named == "" {
+		return directive.Directive{}, nil
+	}
+	if s.options.Directives == nil {
+		return directive.Directive{}, errors.New("no durable directive record is wired to this conversation, so nothing here can be admitted as answering a directive")
+	}
+	found, err := s.options.Directives.Find(ctx, named)
+	if err != nil {
+		return directive.Directive{}, fmt.Errorf("read the directive this admission answers: %w", err)
+	}
+	return found, nil
+}
+
+// directiveNote is what an item created in answer to a directive records about
+// the directive, and is nothing at all on the ordinary creation that answers
+// none. It carries the operator's own words as well as the identifier, because
+// an item that names a record somebody has to go and open says less than one
+// that says what was asked for.
+func directiveNote(prompting directive.Directive) string {
+	if prompting.ID == "" {
+		return ""
+	}
+	return fmt.Sprintf("\n\nIn answer to directive %s, received by the %s, which said: %s",
+		prompting.ID, prompting.ReceivedBy, singleLine(prompting.Text, maxTrackerFailureBytes))
+}
+
+// recordDirectiveOutcome tells a directive what the work it prompted became. It
+// is the other half of naming one on the admission, and the half that reaches
+// anybody who is not reading the work item: the directive's own record is what
+// the thread it was said in is answered from, so an admission that named a
+// directive and never wrote back is the same silence as one that named nothing.
+//
+// Nothing here fails the creation. The item is admitted, and a directive the
+// record would not settle — one holding work up, or one whose account of what it
+// became was written already — is said beside the admission rather than turned
+// into a creation reported as not having happened.
+func (s *Session) recordDirectiveOutcome(ctx context.Context, outcome *TrackerOutcome, prompting directive.Directive, verb creation, created beads.WorkItem) {
+	if prompting.ID == "" {
+		return
+	}
+	outcome.DirectiveID = prompting.ID
+	if _, err := s.options.Directives.CarryOut(ctx, prompting.ID, directiveOutcome(verb, created)); err != nil {
+		outcome.DirectiveUnrecorded = singleLine(err.Error(), maxTrackerFailureBytes)
+	}
+}
+
+// directiveOutcome is what a directive's record says it became. It names the
+// item rather than saying the directive was acted on, because a thread told its
+// directive was acted on is told nothing it can follow, and the identifier is
+// what somebody goes and reads. It is said in the same words the creation itself
+// is: what a directive prompted was an admission or a decomposition, and the
+// record must not describe one as the other.
+func directiveOutcome(verb creation, created beads.WorkItem) string {
+	return fmt.Sprintf("%s: %s", verb.applied(created.ID), singleLine(created.Title, maxTrackerTitleBytes))
+}
+
+// answeringClause is what one line about an admission says about the directive
+// it answered: which one, and where the record could not be told. It is folded
+// into the summary rather than rendered separately so the operator's account and
+// the product manager's results say it once, in the same words.
+func (o TrackerOutcome) answeringClause() string {
+	if o.DirectiveID == "" {
+		return ""
+	}
+	if o.DirectiveUnrecorded == "" {
+		return ", answering directive " + o.DirectiveID
+	}
+	return fmt.Sprintf(", answering directive %s, which was not told what became of it: %s",
+		o.DirectiveID, o.DirectiveUnrecorded)
 }
 
 // trackerProvenance is what an item records about a change an agent made to it.

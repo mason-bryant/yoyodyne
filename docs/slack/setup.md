@@ -591,6 +591,20 @@ it was are said where you asked rather than only where it was typed. A directive
 recorded at a terminal has no thread and nobody to tag, so nothing is said about
 it here.
 
+An ordinary reply records an operational directive, which pauses nothing and so
+has nothing to resolve. What settles one of those is somebody carrying it out,
+and the case that reaches most replies is the product manager admitting the work
+you asked for: the item it admits names your directive, and the directive's own
+record is told which item it became. That is what the thread then says back to
+you — the identifier of the work, not just that you were heard — so a reply that
+turned into a work item stops wearing :thinking_face: at the moment there is
+something to go and read.
+
+The check mark says you have an answer, not that your instruction has lapsed.
+An operational directive is in force from the moment it is recorded and stays
+there; carrying it out records what it produced and withdraws nothing, so it is
+still listed by `yoyo directive list` as in force, with what it became under it.
+
 Three things are refused, visibly:
 
 - **a reply from somebody without `direct-work`**, or with the grant but no

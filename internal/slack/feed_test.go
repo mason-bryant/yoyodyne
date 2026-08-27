@@ -504,6 +504,67 @@ func TestWhatBecomesOfADirectiveSaidInAThreadIsSaidInThatThread(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// The founding case, replayed to its end. A plain reply records an operational
+// directive, which pauses nothing and so has nothing to resolve: before the
+// harness could record what came of one, that reply was acknowledged, the work
+// it prompted was admitted, and the thread was never told the two were the same
+// thing. Carrying it out is what closes that, and the thread hears which item
+// its directive became.
+//
+// It is said as carried out rather than as resolved, because the person reading
+// it was never waiting for work to resume — nothing had stopped — and a message
+// about a lifted pause would describe something that did not happen.
+func TestWhatBecameOfAnOperationalDirectiveIsSaidInTheThreadThatAskedForIt(t *testing.T) {
+	t.Parallel()
+
+	const member = "U0OPERATOR"
+	const askTS = "1750000001.000200"
+	const outcome = "admitted yoyodyne-ifd.171 to the backlog: Make the integration retry budget configurable"
+	harness := newTestHarness(t, time.Time{})
+	recorded := harness.operationalDirective(t, "yoyodyne-ifd.68.3", member, askTS)
+
+	// Nothing has become of it yet, and a directive in force is not news a second
+	// time.
+	cursors := harness.poll(t, harness.start())
+
+	if _, err := harness.directives.CarryOut(recorded.ID, outcome, moment); err != nil {
+		t.Fatalf("CarryOut() error = %v", err)
+	}
+	batch, err := harness.feed.Poll(context.Background(), cursors)
+	if err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	said := 0
+	for _, delivery := range batch.Deliveries {
+		if delivery.Stream != directiveStream {
+			continue
+		}
+		said++
+		cursors.Streams[delivery.Stream] = delivery.Cursor
+		if delivery.Notification.Event.Kind != notify.KindDirectiveCarriedOut {
+			t.Fatalf("said %q, want a directive that paused nothing said as carried out", delivery.Notification.Event.Kind)
+		}
+		if delivery.Notification.Topic.Key() != "work-item:yoyodyne-ifd.68.3" {
+			t.Fatalf("said in %q, want the thread the directive was asked for in", delivery.Notification.Topic.Key())
+		}
+		if delivery.Mention != member || delivery.Reply != askTS {
+			t.Fatalf("delivery = %#v, want the person who asked tagged and their message carried", delivery)
+		}
+		// The identifier of the work is the whole point: a thread told its
+		// directive was acted on is told nothing it can go and read.
+		if delivery.Notification.Event.Text != outcome {
+			t.Fatalf("said %q, want the item the directive became", delivery.Notification.Event.Text)
+		}
+		if delivery.Notification.Event.Refs.DirectiveID != recorded.ID {
+			t.Fatalf("refs = %#v, want the directive it is about", delivery.Notification.Event.Refs)
+		}
+	}
+	if said != 1 {
+		t.Fatalf("said %d outcomes, want exactly one", said)
+	}
+	harness.poll(t, cursors)
+}
+
 // A settlement that happened before this product's reporting began is history,
 // exactly as everything else read from a record is. The per-directive marks live
 // in the cursors and the steer map does not, so an operator who starts the
@@ -720,21 +781,40 @@ func (h *testHarness) start() Cursors {
 // was said in, by whom, and in which message beside it.
 func (h *testHarness) directive(t *testing.T, workItemID, member, messageTS string) directive.Directive {
 	t.Helper()
+	return h.steered(t, directive.Directive{
+		Kind:       directive.KindAmbiguous,
+		Text:       "ambiguous: which of the two branches did you mean",
+		Unresolved: "which of the two branches did you mean",
+	}, workItemID, member, messageTS)
+}
+
+// operationalDirective records the directive a plain reply actually makes: in
+// force from the moment it arrives, pausing nothing, and settled only by
+// somebody carrying it out. It is what most replies are, which is why what
+// becomes of one is the case that matters most in this thread.
+func (h *testHarness) operationalDirective(t *testing.T, workItemID, member, messageTS string) directive.Directive {
+	t.Helper()
+	return h.steered(t, directive.Directive{
+		Kind: directive.KindOperational,
+		Text: "also make the integration retry budget configurable",
+	}, workItemID, member, messageTS)
+}
+
+// steered records one directive and the sink's note of where it was said, which
+// is what makes it answerable later.
+func (h *testHarness) steered(t *testing.T, said directive.Directive, workItemID, member, messageTS string) directive.Directive {
+	t.Helper()
 	id, err := directive.NewID()
 	if err != nil {
 		t.Fatalf("NewID() error = %v", err)
 	}
-	recorded := directive.Directive{
-		SchemaVersion: directive.SchemaVersion,
-		ID:            id,
-		ProductID:     "yoyodyne",
-		Kind:          directive.KindAmbiguous,
-		ReceivedBy:    domain.RoleProductManager,
-		ReceivedAt:    moment,
-		Text:          "ambiguous: which of the two branches did you mean",
-		Unresolved:    "which of the two branches did you mean",
-		Scope:         []string{workItemID},
-	}
+	recorded := said
+	recorded.SchemaVersion = directive.SchemaVersion
+	recorded.ID = id
+	recorded.ProductID = "yoyodyne"
+	recorded.ReceivedBy = domain.RoleProductManager
+	recorded.ReceivedAt = moment
+	recorded.Scope = []string{workItemID}
 	if err := h.directives.Record(recorded); err != nil {
 		t.Fatalf("Record() error = %v", err)
 	}
