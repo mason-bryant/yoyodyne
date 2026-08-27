@@ -749,6 +749,10 @@ a bundle, and migration from `.yoyodyne.yaml`.
 - [The configuration guide](docs/configuration.md) — the full configuration
   reference: layout, discovery, precedence, checks, publishing, personas,
   inheritance, and inspection.
+- [Provider plugins](docs/provider-plugins.md) — declaring a provider of your
+  own: the six answers a provider has to give, the rule format for describing one
+  in configuration, which compiled adapter runs it, and why a plugin never
+  decides how long to wait.
 - [The v1 harness design](docs/designs/v1-harness-design.md) — the architecture,
   the artifact and agent models, the Git model and what it does and does not
   enforce, and the self-hosting sequence.

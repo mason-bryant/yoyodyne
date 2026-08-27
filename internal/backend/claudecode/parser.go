@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -26,6 +24,11 @@ type streamParser struct {
 	clock    execution.Clock
 	redactor execution.Redactor
 	sink     func(execution.Event) error
+	// dialect is how what this provider says is read. It is a field rather than a
+	// package-level call so the parser depends on the contract rather than on
+	// this provider: swapping it is how a test drives the parser with a
+	// provider's answers and nothing else about the provider.
+	dialect backend.Dialect
 	// reply is where the agent's prose goes for whoever is watching it arrive.
 	// It is nil when nobody is, which is every invocation the harness makes on
 	// its own behalf.
@@ -68,164 +71,12 @@ type streamEnvelope struct {
 	RateLimitInfo json.RawMessage `json:"rate_limit_info"`
 }
 
-// rateLimitInfo names the fields of a rate_limit_event the harness acts on. The
-// provider sends more than this — utilization, overage accounting, the reason
-// overage is unavailable — and all of it is preserved in the event stream; only
-// these decide whether a run waits.
-//
-// Provenance of these names. No recorded rate_limit_event was available to read
-// them off: this parser used to route the event to its default branch, so all
-// twenty entries in the local run history had already had their payload
-// discarded, and a hard limit could not be provoked on demand to record a fresh
-// one. They were therefore read out of the shipped provider CLI itself —
-// Claude Code 2.1.224, the emitted-message schema `$1v` and the payload schema
-// it references, `L1v` — which declares:
-//
-//	type:           "rate_limit_event"
-//	rate_limit_info: status ∈ {allowed, allowed_warning, rejected}   (required)
-//	                 resetsAt?: int
-//	                 rateLimitType? ∈ {five_hour, seven_day, seven_day_opus,
-//	                                   seven_day_sonnet,
-//	                                   seven_day_overage_included, overage}
-//	                 utilization?, isUsingOverage?, overageStatus?,
-//	                 overageResetsAt?, overageDisabledReason?, …
-//
-// resetTime reads resetsAt as whole Unix seconds because that CLI compares it as
-// `resetsAt * 1000 <= Date.now()` and renders it as `resetsAt - Date.now()/1000`.
-// exhausted excludes isUsingOverage because that CLI shows a hard limit only
-// when overage is not already serving the request.
-//
-// That is a description of the provider, not a promise from it. Everything here
-// degrades safely if a future version disagrees: an unreadable payload is
-// recorded whole and never read as exhaustion, so the harness stops waiting
-// rather than starts waiting wrongly. The first real exhausted limit this
-// records is the evidence that should replace this comment.
-type rateLimitInfo struct {
-	Status        string `json:"status"`
-	RateLimitType string `json:"rateLimitType"`
-	// ResetsAt stays raw so that a reset time in a shape this version does not
-	// expect cannot sink the decode of the whole payload. An exhausted limit
-	// whose reset time is unreadable is still an exhausted limit, and it has to
-	// reach the caller as one: what the harness refuses is guessing the wait, not
-	// noticing the refusal.
-	ResetsAt       json.RawMessage `json:"resetsAt"`
-	IsUsingOverage bool            `json:"isUsingOverage"`
-}
-
-// terminalAPIError is the provider's own terminal reason for an invocation that
-// ended on an error from the API rather than on anything the agent did or the
-// harness decided.
-const terminalAPIError = "api_error"
-
-// overloadedStatus is the HTTP status the provider's API answers with when it is
-// transiently unable to serve a request at all.
-const overloadedStatus = "529"
-
-// apiErrorStatus reads the status out of the message the provider CLI writes on
-// a terminal API error, which it puts at the front, before its own prose.
-//
-// Provenance. Two runs on 2026-08-18 — run-ff3c59bff086d6ac16dbf5101778843d and
-// run-19dc9dff153e1eb89a2470f78f02f240 — recorded a terminal result byte for
-// byte identical apart from the session, with terminal_reason "api_error" and
-// this result text:
-//
-//	API Error: 529 Overloaded. This is a server-side issue, usually temporary —
-//	try again in a moment. If it persists, check https://status.claude.com.
-//
-// Both had already exhausted the CLI's own ten api_retry attempts on the same
-// condition, so a terminal result in this shape is what the provider says after
-// it has finished retrying rather than instead of retrying.
-//
-// The match is deliberately narrow: only a terminal API error whose status is
-// the overloaded one becomes a waitable refusal, so a message this version does
-// not recognize fails the run exactly as it does today rather than becoming a
-// wait nobody can justify.
-//
-// All of this is Claude Code's dialect, and it is one more piece of it living
-// here rather than behind a contract. What generalizes out of it — that a
-// transient server refusal is an answer a provider contract has to name, and
-// why it cannot be folded into the unknown-reset case — is stated where the
-// contract lives, on backend.ServerOverload, for yoyodyne-ifd.32 to build on.
-var apiErrorStatus = regexp.MustCompile(`(?i)\bapi error\b\D{0,4}(\d{3})\b`)
-
-// transientServerOverload reports an invocation the provider ended because its
-// own servers could not serve it. It is not a usage limit — nothing about the
-// account is exhausted, and no reset time is quoted — but it asks for the same
-// answer: wait briefly and ask again.
-func transientServerOverload(result backend.RunResult) *backend.ServerOverload {
-	if !result.IsError || result.StopReason != terminalAPIError {
-		return nil
-	}
-	status := apiErrorStatus.FindStringSubmatch(result.FinalText)
-	if status == nil || status[1] != overloadedStatus {
-		return nil
-	}
-	return &backend.ServerOverload{Detail: result.FinalText}
-}
-
-// clientErrorPrefix marks the API statuses that describe the request rather than
-// the server's ability to serve it. A relaunch would put the identical request in
-// front of the provider again and earn the identical refusal, so nothing in this
-// class is transient — an exhausted key and a malformed request both stay what
-// they are however many times they are asked.
-const clientErrorPrefix = "4"
-
-// transientProviderFailure reports an invocation the provider ended on something
-// that judged nothing about the work and may well not happen again. It is what is
-// left of the terminal API errors once the narrower readings have taken theirs:
-// an overload is already a waitable refusal and never reaches here, and a status
-// describing the request is a refusal that stands. What remains is a server-side
-// status that named no wait, or a terminal API error carrying no status at all —
-// the shape of a connection that went away, since "Connection closed
-// mid-response" quotes no status because nothing answered.
-//
-// Reading the leftovers as transient rather than the recognized ones as such is
-// deliberate, and it is the opposite of how the overload above is matched. That
-// one turns a failure into a wait, so a message it does not recognize has to keep
-// failing the run. This one turns a failure into another attempt against a
-// budget, so the cost of being wrong is one more invocation and a blocker that
-// arrives three attempts later than it might have — while the cost of missing a
-// case is the whole run, which is what a person spent this week reconciling by
-// hand. Being narrow is the safe direction there only if the harness is content
-// to keep failing on weather it has not seen yet, and it is not.
-//
-// Claude Code's dialect again: what generalizes is on backend.TransientFailure.
-func transientProviderFailure(result backend.RunResult) *backend.TransientFailure {
-	if !result.IsError || result.StopReason != terminalAPIError {
-		return nil
-	}
-	if status := apiErrorStatus.FindStringSubmatch(result.FinalText); status != nil && strings.HasPrefix(status[1], clientErrorPrefix) {
-		return nil
-	}
-	// The provider's own account of the death, bounded: the category alone does
-	// not say what happened, and the message beside it is the difference between
-	// a record somebody can act on and three runs that all read "api_error".
-	return &backend.TransientFailure{Detail: result.DescribeFailure()}
-}
-
-// rateLimitRejected is the provider's name for a limit that is refusing work.
-// Its other statuses describe a limit that is still serving, and the transient
-// throttles the provider CLI retries by itself arrive separately as the system
-// api_retry subtype, so neither is a reason for the harness to wait.
-const rateLimitRejected = "rejected"
-
-// exhausted reports a limit that actually stops work. A rejected primary limit
-// with overage already in use is still being served, which is the provider's own
-// rule for whether to show the user a hard limit or leave them working.
-func (r rateLimitInfo) exhausted() bool {
-	return r.Status == rateLimitRejected && !r.IsUsingOverage
-}
-
-// resetTime reads the instant the limit resets. The provider sends whole
-// seconds since the Unix epoch; anything else is no reset time at all, and the
-// caller refuses to wait rather than inventing one.
-func (r rateLimitInfo) resetTime() time.Time {
-	var seconds int64
-	if len(r.ResetsAt) == 0 || json.Unmarshal(r.ResetsAt, &seconds) != nil || seconds <= 0 {
-		return time.Time{}
-	}
-	return time.Unix(seconds, 0).UTC()
-}
+// Everything this parser used to know about rate limits, retries, and reset
+// times now lives in dialect.go, as one implementation of the provider contract
+// in internal/backend. What stays here is reading the stream: which envelope is
+// the invocation's terminal, what goes into the event log, and what the
+// invocation's result is. What each thing the provider said *means* is the
+// dialect's, and what to do about it is the harness's.
 
 type message struct {
 	Content []contentBlock `json:"content"`
@@ -242,7 +93,17 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
+// newStreamParser reads one invocation's stream with the dialect it is given.
+// The dialect is a parameter rather than this file's own choice because a
+// project may declare a provider that speaks this adapter's protocol and reports
+// its limits, retries, and reset times in some other spelling: the adapter runs
+// the process, and what the process said is read by whichever dialect the
+// registry resolved for the backend the agent named. Nothing means this
+// provider's own.
+func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string), dialect backend.Dialect) *streamParser {
+	if dialect == nil {
+		dialect = Dialect{}
+	}
 	return &streamParser{
 		runID:    runID,
 		role:     role,
@@ -250,6 +111,7 @@ func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, c
 		clock:    clock,
 		redactor: redactor,
 		sink:     sink,
+		dialect:  dialect,
 		reply:    reply,
 	}
 }
@@ -293,13 +155,13 @@ func (p *streamParser) ParseLine(line string) error {
 	}
 
 	switch envelope.Type {
-	case "system":
+	case systemEventType:
 		return p.parseSystem(envelope)
 	case "assistant", "user":
 		return p.parseMessage(envelope.Type, envelope.Message)
 	case "result":
 		return p.parseResult(envelope)
-	case "rate_limit_event":
+	case rateLimitEventType:
 		return p.parseRateLimit(envelope)
 	default:
 		return p.emit(execution.EventProcessOutput, map[string]any{
@@ -332,7 +194,13 @@ func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 			"tools":           envelope.Tools,
 			"capabilities":    envelope.Capabilities,
 		})
-	case "api_retry":
+	case apiRetrySubtype:
+		// The provider is retrying by itself. The dialect is asked anyway, so the
+		// answer for a retry in progress is the contract's rather than this
+		// parser's silence -- what it earns the run is nothing, and that is a
+		// statement the contract makes rather than one this branch makes by
+		// leaving the result alone.
+		p.observe(backend.ProviderEvent{Type: envelope.Type, Subtype: envelope.Subtype})
 		return p.emit(execution.EventProcessOutput, map[string]any{
 			"provider_type":    envelope.Type,
 			"provider_subtype": envelope.Subtype,
@@ -351,11 +219,14 @@ func (p *streamParser) parseSystem(envelope streamEnvelope) error {
 }
 
 // parseRateLimit records what the provider said about capacity. The whole
-// payload goes into the event stream, not the handful of fields this version
+// payload goes into the event stream, not the handful of fields the dialect
 // reads from it: a limit nobody has seen the shape of cannot be diagnosed from
-// an event that already threw the shape away. Only an exhausted limit becomes a
-// result the run acts on — the same event reports healthy utilization far more
-// often, and reading that as exhaustion would stop runs that have capacity.
+// an event that already threw the shape away.
+//
+// What the payload means is the dialect's answer, and what a payload it cannot
+// read means is nothing at all: the same event reports healthy utilization far
+// more often, so a report that cannot be read must not become exhaustion, and it
+// is not a reason to fail the stream either.
 func (p *streamParser) parseRateLimit(envelope streamEnvelope) error {
 	if err := p.emit(execution.EventProcessOutput, map[string]any{
 		"provider_type":   envelope.Type,
@@ -363,22 +234,23 @@ func (p *streamParser) parseRateLimit(envelope streamEnvelope) error {
 	}); err != nil {
 		return err
 	}
-	var info rateLimitInfo
-	if len(envelope.RateLimitInfo) == 0 || json.Unmarshal(envelope.RateLimitInfo, &info) != nil {
-		// A payload the harness cannot read is already recorded above. It says
-		// nothing about capacity, so it must not be read as exhaustion, and a
-		// malformed report is not a reason to fail the stream either.
-		return nil
-	}
-	if !info.exhausted() {
-		// The provider re-reports as the limit changes, so a later report that
-		// the limit is serving again supersedes an earlier exhausted one rather
-		// than accumulating beside it.
-		p.result.UsageLimit = nil
-		return nil
-	}
-	p.result.UsageLimit = &backend.UsageLimit{Kind: info.RateLimitType, ResetsAt: info.resetTime()}
+	p.observe(backend.ProviderEvent{Type: envelope.Type, Payload: envelope.RateLimitInfo})
 	return nil
+}
+
+// observe hands one provider event to this provider's dialect and records
+// whatever answer comes back on the invocation's result. It is the only way an
+// answer reaches the result, so nothing in this parser decides what a provider
+// said and nothing above it special-cases this provider.
+func (p *streamParser) observe(event backend.ProviderEvent) {
+	if p.dialect == nil {
+		return
+	}
+	observation, said := p.dialect.Observe(event)
+	if !said {
+		return
+	}
+	observation.Record(&p.result)
 }
 
 func (p *streamParser) parseMessage(messageType string, raw json.RawMessage) error {
@@ -553,14 +425,17 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	if p.result.StopReason == "" {
 		p.result.StopReason = envelope.StopReason
 	}
-	p.result.ServerOverload = transientServerOverload(p.result)
-	// An overload is the transient death the harness already has a wait for, so
-	// it is never also reported as one to relaunch on. Deciding it here rather
-	// than inside the classifier keeps the two answers mutually exclusive by
-	// construction instead of by each one remembering the other.
-	if p.result.ServerOverload == nil {
-		p.result.TransientFailure = transientProviderFailure(p.result)
-	}
+	// The terminal is where the provider says how the invocation ended, so it is
+	// the event whose answer decides whether this is a wait, another attempt, or
+	// a refusal that stands. Which of those it is comes back from the dialect;
+	// that they cannot stand together is held by the contract.
+	p.observe(backend.ProviderEvent{
+		Type:     envelope.Type,
+		Subtype:  p.result.StopReason,
+		Text:     p.result.FinalText,
+		Terminal: true,
+		Failed:   p.result.IsError,
+	})
 	eventType := execution.EventRunCompleted
 	if envelope.IsError {
 		eventType = execution.EventRunFailed

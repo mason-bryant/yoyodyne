@@ -66,19 +66,16 @@ const readOnlyPermissionMode = "plan"
 var readOnlyTools = []string{}
 
 // readOnlyRole reports whether a role reasons over supplied evidence rather than
-// reaching outside it. Such a role gets no tools and cannot be given them. Of
-// the roles this backend serves, every one but the developer is such a role: the
-// developer is the only one whose work is editing a worktree, and each of the
-// others decides something the harness then performs on its behalf. The roles
-// are listed rather than inverted so that a role nobody has decided a posture
-// for reaches the refusal in Run instead of inheriting one.
+// reaching outside it. Such a role gets no tools and cannot be given them.
+//
+// Which roles those are is the contract's to say rather than this adapter's: it
+// is the same statement a backend makes when it declares which postures it can
+// hold, and a provider validated against one table and run against another is a
+// provider whose configuration says nothing. A role nobody has decided a posture
+// for has no posture at all, so it is neither read-only here nor supported by
+// this backend, and it reaches the refusal in Run.
 func readOnlyRole(role domain.AgentRole) bool {
-	switch role {
-	case domain.RoleReviewer, domain.RoleProductManager, domain.RoleArchitect, domain.RoleDevelopmentManager:
-		return true
-	default:
-		return false
-	}
+	return backend.PostureFor(role) == backend.PostureReadOnly
 }
 
 // supportedRole reports whether this backend knows how to assemble an
@@ -95,6 +92,38 @@ type Backend struct {
 	Runner execution.ProcessRunner
 	Binary string
 	Clock  execution.Clock
+	// Provider is the backend identifier this invocation is recorded under, and
+	// is empty for Claude Code itself. A project that declared a provider running
+	// on this adapter is a different backend from the one that ships here, and
+	// what a run, a conversation, and a line of spend record has to be the
+	// backend the agent named rather than the adapter that happened to launch it.
+	Provider domain.Backend
+	// Dialect is how what the provider says is read: which reports are limits,
+	// which are retries the provider is taking itself, and when a limit lifts.
+	// Empty is this provider's own dialect, which is every invocation until a
+	// project declares one; a declared provider supplies its own as data.
+	//
+	// It decides nothing. Whether to wait, how long, and against which budget
+	// stay above this adapter, which is what keeps a declared provider from being
+	// able to spend an account.
+	Dialect backend.Dialect
+}
+
+// dialect is what reads this invocation's stream: whatever the caller resolved
+// for the backend the agent named, and this provider's own when nothing did.
+func (b Backend) dialect() backend.Dialect {
+	if b.Dialect == nil {
+		return Dialect{}
+	}
+	return b.Dialect
+}
+
+// provider is the backend a result is recorded under.
+func (b Backend) provider() domain.Backend {
+	if b.Provider == "" {
+		return domain.BackendClaudeCode
+	}
+	return b.Provider
 }
 
 func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, error) {
@@ -132,14 +161,13 @@ func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, e
 	return availability, nil
 }
 
+// Capabilities is what this adapter can do, read from the one description of
+// this backend the harness holds rather than restated here. A configuration is
+// validated against that description, so an adapter that answered differently
+// would be one whose capability check meant nothing.
 func (Backend) Capabilities() backend.Capabilities {
-	return backend.Capabilities{
-		StructuredEvents:  true,
-		SessionResumption: true,
-		StructuredOutput:  true,
-		ToolControl:       true,
-		LocalAuth:         true,
-	}
+	descriptor, _ := backend.BuiltInDescriptor(domain.BackendClaudeCode)
+	return descriptor.Capabilities
 }
 
 func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.RunResult, error) {
@@ -245,7 +273,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		clock = execution.RealClock{}
 	}
 	redactor := execution.NewRedactor(request.RedactValues...)
-	parser := newStreamParser(request.RunID, request.Role, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink)
+	parser := newStreamParser(request.RunID, request.Role, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink, b.dialect())
 	var parseErrors []error
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name:  b.binary(),
@@ -279,7 +307,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	// return the raw JSON stream as a second, potentially escape-obfuscated copy.
 	processResult.Stdout = ""
 	result := parser.Result()
-	result.Backend = domain.BackendClaudeCode
+	result.Backend = b.provider()
 	result.Process = processResult
 	if processResult.Status == execution.ProcessCancelled || processResult.Status == execution.ProcessTimedOut || processResult.Status == execution.ProcessStalled {
 		result.IsError = true

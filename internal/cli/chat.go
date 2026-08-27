@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/chat"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -367,7 +366,10 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	if err != nil {
 		return nil, nil, err
 	}
-	if agent.Backend != domain.BackendClaudeCode {
+	// A conversation runs on whatever adapter this build has, so what is asked is
+	// whether the backend the agent named resolves to one — which a provider the
+	// project declared does, and a backend nothing can launch does not.
+	if !providerRuns(cfg, agent.Backend) {
 		return nil, nil, fmt.Errorf("a conversation requires a claude-code agent, and the %s agent %s is configured for %q", role, name, agent.Backend)
 	}
 	if err := config.ValidateModelSelector(agent.Model); err != nil {
@@ -375,7 +377,7 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	}
 
 	processRunner := parts.runner
-	provider := claudecode.Backend{Runner: processRunner}
+	provider := providerBackend(cfg, agent.Backend, processRunner)
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -419,6 +421,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	for _, problem := range briefing.Problems {
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
 	}
+	// Provider below is the backend the agent named rather than the adapter that
+	// launches it: a conversation record has to say which provider answered it,
+	// and a project that declared its own has a different answer from the
+	// built-in. Providers is the set that name is checked against, so a
+	// conversation on a backend nothing can run is refused before the provider is
+	// invoked rather than on its first turn.
 	session, err := chat.Open(chat.Options{
 		Role:    role,
 		Backend: provider,
@@ -503,7 +511,8 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Model:          agent.Model,
 		Persona:        agent.Persona.Text,
 		Agent:          name,
-		Provider:       domain.BackendClaudeCode,
+		Provider:       agent.Backend,
+		Providers:      providerRegistry(cfg),
 		Repository:     repository,
 		ProductID:      cfg.Product.ID,
 		RepositoryID:   string(cfg.Product.RepositoryID),

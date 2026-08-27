@@ -8,6 +8,7 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/research"
 )
@@ -40,7 +41,13 @@ type configDocument struct {
 	// the set of accounts either layer named. It decodes straight into the
 	// effective type because there is no per-field override to distinguish.
 	Accounts *map[string]Account `yaml:"accounts"`
-	Slack    *slackDocument      `yaml:"slack"`
+	// Providers replaces an inherited mapping entirely rather than merging into
+	// it, for the reason the accounts mapping does: which providers a project may
+	// name is one statement, and a provider assembled half from a bundle and half
+	// from a project is a dialect nobody wrote. It decodes straight into the
+	// effective type because there is no per-field override to distinguish.
+	Providers *map[string]backend.ProviderPlugin `yaml:"providers"`
+	Slack     *slackDocument                     `yaml:"slack"`
 }
 
 type productDocument struct {

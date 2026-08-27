@@ -21,6 +21,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/research"
@@ -82,9 +83,33 @@ type Config struct {
 	// absent from a project that has named nobody, which recognizes nobody rather
 	// than everybody.
 	Operators map[string]Operator `yaml:"operators,omitempty" json:"operators,omitempty"`
+	// Providers are the provider plugins this project declares, keyed by the
+	// backend identifier an agent names to run on one. It is absent from a
+	// project that runs on the backends this build ships, which is every project
+	// until one reaches a harness or an API yoyo has never heard of.
+	//
+	// A declared provider describes and decides nothing: it says which roles it
+	// serves, which tool postures it can hold them to, what it can do, and how to
+	// read what it says about rate limits, retries, and reset times. Whether to
+	// wait, how long, and against which budget stay the harness's, because those
+	// are what the usage_limit settings and a run's safety properties rest on.
+	// See docs/provider-plugins.md.
+	Providers map[string]backend.ProviderPlugin `yaml:"providers,omitempty" json:"providers,omitempty"`
 	// Slack configures the reporting sink. It is absent from a project that does
 	// not report to a workspace, which is every project until one opts in.
 	Slack Slack `yaml:"slack,omitempty" json:"slack,omitempty"`
+}
+
+// ProviderRegistry is every provider this project may name: the backends this
+// build ships, plus whatever the project declared for itself. It reports
+// everything wrong with the declarations at once and nothing at all when there
+// are none, which is the state of every project that runs on a built-in.
+func (c Config) ProviderRegistry() (*backend.Registry, error) {
+	plugins := make(map[domain.Backend]backend.ProviderPlugin, len(c.Providers))
+	for name, plugin := range c.Providers {
+		plugins[domain.Backend(name)] = plugin
+	}
+	return backend.NewRegistry(plugins)
 }
 
 // Slack is what a project says about reporting into a chat workspace. What it
@@ -705,6 +730,17 @@ func (c Config) Validate() error {
 		exempted[class] = struct{}{}
 	}
 
+	// The providers this project may name are resolved before the agents are
+	// checked, because every agent names one. A declaration that will not build
+	// is reported here and the agents are then checked against the built-ins
+	// alone, so a typo in one plugin does not turn every agent in the file into a
+	// second complaint about a backend nobody can find.
+	providers, providerErr := c.ProviderRegistry()
+	if providerErr != nil {
+		problems = append(problems, providerErr.Error())
+		providers, _ = backend.NewRegistry(nil)
+	}
+
 	if len(c.Agents) == 0 {
 		problems = append(problems, "at least one agent is required")
 	}
@@ -735,10 +771,23 @@ func (c Config) Validate() error {
 		} else if !roleKnown {
 			problems = append(problems, fmt.Sprintf("agent %q has unknown role %q; roles are %s", name, agent.Role, describeRoles()))
 		}
-		if !agent.Backend.Valid() {
+		// Which backends exist, and what each of them serves, is one question
+		// asked of the registry rather than two asked of a switch: a provider this
+		// project declared is refused for an unsupported role or an unsupported
+		// tool posture exactly as a backend this build ships is, and both are
+		// refused here, before any work is assigned to an agent that names one.
+		descriptor, known := providers.Lookup(agent.Backend)
+		switch {
+		case !known:
 			problems = append(problems, fmt.Sprintf("agent %q has unsupported backend %q", name, agent.Backend))
-		} else if roleKnown && !agent.Backend.SupportsRole(agent.Role) {
+		case !roleKnown:
+			// The role is already reported above, and a backend cannot be said to
+			// support or refuse a name that is not a role at all.
+		case !descriptor.SupportsRole(agent.Role):
 			problems = append(problems, fmt.Sprintf("backend %q does not support role %q for agent %q", agent.Backend, agent.Role, name))
+		case !descriptor.SupportsPosture(backend.PostureFor(agent.Role)):
+			problems = append(problems, fmt.Sprintf("backend %q cannot hold the %q tool posture that role %q requires, for agent %q",
+				agent.Backend, backend.PostureFor(agent.Role), agent.Role, name))
 		}
 		// Every executable agent declares its own selector; the harness never
 		// falls back to a provider default nobody chose or recorded.

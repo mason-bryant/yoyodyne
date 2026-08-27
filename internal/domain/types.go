@@ -227,32 +227,21 @@ func ValidateIdentifier(kind, value string) error {
 	return nil
 }
 
+// Valid reports a well-formed backend identifier. Which backends a project may
+// actually name, and which roles and tool postures each of them serves, is not
+// this package's to say: a project may declare a provider of its own, and the
+// registry in internal/backend is where the built-ins and the declared ones are
+// checked the same way, when the configuration is validated and before any work
+// is assigned.
+//
+// What is checked here is the shape, because that is what a durable record
+// needs. A run, a conversation, or a line of spend names the provider it was
+// served by, and that record has to stay readable whether or not the provider
+// that served it is still configured, still declared, or still compiled into
+// this build — a fact about what was spent does not stop being true because
+// somebody deleted a plugin.
 func (b Backend) Valid() bool {
-	switch b {
-	case BackendClaudeCode, BackendCodex:
-		return true
-	default:
-		return false
-	}
-}
-
-// SupportsRole reports whether a backend serves a role. No backend serves a name
-// that is not a role at all, so the answer for one is false whichever backend
-// asks: the Claude Code backend already refuses an unrecognized role when it
-// assembles an invocation, and answering true here would describe a combination
-// that cannot run.
-func (b Backend) SupportsRole(role AgentRole) bool {
-	if !role.Valid() {
-		return false
-	}
-	switch b {
-	case BackendClaudeCode:
-		return true
-	case BackendCodex:
-		return role == RoleDeveloper || role == RoleReviewer
-	default:
-		return false
-	}
+	return ValidateIdentifier("backend", string(b)) == nil
 }
 
 func (m ApprovalMode) Valid() bool {

@@ -51,36 +51,26 @@ func TestRolesIsTheWholeSet(t *testing.T) {
 	}
 }
 
-func TestBackendSupportsRole(t *testing.T) {
+// A backend identifier is checked for shape and nothing else. Which backends a
+// project may name, and which roles each of them serves, moved to the registry
+// in internal/backend when a project became able to declare a provider of its
+// own: a durable record naming a provider has to stay readable whether or not
+// that provider is still configured, and this package is what reads it back.
+func TestBackendValidIsAboutShapeAlone(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		backend Backend
-		role    AgentRole
-		want    bool
-	}{
-		{name: "claude developer", backend: BackendClaudeCode, role: RoleDeveloper, want: true},
-		{name: "claude architect", backend: BackendClaudeCode, role: RoleArchitect, want: true},
-		// The set of roles is fixed in the harness, so no backend serves a name
-		// outside it — not even the one that serves every role there is.
-		{name: "claude unknown role", backend: BackendClaudeCode, role: "security-reviewer", want: false},
-		{name: "claude typoed role", backend: BackendClaudeCode, role: "developor", want: false},
-		{name: "claude empty role", backend: BackendClaudeCode, role: "", want: false},
-		{name: "codex developer", backend: BackendCodex, role: RoleDeveloper, want: true},
-		{name: "codex reviewer", backend: BackendCodex, role: RoleReviewer, want: true},
-		{name: "codex product manager", backend: BackendCodex, role: RoleProductManager, want: false},
-		{name: "codex unknown role", backend: BackendCodex, role: "security-reviewer", want: false},
-		{name: "unknown backend", backend: "other", role: RoleDeveloper, want: false},
+	// The two this build ships, and the shape a project's own provider takes.
+	for _, named := range []Backend{BackendClaudeCode, BackendCodex, "my-openai-harness"} {
+		if !named.Valid() {
+			t.Errorf("Valid() = false for backend %q", named)
+		}
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tt.backend.SupportsRole(tt.role); got != tt.want {
-				t.Fatalf("SupportsRole() = %v, want %v", got, tt.want)
-			}
-		})
+	// Nothing that is not an identifier at all.
+	for _, named := range []Backend{"", "Claude Code", "carrier pigeon", "-leading", "under_score"} {
+		if named.Valid() {
+			t.Errorf("Valid() = true for backend %q", named)
+		}
 	}
 }
 

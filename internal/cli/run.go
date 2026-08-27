@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/checks"
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -266,13 +265,19 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 	processRunner := parts.runner
 	redactValues := parts.redactValues
 
+	// Each role's provider is resolved from what this project declares rather
+	// than assumed to be the one this build ships: a project that declared a
+	// provider of its own gets that provider's dialect and executable, so its
+	// rules read the stream its invocation actually produces. A built-in
+	// declares neither and runs exactly as it always has.
+	developerProvider := providerBackend(cfg, agentForRole(cfg, domain.RoleDeveloper).Backend, processRunner)
+	reviewerProvider := providerBackend(cfg, agentForRole(cfg, domain.RoleReviewer).Backend, processRunner)
+
 	return orchestrator.Pipeline{
 		Tracker:   parts.tracker(),
 		Worktrees: parts.worktrees,
 		Store:     parts.store,
-		Backend: claudecode.Backend{
-			Runner: processRunner,
-		},
+		Backend:   developerProvider,
 		Checks: checks.Runner{
 			Process: processRunner,
 			// The budget every check gets is configured rather than fixed,
@@ -286,7 +291,7 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// the reviewer agent's own required model selector and effective
 		// persona.
 		Reviewer: review.Reviewer{
-			Backend: claudecode.Backend{Runner: processRunner},
+			Backend: reviewerProvider,
 			Model:   agentModel(cfg, domain.RoleReviewer),
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
 			// The reviewer's invocation is its own spend and lands in the same log

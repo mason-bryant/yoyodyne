@@ -1,0 +1,75 @@
+package cli
+
+// Resolving the provider an agent named into the adapter that runs it.
+//
+// A backend identifier is not always one this build ships. A project may declare
+// a provider of its own — which roles it serves, which tool postures it can hold
+// them to, which compiled adapter launches it, which binary that adapter runs,
+// and how to read what it says about rate limits, retries, and reset times — and
+// an agent may name it. This is the one place that turns the name into a running
+// adapter, so a declared dialect actually reads the stream rather than sitting
+// in a registry nothing consults.
+
+import (
+	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
+	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
+)
+
+// providerDescriptor is what this project says about one backend: the built-in
+// description for a backend this build ships, the project's own for one it
+// declared, and nothing for a name neither covers. A configuration that will not
+// resolve answers nothing rather than guessing, because it has already been
+// refused where it was loaded.
+func providerDescriptor(cfg config.Config, named domain.Backend) (backend.Descriptor, bool) {
+	registry, err := cfg.ProviderRegistry()
+	if err != nil {
+		return backend.Descriptor{}, false
+	}
+	return registry.Lookup(named)
+}
+
+// providerRegistry is the set of providers this project may name, and nothing
+// when the configuration will not resolve one — which is a configuration that
+// has already been refused where it was loaded. A caller handed nothing falls
+// back to the backends this build ships, which is what every project that
+// declares no provider of its own gets anyway.
+func providerRegistry(cfg config.Config) *backend.Registry {
+	registry, err := cfg.ProviderRegistry()
+	if err != nil {
+		return nil
+	}
+	return registry
+}
+
+// providerBackend builds the adapter that runs one agent's provider. A backend
+// this project does not describe, or one no compiled adapter can launch, still
+// yields an adapter: what refuses it is the run pipeline and the conversation,
+// which say so in their own terms and before anything is claimed. Building one
+// here that says nothing is what keeps this from becoming a second place that
+// decides whether work may start.
+func providerBackend(cfg config.Config, named domain.Backend, runner execution.ProcessRunner) claudecode.Backend {
+	adapter := claudecode.Backend{Runner: runner, Provider: named}
+	descriptor, known := providerDescriptor(cfg, named)
+	if !known {
+		return adapter
+	}
+	// The dialect and the binary are the whole of what a declaration changes
+	// about the invocation. A built-in carries neither, so it runs exactly as it
+	// did: its own dialect, its own executable.
+	adapter.Binary = descriptor.Binary
+	adapter.Dialect = descriptor.Dialect
+	return adapter
+}
+
+// providerRuns reports a backend this build can actually launch: one it ships an
+// adapter for, or one the project declared that runs on that adapter. It is what
+// the surfaces ask before they start a run or open a conversation, so a provider
+// that could never be launched is refused with its own reason rather than
+// failing partway through an invocation.
+func providerRuns(cfg config.Config, named domain.Backend) bool {
+	descriptor, known := providerDescriptor(cfg, named)
+	return known && descriptor.Adapter == domain.BackendClaudeCode
+}

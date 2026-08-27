@@ -165,7 +165,7 @@ func TestConversationValidateRejectsIncoherentRecords(t *testing.T) {
 		{name: "schema", mutate: func(c *Conversation) { c.SchemaVersion = 2 }, want: "schema_version"},
 		{name: "id", mutate: func(c *Conversation) { c.ConversationID = "chat-nope" }, want: "conversation_id is invalid"},
 		{name: "role", mutate: func(c *Conversation) { c.Role = "../escape" }, want: "role"},
-		{name: "backend", mutate: func(c *Conversation) { c.Backend = "carrier-pigeon" }, want: "backend is invalid"},
+		{name: "backend", mutate: func(c *Conversation) { c.Backend = "carrier pigeon" }, want: "backend is invalid"},
 		{name: "turns", mutate: func(c *Conversation) { c.Turns = -1 }, want: "turns cannot be negative"},
 		{
 			name:   "unauditable turn",
