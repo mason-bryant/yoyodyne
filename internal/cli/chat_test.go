@@ -26,7 +26,7 @@ import (
 // The defect this work item exists for: `yoyo chat --message "/reports"` used to
 // be said to the product manager, who cannot carry out a command, so it bought
 // a confused answer with a turn the operator paid for. The provider here has no
-// turn to give, which is what makes "nothing was said to her" an assertion
+// turn to give, which is what makes "nothing was said to it" an assertion
 // rather than a claim.
 func TestASlashMessageIsCarriedOutByTheHarnessRatherThanSaidToTheProductManager(t *testing.T) {
 	t.Parallel()
@@ -261,7 +261,7 @@ func TestAMessageThatIsNotADecisionIsStillSaidToTheProductManager(t *testing.T) 
 		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
 	}
 	if answering.turns != 1 {
-		t.Fatalf("the product manager was asked %d time(s), want the message said to her", answering.turns)
+		t.Fatalf("the product manager was asked %d time(s), want the message said to it", answering.turns)
 	}
 	if len(resumed.Proposals()) != 1 {
 		t.Fatalf("%d proposal(s) are pending, want the undecided one left exactly where it was", len(resumed.Proposals()))
@@ -296,7 +296,7 @@ func TestAConversationalReplyOpeningWithADecisionWordIsSaidToTheProductManager(t
 		t.Fatalf("runChatMessage() code = %d, stderr = %q", code, aside.String())
 	}
 	if answering.turns != 1 {
-		t.Fatalf("the product manager was asked %d time(s), want the message said to her", answering.turns)
+		t.Fatalf("the product manager was asked %d time(s), want the message said to it", answering.turns)
 	}
 	if !strings.Contains(said.String(), "The resolver is yoyodyne-ifd.108.") {
 		t.Fatalf("stdout = %q, want the answer", said.String())
@@ -648,7 +648,7 @@ func collectedTestReport(t *testing.T) report.Report {
 }
 
 // recordingChatBackend counts what the product manager was asked. A turn it was
-// never given is what proves a command never reached her, so the zero value
+// never given is what proves a command never reached it, so the zero value
 // answers nothing at all.
 type recordingChatBackend struct {
 	result backendapi.RunResult

@@ -4,9 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -1677,6 +1681,11 @@ func TestASingleMessageCarriesOutCommandsInsteadOfSayingThemToTheProductManager(
 		want string
 	}{
 		{line: "/work yoyodyne-ifd.70", want: "yoyo run <beads-id>"},
+		// The refusal is about the command rather than about how it was spaced,
+		// so a name separated by anything the operator's terminal calls
+		// whitespace is the same command and gets the same answer.
+		{line: "/work\tyoyodyne-ifd.70", want: "yoyo run <beads-id>"},
+		{line: "  /WORK yoyodyne-ifd.70", want: "yoyo run <beads-id>"},
 		{line: "/wait", want: "never started one"},
 		// Only the bare form is about a run this process started. Naming an item
 		// reads durable state and asks whichever process holds it, so it means the
@@ -1708,4 +1717,93 @@ func TestASingleMessageCarriesOutCommandsInsteadOfSayingThemToTheProductManager(
 	if !IsCommand("  /reports") || IsCommand("what have the agents reported?") {
 		t.Fatal("a command is not told from a message the way the conversation tells them apart")
 	}
+}
+
+// TestEveryDispatchedCommandRecordsWhatASingleMessageMeans holds the claim
+// Session.Command makes about the whole of what the conversation understands:
+// every command either means the same thing at `yoyo chat --message` as it does
+// at the prompt, or is refused there with what to reach for instead. A claim of
+// that shape cannot be held by a list of refusals, because what a list of
+// refusals permits is everything nobody thought about — and a command added to
+// the dispatcher afterwards is permitted outside a conversation silently, which
+// is the one way a half-carried-out command reaches an operator.
+//
+// So the enumeration is a test. It reads the dispatcher's own switch and fails
+// on any command singleMessage records no decision about, so a new command
+// arrives with a failing test naming what it owes rather than as a verb that
+// starts a run in a process about to exit.
+func TestEveryDispatchedCommandRecordsWhatASingleMessageMeans(t *testing.T) {
+	t.Parallel()
+
+	dispatched := dispatchedCommands(t)
+	for _, name := range dispatched {
+		if _, decided := singleMessage[name]; !decided {
+			t.Errorf("the conversation dispatches %s and singleMessage decides nothing about it, so `yoyo chat --message` would carry it out because nobody said it should. "+
+				"Record it in singleMessage — an empty rule says it answers a single message exactly as it answers a conversation.", name)
+		}
+	}
+	// The table going stale the other way is worth catching too: a decision about
+	// a command nobody dispatches any more is a refusal that can never fire, and
+	// it makes the table look maintained while the next command goes unrecorded.
+	for name := range singleMessage {
+		if !containsCommand(dispatched, name) {
+			t.Errorf("singleMessage decides %s, which the conversation no longer dispatches", name)
+		}
+	}
+}
+
+// dispatchedCommands is every command name Session.command switches on, read
+// from the source rather than written down here. Written down it would be a
+// second list to keep in step with the dispatcher, which is the thing this test
+// exists to say cannot be relied on.
+func dispatchedCommands(t *testing.T) []string {
+	t.Helper()
+
+	parsed, err := parser.ParseFile(token.NewFileSet(), "steer.go", nil, 0)
+	if err != nil {
+		t.Fatalf("read the dispatcher: %v", err)
+	}
+	var names []string
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		switched, ok := node.(*ast.SwitchStmt)
+		if !ok {
+			return true
+		}
+		// The dispatcher is the switch on the command's name, and it is the only
+		// thing in this file that switches on one.
+		if tag, ok := switched.Tag.(*ast.Ident); !ok || tag.Name != "name" {
+			return true
+		}
+		for _, statement := range switched.Body.List {
+			clause, ok := statement.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, value := range clause.List {
+				literal, ok := value.(*ast.BasicLit)
+				if !ok || literal.Kind != token.STRING {
+					continue
+				}
+				name, err := strconv.Unquote(literal.Value)
+				if err != nil {
+					t.Fatalf("read the command %s the dispatcher switches on: %v", literal.Value, err)
+				}
+				names = append(names, name)
+			}
+		}
+		return false
+	})
+	if len(names) == 0 {
+		t.Fatal("no command found in the dispatcher, so this sweep is looking for the wrong thing rather than the conversation understanding nothing")
+	}
+	return names
+}
+
+func containsCommand(names []string, name string) bool {
+	for _, candidate := range names {
+		if candidate == name {
+			return true
+		}
+	}
+	return false
 }
