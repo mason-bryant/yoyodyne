@@ -93,7 +93,17 @@ type contentBlock struct {
 	IsError   bool            `json:"is_error"`
 }
 
-func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string)) *streamParser {
+// newStreamParser reads one invocation's stream with the dialect it is given.
+// The dialect is a parameter rather than this file's own choice because a
+// project may declare a provider that speaks this adapter's protocol and reports
+// its limits, retries, and reset times in some other spelling: the adapter runs
+// the process, and what the process said is read by whichever dialect the
+// registry resolved for the backend the agent named. Nothing means this
+// provider's own.
+func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, clock execution.Clock, redactor execution.Redactor, sink func(execution.Event) error, reply func(string), dialect backend.Dialect) *streamParser {
+	if dialect == nil {
+		dialect = Dialect{}
+	}
 	return &streamParser{
 		runID:    runID,
 		role:     role,
@@ -101,7 +111,7 @@ func newStreamParser(runID string, role domain.AgentRole, lastSequence uint64, c
 		clock:    clock,
 		redactor: redactor,
 		sink:     sink,
-		dialect:  Dialect{},
+		dialect:  dialect,
 		reply:    reply,
 	}
 }

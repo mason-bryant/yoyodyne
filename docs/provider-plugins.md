@@ -1,10 +1,24 @@
 # Provider plugins
 
 Yoyo runs agents through a provider — a coding CLI or a harness that speaks to a
-model API. Two are built in: Claude Code, which serves every role, and Codex,
-which serves the two roles inside a run. If you use something else, you can
-describe it to yoyo yourself, in your project's configuration, without forking
-this repository or rebuilding the binary.
+model API. Two are in the vocabulary: Claude Code, which serves every role and is
+the one this build ships an adapter for, and Codex, which serves the two roles
+inside a run and has no adapter yet.
+
+A project can declare a provider of its own in its configuration, without forking
+this repository or rebuilding the binary. **What a declaration supplies is the
+dialect and the executable, not a new way of launching a process.** Your provider
+runs on a compiled adapter — Claude Code's, today — which starts it and reads its
+stream, and your declaration says which executable that adapter runs and how to
+read what it says about rate limits, retries, and reset times. So a fork of a
+provider yoyo already speaks, a proxy in front of one, or anything that talks the
+same protocol and reports its limits differently is reachable from configuration
+alone. Something that speaks a different protocol needs an adapter, which is a
+change to yoyo.
+
+A declaration that names no adapter, or one this build does not ship, is refused
+when the configuration loads. There is deliberately no way to declare a provider
+that validates and can never run.
 
 This document is what a provider plugin is, what it may and may not decide, and
 how one is written.
@@ -88,15 +102,18 @@ rebuild, and nothing on the other side of the boundary that runs, so there is no
 new trust boundary to defend and the "describes but never decides" property is
 structural rather than asked for. What it costs is reach: it covers a provider
 whose reports differ from a built-in's in spelling — field names, event names,
-the unit a reset time arrives in, a limit announced in a sentence — and covers
-nothing else.
+the unit a reset time arrives in, a limit announced in a sentence — and it rides
+on an existing adapter, so it covers nothing about how the process is started.
 
-**Compile-time registration — what the built-ins use.** A dialect written in Go
-can read a shape no rule can describe. The built-in Claude Code dialect uses it
-for exactly that: telling a subagent's completion apart from the invocation's own
-terminal, and telling a transient 529 apart from a 4xx that describes the
-request. What it costs is that a user has to fork or vendor yoyo, which is what
-this whole facility exists to avoid.
+**Compile-time registration — what the built-ins use, and the only way to add an
+adapter.** A dialect written in Go can read a shape no rule can describe. The
+built-in Claude Code dialect uses it for exactly that: telling a subagent's
+completion apart from the invocation's own terminal, and telling a transient 529
+apart from a 4xx that describes the request. Launching a provider is the same
+kind of thing — a command line, a permission model, a stream format — and stays
+compiled in for the same reason. What it costs is that a user has to fork or
+vendor yoyo, which is why the dialect and the executable were pulled out in front
+of that boundary.
 
 **A subprocess speaking a documented protocol — considered, not built.** It keeps
 users independent the way declarative rules do *and* lets them run arbitrary
@@ -106,11 +123,19 @@ guarding a component that gets a say in whether a run waits. That is a real piec
 of engineering and it is not worth it until a plugin exists that declarative
 rules cannot express. If you have one, that is the case for building it.
 
-**What a plugin does not do:** it does not launch the provider. Starting and
-resuming a provider process is a compiled-in adapter, and `yoyo doctor` will
-report a declared provider as one this build has no adapter for. A plugin
-describes the dialect of a provider yoyo can already run, and declares which
-roles and tool postures that provider serves.
+**What a plugin does not do:** it does not launch the provider. Starting the
+process, sending the prompt, scoping the tools, and reading the stream are the
+compiled adapter's, and a declaration names which one does that for it. So a
+declaration reaches a provider that speaks a protocol yoyo already speaks; a
+provider that speaks a different one needs an adapter written in Go, which is a
+change to yoyo rather than to your configuration.
+
+`yoyo doctor` diagnoses a declared provider as what it actually runs on: it looks
+for the executable the declaration named, and reports it installed, missing, or
+unauthenticated the same way it reports a built-in. A backend nothing in this
+build can launch — Codex today, or a declaration that would not load — is
+reported as one this build has no adapter for, with the configuration as the
+remedy, because nothing you could install would give this build one.
 
 ## Capability validation
 
@@ -141,6 +166,11 @@ the backend identifier your agents will name. See
 ```yaml
 providers:
   my-harness:
+    # Which compiled adapter launches it and reads its stream. Required, and
+    # `claude-code` is the only one this build ships.
+    adapter: claude-code
+    # The executable that adapter runs. Omit it for the adapter's own.
+    binary: my-harness
     roles:
       - developer
       - reviewer
@@ -200,6 +230,17 @@ agents:
     model: my-model
 ```
 
+### Provider fields
+
+| Field | Meaning |
+|---|---|
+| `adapter` | Required. The backend whose compiled adapter launches this provider. `claude-code` is the only one this build ships; naming anything else is refused at load. |
+| `binary` | The executable that adapter runs. Omit it for the adapter's own. |
+| `roles` | Which of the harness's roles this provider serves. |
+| `postures` | `read-only`, `worktree-write`, or both. |
+| `capabilities` | What the provider can do, stated rather than assumed. |
+| `dialect.rules` | How to read what it says, below. |
+
 ### Rule fields
 
 | Field | Meaning |
@@ -238,6 +279,10 @@ format.
 `internal/backend/contract.go` is the contract itself: the answers, the
 observation a dialect returns, and `ReadReset`, which is the single place the
 unknown and past-reset cases are decided. `internal/backend/declarative.go` is
-the rule format on this page. `internal/backend/claudecode/dialect.go` is the
-Claude Code dialect, which is one implementation of the same contract and gets no
-special treatment above it.
+the rule format on this page. `internal/backend/registry.go` holds the built-in
+descriptions and turns a declaration into one. `internal/backend/claudecode/dialect.go`
+is the Claude Code dialect, which is one implementation of the same contract and
+gets no special treatment above it — the adapter beside it takes whichever
+dialect it is handed, which is how a declared one comes to read a real stream.
+`internal/cli/provider.go` is where the backend an agent named is resolved into
+the adapter that runs it.

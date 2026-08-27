@@ -11,7 +11,9 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
+	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/slack"
@@ -640,7 +642,9 @@ func TestABackendThisBuildCannotExecuteIsRoutedOutOfTheConfiguration(t *testing.
 	world := newWorld(t)
 	diagnosis := &diagnosis{env: Environment{Runner: world.runner, LookPath: world.lookPath}}
 	configPath := filepath.Join(world.project, ".yoyodyne", "config.yaml")
-	finding := diagnosis.checkProvider(context.Background(), "some-future-backend", configPath)
+	// Nothing describes it, which is what a backend no adapter can launch looks
+	// like once the registry has been asked: no adapter, and so no executable.
+	finding := diagnosis.checkProvider(context.Background(), "some-future-backend", backend.Descriptor{}, configPath)
 
 	if finding.Status != StatusProblem {
 		t.Fatalf("checkProvider() = %s, want a backend nothing can execute reported as a problem", finding.Status)
@@ -652,6 +656,36 @@ func TestABackendThisBuildCannotExecuteIsRoutedOutOfTheConfiguration(t *testing.
 	// package exists instead of, whether or not it happens to be a command.
 	if strings.Contains(finding.Remedy, "yoyo config show") {
 		t.Fatalf("remedy = %q, want a route out rather than a second diagnostic", finding.Remedy)
+	}
+}
+
+// A provider the project declared is diagnosed as what it actually runs on: the
+// executable its declaration named, on the adapter that launches it. Reporting
+// it as a backend this build has no adapter for would send the operator to their
+// configuration for something an install would have fixed.
+func TestADeclaredProviderIsDiagnosedByTheExecutableItRuns(t *testing.T) {
+	t.Parallel()
+
+	world := newWorld(t)
+	diagnosis := &diagnosis{env: Environment{Runner: world.runner, LookPath: world.lookPath}}
+	declared := backend.Descriptor{
+		ID:      "my-harness",
+		Adapter: domain.BackendClaudeCode,
+		Binary:  "my-harness",
+	}
+	finding := diagnosis.checkProvider(context.Background(), "my-harness", declared,
+		filepath.Join(world.project, ".yoyodyne", "config.yaml"))
+
+	if finding.Status != StatusProblem {
+		t.Fatalf("checkProvider() = %s, want the missing executable reported", finding.Status)
+	}
+	if !strings.Contains(finding.Summary, "my-harness is not installed") {
+		t.Fatalf("summary = %q, want the executable the declaration named", finding.Summary)
+	}
+	// The remedy is an install rather than the configuration, because this is a
+	// provider the build can run and the operator has not installed.
+	if !strings.Contains(finding.Remedy, "install") {
+		t.Fatalf("remedy = %q, want the install that fixes it", finding.Remedy)
 	}
 }
 

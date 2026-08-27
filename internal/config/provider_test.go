@@ -14,6 +14,8 @@ import (
 // retries, and reset times.
 const declaredProvider = `providers:
   my-harness:
+    adapter: claude-code
+    binary: my-harness
     roles:
       - developer
     postures:
@@ -63,6 +65,14 @@ func TestAProjectDeclaresAProviderOfItsOwn(t *testing.T) {
 	if descriptor.Dialect == nil || descriptor.Dialect.Name() != "my-harness" {
 		t.Fatalf("Dialect = %#v, want the declared one", descriptor.Dialect)
 	}
+	// The declaration names what launches it and what that adapter runs, which is
+	// what turns rules that validate into rules that fire.
+	if !descriptor.Runnable() || descriptor.Adapter != domain.BackendClaudeCode {
+		t.Fatalf("Adapter = %q, want the adapter this build ships", descriptor.Adapter)
+	}
+	if descriptor.Binary != "my-harness" {
+		t.Fatalf("Binary = %q, want the executable the declaration named", descriptor.Binary)
+	}
 	// The backends this build ships are still there beside it: declaring a
 	// provider adds one rather than replacing the set.
 	if _, known := registry.Lookup(domain.BackendClaudeCode); !known {
@@ -108,6 +118,16 @@ func TestADeclaredProviderIsRefusedForWhatItDoesNotServe(t *testing.T) {
 				return strings.Split(input, "    dialect:")[0] + "    dialect:\n      rules: []\n"
 			},
 			wants: []string{"reads nothing a provider says"},
+		},
+		{
+			// A declaration running on a backend this build ships no adapter for
+			// is rules with no invocation to observe, so it is refused where it is
+			// written rather than loaded and never fired.
+			name: "an adapter this build does not ship",
+			edit: func(input string) string {
+				return strings.Replace(input, "    adapter: claude-code\n", "    adapter: codex\n", 1)
+			},
+			wants: []string{"ships no adapter for"},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

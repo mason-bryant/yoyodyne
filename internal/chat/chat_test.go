@@ -19,6 +19,42 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
+// A conversation's provider is checked against the set of backends the project
+// may name rather than against the shape of the identifier. The shape says only
+// that somebody could have written it; a conversation opened on a backend
+// nothing can run fails on its first turn, at the operator's terminal, with the
+// provider already invoked.
+func TestAConversationsProviderIsCheckedAgainstTheProjectsBackends(t *testing.T) {
+	t.Parallel()
+
+	registry, err := backendapi.NewRegistry(map[domain.Backend]backendapi.ProviderPlugin{"my-harness": {
+		Adapter:  domain.BackendClaudeCode,
+		Roles:    []domain.AgentRole{domain.RoleProductManager},
+		Postures: []backendapi.Posture{backendapi.PostureReadOnly},
+		Dialect: backendapi.DialectSpec{Rules: []backendapi.DialectRule{
+			{Answer: backendapi.AnswerRefused, Type: "result"},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+
+	// The project declared it, so a conversation may be held on it.
+	declared := testOptions(t, &fakeBackend{})
+	declared.Provider = "my-harness"
+	declared.Providers = registry
+	if _, err := Open(declared); err != nil && strings.Contains(err.Error(), "unsupported backend") {
+		t.Fatalf("Open() error = %v, want the provider the project declared accepted", err)
+	}
+
+	// The same name with nothing declaring it is refused, well-formed or not.
+	undeclared := testOptions(t, &fakeBackend{})
+	undeclared.Provider = "my-harness"
+	if _, err := Open(undeclared); err == nil || !strings.Contains(err.Error(), "unsupported backend") {
+		t.Fatalf("Open() error = %v, want a provider nothing declared refused", err)
+	}
+}
+
 const testBriefing = "# Product context\n\nREADME says Yoyodyne runs bounded work items.\n"
 
 // hostilePersona is what a project could put in its persona file. None of it
@@ -325,7 +361,10 @@ func TestOpenRejectsAnUnusableConversation(t *testing.T) {
 		{name: "no store", mutate: func(o *Options) { o.Store = nil }, want: "store is required"},
 		{name: "no model", mutate: func(o *Options) { o.Model = "" }, want: "model selector is required"},
 		{name: "no product context", mutate: func(o *Options) { o.Briefing = Briefing{} }, want: "product context is required"},
-		{name: "unknown provider", mutate: func(o *Options) { o.Provider = "carrier pigeon" }, want: "unsupported backend"},
+		// A well-formed identifier that names no backend this build ships and no
+		// provider this project declared is still refused. The shape of the name
+		// says only that somebody could have written it.
+		{name: "unknown provider", mutate: func(o *Options) { o.Provider = "carrier-pigeon" }, want: "unsupported backend"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()

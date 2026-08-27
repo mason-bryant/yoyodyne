@@ -238,13 +238,16 @@ from the name — so `role` must be one of `product-manager`, `architect`,
 the table itself.
 
 `backend` is `claude-code` or `codex` unless your project declares one of its
-own. A project that uses some other coding CLI or harness can describe it under a
-top-level `providers:` key and name it here — which roles it serves, which tool
-postures it can hold them to, and how to read what it says about rate limits,
-retries, and reset times. A declared provider describes and decides nothing:
-whether to wait, how long, and against which budget stay the harness's, because
-those are what the `execution.usage_limit_*` settings below mean.
-[Provider plugins](provider-plugins.md) is the format and its limits.
+own. A project running a fork, a proxy, or a variant of a provider yoyo already
+speaks can describe it under a top-level `providers:` key and name it here: which
+compiled adapter launches it, which executable that adapter runs, which roles it
+serves, which tool postures it can hold them to, and how to read what it says
+about rate limits, retries, and reset times. A declared provider describes and
+decides nothing: whether to wait, how long, and against which budget stay the
+harness's, because those are what the `execution.usage_limit_*` settings below
+mean. [Provider plugins](provider-plugins.md) is the format and its limits — in
+particular that a provider speaking a protocol no compiled adapter speaks needs
+an adapter rather than a declaration.
 
 ## Discovery
 
@@ -2747,9 +2750,10 @@ These are all errors, reported before any work is claimed:
   architect on the Codex backend — and the same refusal for a provider your
   project declared itself, including one asked to hold a tool posture it never
   claimed, such as a developer on a provider that declared only `read-only`;
-- a `providers:` entry that serves no role, holds no tool posture, names a role
-  or posture the harness does not have, reads nothing its provider says, or tries
-  to replace a backend this build ships;
+- a `providers:` entry that names no adapter or one this build ships none for,
+  serves no role, holds no tool posture, names a role or posture the harness does
+  not have, reads nothing its provider says, or tries to replace a backend this
+  build ships;
 - any effective configuration that fails validation, even when every individual
   layer looked reasonable — for example `max_concurrent_developers` above the
   configured developer instances, or automatic integration with no checks;

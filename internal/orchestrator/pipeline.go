@@ -494,7 +494,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		return Outcome{}, err
 	}
 	developer := p.developer()
-	if developer.Backend != domain.BackendClaudeCode {
+	if !p.runsOnCompiledAdapter(developer.Backend) {
 		return Outcome{}, fmt.Errorf("Milestone 0 run pipeline requires a claude-code developer, configured backend is %q", developer.Backend)
 	}
 	// Every invocation names its own model; the harness never lets a provider
@@ -3905,6 +3905,25 @@ func (p Pipeline) agentNames() []string {
 	return names
 }
 
+// runsOnCompiledAdapter reports a configured backend this build can actually
+// launch. That is the Claude Code adapter, and — since a project may declare a
+// provider of its own — anything the project declared that runs on it: a
+// declared provider is this adapter driving its executable and reading its
+// stream with the dialect the declaration supplied, which is exactly what the
+// pipeline wires. A backend the vocabulary has and this build ships no adapter
+// for, Codex today, is refused here rather than started.
+func (p Pipeline) runsOnCompiledAdapter(named domain.Backend) bool {
+	registry, err := p.Config.ProviderRegistry()
+	if err != nil {
+		// A configuration whose providers will not resolve has already been
+		// refused by Config.Validate above, so the only honest answer left is the
+		// one backend this build ships unconditionally.
+		return named == domain.BackendClaudeCode
+	}
+	descriptor, known := registry.Lookup(named)
+	return known && descriptor.Adapter == domain.BackendClaudeCode
+}
+
 // validateReviewPolicy refuses automatic integration that is not actually
 // gated. An unenforceable policy must stop the run before anything is claimed,
 // rather than integrate work no independent reviewer ever saw.
@@ -3916,7 +3935,7 @@ func (p Pipeline) validateReviewPolicy() error {
 	if reviewer.Role != domain.RoleReviewer {
 		return errors.New("automatic integration requires a configured reviewer agent")
 	}
-	if reviewer.Backend != domain.BackendClaudeCode {
+	if !p.runsOnCompiledAdapter(reviewer.Backend) {
 		return fmt.Errorf("run pipeline requires a claude-code reviewer, configured backend is %q", reviewer.Backend)
 	}
 	if err := config.ValidateModelSelector(reviewer.Model); err != nil {

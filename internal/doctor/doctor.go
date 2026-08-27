@@ -594,24 +594,38 @@ func (d *diagnosis) checkProviders(ctx context.Context, resolved config.Resolved
 	}
 	sort.Slice(backends, func(i, j int) bool { return backends[i] < backends[j] })
 
+	// What this build can do with a backend is what the project's registry says
+	// about it, so a provider the project declared is diagnosed as the adapter and
+	// executable it actually runs on rather than as a name nothing recognizes.
+	// A configuration whose providers will not resolve has already been reported
+	// where it was loaded, and every backend then answers as one nothing runs.
+	registry, _ := resolved.Config.ProviderRegistry()
+
 	findings := make([]Finding, 0, len(backends))
 	for _, named := range backends {
-		findings = append(findings, d.checkProvider(ctx, named, resolved.Path))
+		descriptor, _ := registry.Lookup(named)
+		findings = append(findings, d.checkProvider(ctx, named, descriptor, resolved.Path))
 	}
 	return findings
 }
 
-func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, configPath string) Finding {
+func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, descriptor backend.Descriptor, configPath string) Finding {
 	check := "provider:" + string(named)
-	binary := providerBinary(named)
+	// A declared provider names the executable its adapter runs; a built-in uses
+	// the one this build knows for it.
+	binary := descriptor.Binary
 	if binary == "" {
+		binary = providerBinary(descriptor.Adapter)
+	}
+	if !descriptor.Runnable() || binary == "" {
 		return Finding{
 			Check:   check,
 			Status:  StatusProblem,
 			Summary: fmt.Sprintf("the agents name backend %q, which this build has no adapter for", named),
 			// The remedy is the configuration for the reason the checks probe's
 			// is: nothing can be installed that would make this build grow an
-			// adapter, so what has to change is the backend the agents name.
+			// adapter, so what has to change is the backend the agents name — or,
+			// for a provider the project declared, the adapter it says runs it.
 			Remedy: fmt.Sprintf("${EDITOR:-vi} %s", shellQuote(configPath)),
 		}
 	}
@@ -621,34 +635,39 @@ func (d *diagnosis) checkProvider(ctx context.Context, named domain.Backend, con
 			Status:  StatusProblem,
 			Summary: fmt.Sprintf("%s is not installed, and it executes every agent that names this backend", binary),
 			Detail:  err.Error(),
-			Remedy:  providerInstallCommand(named),
+			Remedy:  providerInstallCommand(descriptor.Adapter),
 		}
 	}
-	if named != domain.BackendClaudeCode {
+	if descriptor.Adapter != domain.BackendClaudeCode {
 		// Only Claude Code has an adapter that can be asked about its own
 		// authentication. Saying so is better than reporting an unauthenticated
 		// provider as healthy because nothing here could tell -- and the remedy
 		// is the login rather than a second diagnostic, because what an operator
 		// can act on here is making the answer yes, not asking again.
+		//
+		// Nothing reaches this today, because Claude Code's is the only adapter
+		// this build ships and a provider that runs on no adapter was answered
+		// above. It stands for the second one, whose availability check is its
+		// own to write.
 		return Finding{
 			Check:   check,
 			Status:  StatusWarning,
 			Summary: fmt.Sprintf("%s is installed, and this build has no adapter that can ask whether it is authenticated", binary),
 			Detail:  "an unauthenticated provider would refuse every agent invocation, so this is worth confirming by hand",
-			Remedy:  providerLoginCommand(named),
+			Remedy:  providerLoginCommand(descriptor.Adapter),
 		}
 	}
-	availability, err := (claudecode.Backend{Runner: d.env.Runner}).CheckAvailability(ctx)
+	availability, err := (claudecode.Backend{Runner: d.env.Runner, Binary: descriptor.Binary}).CheckAvailability(ctx)
 	if err != nil {
 		return Finding{
 			Check:   check,
 			Status:  StatusProblem,
 			Summary: fmt.Sprintf("%s would not say whether it is authenticated", binary),
 			Detail:  err.Error(),
-			Remedy:  providerLoginCommand(named),
+			Remedy:  providerLoginCommand(descriptor.Adapter),
 		}
 	}
-	return providerFinding(check, binary, named, availability)
+	return providerFinding(check, binary, descriptor.Adapter, availability)
 }
 
 func providerFinding(check, binary string, named domain.Backend, availability backend.Availability) Finding {

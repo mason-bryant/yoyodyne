@@ -79,12 +79,28 @@ func PostureFor(role domain.AgentRole) Posture {
 // it: which roles it serves, which postures it can hold them to, what it can do,
 // and how to read what it says.
 type Descriptor struct {
-	ID           domain.Backend
+	ID domain.Backend
+	// Adapter is the backend whose compiled adapter launches this provider, and
+	// is empty for a provider nothing in this build can launch. A built-in that
+	// ships an adapter names itself; one that does not — Codex, today — names
+	// nothing, and a declared provider names the built-in whose adapter runs it.
+	//
+	// It exists because a dialect that nothing can attach to is a plugin that
+	// loads and can never fire. A declaration says which compiled adapter starts
+	// the process and reads the stream, and supplies the dialect that adapter
+	// reads the stream *with*; a declaration naming an adapter this build does
+	// not ship is refused where it is written.
+	Adapter domain.Backend
+	// Binary is the executable the adapter runs, and is empty for the adapter's
+	// own default. It is what makes a fork or a proxy of a provider this build
+	// already speaks reachable without a second adapter.
+	Binary       string
 	Capabilities Capabilities
 	Roles        []domain.AgentRole
 	Postures     []Posture
 	// Dialect is how this provider's operational vocabulary is read. It is set
-	// for a user-supplied provider, whose dialect is data. A built-in leaves it
+	// for a user-supplied provider, whose dialect is data, and the adapter that
+	// runs the provider is handed it in place of its own. A built-in leaves it
 	// nil and carries its dialect as code beside its adapter, which is the trade
 	// the two delivery mechanisms make: code can read a shape data cannot
 	// describe, and data needs no fork.
@@ -94,6 +110,9 @@ type Descriptor struct {
 	// is a typo and the other is a plugin that was never written.
 	BuiltIn bool
 }
+
+// Runnable reports a provider something in this build can actually launch.
+func (d Descriptor) Runnable() bool { return d.Adapter != "" }
 
 func (d Descriptor) SupportsRole(role domain.AgentRole) bool {
 	if !role.Valid() {
@@ -117,14 +136,15 @@ func (d Descriptor) SupportsPosture(posture Posture) bool {
 }
 
 // BuiltInDescriptors are the providers this build ships. Claude Code serves
-// every role; Codex is documented as not matching every Claude Code feature and
-// serves the two roles inside a run, which is the same statement that used to
-// live as a switch on the backend identifier and is now the one place it is
-// made.
+// every role and is the one this build has an adapter for; Codex is documented
+// as not matching every Claude Code feature, serves the two roles inside a run,
+// and has no adapter yet — which is the same statement that used to live as a
+// switch on the backend identifier and is now the one place it is made.
 func BuiltInDescriptors() []Descriptor {
 	return []Descriptor{
 		{
-			ID: domain.BackendClaudeCode,
+			ID:      domain.BackendClaudeCode,
+			Adapter: domain.BackendClaudeCode,
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -138,6 +158,9 @@ func BuiltInDescriptors() []Descriptor {
 		},
 		{
 			ID: domain.BackendCodex,
+			// No adapter: the vocabulary has the name and this build has nothing
+			// that can launch it, which is why a run configured for it is refused
+			// rather than started.
 			Capabilities: Capabilities{
 				StructuredEvents:  true,
 				SessionResumption: true,
@@ -149,6 +172,26 @@ func BuiltInDescriptors() []Descriptor {
 			BuiltIn:  true,
 		},
 	}
+}
+
+// RunnableAdapters names the backends this build ships an adapter for, which is
+// what a declared provider may name as the thing that launches it.
+func RunnableAdapters() []domain.Backend {
+	var runnable []domain.Backend
+	for _, descriptor := range BuiltInDescriptors() {
+		if descriptor.Runnable() {
+			runnable = append(runnable, descriptor.ID)
+		}
+	}
+	return runnable
+}
+
+func describeRunnableAdapters() string {
+	named := make([]string, 0, 2)
+	for _, id := range RunnableAdapters() {
+		named = append(named, string(id))
+	}
+	return strings.Join(named, ", ")
 }
 
 // BuiltInDescriptor is what this build knows about one of the providers it
@@ -169,6 +212,16 @@ func BuiltInDescriptor(id domain.Backend) (Descriptor, bool) {
 // that reads what it says. It is the whole of a user-supplied provider's
 // description, and it holds nothing that decides anything.
 type ProviderPlugin struct {
+	// Adapter is the backend this build ships an adapter for whose adapter
+	// launches this provider and reads its stream. It is required, because a
+	// dialect nothing can attach to is a plugin that loads and can never fire:
+	// naming the adapter is what gives the declared rules an invocation to
+	// observe.
+	Adapter domain.Backend `yaml:"adapter" json:"adapter"`
+	// Binary is the executable that adapter runs, and is empty for the adapter's
+	// own default. A fork or a proxy of a provider this build already speaks is
+	// reached by naming its binary here rather than by writing a second adapter.
+	Binary       string             `yaml:"binary,omitempty" json:"binary,omitempty"`
 	Roles        []domain.AgentRole `yaml:"roles" json:"roles"`
 	Postures     []Posture          `yaml:"postures" json:"postures"`
 	Capabilities Capabilities       `yaml:"capabilities,omitempty" json:"capabilities,omitempty"`
@@ -227,6 +280,18 @@ func DescriptorFor(id domain.Backend, plugin ProviderPlugin) (Descriptor, error)
 	if err := domain.ValidateIdentifier("identifier", string(id)); err != nil {
 		problems = append(problems, fmt.Sprintf("is named something an agent could not name: %v", err))
 	}
+	// A declaration that names no adapter, or one this build does not ship, is
+	// refused here rather than loaded: it would be a set of rules with no
+	// invocation to observe, which is a plugin that validates and can never fire.
+	adapter, adapterKnown := BuiltInDescriptor(plugin.Adapter)
+	switch {
+	case strings.TrimSpace(string(plugin.Adapter)) == "":
+		problems = append(problems, fmt.Sprintf("names no adapter, so nothing in this build could launch it; adapter is one of %s",
+			describeRunnableAdapters()))
+	case !adapterKnown || !adapter.Runnable():
+		problems = append(problems, fmt.Sprintf("runs on adapter %q, which this build ships no adapter for; adapter is one of %s",
+			plugin.Adapter, describeRunnableAdapters()))
+	}
 	if len(plugin.Roles) == 0 {
 		problems = append(problems, "serves no role, so no agent could ever name it")
 	}
@@ -252,6 +317,8 @@ func DescriptorFor(id domain.Backend, plugin ProviderPlugin) (Descriptor, error)
 	}
 	return Descriptor{
 		ID:           id,
+		Adapter:      plugin.Adapter,
+		Binary:       strings.TrimSpace(plugin.Binary),
 		Capabilities: plugin.Capabilities,
 		Roles:        append([]domain.AgentRole(nil), plugin.Roles...),
 		Postures:     append([]Posture(nil), plugin.Postures...),

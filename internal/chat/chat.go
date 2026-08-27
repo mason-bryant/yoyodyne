@@ -230,6 +230,16 @@ type Options struct {
 	Agent string
 	// Provider names the backend for the durable record.
 	Provider domain.Backend
+	// Providers is the set of backends this project may name, and is what
+	// Provider is checked against. It is optional: nothing means the backends
+	// this build ships, which is what every project that declares no provider of
+	// its own may name anyway.
+	//
+	// It is checked against a registry rather than against the identifier's shape
+	// because the shape says only that somebody could have written it. A
+	// conversation opened on a backend nothing can run is one that fails on its
+	// first turn, at the operator's terminal, with the provider already invoked.
+	Providers *backend.Registry
 	// Spend is the cost log every turn's provider invocation lands in, one line
 	// each at the moment its cost is known. A conversation is a provider
 	// invocation like a run's, so what it spends is recorded where a run's is
@@ -2294,6 +2304,21 @@ func (s *Session) undecidedProposals() []runstate.PendingProposal {
 	return pending
 }
 
+// providers is the set of backends this conversation's provider is checked
+// against: the project's, when it supplied one, and the backends this build
+// ships otherwise. A registry over no declared provider never fails to build, so
+// the fallback is total.
+func (o Options) providers() *backend.Registry {
+	if o.Providers != nil {
+		return o.Providers
+	}
+	registry, err := backend.NewRegistry(nil)
+	if err != nil {
+		return nil
+	}
+	return registry
+}
+
 func (o Options) validate() error {
 	var problems []error
 	// The role is checked first and by name. A conversation opened for a role
@@ -2317,7 +2342,7 @@ func (o Options) validate() error {
 	if err := config.ValidateModelSelector(o.Model); err != nil {
 		problems = append(problems, fmt.Errorf("%s %s", RoleTitle(o.Role), err))
 	}
-	if !o.Provider.Valid() {
+	if _, known := o.providers().Lookup(o.Provider); !known {
 		problems = append(problems, fmt.Errorf("unsupported backend %q", o.Provider))
 	}
 	if strings.TrimSpace(o.Repository) == "" {

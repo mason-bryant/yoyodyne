@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/console"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
@@ -129,12 +128,16 @@ func branchReviewerFrom(parts components, model string) orchestrator.BranchRevie
 	if model != "" {
 		reviewerModel = model
 	}
+	// A branch review is the reviewer's own provider invocation, so it runs on
+	// whatever provider that agent names — a built-in, or one this project
+	// declared, read by the dialect the declaration supplied.
+	reviewer := agentForRole(cfg, domain.RoleReviewer)
 	return orchestrator.BranchReviewer{
 		Worktrees: parts.worktrees,
 		Reviewer: review.Reviewer{
-			Backend: claudecode.Backend{Runner: parts.runner},
+			Backend: providerBackend(cfg, reviewer.Backend, parts.runner),
 			Model:   reviewerModel,
-			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
+			Persona: reviewer.Persona.Text,
 			// A branch review spends like every other provider invocation and lands
 			// in the same log, which is also what makes a shadow review's price
 			// comparable to the review it was measured against.

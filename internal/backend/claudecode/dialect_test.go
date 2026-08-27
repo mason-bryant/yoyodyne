@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -8,6 +9,8 @@ import (
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
+	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 )
 
 // Claude Code's dialect is one implementation of the provider contract, and
@@ -212,6 +215,81 @@ func TestTheDialectStatesNoWait(t *testing.T) {
 		}
 	}
 }
+
+// A project may declare a provider that this adapter launches and that reports
+// its limits in some other spelling. The declaration's dialect is what reads the
+// stream then, in place of this provider's own — so a declared rule actually
+// fires on an invocation rather than sitting in a registry nothing consults.
+func TestADeclaredDialectReadsTheStreamInsteadOfThisProvidersOwn(t *testing.T) {
+	t.Parallel()
+
+	// The provider spells its exhausted limit in prose on the terminal, which
+	// this adapter's own dialect reads as a refusal that stands.
+	const message = "Quota exhausted for this workspace; the window rolls at midnight."
+	stream := strings.Join([]string{
+		`{"type":"system","subtype":"init","session_id":"session-1","model":"claude-test"}`,
+		`{"type":"result","subtype":"error","session_id":"session-1","is_error":true,` +
+			`"terminal_reason":"quota_exhausted","result":"` + message + `","usage":{}}`,
+	}, "\n") + "\n"
+
+	declared, err := backend.NewDeclarativeDialect("my-harness", backend.DialectSpec{Rules: []backend.DialectRule{{
+		Answer:   backend.AnswerLimitReached,
+		Terminal: &terminalEvent,
+		Failed:   &failedEvent,
+		Match:    `(?i)quota exhausted`,
+		Kind:     "workspace",
+	}}})
+	if err != nil {
+		t.Fatalf("NewDeclarativeDialect() error = %v", err)
+	}
+
+	// The same stream, once through this provider's own dialect and once through
+	// the declared one, so what differs is only which dialect read it.
+	own, _ := runUsageLimitStream(t, stream)
+	if own.UsageLimit != nil {
+		t.Fatalf("this provider's own dialect read the declared provider's prose as a limit: %#v", own.UsageLimit)
+	}
+
+	var events []execution.Event
+	result, err := (Backend{
+		Runner: &fakeRunner{results: []execution.ProcessResult{{Status: execution.ProcessFailed, ExitCode: 1, Stdout: stream}}},
+		Clock:  fixedClock{},
+		// What the caller resolved for the backend the agent named: the declared
+		// provider's identity, and the dialect that reads its stream.
+		Provider: "my-harness",
+		Dialect:  declared,
+	}).Run(context.Background(), backend.RunRequest{
+		RunID:            testRunID,
+		Role:             domain.RoleDeveloper,
+		WorkingDirectory: "/worktree",
+		Prompt:           "implement",
+		EventSink:        func(event execution.Event) error { events = append(events, event); return nil },
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.UsageLimit == nil || result.UsageLimit.Kind != "workspace" {
+		t.Fatalf("UsageLimit = %#v, want the limit the declared dialect read", result.UsageLimit)
+	}
+	// The reset time is unknown rather than invented: the provider named none the
+	// declaration could read, and what the harness does about that is the
+	// contract's answer rather than the plugin's.
+	if !result.UsageLimit.ResetsAt.IsZero() {
+		t.Fatalf("ResetsAt = %s, want no reset time rather than a guessed one", result.UsageLimit.ResetsAt)
+	}
+	// The record says which provider answered, not which adapter launched it.
+	if result.Backend != "my-harness" {
+		t.Fatalf("Backend = %q, want the provider the agent named", result.Backend)
+	}
+	if len(events) == 0 {
+		t.Fatal("the invocation recorded nothing")
+	}
+}
+
+// terminalEvent and failedEvent are the two facts a declared rule matches on,
+// addressable because a rule distinguishes "not a condition" from "must be
+// false".
+var terminalEvent, failedEvent = true, true
 
 // unixSeconds is how this provider quotes a reset time: whole seconds since the
 // epoch, which is what its own CLI compares and renders.

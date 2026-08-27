@@ -11,11 +11,51 @@ import (
 // respect a test is not deliberately spoiling.
 func declaredPlugin() ProviderPlugin {
 	return ProviderPlugin{
+		Adapter:  domain.BackendClaudeCode,
+		Binary:   "my-harness",
 		Roles:    []domain.AgentRole{domain.RoleDeveloper, domain.RoleReviewer},
 		Postures: []Posture{PostureReadOnly, PostureWorktreeWrite},
 		Dialect: DialectSpec{Rules: []DialectRule{
 			{Answer: AnswerRefused, Terminal: truth(true), Failed: truth(true)},
 		}},
+	}
+}
+
+// A declaration has to name something that can launch it. A dialect with no
+// invocation to observe is a plugin that validates and can never fire, which is
+// the failure this refusal exists instead of.
+func TestADeclarationNamesTheAdapterThatRunsIt(t *testing.T) {
+	t.Parallel()
+
+	registry, err := NewRegistry(map[domain.Backend]ProviderPlugin{"my-harness": declaredPlugin()})
+	if err != nil {
+		t.Fatalf("NewRegistry() error = %v", err)
+	}
+	descriptor, known := registry.Lookup("my-harness")
+	if !known {
+		t.Fatal("Lookup() found nothing")
+	}
+	if !descriptor.Runnable() || descriptor.Adapter != domain.BackendClaudeCode {
+		t.Fatalf("Adapter = %q, want the adapter this build ships", descriptor.Adapter)
+	}
+	if descriptor.Binary != "my-harness" {
+		t.Fatalf("Binary = %q, want the executable the declaration named", descriptor.Binary)
+	}
+	// The dialect is the thing the adapter is handed in place of its own, so a
+	// declaration that produced none would be a provider read by the wrong
+	// vocabulary.
+	if descriptor.Dialect == nil {
+		t.Fatal("the declared provider carries no dialect for its adapter to read with")
+	}
+
+	// A backend the vocabulary has and this build ships no adapter for names
+	// nothing, which is what stops a run being started on it.
+	codex, known := registry.Lookup(domain.BackendCodex)
+	if !known || codex.Runnable() {
+		t.Fatalf("codex descriptor = %#v, want a backend nothing in this build can launch", codex)
+	}
+	if runnable := RunnableAdapters(); len(runnable) != 1 || runnable[0] != domain.BackendClaudeCode {
+		t.Fatalf("RunnableAdapters() = %v, want the one adapter this build ships", runnable)
 	}
 }
 
@@ -119,6 +159,26 @@ func TestAPluginThatCouldNeverWorkIsRefused(t *testing.T) {
 		spoil  func(*ProviderPlugin)
 		wanted string
 	}{
+		{
+			name:   "naming no adapter",
+			id:     "my-harness",
+			spoil:  func(p *ProviderPlugin) { p.Adapter = "" },
+			wanted: "names no adapter",
+		},
+		{
+			// The vocabulary has Codex and this build ships nothing that can launch
+			// it, so a declaration running on it is rules with no invocation.
+			name:   "running on an adapter this build does not ship",
+			id:     "my-harness",
+			spoil:  func(p *ProviderPlugin) { p.Adapter = domain.BackendCodex },
+			wanted: "ships no adapter for",
+		},
+		{
+			name:   "running on a provider it declared itself",
+			id:     "my-harness",
+			spoil:  func(p *ProviderPlugin) { p.Adapter = "my-harness" },
+			wanted: "ships no adapter for",
+		},
 		{
 			name:   "serving no role",
 			id:     "my-harness",

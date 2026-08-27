@@ -92,6 +92,38 @@ type Backend struct {
 	Runner execution.ProcessRunner
 	Binary string
 	Clock  execution.Clock
+	// Provider is the backend identifier this invocation is recorded under, and
+	// is empty for Claude Code itself. A project that declared a provider running
+	// on this adapter is a different backend from the one that ships here, and
+	// what a run, a conversation, and a line of spend record has to be the
+	// backend the agent named rather than the adapter that happened to launch it.
+	Provider domain.Backend
+	// Dialect is how what the provider says is read: which reports are limits,
+	// which are retries the provider is taking itself, and when a limit lifts.
+	// Empty is this provider's own dialect, which is every invocation until a
+	// project declares one; a declared provider supplies its own as data.
+	//
+	// It decides nothing. Whether to wait, how long, and against which budget
+	// stay above this adapter, which is what keeps a declared provider from being
+	// able to spend an account.
+	Dialect backend.Dialect
+}
+
+// dialect is what reads this invocation's stream: whatever the caller resolved
+// for the backend the agent named, and this provider's own when nothing did.
+func (b Backend) dialect() backend.Dialect {
+	if b.Dialect == nil {
+		return Dialect{}
+	}
+	return b.Dialect
+}
+
+// provider is the backend a result is recorded under.
+func (b Backend) provider() domain.Backend {
+	if b.Provider == "" {
+		return domain.BackendClaudeCode
+	}
+	return b.Provider
 }
 
 func (b Backend) CheckAvailability(ctx context.Context) (backend.Availability, error) {
@@ -241,7 +273,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 		clock = execution.RealClock{}
 	}
 	redactor := execution.NewRedactor(request.RedactValues...)
-	parser := newStreamParser(request.RunID, request.Role, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink)
+	parser := newStreamParser(request.RunID, request.Role, request.LastSequence, clock, redactor, request.EventSink, request.ReplySink, b.dialect())
 	var parseErrors []error
 	processResult, err := b.Runner.Run(ctx, execution.Command{
 		Name:  b.binary(),
@@ -275,7 +307,7 @@ func (b Backend) Run(ctx context.Context, request backend.RunRequest) (backend.R
 	// return the raw JSON stream as a second, potentially escape-obfuscated copy.
 	processResult.Stdout = ""
 	result := parser.Result()
-	result.Backend = domain.BackendClaudeCode
+	result.Backend = b.provider()
 	result.Process = processResult
 	if processResult.Status == execution.ProcessCancelled || processResult.Status == execution.ProcessTimedOut || processResult.Status == execution.ProcessStalled {
 		result.IsError = true
