@@ -1272,7 +1272,11 @@ The lease is the only thing keeping two processes off one in-flight item.
 ```
 
 Only files directly in this directory are read, because the file name is the
-identity; a `.md` filed in a subdirectory is reported rather than read. `scope`
+identity; a `.md` filed in a subdirectory is reported rather than read. One name
+is not read at all: `README.md` is the directory index this home carries like
+every other, so it is skipped rather than reported as a malformed constraint, and
+`yoyo invariant create readme` is refused because a constraint written there
+would be one nobody is held to. `scope`
 is optional: an invariant without one is repository-wide and reaches every work
 item, and a scoped one is delivered when the work item's prose — or, for the
 reviewer, the change itself — names a path it constrains. A missing directory is

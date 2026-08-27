@@ -160,6 +160,37 @@ func TestLoadReportsWhatCannotBeReadAsAnInvariant(t *testing.T) {
 	}
 }
 
+func TestTheDirectoryIndexIsNeitherLoadedNorReported(t *testing.T) {
+	t.Parallel()
+
+	// Every artifact home carries the README `yoyo init` writes and `yoyo doctor`
+	// reports missing, and this home is one of them. A file the harness asks for
+	// must not be the file it calls a malformed constraint on every load.
+	store := newStore(t)
+	if _, err := store.Create(domain.RoleArchitect, draft("reserve-before-work"), moment()); err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	base := filepath.Join(store.RepositoryRoot, invariantsDirectory)
+	writeFile(t, filepath.Join(base, "README.md"), "# "+invariantsDirectory+"\n\n**Purpose.** What is filed here.\n")
+
+	set, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(set.Active) != 1 || set.Active[0].ID != "reserve-before-work" {
+		t.Fatalf("active = %#v", set.Active)
+	}
+	if len(set.Problems) != 0 {
+		t.Fatalf("the index was reported: %#v", set.Problems)
+	}
+
+	// And the name is refused to a constraint, because one written there would be
+	// skipped by the same rule and held against nobody.
+	if _, err := store.Create(domain.RoleArchitect, draft("readme"), moment()); err == nil {
+		t.Fatal("Create(\"readme\") was allowed")
+	}
+}
+
 func TestSelectDeliversRepositoryWideInvariantsAndScopeMatches(t *testing.T) {
 	t.Parallel()
 
