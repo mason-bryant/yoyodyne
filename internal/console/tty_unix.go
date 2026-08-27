@@ -17,6 +17,14 @@ const defaultColumns = 80
 // widths a region cannot be drawn in at all.
 const minimumColumns = 20
 
+// defaultRows is the height assumed when the terminal will not say, for the
+// same reason defaultColumns is the width it will not say.
+const defaultRows = 24
+
+// minimumRows keeps the region bounded to a window it can still be drawn in: a
+// row for what the operator is typing, and one for what they are waiting on.
+const minimumRows = 2
+
 // winsize is the terminal's own account of its size. The syscall package
 // declares the request but not the structure it fills in, so it is declared
 // here, in the layout every one of these systems uses for it.
@@ -84,6 +92,22 @@ func terminalWidth(fd uintptr) int {
 		return minimumColumns
 	}
 	return int(size.columns)
+}
+
+// terminalHeight asks the terminal how tall it is, every time the region is
+// drawn, so a window the operator resized bounds the region at the size it is
+// now. The region is drawn at the bottom of the screen and erased by climbing
+// back up it, so a region drawn taller than this would be climbing over rows
+// that had already scrolled away.
+func terminalHeight(fd uintptr) int {
+	var size winsize
+	if err := ioctl(fd, syscall.TIOCGWINSZ, unsafe.Pointer(&size)); err != nil || size.rows == 0 {
+		return defaultRows
+	}
+	if int(size.rows) < minimumRows {
+		return minimumRows
+	}
+	return int(size.rows)
 }
 
 // raiseSignal delivers the signal the terminal driver would have raised itself.

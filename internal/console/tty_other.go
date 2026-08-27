@@ -16,6 +16,8 @@ func enterCBreak(uintptr) (func() error, error) {
 
 func terminalWidth(uintptr) int { return 80 }
 
+func terminalHeight(uintptr) int { return 24 }
+
 // raiseSignal has nothing to raise: no keyboard is negotiated where no terminal
 // can be addressed, so the driver is still handling these keys itself.
 func raiseSignal(signalKey) {}

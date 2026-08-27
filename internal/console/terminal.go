@@ -42,6 +42,11 @@ type terminal struct {
 	// width is asked for at every draw rather than remembered, so a window the
 	// operator resized is drawn at the size it is now.
 	width func() int
+	// height is the same question about the other dimension, and it bounds the
+	// region rather than wrapping it: a region taller than the window scrolls off
+	// the top of it, and what has scrolled off cannot be climbed back over to
+	// erase, so the erase would start inside the conversation instead.
+	height func() int
 	// theme is how much this terminal's environment permits it to be dressed.
 	// It is fixed for the life of the console, because an operator who set
 	// NO_COLOR set it before the conversation opened.
@@ -103,7 +108,8 @@ func openTerminal(in, out *os.File, env func(string) string) (*terminal, error) 
 		return nil, err
 	}
 	width := func() int { return terminalWidth(out.Fd()) }
-	terminal := newTerminal(in, out, width, restore)
+	height := func() int { return terminalHeight(out.Fd()) }
+	terminal := newTerminal(in, out, width, height, restore)
 	terminal.modes = func() (func() error, error) { return enterCBreak(in.Fd()) }
 	terminal.theme = NewTheme(env, width)
 	// What the terminal will say about a keystroke is settled before the first
@@ -115,13 +121,14 @@ func openTerminal(in, out *os.File, env func(string) string) (*terminal, error) 
 
 // newTerminal builds the console over whatever the caller supplies, so the
 // region and the editing can be exercised without a real terminal to drive.
-func newTerminal(in io.Reader, out io.Writer, width func() int, restore func() error) *terminal {
+func newTerminal(in io.Reader, out io.Writer, width, height func() int, restore func() error) *terminal {
 	return &terminal{
 		out:     out,
 		input:   readInput(in),
 		restore: restore,
 		raise:   raiseSignal,
 		width:   width,
+		height:  height,
 	}
 }
 
@@ -220,14 +227,18 @@ func (t *terminal) eraseRegion() string {
 }
 
 // statusRows is how many rows the status line took at the width the terminal
-// has now, counting the newline that ends it. A line that exactly fills the
-// width still occupies one row: the terminal defers the wrap, and the newline
-// is what commits it.
-func (t *terminal) statusRows() int {
-	if t.drawnStatus == "" {
+// has now, counting the newline that ends it.
+func (t *terminal) statusRows() int { return statusHeight(t.drawnStatus, t.columns()) }
+
+// statusHeight is how many rows a status line occupies at this width. A line
+// that exactly fills the width still occupies one row: the terminal defers the
+// wrap, and the newline is what commits it. Drawing and erasing take this same
+// measure, so what is climbed over is what was put there.
+func statusHeight(text string, width int) int {
+	if text == "" {
 		return 0
 	}
-	return (visibleWidth(t.drawnStatus)-1)/t.columns() + 1
+	return (visibleWidth(text)-1)/width + 1
 }
 
 // columns is how wide the terminal is now. It divides the arithmetic that
@@ -240,21 +251,41 @@ func (t *terminal) columns() int {
 	return 1
 }
 
+// rows is how tall the terminal is now. It bounds the region, so a terminal
+// that answers with nothing usable is floored at the one row a region needs
+// rather than left bounding it to nothing at all.
+func (t *terminal) rows() int {
+	if height := t.height(); height > 0 {
+		return height
+	}
+	return 1
+}
+
 // drawRegion returns the sequence that puts the region back: the account of
 // work in progress if there is one, the line being composed under it, and the
-// cursor where the operator left it.
+// cursor where the operator left it. The whole of it is drawn within the window
+// the operator has, because a region that scrolled off the top of the window
+// cannot be erased again from where it began.
 func (t *terminal) drawRegion() string {
 	status := t.statusLine()
 	if !t.prompting && status == "" {
 		return ""
 	}
 	width := t.columns()
+	rows := t.rows()
 	var out strings.Builder
+	// Where the window has no room for both, the status gives up its row: the
+	// region has to fit, and what the operator is typing is the part of it they
+	// cannot do without.
+	if statusHeight(status, width) >= rows {
+		status = ""
+	}
 	if status != "" {
 		// The status is written and left behind: the region is redrawn as a
 		// whole, so it is put back on every draw rather than moved.
 		out.WriteString(status)
 		out.WriteString("\n")
+		rows -= statusHeight(status, width)
 	}
 	t.drawnStatus = status
 	if !t.prompting {
@@ -266,6 +297,17 @@ func (t *terminal) drawRegion() string {
 		return out.String()
 	}
 	composed := t.promptText + string(t.line)
+	// Where the cursor is in the composed text, counted in runes, because that is
+	// what `place` steps through. It is not the same as the columns the prompt
+	// occupies: a prompt with colour in it carries runes that take no room at
+	// all, and counting those as columns would put the cursor past the end of
+	// what the operator can see.
+	cursor := utf8.RuneCountInString(t.promptText) + t.cursor
+	// A message with more lines than the window has rows is drawn as the part of
+	// it that fits. Everything after this point measures the text that is drawn
+	// rather than the whole message, so the erase climbs back over rows the
+	// region really put on the screen.
+	composed, cursor = boundComposed(composed, cursor, width, rows)
 	// A newline the operator typed is written as one: the message occupies as
 	// many rows as it has lines, and the rest of the region is measured from the
 	// same text, so what is erased is what was drawn.
@@ -280,12 +322,6 @@ func (t *terminal) drawRegion() string {
 		endRow++
 		endColumn = 0
 	}
-	// Where the cursor is in the composed text, counted in runes, because that is
-	// what `place` steps through. It is not the same as the columns the prompt
-	// occupies: a prompt with colour in it carries runes that take no room at
-	// all, and counting those as columns would put the cursor past the end of
-	// what the operator can see.
-	cursor := utf8.RuneCountInString(t.promptText) + t.cursor
 	targetRow, targetColumn := place(composed, cursor, width)
 	if targetColumn >= width {
 		targetRow++
@@ -361,6 +397,126 @@ func cursorRow(text string, index, width int) int {
 		row++
 	}
 	return row
+}
+
+// drawnRows is how many rows text occupies once it has been drawn. It is one
+// more than the row the end of the text lands on, and a text that ends on an
+// exactly full row lands on the row after it, because drawing commits that
+// deferred wrap rather than leaving the cursor between two rows.
+func drawnRows(text string, width int) int {
+	return cursorRow(text, utf8.RuneCountInString(text), width) + 1
+}
+
+// rowStarts is the rune index each row of the text begins at when it is written
+// at this width. The first row begins at nothing, a newline the operator typed
+// begins the next row after itself, and a row the width filled begins the next
+// at the rune that would not fit on it.
+func rowStarts(text string, width int) []int {
+	runes := []rune(text)
+	starts := []int{0}
+	column := 0
+	for position := 0; position < len(runes); {
+		if runes[position] == 0x1b {
+			position += escapeRunes(runes[position:])
+			continue
+		}
+		character := runes[position]
+		position++
+		if character == '\n' {
+			starts = append(starts, position)
+			column = 0
+			continue
+		}
+		if column >= width {
+			starts = append(starts, position-1)
+			column = 0
+		}
+		column++
+	}
+	return starts
+}
+
+// rowIndex is which of those rows a rune index falls on.
+func rowIndex(starts []int, index int) int {
+	row := 0
+	for row+1 < len(starts) && starts[row+1] <= index {
+		row++
+	}
+	return row
+}
+
+// escapesIn is the escape sequences in the runes and nothing else. Replaying
+// them leaves the terminal dressed exactly as the text before them left it, and
+// in no columns at all, so a region that begins part way down a message is
+// coloured as the whole of it would have been.
+func escapesIn(runes []rune) []rune {
+	var kept []rune
+	for position := 0; position < len(runes); {
+		if runes[position] != 0x1b {
+			position++
+			continue
+		}
+		size := escapeRunes(runes[position:])
+		kept = append(kept, runes[position:position+size]...)
+		position += size
+	}
+	return kept
+}
+
+// boundComposed is the part of the composed text a window this many rows tall
+// has room for, and where the cursor sits in it.
+//
+// A region taller than the window scrolls off the top of it as it is drawn, and
+// what has scrolled off is no longer somewhere the cursor can be moved: the
+// erase would climb until it hit the top of the window and clear from there,
+// which is inside the conversation. So a region that will not fit is cut to
+// what does. What is kept is the end of the message, which is where the
+// operator is typing, moved up far enough that the cursor is still on screen.
+// Only what is drawn is cut — the message they send is the whole of it.
+func boundComposed(text string, cursor, width, rows int) (string, int) {
+	if rows < 1 {
+		rows = 1
+	}
+	if drawnRows(text, width) <= rows {
+		return text, cursor
+	}
+	runes := []rune(text)
+	starts := rowStarts(text, width)
+	cursorAt := rowIndex(starts, cursor)
+	last := len(starts) - 1
+	if cursorAt+rows-1 < last {
+		last = cursorAt + rows - 1
+	}
+	// What is kept ends at the end of the message, or one rune short of the row
+	// after it. That rune is the operator's own newline where the row ended in
+	// one, and the last column of a row the width filled exactly otherwise, whose
+	// wrap the drawing would commit onto a row this region does not have.
+	end := len(runes)
+	if last < len(starts)-1 {
+		end = starts[last+1] - 1
+	}
+	first := last
+	for first > 0 && drawnRows(string(runes[starts[first-1]:end]), width) <= rows {
+		first--
+	}
+	if first > cursorAt {
+		first = cursorAt
+	}
+	visible := runes[starts[first]:end]
+	// The row the cursor is on is kept whatever else goes, so where keeping it
+	// leaves one row too many it is the end that gives way.
+	for len(visible) > 0 && drawnRows(string(visible), width) > rows {
+		visible = visible[:len(visible)-1]
+	}
+	prefix := escapesIn(runes[:starts[first]])
+	moved := len(prefix) + cursor - starts[first]
+	if moved < 0 {
+		moved = 0
+	}
+	if moved > len(prefix)+len(visible) {
+		moved = len(prefix) + len(visible)
+	}
+	return string(prefix) + string(visible), moved
 }
 
 // redraw puts the region back where it belongs after the state behind it

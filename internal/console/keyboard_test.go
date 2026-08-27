@@ -115,7 +115,7 @@ func TestTheKeyboardIsNegotiatedAndHandedBack(t *testing.T) {
 
 			reader, keys := io.Pipe()
 			out := newRecorder(40)
-			console := newTerminal(reader, out, func() int { return 40 }, nil)
+			console := newTerminal(reader, out, func() int { return 40 }, func() int { return windowRows }, nil)
 			go func() {
 				if test.reply != "" {
 					keys.Write([]byte(test.reply))
@@ -154,7 +154,7 @@ func TestTypingAheadOfTheNegotiationIsKept(t *testing.T) {
 
 	reader, keys := io.Pipe()
 	out := newRecorder(40)
-	console := newTerminal(reader, out, func() int { return 40 }, nil)
+	console := newTerminal(reader, out, func() int { return 40 }, func() int { return windowRows }, nil)
 	t.Cleanup(func() {
 		console.Close()
 		keys.Close()
