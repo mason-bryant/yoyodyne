@@ -91,7 +91,7 @@ func (m *Manager) CatchUpTarget(ctx context.Context, targetBranch string) (Catch
 		return catchup, nil
 	}
 	catchup.LocalCommit = local
-	published, onRemote, err := m.remoteCommit(ctx, targetBranch)
+	published, onRemote, err := m.remoteCommit(ctx, m.remote, targetBranch)
 	if err != nil {
 		return catchup, err
 	}

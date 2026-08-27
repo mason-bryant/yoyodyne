@@ -703,7 +703,22 @@ func (d *diagnosis) checkForge(ctx context.Context, resolved config.Resolved, re
 			Remedy:  fmt.Sprintf("git -C %s remote add %s <url>", shellQuote(repository), remote),
 		}
 	}
-	availability, err := (publish.GitHub{Runner: d.env.Runner, Dir: repository, Remote: remote}).Availability(ctx)
+	// A project publishing from a fork needs the fork too, and the run that finds
+	// it missing is a run that has already been claimed and worked. Asking here is
+	// what turns that into a sentence somebody reads before starting.
+	pushRemote := resolved.Config.Execution.PushRemote
+	if pushRemote != "" && pushRemote != remote {
+		if result, err := d.run(ctx, repository, "git", "remote", "get-url", pushRemote); err != nil || result.Status != execution.ProcessSucceeded {
+			return Finding{
+				Check:   "forge",
+				Status:  StatusProblem,
+				Summary: fmt.Sprintf("this project pushes run branches to the Git remote %q, which this repository does not have", pushRemote),
+				Detail:  describeFailure(result, err),
+				Remedy:  fmt.Sprintf("git -C %s remote add %s <url-of-your-fork>", shellQuote(repository), pushRemote),
+			}
+		}
+	}
+	availability, err := (publish.GitHub{Runner: d.env.Runner, Dir: repository, Remote: remote, PushRemote: pushRemote}).Availability(ctx)
 	if err != nil {
 		return Finding{
 			Check:   "forge",
@@ -728,6 +743,14 @@ func (d *diagnosis) checkForge(ctx context.Context, resolved config.Resolved, re
 			Summary: "gh is installed but not authenticated, so no pull request can be opened",
 			Detail:  availability.Version,
 			Remedy:  "gh auth login",
+		}
+	}
+	if pushRemote != "" && pushRemote != remote {
+		return Finding{
+			Check:   "forge",
+			Status:  StatusOK,
+			Summary: fmt.Sprintf("gh is authenticated, run branches go to %s, and pull requests are opened against %s", pushRemote, remote),
+			Detail:  availability.Version,
 		}
 	}
 	return Finding{

@@ -617,6 +617,103 @@ func TestGitHubScopesCommandsToTheConfiguredRemote(t *testing.T) {
 	}
 }
 
+// A contributor's run branch lives in their fork, so the request has to be
+// opened across two repositories: against the one the work is going into, from a
+// head that repository has never heard of. What qualifies the head is the fork's
+// owner, read out of the fork remote's own URL.
+func TestGitHubOpensACrossRepositoryRequestFromTheFork(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url upstream", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("remote get-url fork", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "git@example.invalid:contributor/thing.git\n"})
+	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]\n"})
+	runner.replyAfter("pr list", 1, execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":9,"url":"https://example.invalid/pull/9","state":"OPEN","mergedAt":""}]`,
+	})
+	runner.reply("pr create", execution.ProcessResult{Status: execution.ProcessSucceeded})
+
+	forge := GitHub{Runner: runner, Dir: t.TempDir(), Remote: "upstream", PushRemote: "fork"}
+	if _, err := forge.Ensure(context.Background(), Request{Head: "yoyodyne/task/abcd1234", Base: "main", Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+
+	created := runner.matching("pr create")
+	if len(created) != 1 {
+		t.Fatalf("pr create calls = %d, want exactly one", len(created))
+	}
+	if !contains(created[0], "contributor:yoyodyne/task/abcd1234") {
+		t.Errorf("pr create args = %v, want the head qualified with the fork's owner", created[0])
+	}
+	// The request is still opened against the repository the work is going into,
+	// which is the half of a cross-repository request that must not move.
+	if !contains(created[0], "https://example.invalid/acme/thing") {
+		t.Errorf("pr create args = %v, want the request opened against the publishing remote", created[0])
+	}
+	// The listing is by head reference name, which is what a request from a fork
+	// carries on the base repository. Qualifying it would name a reference that
+	// repository does not have.
+	for _, call := range runner.matching("pr list") {
+		if !contains(call, "yoyodyne/task/abcd1234") {
+			t.Errorf("pr list args = %v, want the run branch's head reference", call)
+		}
+	}
+}
+
+// A project that pushes run branches to the repository it publishes into names
+// the branch and nothing else, and resolves one remote to do it.
+func TestGitHubLeavesTheHeadUnqualifiedWithoutAFork(t *testing.T) {
+	t.Parallel()
+
+	runner := &scriptedRunner{}
+	runner.reply("remote get-url", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "https://example.invalid/acme/thing\n"})
+	runner.reply("pr list", execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: "[]\n"})
+	runner.replyAfter("pr list", 1, execution.ProcessResult{
+		Status: execution.ProcessSucceeded,
+		Stdout: `[{"number":4,"url":"https://example.invalid/pull/4","state":"OPEN","mergedAt":""}]`,
+	})
+	runner.reply("pr create", execution.ProcessResult{Status: execution.ProcessSucceeded})
+
+	forge := GitHub{Runner: runner, Dir: t.TempDir(), Remote: "origin"}
+	if _, err := forge.Ensure(context.Background(), Request{Head: "yoyodyne/task/abcd1234", Base: "main", Title: "t", Body: "b"}); err != nil {
+		t.Fatalf("Ensure() error = %v", err)
+	}
+	created := runner.matching("pr create")
+	if len(created) != 1 {
+		t.Fatalf("pr create calls = %d, want exactly one", len(created))
+	}
+	if !contains(created[0], "yoyodyne/task/abcd1234") {
+		t.Errorf("pr create args = %v, want the plain head reference", created[0])
+	}
+}
+
+// A fork remote can be written any way Git accepts one, and the account is the
+// same in all of them. A URL that names no repository is refused rather than
+// guessed at: a request opened from an unidentifiable head is worse than one
+// that was not opened.
+func TestRepositoryOwnerReadsEveryRemoteURLForm(t *testing.T) {
+	t.Parallel()
+
+	for _, url := range []string{
+		"git@github.com:contributor/thing.git",
+		"ssh://git@github.com/contributor/thing.git",
+		"https://github.com/contributor/thing.git",
+		"https://github.com/contributor/thing",
+		"https://github.com/contributor/thing/",
+	} {
+		owner, err := repositoryOwner(url)
+		if err != nil || owner != "contributor" {
+			t.Errorf("repositoryOwner(%q) = %q, %v, want contributor", url, owner, err)
+		}
+	}
+	for _, url := range []string{"", "   ", "https://github.com", "github.com:thing.git"} {
+		if owner, err := repositoryOwner(url); err == nil {
+			t.Errorf("repositoryOwner(%q) = %q, want a refusal", url, owner)
+		}
+	}
+}
+
 // TestGitHubRefusesWhenTheRemoteCannotBeResolved keeps the failure closed: a
 // forge command that cannot tell which repository it is acting on must not fall
 // back to inferring one.

@@ -1702,11 +1702,22 @@ execution:
   remote: origin   # the default; name another remote if yours is not origin
 ```
 
+If you cannot push to that remote — you are contributing to somebody else's
+repository — name your fork as well:
+
+```yaml
+execution:
+  remote: upstream     # where pull requests are opened; you need no push access
+  push_remote: fork    # where run branches go; the one you can push to
+```
+
 With both on, a run works like this:
 
 1. **The developer phase publishes.** When a developer attempt finishes, the
-   harness commits its work under its own identity, pushes the run branch, and
-   opens a pull request against the target branch. Each repair attempt pushes
+   harness commits its work under its own identity, pushes the run branch to
+   `execution.remote` — or to your fork, if you named one; see [Publishing from
+   a fork](#publishing-from-a-fork) — and opens a pull request against the
+   target branch on `execution.remote`. Each repair attempt pushes
    onto the same branch and updates the same pull request, so one change never
    ends up with two places to be reviewed. This happens *before* the checks run:
    a pull request is where work is reviewed, and work that does not pass yet is
@@ -1775,6 +1786,41 @@ that your local target branch is authoritative: work an agent pushed by itself
 is not integrated by having been pushed, and a pull request merged behind the
 harness's back moves the remote away from the local branch, which the harness's
 own check of the remote target then refuses rather than force-resolves.
+
+### Publishing from a fork
+
+Everything above assumes you can push to the remote you publish into. When you
+cannot — the ordinary situation for a contributor to somebody else's
+repository — `execution.push_remote` names the remote your run branches go to
+instead, and the pull request is opened across the two repositories:
+
+```yaml
+execution:
+  remote: upstream
+  push_remote: fork
+```
+
+Both remotes have to exist in your checkout. Add the fork the way you would add
+any remote, and check both with `yoyo doctor`, which names whichever one is
+missing:
+
+```bash
+git remote add fork git@github.com:you/theirproject.git
+yoyo doctor
+```
+
+Nothing else about publishing changes, and nothing about it is a second mode.
+Run branches are pushed to the fork, the pull request is opened against the
+remote you publish into with the head qualified by your account, and every
+question about the target branch — whether it may still be merged into, where
+the forge's merge left it, catching your local branch up afterwards — is asked
+of the repository the work is going into. The merged run branch is deleted from
+the fork, because that is the only place it ever was.
+
+Your fork's account is read from the fork remote's URL rather than configured
+separately, so there is nothing to keep in step with it. A repository that does
+not have the remote you named publishes nothing and says which remote it was
+looking for, the same way a repository with no remote at all does.
 
 ### Publishing without automatic integration
 
@@ -2598,7 +2644,9 @@ These are all errors, reported before any work is claimed:
 - a negative `triage.review_rounds_cap`, or a `triage.repair_grant_attempts`
   below 1 — a cap of `0` is a choice and is accepted, a grant of `0` is not;
 - an `execution.remote` that is empty or is not a plain remote name, since it
-  reaches a `git push` command line;
+  reaches a `git push` command line; and an `execution.push_remote` that is set
+  and is not one, for the same reason — leaving it out is what says your run
+  branches go to `execution.remote`;
 - a `product.specifications` that is empty, absolute, or climbs out of the
   repository, since it decides what the product manager reads; and the same of
   `product.invariants`, `product.designs`, and `product.decisions`, since they

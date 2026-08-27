@@ -206,8 +206,15 @@ type GitHub struct {
 	// acts on the repository the project configured rather than on whichever
 	// one it would infer from the working directory. A checkout with more than
 	// one remote is the case that makes inference wrong rather than merely
-	// redundant.
+	// redundant. Pull requests are opened against this repository.
 	Remote string
+	// PushRemote names the Git remote run branches are pushed to, when that is
+	// not Remote. It is what makes a pull request cross-repository: the branch
+	// lives in the fork this names and the request is opened against Remote, so
+	// a contributor without push access to the project's repository publishes
+	// the same way anyone with it does. Empty means the branch is on Remote,
+	// which is every project that can push to what it publishes into.
+	PushRemote string
 	// GitBinary resolves the remote to a repository URL. It is a field so the
 	// resolution is testable without a real checkout.
 	GitBinary string
@@ -264,9 +271,13 @@ func (g GitHub) Ensure(ctx context.Context, request Request) (PullRequest, error
 	if err != nil {
 		return PullRequest{}, err
 	}
+	head, err := g.headRef(ctx, request.Head)
+	if err != nil {
+		return PullRequest{}, err
+	}
 	created, err := g.exec(ctx, append([]string{"pr", "create"}, append(scope,
 		"--base", request.Base,
-		"--head", request.Head,
+		"--head", head,
 		"--title", boundedTitle(request.Title),
 		"--body", boundedBody(request.Body))...)...)
 	if err != nil {
@@ -488,6 +499,14 @@ func (g GitHub) State(ctx context.Context, head string) (PullRequest, error) {
 // is deliberate: it reports "there is none" as an empty result rather than as a
 // failed command, so an absent pull request is never confused with a forge that
 // could not be reached.
+//
+// The head is the plain branch name even when the branch lives in a fork, which
+// is the one place a cross-repository request is not qualified: the forge
+// filters this listing by head reference name, and a request opened from a fork
+// carries the same branch name there as it does in the fork. Qualifying it would
+// name a reference the base repository has never heard of. What keeps that from
+// matching somebody else's request is the branch name itself — a run branch
+// carries its run's identifier, which no other repository's branch has.
 func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error) {
 	scope, err := g.repoArgs(ctx)
 	if err != nil {
@@ -540,18 +559,57 @@ func (g GitHub) find(ctx context.Context, head string) (PullRequest, bool, error
 // project did not name is the mistake worth refusing, and a silent fallback is
 // how that mistake would happen.
 func (g GitHub) repoArgs(ctx context.Context) ([]string, error) {
-	url, err := g.remoteURL(ctx)
+	url, err := g.remoteURL(ctx, g.remoteName())
 	if err != nil {
 		return nil, err
 	}
 	return []string{"--repo", url}, nil
 }
 
-func (g GitHub) remoteURL(ctx context.Context) (string, error) {
+// headRef names the branch a pull request is opened from, in the form the forge
+// has to be told it. A project whose run branches are pushed to the repository
+// it publishes into names the branch and nothing else. One that pushes to a fork
+// has to qualify the branch with that fork's owner, because the reference the
+// forge is being asked about is not one the base repository has.
+//
+// The owner is read out of the fork remote's own URL rather than configured
+// beside it. The remote already says which repository the branch was pushed to,
+// and a second setting is a second thing that can disagree with the first.
+func (g GitHub) headRef(ctx context.Context, branch string) (string, error) {
+	pushRemote := g.pushRemoteName()
+	if pushRemote == g.remoteName() {
+		return branch, nil
+	}
+	url, err := g.remoteURL(ctx, pushRemote)
+	if err != nil {
+		return "", err
+	}
+	owner, err := repositoryOwner(url)
+	if err != nil {
+		return "", fmt.Errorf("resolve the owner of remote %s: %w", pushRemote, err)
+	}
+	return owner + ":" + branch, nil
+}
+
+func (g GitHub) remoteName() string {
 	remote := strings.TrimSpace(g.Remote)
 	if remote == "" {
-		remote = defaultRemote
+		return defaultRemote
 	}
+	return remote
+}
+
+// pushRemoteName is the remote run branches were pushed to, which is the one
+// pull requests are opened against unless the project publishes from a fork.
+func (g GitHub) pushRemoteName() string {
+	pushRemote := strings.TrimSpace(g.PushRemote)
+	if pushRemote == "" {
+		return g.remoteName()
+	}
+	return pushRemote
+}
+
+func (g GitHub) remoteURL(ctx context.Context, remote string) (string, error) {
 	if err := validateArgument("remote", remote); err != nil {
 		return "", err
 	}
@@ -656,6 +714,43 @@ func (m MergeMethod) flag() string {
 // commitPattern keeps a commit a commit, for the same reason branch names are
 // validated: it reaches a command line.
 var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// ownerPattern keeps a resolved account name an account name. It reaches a
+// command line as half of a qualified head reference, so anything that could
+// read as an option, as a second reference, or as whitespace is refused rather
+// than passed along.
+var ownerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// repositoryOwner reads the account a remote's repository belongs to out of the
+// remote's URL. Every form Git accepts names the repository as the last two path
+// segments — `owner/name` — whether it arrived over SSH, over HTTPS, or in the
+// scp-like syntax, so that is what is read rather than the shape of any one of
+// them. A URL that names no such pair is refused: publishing from a fork nobody
+// can identify would open the request against the wrong head or none at all.
+func repositoryOwner(url string) (string, error) {
+	path := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(url), "/"), ".git")
+	if scheme := strings.Index(path, "://"); scheme >= 0 {
+		authority := path[scheme+len("://"):]
+		slash := strings.Index(authority, "/")
+		if slash < 0 {
+			return "", fmt.Errorf("remote URL %q names no repository", url)
+		}
+		path = authority[slash+1:]
+	} else if colon := strings.LastIndex(path, ":"); colon >= 0 {
+		// The scp-like form, `[user@]host:owner/name`, which has no scheme and
+		// separates the path with a colon rather than a slash.
+		path = path[colon+1:]
+	}
+	segments := strings.Split(strings.Trim(path, "/"), "/")
+	if len(segments) < 2 {
+		return "", fmt.Errorf("remote URL %q names no repository owner", url)
+	}
+	owner := segments[len(segments)-2]
+	if !ownerPattern.MatchString(owner) {
+		return "", fmt.Errorf("remote URL %q names %q as its owner, which is not an account name", url, owner)
+	}
+	return owner, nil
+}
 
 // validateArgument keeps a branch name a branch name. These values reach a
 // command line, so anything that could read as an option is refused rather than
