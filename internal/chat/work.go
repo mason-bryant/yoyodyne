@@ -924,7 +924,11 @@ func (c RunChanges) Render() string {
 		if c.Preserved {
 			fmt.Fprintf(&rendered, "  worktree: %s\n", c.WorktreePath)
 		} else {
-			fmt.Fprintf(&rendered, "  worktree: %s, removed when the run was cleaned up\n", c.WorktreePath)
+			// Which removal it was is not said, because what the reader needs is
+			// that the directory is not there: cleanup after a promotion, a re-run
+			// retiring what this one preserved, and the convergence sweep retiring
+			// an old empty checkout all end the same way.
+			fmt.Fprintf(&rendered, "  worktree: %s, removed\n", c.WorktreePath)
 		}
 	}
 	if c.Integrated {

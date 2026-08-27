@@ -93,6 +93,17 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 			failed = true
 		}
 	}
+	for _, worktree := range convergence.Worktrees {
+		// A record that could not be told its checkout is gone fails the command
+		// as squarely as a retirement that could not run: it is the state that
+		// sends every later reader to a directory that is not there.
+		if worktree.Failure != "" || worktree.RecordProblem != "" {
+			failed = true
+		}
+	}
+	if convergence.Registrations.Failure != "" {
+		failed = true
+	}
 	// A publication left where it stands for a reason is not a failure; one the
 	// forge could not be asked about, or whose corrected record could not be
 	// written, is a record still disagreeing with the forge.
@@ -114,6 +125,12 @@ func reportReconcileResult(stdout, stderr io.Writer, jsonOutput bool, results []
 		}
 		if output.Convergence.Branches == nil {
 			output.Convergence.Branches = []orchestrator.BranchSweep{}
+		}
+		if output.Convergence.Worktrees == nil {
+			output.Convergence.Worktrees = []orchestrator.WorktreeSweep{}
+		}
+		if output.Convergence.Registrations.Pruned == nil {
+			output.Convergence.Registrations.Pruned = []string{}
 		}
 		if err != nil {
 			output.Error = err.Error()
@@ -186,11 +203,18 @@ func printPublications(stdout, stderr io.Writer, publications []orchestrator.Pub
 	}
 }
 
-// printConvergence reports only what the sweep changed and what it could not
-// do. A repository already level with the forge says nothing here, and neither
-// does a branch kept for a good reason: both are the status quo, and a line per
-// target and per preserved branch on every sweep would bury the ones that
-// actually need reading. `--json` carries the whole sweep either way.
+// printConvergence reports what the sweep changed and what it could not do. A
+// repository already level with the forge says nothing here, and neither does a
+// branch kept for a good reason: both are the status quo, and a line per target
+// and per preserved branch on every sweep would bury the ones that actually need
+// reading. `--json` carries the whole sweep either way.
+//
+// A kept checkout is said, unlike a kept branch, because it is no longer a
+// category the sweep declines to act on — the work in one is captured and the
+// directory retired — so anything still kept is an anomaly: a directory Git is
+// not managing, a registration on a branch the run never recorded, a capture
+// that could not be written. Each of those is one line that should not be
+// appearing at all, rather than a standing list somebody learns to scroll past.
 func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Convergence) {
 	for _, target := range convergence.Targets {
 		switch {
@@ -202,6 +226,40 @@ func printConvergence(stdout, stderr io.Writer, convergence orchestrator.Converg
 		case target.Held != "":
 			fmt.Fprintf(stderr, "%s not caught up: %s\n", target.TargetBranch, target.Held)
 		}
+	}
+	for _, worktree := range convergence.Worktrees {
+		switch {
+		// A checkout that is gone whose run was not told so is read first, because
+		// it is the only one of these where doing nothing leaves somebody being
+		// sent after a directory that does not exist.
+		case worktree.RecordProblem != "":
+			fmt.Fprintf(stderr, "%s retired but not recorded: %s\n", worktree.Path, worktree.RecordProblem)
+		// "not swept cleanly" rather than "not retired", because this covers both
+		// a retirement that was refused and one that happened and could not be
+		// confirmed. The message says which.
+		case worktree.Failure != "":
+			fmt.Fprintf(stderr, "%s not swept cleanly: %s\n", worktree.Path, worktree.Failure)
+		case worktree.Removed:
+			fmt.Fprintf(stdout, "%s retired: run %s is settled\n", worktree.Path, worktree.RunID)
+			// Where a half-finished change went is the one thing retiring it raises,
+			// so it is said next to the retirement rather than left in `--json`.
+			if worktree.PreservedWork != "" {
+				fmt.Fprintf(stdout, "  uncommitted work preserved at %s\n", worktree.PreservedWork)
+			}
+		// The run rather than the path, because the reason already names the
+		// checkout and the run is how an operator finds what it was for.
+		case worktree.Kept != "":
+			fmt.Fprintf(stdout, "%s kept: %s\n", worktree.RunID, worktree.Kept)
+		}
+	}
+	// The prune says something only when it removed registrations or could not
+	// run. A repository with none to remove is the status quo, and a line about
+	// it on every sweep is a line nobody reads.
+	if failure := convergence.Registrations.Failure; failure != "" {
+		fmt.Fprintf(stderr, "stale worktree registrations not pruned: %s\n", failure)
+	}
+	if pruned := len(convergence.Registrations.Pruned); pruned > 0 {
+		fmt.Fprintf(stdout, "%d stale worktree registration(s) pruned\n", pruned)
 	}
 	for _, branch := range convergence.Branches {
 		switch {
@@ -220,6 +278,19 @@ Settles every run an interrupted process left outstanding, then converges local
 state on the forge: each target branch is caught up onto its remote counterpart,
 and the leftover branches of settled runs whose work the target already carries
 are removed. Both are fast-forward-or-nothing and safe to repeat.
+
+It also retires the leftover checkouts, so the worktree registrations a machine
+carries are live runs plus a bounded tail rather than growing with the harness's
+history until a command in the next worktree cannot spawn. Settled runs past the
+most recent few have their checkout unregistered, and registrations whose
+checkout is no longer on disk are pruned, whichever run or person left them
+behind. No branch is touched by either.
+
+A checkout holding uncommitted work is retired too, and nothing is lost doing it:
+the tree is recorded first on refs/yoyodyne/preserved-work/<run-id>, which the
+retirement line names and the run's own record keeps. Recover it with
+"git worktree add --detach <path> <ref>". A capture that cannot be written
+leaves the checkout exactly where it was.
 
 It also re-asks the forge about the pull request of every run that ended without
 its publication being settled, and records what the forge now says — merged,

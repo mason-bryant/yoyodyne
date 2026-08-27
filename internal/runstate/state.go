@@ -609,6 +609,36 @@ type State struct {
 	// Absent is every run whose artifacts it removed itself, which is all of them
 	// until triage retires one.
 	ArtifactsRetiredBy string `json:"artifacts_retired_by,omitempty"`
+	// WorktreeSweptAt is when the convergence sweep retired this run's checkout
+	// as hygiene, on a settled run that neither promoted anything nor was
+	// superseded. It is the third way a removal is earned and it covers the
+	// checkout alone, because the sweep only ever unregisters an empty checkout
+	// and never touches a branch: what that checkout carried is still on the
+	// branch, so nothing about the run stops being recoverable.
+	//
+	// It is recorded for the reason the other two are. `yoyo status`, the triage
+	// docket, and a re-run all read WorktreeRemoved as the answer to whether the
+	// directory is still there, and a removal nothing wrote down leaves every one
+	// of them sending somebody after a checkout that is gone.
+	//
+	// Absent is every run whose checkout the sweep has not taken, which is all of
+	// them while it is still within the tail the sweep holds back.
+	WorktreeSweptAt *time.Time `json:"worktree_swept_at,omitempty"`
+	// PreservedWorkRef names the ref carrying whatever this run left uncommitted
+	// in its checkout, written when the sweep retired that checkout and had
+	// something to move out of it first. It is deliberately not a branch: a branch
+	// would be swept, listed, and considered by every containment proof the
+	// harness makes, and this is none of those things — only a garbage-collection
+	// root and an answer to where the work went.
+	//
+	// This record is the only place that answer lives. A stopped run's
+	// half-finished change is exactly what somebody comes looking for months
+	// later, and nothing else in the repository connects the ref to the item it
+	// belonged to.
+	//
+	// Absent is every run whose checkout held nothing to move, and every run whose
+	// checkout is still there.
+	PreservedWorkRef string `json:"preserved_work_ref,omitempty"`
 	// TargetBranch is the integration target fixed when the worktree was
 	// created. It is durable so a resumed run promotes the work into the branch
 	// it was written against rather than whatever happens to be checked out
@@ -1106,12 +1136,34 @@ func (s State) Validate() error {
 		}
 	}
 	// A removal is only ever recorded with the evidence that earned it. There are
-	// two kinds: the run promoted its own work and cleaned up after it, or triage
-	// retired what it preserved once another run superseded it. A record carrying
-	// neither describes cleanup nothing authorized.
+	// three kinds: the run promoted its own work and cleaned up after it, triage
+	// retired what it preserved once another run superseded it, or the
+	// convergence sweep retired an empty checkout as hygiene. A record carrying
+	// none of them describes cleanup nothing authorized.
+	//
+	// The third covers the checkout alone. The sweep never touches a branch, so a
+	// branch removed with no integration and no superseding run behind it is
+	// still a removal with no evidence for it.
 	retiredBy := strings.TrimSpace(s.ArtifactsRetiredBy)
-	if (s.WorktreeRemoved || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
-		problems = append(problems, errors.New("removed artifacts require recorded integration, or the run that superseded this one and retired them"))
+	sweptWorktree := s.WorktreeSweptAt != nil
+	if ((s.WorktreeRemoved && !sweptWorktree) || s.BranchRemoved) && s.Integration == nil && retiredBy == "" {
+		problems = append(problems, errors.New("removed artifacts require recorded integration, the run that superseded this one and retired them, or the convergence sweep that retired the checkout"))
+	}
+	if sweptWorktree && !s.WorktreeRemoved {
+		problems = append(problems, errors.New("a recorded checkout sweep names a checkout that was removed, and this one removed none"))
+	}
+	if preservedWork := strings.TrimSpace(s.PreservedWorkRef); preservedWork != "" {
+		// Only the sweep writes it, and it writes it as part of the removal, so a
+		// record carrying one without the sweep describes a capture nothing did.
+		if !sweptWorktree {
+			problems = append(problems, errors.New("preserved_work_ref requires the checkout sweep that recorded it"))
+		}
+		// A branch here would be swept by the branch sweep and answer the
+		// containment proofs the harness makes about run branches, which is exactly
+		// what keeping the capture out of refs/heads avoids.
+		if strings.HasPrefix(preservedWork, "refs/heads/") || !strings.HasPrefix(preservedWork, "refs/") {
+			problems = append(problems, fmt.Errorf("preserved_work_ref %q must be a ref outside refs/heads", s.PreservedWorkRef))
+		}
 	}
 	if retiredBy != "" {
 		if !ValidRunID(retiredBy) {

@@ -963,6 +963,16 @@ that are gone. Anything that could not be retired is recorded as kept and why; a
 branch whose work nothing promoted is never deleted, so what survives is
 discoverable rather than orphaned.
 
+The worktree alone has one other way of going, on a stoppage nobody re-ran: once
+enough later runs have settled past it, the [convergence
+sweep](operations.md#recovering-interrupted-runs) unregisters the checkout so a
+machine's worktree registrations stay bounded. It records that removal the same
+way, and it takes nothing — the branch is untouched, and whatever the developer
+left uncommitted is recorded on `refs/yoyodyne/preserved-work/<run-id>`, named on
+the run's record, before the directory goes. What it costs is `/continue` on that
+run, which needs the checkout itself; `/rerun`, the branch, and the preserved
+work are all still there.
+
 Guidance the development manager left on the item — what the preserved branch
 holds, what is worth cherry-picking rather than writing again — reaches the
 developer of the fresh run the way everything in an item's notes does. Nothing
@@ -999,7 +1009,12 @@ not be closed or waiting on other work. A grant of the development manager's has
 to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so. And **the
+committed — refuses to a person, leaves the item blocked, and says so. A checkout
+the [convergence sweep](operations.md#recovering-interrupted-runs) retired
+refuses here too, and for the same reason: there is nothing left to hand back.
+That is what the sweep's tail is for — a recent stoppage still has its checkout,
+and an old one is replanned or re-run instead, from its branch and from the
+preserved-work ref the sweep recorded before it took the directory. And **the
 change has to still be in it**: a worktree the harness would call its own and that
 holds nothing passes the check above and fails this one, and a developer handed
 the reviewer's findings and an empty directory delivers an empty repair or

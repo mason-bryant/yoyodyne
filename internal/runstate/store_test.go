@@ -612,6 +612,74 @@ func TestStateRequiresCoherentReviewAndIntegrationEvidence(t *testing.T) {
 			problem: "names what it removed",
 		},
 		{
+			// The third way a removal is earned: the convergence sweep retired an
+			// old stoppage's empty checkout to keep the machine's worktree
+			// registrations bounded.
+			name: "checkout removal earned by the convergence sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+			},
+		},
+		{
+			// It earns the checkout and nothing else, because the sweep never
+			// touches a branch.
+			name: "a branch removal claimed on the checkout sweep",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.BranchRemoved = true
+				state.WorktreeSweptAt = &swept
+			},
+			problem: "removed artifacts require recorded integration",
+		},
+		{
+			name: "a checkout sweep that removed nothing",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeSweptAt = &swept
+			},
+			problem: "a recorded checkout sweep names a checkout that was removed",
+		},
+		{
+			// Where the retired checkout's uncommitted work went, which is the only
+			// record connecting that ref back to the item it belonged to.
+			name: "a checkout sweep that preserved the work in it",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + state.RunID
+			},
+		},
+		{
+			name: "preserved work with no sweep that recorded it",
+			mutate: func(state *State) {
+				state.Integration = nil
+				state.PreservedWorkRef = "refs/yoyodyne/preserved-work/" + state.RunID
+			},
+			problem: "preserved_work_ref requires the checkout sweep that recorded it",
+		},
+		{
+			// A branch would be swept by the branch sweep and answer the containment
+			// proofs the harness makes about run branches, which is the whole reason
+			// the capture is kept out of refs/heads.
+			name: "preserved work recorded as a branch",
+			mutate: func(state *State) {
+				swept := state.UpdatedAt
+				state.Integration = nil
+				state.WorktreeRemoved = true
+				state.WorktreeSweptAt = &swept
+				state.PreservedWorkRef = "refs/heads/" + state.RunID
+			},
+			problem: "must be a ref outside refs/heads",
+		},
+		{
 			name: "a run recorded as superseding itself",
 			mutate: func(state *State) {
 				state.Integration = nil
