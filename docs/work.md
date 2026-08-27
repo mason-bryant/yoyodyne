@@ -64,7 +64,12 @@ change whose ground moved. **The two are different acts with different
 accounting** — one spends the item's repair grant and the review rounds that
 grant buys, the other spends its re-run budget — and neither of them is `yoyo
 run <beads-id>`, which is you naming an item rather than carrying out a decision
-somebody recorded about a run that stopped.
+somebody recorded about a run that stopped. `yoyo run` enforces that difference
+rather than relying on it being understood: an item whose last run stopped with
+its change preserved on a branch is refused a fresh clean run, naming both the
+repair that would continue the change and the re-run that would start over
+deliberately, because a fresh worktree off the target branch looks perfectly
+valid and a developer given one delivers an empty change or reinvents the work.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

@@ -1658,16 +1658,31 @@ recorded on it, and the run's blocker is cleared onto the continuation that
 supersedes it, keeping the words it was recorded in. So a repair does not need
 the reopening a re-run does.
 
-Five things refuse it, and every one of them is asked before either of those
+Six things refuse it, and every one of them is asked before either of those
 writes, so a refused re-entry leaves the grant exactly where it was. The stopped
 run has to be really over. It has to have recorded a failure that was actually
 returned to its developer — findings, a failing check, or refused paths — because
 a run whose provider kept refusing has no repair loop to re-enter. The item must
 not be closed or waiting on other work. A grant of the development manager's has
-to be there and not already carried out. And **the preserved worktree has to be
+to be there and not already carried out. **The preserved worktree has to be
 as the harness left it**: what a continued developer is handed back is whatever is
 in that worktree, so a HEAD that moved — you mid-surgery, an agent that
-committed — refuses to a person, leaves the item blocked, and says so.
+committed — refuses to a person, leaves the item blocked, and says so. And **the
+change has to still be in it**: a worktree the harness would call its own and that
+holds nothing passes the check above and fails this one, and a developer handed
+the reviewer's findings and an empty directory delivers an empty repair or
+reinvents the change from them.
+
+The run asks that last question again itself, on every resume whose worktree is
+supposed to hold a change already — one picked up inside its repair loop, and one
+picked up at the checks or the review, which has a developer attempt behind it
+and nothing else for those steps to judge. Only the run owed its first attempt is
+exempt. And a **fresh run is refused where a repair is owed**: an item whose last
+run stopped with its change preserved on a branch does not get started over from
+nothing, because a clean worktree off the target branch looks perfectly valid and
+is caught by nothing downstream. The refusal names the branch and both ways out,
+and `yoyo triage rerun` is the one that starts over deliberately — a claimed
+re-run is exactly what lets a fresh run through.
 
 The harness carries out none of the other four. One of them asks for something
 and it is still yours to do: for a re-arm, asking the forge to merge the pull

@@ -2265,17 +2265,51 @@ already carried out, which it counts from the continuations the item's runs
 record. Past the once-per-item cap a second is an escalation rather than a larger
 budget, and an item with no rounds left never gets a grant to carry out at all.
 
-Three more things refuse it. The stopped run has to be really over, terminal with
+Four more things refuse it. The stopped run has to be really over, terminal with
 its blocker standing, read from the run's own record rather than from the docket
 entry. The run has to have recorded a repair input — a run whose provider kept
 refusing, or whose replay conflicted, never had a failure returned to its
-developer, so there is no repair loop to re-enter. And the preserved worktree has
+developer, so there is no repair loop to re-enter. The preserved worktree has
 to be as the harness left it: what a continued developer is handed back is
 whatever is in that worktree, so a HEAD that moved — an operator mid-surgery, an
 agent that committed — is a person's to decide about, and the refusal leaves the
-item blocked and says so. The intake hold applies for the reason it applies to a
+item blocked and says so. And that worktree has to still hold the change: a
+checkout the harness would call its own and that holds nothing passes the gate
+above and fails this one, and a developer handed the reviewer's findings and an
+empty directory delivers an empty repair or reinvents the change from them, with
+nothing in the run's record afterwards to tell either from a repair that went
+well. The intake hold applies for the reason it applies to a
 re-run: this spends on a provider, and the development manager naming the item is
 not the operator naming it.
+
+**The resumed run asks the same question again**, and blocks rather than
+spending where the answer has changed. That is the enforcement rather than a
+second opinion: it binds every route into a run that continues a change — this
+action, an interrupted process a later invocation picks up, and whatever
+re-entry is built next — because a worktree that lost its change looks exactly
+like a valid one and is caught by nothing else. It is asked of every resume whose
+worktree is supposed to hold a change already, which is two different cases: a
+run picked up inside its repair loop, which carries a failure returned about a
+change it made, and a run picked up at the checks or at the review, which has
+completed a developer attempt and has nothing else for those steps to judge. Only
+the run owed its first attempt is exempt, because an empty worktree is what that
+attempt starts from. The blocker it records names the run's branch as where the
+preserved work is, and says plainly that nothing was developed, checked, or
+reviewed, because the empty diff behind it is not a verdict on the change.
+
+**A fresh run is refused where a repair is owed**, which is the same loss
+arriving by the opposite route: nothing is handed back at all, and a run starts
+clean on an item whose last run stopped with its change preserved. The fresh
+worktree is a perfectly valid one off the target branch, so nothing downstream
+notices; what makes it visible is the stopped run's own record — terminal, its
+blocker standing, a failure returned to its developer, and a branch that still
+carries the change. So `yoyo run` reads that record before it reserves anything,
+and refuses, naming both the repair that would continue the change and the re-run
+that would deliberately start over. The one fresh run of such an item that is
+right is the re-run, and it says so in the record before it starts: triage claims
+it against the stoppage, and a claim naming that run is what lets the fresh run
+through. Nothing is reserved, claimed, or created by the refusal, so carrying out
+either decision afterwards costs the stoppage nothing.
 
 **A repair supersedes the blocker rather than needing somebody to remember to.**
 The run that stopped blocked its item and recorded the blocker on its own state,
