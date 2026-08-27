@@ -362,6 +362,109 @@ func TestCostSaysWhenPricedInvocationsLandedInNoPhase(t *testing.T) {
 	}
 }
 
+// The keep-or-revert criterion of a prompt-caching change is the cache-read
+// share of input tokens, and it is worth nothing unless the shipped tooling
+// reports it. The ledger carries it per item and over everything, and the
+// per-item breakdown carries it per run, which is the window the measure is
+// actually taken over.
+func TestCostReportsTheCacheReadShareOfInputTokens(t *testing.T) {
+	t.Parallel()
+
+	started := time.Date(2026, 8, 23, 9, 0, 0, 0, time.UTC)
+	prices := []runstate.ItemPrice{{
+		WorkItemID: "yoyodyne-ifd.84",
+		Runs: []runstate.RunPrice{{
+			RunID: "run-1", Status: runstate.StatusSucceeded, Outcome: runstate.OutcomeSucceeded,
+			StartedAt: started, CostUSD: 9.00, Invocations: 1,
+			Phases: runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1}},
+			Tokens: runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500, Measured: 4},
+		}},
+		TotalUSD: 9.00,
+		Phases:   runstate.PhaseSpend{Development: runstate.PhaseCost{CostUSD: 9.00, Invocations: 1}},
+		Tokens:   runstate.TokenUsage{InputTokens: 1300, CacheReadTokens: 2500, CacheCreationTokens: 200, OutputTokens: 5500, Measured: 4},
+	}}
+
+	var out bytes.Buffer
+	printPrices(&out, prices, nil, false)
+	rendered := out.String()
+	for _, required := range []string{
+		"cached",
+		// 2500 of the 4000 input tokens, however the provider billed each of them.
+		"62.5%",
+		"cached is the cache-read share of input tokens: 2500 of 4000 input token(s) over 4 priced invocation(s)",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered ledger = %q, want it to contain %q", rendered, required)
+		}
+	}
+	// An exchange record carries what its rounds cost and no token counts at all,
+	// so the ask row states no share rather than a share of nothing.
+	out.Reset()
+	printPrices(&out, prices, &runstate.ExchangeSpend{Exchanges: 1, Rounds: 1, CostUSD: 0.50}, false)
+	if asks := ledgerLine(out.String(), askLedgerLabel); strings.Contains(asks, "%") {
+		t.Fatalf("ask row = %q, want no cache-read share claimed for an exchange", asks)
+	}
+
+	out.Reset()
+	printPrices(&out, prices, nil, true)
+	if !strings.Contains(out.String(), "cache-read share 62.5% of 4000 input token(s) over 4 invocation(s): 2500 cached, 1300 fresh, 200 written to the cache; 5500 output") {
+		t.Fatalf("rendered breakdown = %q, want the share spelled out per item and per run", out.String())
+	}
+}
+
+// A run nobody measured and a run measured at nothing are the same figure and
+// opposite facts. Every run recorded before the harness kept the provider's
+// usage object is the first kind, and reporting it as a share of nought would
+// read as a caching change that achieved nothing.
+func TestCostSaysWhenThereIsNoCacheReadShareRatherThanReportingNought(t *testing.T) {
+	t.Parallel()
+
+	unmeasured := []runstate.ItemPrice{{
+		WorkItemID: "yoyodyne-ifd.2.7",
+		Runs: []runstate.RunPrice{{
+			RunID: "run-1", Status: runstate.StatusSucceeded, CostUSD: 4.00, Invocations: 2,
+			Tokens: runstate.TokenUsage{Unreported: 2},
+		}},
+		TotalUSD: 4.00,
+		Tokens:   runstate.TokenUsage{Unreported: 2},
+	}}
+
+	var out bytes.Buffer
+	printPrices(&out, unmeasured, nil, false)
+	rendered := out.String()
+	if !strings.Contains(rendered, "2 priced invocation(s) reported no token usage and none reported any") {
+		t.Fatalf("ledger = %q, want the window said to be unmeasurable", rendered)
+	}
+	if strings.Contains(rendered, "0.0%") {
+		t.Fatalf("ledger = %q, want no share where nothing was measured", rendered)
+	}
+
+	// An invocation the provider measured at nothing is the opposite case, and it
+	// keeps its nought: that is a reading, and reporting it as no reading would
+	// lose the one figure the provider actually gave.
+	unmeasured[0].Tokens = runstate.TokenUsage{Measured: 1}
+	out.Reset()
+	printPrices(&out, unmeasured, nil, false)
+	if rendered := out.String(); !strings.Contains(rendered, "0.0%") {
+		t.Fatalf("ledger = %q, want a measured nought reported as the reading it is", rendered)
+	}
+
+	// Where some invocations reported usage and others did not, the share is over
+	// what was measured and the rest is named beside it rather than folded in.
+	unmeasured[0].Tokens = runstate.TokenUsage{InputTokens: 250, CacheReadTokens: 750, Measured: 3, Unreported: 1}
+	out.Reset()
+	printPrices(&out, unmeasured, nil, false)
+	rendered = out.String()
+	for _, required := range []string{
+		"75.0%",
+		"1 priced invocation(s) reported no token usage at all and are outside that share entirely",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("ledger = %q, want it to contain %q", rendered, required)
+		}
+	}
+}
+
 // A backfill that could not reach an item has to say which one, or the ledger
 // reads as complete while part of it was never written.
 func TestCostNamesThePricesItCouldNotRecord(t *testing.T) {

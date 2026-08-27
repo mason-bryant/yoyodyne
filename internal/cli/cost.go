@@ -163,19 +163,21 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		printPriceBreakdown(writer, prices[0])
 		return
 	}
-	fmt.Fprintf(writer, ledgerRow, "item", "runs", "unpriced", "develop", "review", "repair", "cost", "waited")
+	fmt.Fprintf(writer, ledgerRow, "item", "runs", "unpriced", "develop", "review", "repair", "cost", "cached", "waited")
 	total := 0.0
 	runs, unpriced := 0, 0
 	var phases runstate.PhaseSpend
+	var tokens runstate.TokenUsage
 	for _, price := range prices {
 		if !price.Recorded() {
 			continue
 		}
-		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases, false)
+		printLedgerRow(writer, price.WorkItemID, len(price.Runs), price.UnknownRuns, price.TotalUSD, price.Phases, price.Tokens, false)
 		total += price.TotalUSD
 		runs += len(price.Runs)
 		unpriced += price.UnknownRuns
 		phases.Merge(price.Phases)
+		tokens.Merge(price.Tokens)
 	}
 	// The asks are a row rather than a note under the table, because the total
 	// below has to add up: what one role spent asking another is a provider
@@ -187,13 +189,14 @@ func printPrices(writer io.Writer, prices []runstate.ItemPrice, exchanges *runst
 		total += exchanges.CostUSD
 		floor = !exchanges.Known()
 	}
-	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, floor)
+	printLedgerRow(writer, "TOTAL", runs, unpriced, total, phases, tokens, floor)
 	if unpriced > 0 {
 		fmt.Fprintln(writer, "a run with no surviving record is counted as unpriced and left out of the total,")
 		fmt.Fprintln(writer, "so every total it touches is a floor rather than a price")
 	}
 	printAskNote(writer, exchanges)
 	printSplitNote(writer, phases)
+	printCacheNote(writer, tokens)
 	fmt.Fprintln(writer, "this prices runs; conversation turns are recorded but not attributed to an item")
 }
 
@@ -217,13 +220,17 @@ const askLedgerLabel = "ASKS BETWEEN ROLES"
 // holds on an item's row: the records that could not be read, left out of the
 // figure beside them and making it a floor. Records nothing could even
 // enumerate leave no floor to state, so that row says unknown instead.
+//
+// The cached column is empty for a reason of its own: an exchange record carries
+// what its rounds cost and no token counts at all, so there is no share to state
+// rather than a share of nothing.
 func printAskRow(writer io.Writer, exchanges runstate.ExchangeSpend) {
 	unreadable, cost := "-", "unknown"
 	if exchanges.Enumerated() {
 		unreadable = strconv.Itoa(exchanges.Unreadable)
 		cost = renderFloor(exchanges.CostUSD, !exchanges.Known())
 	}
-	fmt.Fprintf(writer, ledgerRow, askLedgerLabel, "-", unreadable, "-", "-", "-", cost, "")
+	fmt.Fprintf(writer, ledgerRow, askLedgerLabel, "-", unreadable, "-", "-", "-", cost, "-", "")
 }
 
 // printAskNote says what the ask row is made of, and what is missing from it.
@@ -251,7 +258,7 @@ func printAskNote(writer io.Writer, exchanges *runstate.ExchangeSpend) {
 
 // ledgerRow is the shape of every line of the ledger, header and total
 // included, so the columns cannot drift apart between them.
-const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %9s\n"
+const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %7s %9s\n"
 
 // printLedgerRow writes one item's line. Each phase carries the same floor
 // marker the total does when it is the runs that went unpriced, for the reason
@@ -262,7 +269,12 @@ const ledgerRow = "%-38s %6s %9s %12s %12s %12s %12s %9s\n"
 // makes of it. That money belongs to no phase — an ask is not development,
 // review, or repair — so marking the phase columns for it would claim
 // uncertainty in three figures that have none.
-func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend, floor bool) {
+//
+// The cached column carries no floor marker of any kind. It is a share rather
+// than a sum, so an unpriced run does not leave it short: what a run nobody can
+// read would have contributed is a share of its own, not tokens missing from
+// this one. What is outside it is said under the table instead.
+func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total float64, phases runstate.PhaseSpend, tokens runstate.TokenUsage, floor bool) {
 	fmt.Fprintf(writer, ledgerRow,
 		label,
 		strconv.Itoa(runs),
@@ -271,8 +283,22 @@ func printLedgerRow(writer io.Writer, label string, runs, unpriced int, total fl
 		renderTotal(phases.Review.CostUSD, unpriced),
 		renderTotal(phases.Repair.CostUSD, unpriced),
 		renderFloor(total, floor || unpriced > 0),
+		renderCacheShare(tokens),
 		renderWait(phases.Waits.Total()),
 	)
+}
+
+// renderCacheShare is the cached column: how much of the input the provider
+// served from its own cache. Usage nobody reported is a dash rather than a
+// nought, because a run measured at nothing and a run nothing measured are the
+// same figure and opposite facts, and the second is the one that would make a
+// caching change look like it failed. A run the provider really did report as
+// reading nothing keeps its nought, which is a reading and says so.
+func renderCacheShare(tokens runstate.TokenUsage) string {
+	if !tokens.Reported() {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", tokens.CacheReadShare()*100)
 }
 
 func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
@@ -282,6 +308,9 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 	}
 	fmt.Fprintf(writer, "%s: %s across %d run(s)\n", price.WorkItemID, renderTotal(price.TotalUSD, price.UnknownRuns), len(price.Runs))
 	fmt.Fprintf(writer, "  %s\n", renderPhaseSplit(price.Phases, price.UnknownRuns))
+	if tokens := renderTokenSplit(price.Tokens); tokens != "" {
+		fmt.Fprintf(writer, "  %s\n", tokens)
+	}
 	for _, run := range price.Runs {
 		fmt.Fprintf(writer, "  %s started %s [%s] %s\n", run.RunID, run.StartedAt.UTC().Format(time.RFC3339), renderRunOutcome(run), renderRunPrice(run))
 		// A run nothing survives to price has no split to show, but it still
@@ -289,6 +318,9 @@ func printPriceBreakdown(writer io.Writer, price runstate.ItemPrice) {
 		// rather than from the log that is gone.
 		if run.Known() {
 			fmt.Fprintf(writer, "    %s\n", renderPhaseSplit(run.Phases, 0))
+			if tokens := renderTokenSplit(run.Tokens); tokens != "" {
+				fmt.Fprintf(writer, "    %s\n", tokens)
+			}
 		} else if wait := renderWaits(run.Phases.Waits); wait != "" {
 			fmt.Fprintf(writer, "    %s\n", wait)
 		}
@@ -318,6 +350,61 @@ func renderPhaseSplit(phases runstate.PhaseSpend, unpriced int) string {
 		split += "; " + waits
 	}
 	return split
+}
+
+// renderTokenSplit says how much of an input the provider served from its own
+// cache, and out of how much. The three parts are spelled out beside the share
+// for the reason the phase split spells out its three: a share on its own says a
+// prompt is cached well and not whether that is because the prefix is shared or
+// because the prompt is short.
+//
+// Invocations whose terminal carried no usage object are named rather than
+// folded in. A share computed over a subset and a share computed over everything
+// read identically, and telling them apart is what stops a measurement being
+// taken against invocations nobody measured.
+func renderTokenSplit(tokens runstate.TokenUsage) string {
+	if !tokens.Reported() {
+		if tokens.Unreported > 0 {
+			return fmt.Sprintf("cache-read share unknown: %d priced invocation(s) reported no token usage", tokens.Unreported)
+		}
+		return ""
+	}
+	split := fmt.Sprintf("cache-read share %.1f%% of %d input token(s) over %d invocation(s): %d cached, %d fresh, %d written to the cache; %d output",
+		tokens.CacheReadShare()*100, tokens.InputTotal(), tokens.Measured,
+		tokens.CacheReadTokens, tokens.InputTokens, tokens.CacheCreationTokens, tokens.OutputTokens)
+	if tokens.Unreported > 0 {
+		split += fmt.Sprintf("; %d priced invocation(s) reported no usage and are outside it", tokens.Unreported)
+	}
+	return split
+}
+
+// printCacheNote says what the cached column is a share of and what is outside
+// it. It is the instrument a change to what the harness sends is kept or
+// reverted on -- a prompt reordered to share a longer prefix is worth keeping
+// exactly insofar as this rises -- so it says what the figure means rather than
+// leaving a percentage to be read for whatever the reader assumes.
+//
+// A record where nothing reported usage says so instead of printing a share of
+// nothing. Every run recorded before the harness kept the provider's usage
+// object is one of those, and a nought there would read as a caching change that
+// achieved nothing rather than as a window that cannot answer.
+func printCacheNote(writer io.Writer, tokens runstate.TokenUsage) {
+	if !tokens.Reported() {
+		if tokens.Unreported == 0 {
+			return
+		}
+		fmt.Fprintf(writer, "%d priced invocation(s) reported no token usage and none reported any, so there is no\n", tokens.Unreported)
+		fmt.Fprintln(writer, "cache-read share to report for this window rather than a share of nothing")
+		return
+	}
+	fmt.Fprintf(writer, "cached is the cache-read share of input tokens: %d of %d input token(s) over %d priced invocation(s)\n",
+		tokens.CacheReadTokens, tokens.InputTotal(), tokens.Measured)
+	fmt.Fprintln(writer, "came from the provider's cache, the rest fresh or written to it, and a change made to share a")
+	fmt.Fprintln(writer, "longer prompt prefix is kept or reverted on whether this rises")
+	if tokens.Unreported > 0 {
+		fmt.Fprintf(writer, "%d priced invocation(s) reported no token usage at all and are outside that share entirely,\n", tokens.Unreported)
+		fmt.Fprintln(writer, "counted apart rather than added in as nothing")
+	}
 }
 
 // printSplitNote says what the three phase columns come to as a whole. The
@@ -464,6 +551,12 @@ cost the provider itself reported. Every price is split by where it went --
 making the change, reviewing it, and repairing it -- with the time the work
 spent waiting on a provider or on the operator beside it. Naming an item breaks
 its price down by run.
+
+Beside the money is what the provider was billed tokens for: the cache-read
+share of input tokens, per run and over everything, which is the measure a
+change made to share a longer prompt prefix is kept or reverted on. An
+invocation whose terminal reported no usage is counted apart rather than added
+in as nothing.
 
 What the roles spent asking each other is a row of its own above the total. The
 exchange record names no piece of work to charge it to, so it reaches no item's

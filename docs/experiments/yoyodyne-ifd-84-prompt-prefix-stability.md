@@ -3,10 +3,18 @@
 Work item: yoyodyne-ifd.84, lever 5 of the token-efficiency brainstorm.
 Audit performed 2026-08-23 against the tree at that date.
 
-**Status: the change is landed; the measurement is outstanding and is an
-operator's to run.** A developer run cannot reach a provider, so no before/after
-window exists yet. What is below is the audit that decided the change, the
-change itself, and exactly what would tell the operator to keep it or revert it.
+**Status: the change is landed, the instrument is landed, the measurement has
+been taken, and it is a null result. By this document's own clause the change is
+to be reverted.** The numbers, the windows they were taken over, and what they
+do and do not establish are in [The measurement](#the-measurement) below.
+
+The criterion had no tooling behind it until yoyodyne-ifd.171, which is why this
+sat undecided for four days: a null result was supposed to trigger a revert and
+nothing computed the number, so the experiment concluded neither way by default.
+`yoyo cost` now reports the cache-read share, and the measurement below was taken
+against the runs already recorded — which is the point worth keeping. Nothing new
+had to be run. The evidence had been accumulating in the event logs since the day
+the change landed, and what was missing was only something that would read it.
 
 ## What the lever is
 
@@ -73,9 +81,21 @@ carries `cache_read_input_tokens` and `cache_creation_input_tokens`. The event
 logs are at `state/products/<product>/runs/<run-id>.events.jsonl`. The measure is
 the cache-read share of input tokens — `cache_read / (input + cache_read +
 cache_creation)` — summed over a window of runs. It must rise after this change.
-No `yoyo` command reports it today; `yoyo cost` prices runs in dollars and does
-not read the usage breakdown, so the share has to be computed from the event
-logs directly.
+
+`yoyo cost` reports it, in the `cached` column of the ledger and per run under
+`yoyo cost <item>`, from those same event logs:
+
+```sh
+./bin/yoyo cost                  # the cached column per item, and the share over everything
+./bin/yoyo cost yoyodyne-ifd.84  # per run, with the cached, fresh, and cache-write split
+./bin/yoyo cost --json           # tokens on each run and each item, for a window taken by hand
+```
+
+The runs are in identifier order rather than in date order, so a before/after
+window is cut on each run's `started_at` from the JSON rather than by reading
+two ends of the table. Invocations whose terminal carried no usage object are
+counted apart and named under the table; where a window is mostly those, it
+cannot answer, and the report says so rather than reporting a share of nought.
 
 **Harm.** Compare a window of roughly 20 runs before and after on first-pass
 approval rate, repair attempts per landed item, and cost per landed item, all of
@@ -88,6 +108,87 @@ not real.
 **Null result.** If the cache-read share does not rise, the change failed at its
 purpose and is reverted. It buys nothing else — the prose reads no better either
 way — so there is no second reason to keep it.
+
+## The measurement
+
+Taken 2026-08-27 against the recorded run event logs, on the yoyodyne product.
+The boundary is exact rather than a date: `run-bd535e5ee0027b61fc5b190053699e0b`
+is the run that made this change, and it promoted `ee9d8841` onto `main` at
+`2026-08-23T10:41:35Z`. Every run started before that assembled its prompts
+without the reordering; every run started after it assembled them with it.
+
+| Window | Runs | Priced invocations | cache_read | + cache_creation | + fresh input | **Cache-read share** |
+|---|---|---|---|---|---|---|
+| Before — started 2026-08-23 00:00–09:59Z | 26 | 119 | 464,562,608 | 12,424,485 | 23,924 | **97.39%** |
+| After — started 2026-08-24 00:00–23:59Z | 31 | 137 | 613,259,701 | 19,998,749 | 16,407 | **96.84%** |
+
+Both windows clear the twenty runs the harm comparison asks for. Each is a whole
+day of run history taken as it stands, adjacent to the promotion on its own side,
+and where a run is left out the reason is below.
+
+Before the promotion, the window is the morning of the 23rd, which is the run
+history nearest to it: no run was started on 2026-08-21 or on 2026-08-22. Older
+runs do exist, on the 20th and before, and are not in the window — 26 runs
+already clears the twenty asked for, and the nearest day is the most comparable
+one. Adding older days would widen the window away from the change, not towards
+it. The runs of the 23rd after the promotion are left out rather than split,
+because a run that starts in the same hour a promotion lands is a run nobody can
+say which prompt it was given.
+
+After it, the window is a single day because a single day is all there is. No run
+was started on 2026-08-25 or on 2026-08-26 either. Six were started on the 27th,
+the day this measurement was taken, and all six are left out for one reason: they
+were still open when it was taken — one of them is the run that took it — so
+their logs were still being written and their figures would not be the same
+figures if anybody re-read them. A permanent record is worth more closed than
+current.
+
+Leaving them out does not decide anything. To lift the after window to the before
+window's 97.39%, those six would have to add at least 134 million input tokens
+read *entirely* from the cache — and more than that at any share a real run
+reaches, since a session has to write to the cache before it can read from it.
+The whole after window is 633 million across thirty-one runs. Six more can move
+the size of this result; they cannot turn it around.
+
+**The share did not rise. It fell, by 0.55 points.** By the clause above that is
+a null result, the change failed at its purpose, and it is to be reverted. The
+revert is a separate change and is named as work rather than made here.
+
+### Why the number is what it is, and what it does not establish
+
+The fall is not evidence that the change did harm, and the reader should not take
+it as such. It is what a measure looks like when it cannot resolve what it was
+pointed at.
+
+Almost all of the cache-read in both windows is a developer session re-reading
+its own conversation on every turn. A single developer invocation in these
+windows reads between three and forty-seven million cached tokens; the entire
+block of text this change moved onto the shared prefix is a few thousand. The
+lever is four orders of magnitude below the noise, and the difference between the
+two windows is the mix of session lengths in each — the after window wrote
+proportionally more cache, 3.16% of its input against the before window's 2.60%,
+which is what a window with more, shorter sessions looks like. That pair is
+`cache_creation / (fresh input + cache_read + cache_creation)` on the table's own
+figures, over the same denominator the share above uses and `yoyo cost` reports;
+it is the cache-read share's own complement, less the fresh input, which is why
+it accounts for the 0.55 points almost exactly.
+
+Beside that there is a structural finding the aggregate hides, and it is the one
+worth keeping. The short one-shot invocations — the reviewer's, which is the case
+the shared cross-run prefix was supposed to pay for — report
+`cache_read_input_tokens` of exactly **0** almost without exception, in both
+windows, while writing 10,000 to 160,000 tokens of fresh cache each time. Those
+invocations are not reading a shared prefix at all; each one pays to write its
+own. Whatever this change did to prefix stability, nothing downstream is
+converting it into a cache read, so the lever cannot pay until that is
+understood.
+
+So the honest reading is two things at once: the criterion as written is met and
+says revert, and the criterion as written could never have said anything else,
+because it was specified at a resolution the effect could not reach. Both belong
+in the record. The second is the precedent — a measurement-based revert clause
+has to be specified so that the measure can resolve the effect, and stating the
+metric is not the same as establishing that it discriminates.
 
 ## What the audit found and did not act on
 
