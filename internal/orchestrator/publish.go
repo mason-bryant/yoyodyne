@@ -439,6 +439,15 @@ func (a *activeRun) awaitMerge(ctx context.Context) (publish.PullRequest, error)
 	return merged, err
 }
 
+// mergeQueued reports a merge the forge accepted and has not performed. It is
+// the one way a run can finish with its promotion made and its publication
+// still undecided, which is why it is what defers closing the work item: the
+// forge either merges minutes later or drops the request, and only its answer
+// says whether the change was integrated anywhere but this repository.
+func (a *activeRun) mergeQueued() bool {
+	return a.outcome.PullRequest != nil && a.outcome.PullRequest.MergeQueued
+}
+
 // catchUpTarget brings the local target branch onto the commit the forge's
 // merge left on the remote, and records what happened either way.
 //
@@ -523,10 +532,13 @@ func renderPublishNotes(outcome Outcome) []string {
 		// A queued merge is the ordinary outcome on a protected branch, and it is
 		// not the same fact as an unmerged one: the forge has accepted it and will
 		// perform it once the required checks pass. A reader of the item has to be
-		// able to tell the two apart without going to the forge.
+		// able to tell the two apart without going to the forge — and has to be
+		// told why this item is not closed, because a queued merge is the one
+		// integrated outcome whose closure waits for somebody else's answer.
 		if outcome.PullRequest.MergeQueued {
 			lines = append(lines,
-				"Merge queued: the forge merges this request once the base branch's requirements are met; `yoyo reconcile` settles the run when it does.")
+				"Merge queued: the forge merges this request once the base branch's requirements are met; `yoyo reconcile` settles the run when it does.",
+				"This item stays open until then: it is closed when the forge's merge is confirmed, and handed back to you with a blocker if the forge drops it.")
 		}
 		// The method decides what the remote history looks like, and the merge
 		// commit is the one commit the remote target has that the authoritative

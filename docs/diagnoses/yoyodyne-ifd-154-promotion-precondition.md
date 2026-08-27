@@ -42,9 +42,28 @@ What changed, in two halves:
 
 So the window remains and the wedge does not: no run closes an item as
 integrated against a divergence nothing reconciles, on either side of the
-promotion. The rest of this document — where the precondition is enforced, what
-containment and content each prove, and the queued-merge gap — is unchanged and
-still holds.
+promotion.
+
+## Superseded in part by yoyodyne-ifd.181
+
+The queued-merge gap this document identifies had a second half that ifd.177 did
+not reach, and `yoyodyne-ifd.181` closed it: **a run whose merge the forge queued
+no longer closes its work item.** The section below titled "What is not enforced:
+the merge the forge queues" still describes what the forge is and is not asked to
+enforce, which is unchanged — the base of a queued merge is still unpinned, and
+the guarantee for that path is still a check before the request plus
+after-the-fact detection. What changed is only what the harness records while
+that detection is outstanding: the run finishes with the item open and the queued
+merge named on it, reconciliation closes the item when the forge's merge is
+confirmed, and a merge the forge dropped hands the item back with a blocker
+rather than leaving it closed as integrated against a publication that never
+happened.
+
+The same work item gave the divergence this document describes a documented,
+executable recovery route, which it never had — see the last section.
+
+The rest of this document — where the precondition is enforced, and what
+containment and content each prove — is unchanged and still holds.
 
 ## The claim under test
 
@@ -163,6 +182,14 @@ than accepted.
   the item, or caught up and closed — and the second asserts that the remote
   actually contains the promoted commit, which is the condition that makes
   closing the item safe rather than a repeat of the defect.*
+- *Extended by ifd.181, for the queued path's own early close.
+  `TestPipelineQueuesTheMergeAndFinishesWithoutWaitingForIt` now asserts that the
+  run leaves the item open;
+  `TestReconcileFinishesAQueuedMergeTheForgePerformed` asserts that the confirmed
+  merge is what closes it, and with what reason; and
+  `TestReconcileReportsAQueuedMergeTheForgeDropped` asserts that a dropped merge
+  blocks the item rather than closing it as integrated. Between them the closure
+  is pinned to the forge's answer on both of the answers it can give.*
 
 ## What is not enforced: the merge the forge queues
 
@@ -247,16 +274,39 @@ was waiting on rather than a position on it.
 
 ## Work discovered, for the product manager to admit
 
-- Pin or re-check the merge base for a queued merge, or state in the design that
-  the queued path detects after the merge rather than failing closed before it.
-  Nothing covers this today.
-- ~~No recovery path exists for the outcome above: a local target diverged from
-  the remote with a closed work item behind it is reported by reconciliation and
-  resolved by nobody.~~ Admitted as `yoyodyne-ifd.177` and fixed at the source:
-  no run produces *a closed work item behind* that divergence any more, on either
-  side of the promotion — it is settled or replayed before, and blocked without
-  closing the item after. Two things this did **not** do, and both still stand:
-  the check-then-act window against a second machine is not closed and cannot be
-  by a check, so the divergence itself remains reachable; and no recovery path was
-  added, so a repository already wedged by a run that predates the fix, and one
-  wedged by the queued-merge path below, still need a person.
+This list was once one struck-through bullet with two live pieces inside it,
+which read as resolved to anybody who did not finish the paragraph. It is split
+below so each piece carries its own state, and a struck bullet means that piece
+and nothing beside it.
+
+- **The merge base of a queued merge is still not pinned, and still cannot be.**
+  Pin or re-check it, or state in the design that the queued path detects after
+  the merge rather than failing closed before it. Nothing covers this today. What
+  `yoyodyne-ifd.181` changed is only what the queued path *records* while the
+  answer is outstanding, below — not what the forge is asked to enforce.
+- ~~The queued-merge path closes an item as integrated before the forge performs
+  the merge.~~ Fixed by `yoyodyne-ifd.181`. A run whose merge the forge queued
+  finishes without closing its item; the closure moves to the settle path and is
+  made on the forge's answer. A merge the forge dropped no longer closes the item
+  either — it records the outstanding publication and hands the item back with a
+  durable blocker, which is where a bounded re-arm of the dropped merge is
+  decided.
+- ~~No recovery path exists for a repository already wedged: a local target
+  diverged from the remote, reported by reconciliation on every sweep and
+  resolved by nobody.~~ Given one by `yoyodyne-ifd.181`, as a documented,
+  executable route rather than a harness action:
+  [Unwedging a target branch that diverged from the forge](../operations.md#unwedging-a-target-branch-that-diverged-from-the-forge)
+  preserves the local-only promotions on a branch, puts the target back onto the
+  remote's history without racing a promotion, and leaves the unpublished work
+  named for whoever republishes it. Every report of the divergence — both
+  blockers a run can end on — now names that route. **Which history is right is
+  still a person's decision, and the harness still does not make it**; what
+  changed is that the person is no longer left to invent the steps.
+- ~~No run produces a closed work item behind that divergence.~~ Fixed at the
+  source by `yoyodyne-ifd.177`, on either side of the promotion: it is settled or
+  replayed before, and blocked without closing the item after.
+- **The check-then-act window against a second machine is not closed, and cannot
+  be by a check.** The divergence above therefore remains reachable, however
+  rarely. This is the one piece of the original bullet that nothing has addressed
+  and nothing in this shape can; what the two work items above changed is what it
+  costs when it happens, not whether it can.

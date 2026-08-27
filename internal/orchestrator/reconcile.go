@@ -397,9 +397,14 @@ func (r Reconciler) blockContradictedIntegration(ctx context.Context, state runs
 //     for it any more. Something the base branch requires went unmet, and the
 //     harness does not merge past a requirement — not with administrator
 //     privileges, not by asking again. The publication is recorded as
-//     outstanding and named on the work item, for a person. The change itself is
-//     not at risk: the local target branch it was integrated into is the
-//     authoritative one and moved before any of this.
+//     outstanding and the item is handed to a person with a durable blocker
+//     rather than closed as integrated: the run that promoted the change left
+//     that closure to the forge's answer, and this is the answer. The change
+//     itself is not at risk — the local target branch it was integrated into is
+//     the authoritative one and moved before any of this — so what the blocker
+//     asks for is the publication, which is where triage's bounded re-arm of a
+//     dropped merge acts. An item some earlier run already closed keeps the
+//     closure it has; the outstanding publication is still recorded on it.
 func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State) (Reconciliation, error) {
 	published := *state.PullRequest
 	if r.Publisher == nil {
@@ -422,16 +427,17 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 	published.MergeQueued = false
 	state.PullRequest = &published
 
-	var detail string
+	if !observed.Merged {
+		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
+			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
+		return r.settleDroppedMerge(ctx, state)
+	}
+	detail := fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
 	var catchup *gitworktree.Catchup
-	switch {
-	case observed.Merged:
-		detail = fmt.Sprintf("the forge merged pull request %d into %s", published.Number, state.Integration.TargetBranch)
-		if failure := r.finishQueuedPublication(ctx, state, &published); failure != nil {
-			state.PublishFailure = failure.Error()
-			detail = failure.Error()
-			break
-		}
+	if failure := r.finishQueuedPublication(ctx, state, &published); failure != nil {
+		state.PublishFailure = failure.Error()
+		detail = failure.Error()
+	} else {
 		// The merge is confirmed on the remote, so the local branch is behind it
 		// by the commit the forge made of this run's own promotion. A publication
 		// that could not be confirmed deliberately does not reach here: that is
@@ -439,23 +445,90 @@ func (r Reconciler) settleQueuedMerge(ctx context.Context, state runstate.State)
 		// merge nothing verified would be deciding it for them.
 		settled := r.catchUp(ctx, state.Integration.TargetBranch)
 		catchup = &settled
-	default:
-		state.PublishFailure = fmt.Sprintf("the forge dropped the queued merge of pull request %d: it is %s and has no merge queued for it. A requirement of %s went unmet, and the harness does not merge past one, so the pull request needs a person",
-			published.Number, strings.ToLower(nonEmpty(observed.State, "in an unreported state")), state.Integration.TargetBranch)
-		detail = state.PublishFailure
 	}
-	// The item was closed by the run that integrated the change, so this note is
-	// the only place an operator learns how the publication of it ended. It is
+	// The run that integrated the change left the closure to this answer, so this
+	// note is where an operator learns how the publication of it ended. It is
 	// written before the run is settled: a sweep that stopped in between leaves
 	// the merge still queued durably and takes it up again, which repeats a note
 	// rather than losing one.
 	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderQueuedMergeNotes(state, detail, catchup)); err != nil {
 		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the settled merge for run %s: %w", state.RunID, err)
 	}
+	// The run that promoted this change deliberately left the closure to the
+	// forge's answer, so making it is this step's work. It is made here rather
+	// than left to completeIntegrated so the reason says what actually happened:
+	// a reviewed promotion the forge has now merged, not a run somebody
+	// interrupted. completeIntegrated then finds the item closed and adds nothing,
+	// which keeps the item's account of this merge to the one note above.
+	if err := r.closeSettledMerge(ctx, state); err != nil {
+		return reconciliationOf(state, ActionUnsettled), err
+	}
 	result, err := r.completeIntegrated(ctx, state, false)
 	result.Detail = detail
 	result.Catchup = catchup
 	return result, err
+}
+
+// closeSettledMerge closes an item whose queued merge the forge has performed.
+// An item already closed is left alone, so settling the same merge twice closes
+// it once — and so does settling one an older run closed before the closure
+// waited on the forge at all.
+func (r Reconciler) closeSettledMerge(ctx context.Context, state runstate.State) error {
+	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+	if err != nil {
+		return err
+	}
+	if itemStatus == "closed" {
+		return nil
+	}
+	if _, err := r.Tracker.Complete(ctx, state.WorkItemID, settledMergeCompletionReason(state)); err != nil {
+		return fmt.Errorf("close integrated work item for run %s: %w", state.RunID, err)
+	}
+	return nil
+}
+
+// settleDroppedMerge settles a run whose queued merge the forge gave up on. The
+// promotion stands and the item is not closed against it: nothing confirmed the
+// merge, and closing an item as integrated on a publication that never happened
+// is the early close this path exists to avoid. What it leaves instead is a
+// durable blocker naming the dropped merge, which is what puts the item in front
+// of triage — the one place a dropped merge may be re-armed, once and bounded.
+//
+// It writes the terminal record itself rather than through recordTerminalFailure
+// for the reason blockContradictedIntegration does: the merge is no longer queued
+// and that has to reach disk even for a run that finished successfully, or every
+// later sweep asks the forge the same settled question again.
+//
+// An item an earlier run already closed — one promoted before the closure waited
+// on the forge — keeps that closure. Reopening it would rewrite history the
+// operator has already read; the outstanding publication on it is what they need.
+func (r Reconciler) settleDroppedMerge(ctx context.Context, state runstate.State) (Reconciliation, error) {
+	reason := state.PublishFailure
+	itemStatus, err := r.itemStatus(ctx, state.WorkItemID)
+	if err != nil {
+		return reconciliationOf(state, ActionBlocked), err
+	}
+	if _, err := r.Tracker.RecordOutcome(ctx, state.WorkItemID, renderQueuedMergeNotes(state, reason, nil)); err != nil {
+		return reconciliationOf(state, ActionUnsettled), fmt.Errorf("record the settled merge for run %s: %w", state.RunID, err)
+	}
+	if itemStatus == "closed" {
+		result, err := r.completeIntegrated(ctx, state, false)
+		result.Detail = reason
+		return result, err
+	}
+	// The blocker reaches the item before the record is disturbed, so an
+	// interruption here leaves the merge still queued durably and takes the whole
+	// settlement up again rather than settling a run nobody was told about.
+	notes, err := r.recordBlocker(ctx, state, itemStatus, gitworktree.Observation{}, reason)
+	if err != nil {
+		return reconciliationOf(state, ActionBlocked), err
+	}
+	state.Blocker = runstate.RecordBlocker(notes)
+	settled, saveErr := r.saveTerminalFailure(state, reason)
+	result := reconciliationOf(settled, ActionBlocked)
+	result.Detail = reason
+	result.DocketProblem = r.docketStoppedRun(settled)
+	return result, saveErr
 }
 
 // finishQueuedPublication does what the run would have done had the merge
@@ -823,6 +896,14 @@ func renderQueuedMergeNotes(state runstate.State, detail string, catchup *gitwor
 			"The change is integrated into the local target branch, which is the authoritative one; only its publication is unfinished.")
 	}
 	return strings.Join(append(lines, renderCatchupNotes(catchup)...), "\n")
+}
+
+// settledMergeCompletionReason closes an item on the whole of what happened to
+// it: the promotion its own run made and reviewed, and the forge merge that run
+// asked for and could not wait out.
+func settledMergeCompletionReason(state runstate.State) string {
+	return fmt.Sprintf("Reviewed and integrated by Yoyodyne run %s, then merged by the forge: %s is at %s",
+		state.RunID, state.Integration.TargetBranch, state.Integration.TargetCommit)
 }
 
 func reconciledCompletionReason(state runstate.State) string {

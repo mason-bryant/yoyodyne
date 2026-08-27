@@ -353,14 +353,19 @@ earlier becomes a durable blocker naming the branch and worktree that were
 preserved. A run that finished with its merge queued at the forge is settled
 here too: reconcile asks the forge and, once the merge has landed, finishes the
 publication — merge commit recorded, remote branch deleted, and your local
-target branch caught up onto the merge commit the forge made. Settling a merge
+target branch caught up onto the merge commit the forge made — and closes the
+work item, which the run deliberately left open because a queued merge is a
+publication nothing has confirmed. Settling a merge
 is complete on its own that way rather than leaning on the sweep below, so a
 checkout is never left behind by which command somebody happened to run.
 
 Two settle-path outcomes leave a publication outstanding for a person, each
 with its own line on the work item. A merge the forge **dropped** is the
 first: something the base branch required went unmet, the harness does not
-merge past a requirement, and nothing about that publication is confirmed. A
+merge past a requirement, and nothing about that publication is confirmed — so
+the item is handed back to you with a blocker rather than closed as integrated,
+which is also what puts it where a bounded re-arm of the dropped merge can be
+decided. A
 merge that **landed but could not be confirmed** is the second: the forge
 performed it, and the steps that confirm it — verifying the remote carries the
 promotion, recording the merge commit, retiring the consumed branch — failed,
@@ -382,7 +387,9 @@ fast-forward the settle paths make, for a target left behind by something no run
 is going to finish, or a catch-up that was held at the time — and every settled
 run's leftover branch whose work the target already carries is deleted. Both
 refuse on evidence rather than on a record: a remote that has diverged from
-your local branch is reported for you to decide rather than reconciled, a
+your local branch is reported for you to decide rather than reconciled — the
+steps for deciding it are
+[here](#unwedging-a-target-branch-that-diverged-from-the-forge) — a
 branch carrying work nothing promoted is
 kept, and a branch a checkout still holds is left alone. Catching a branch up
 takes that branch's promotion lease, so it never races a run promoting into it.
@@ -396,6 +403,105 @@ provider the harness stopped on time, one paused for an [unresolved
 directive](conversation.md#directives-and-the-work-they-pause), or one parked on an
 [operator pause](#pausing-everything-and-resuming-it) — is left exactly as it is
 for that command to pick up.
+
+## Unwedging a target branch that diverged from the forge
+
+Every catch-up and every promotion here is fast-forward-or-nothing, so a local
+target branch and the remote's having both moved is the one repository state the
+harness will not decide. You see it as the same line on every sweep:
+
+```
+main not caught up: main on origin is at 9f1c2ab, which does not contain the local main at 4d7e805; only a person can say which history is right
+```
+
+and until it is resolved every run that reaches integration for that target
+stops with both branch positions named rather than promoting into it. That
+refusal is deliberate — the alternative is a promotion nobody can publish and an
+item closed as integrated against it — but it does mean the branch does no more
+work until you say which history is right. Nothing sweeps it away in the
+meantime, and no later `yoyo reconcile` resolves it.
+
+Runs that predate the fix in `yoyodyne-ifd.177` could produce this by losing a
+cross-machine race after promoting, and a repository still standing in that state
+is what this section is for. A run today cannot produce it that way: it settles
+where the remote target stands before promoting, and stops without closing
+anything if the remote moves afterwards. Reaching it now takes somebody pushing
+to the target directly, or the window a queued merge leaves open. The recovery is
+the same either way, and it is yours to run.
+
+**Which side is which.** The remote is the shared truth: the forge has it, and so
+does every other checkout of the project. The commits your local branch has that
+the remote does not are promotions this repository made and never published —
+reviewed and integrated here, and nowhere else. Keeping the remote's history and
+preserving those commits on a branch of their own is the only resolution that
+discards nothing, and it is the one below. Do not resolve it the other way by
+force-pushing your local branch over the remote: that throws away whatever the
+remote gained, which is by definition work this repository has never seen.
+
+1. **Stop the harness spending, and check nothing is mid-promotion.**
+
+   ```sh
+   ./bin/yoyo pause
+   ./bin/yoyo status
+   ```
+
+   `pause` keeps new attempts from starting. `status` is what tells you no run is
+   in the `integrating` phase: a promotion already under way holds that target's
+   promotion lease, and moving the branch underneath it is exactly the race the
+   lease exists to prevent. Wait for anything integrating to finish.
+
+2. **See what each side has that the other does not**, so you are deciding about
+   named commits rather than two hashes:
+
+   ```sh
+   git -C <repository> fetch origin main
+   git -C <repository> log --oneline origin/main..main   # promotions the remote never received
+   git -C <repository> log --oneline main..origin/main   # what the remote gained meanwhile
+   ```
+
+3. **Preserve the local-only commits on their own branch**, so nothing you are
+   about to move away from becomes unreachable. Naming it after the commit makes
+   the step safe to repeat:
+
+   ```sh
+   git -C <repository> branch diverged/main-$(git -C <repository> rev-parse --short main) main
+   ```
+
+4. **Put the target back onto the shared truth.** When the primary checkout is not
+   on the branch, move the ref as a compare-and-swap on the commit you read in
+   step 2, so a branch that moved since loses the race rather than being
+   overwritten:
+
+   ```sh
+   git -C <repository> update-ref refs/heads/main <remote-commit> <local-commit>
+   ```
+
+   When the checkout is on the branch, confirm there is nothing uncommitted first,
+   because the move discards changes to tracked files:
+
+   ```sh
+   git -C <repository> status --porcelain    # empty, or only your declared exports
+   git -C <repository> reset --hard origin/main
+   ```
+
+5. **Let the harness go again, and confirm the wedge is gone.**
+
+   ```sh
+   ./bin/yoyo resume
+   ./bin/yoyo reconcile
+   ```
+
+   The held catch-up should be absent from the sweep, and runs for that target
+   promote again. That is the state this recovery is for: resolvable, and back
+   under the harness.
+
+6. **Decide what happens to the preserved branch.** Its commits carry work a
+   reviewer approved and this repository integrated, which the shared remote never
+   received; the work items behind them carry a `Publication outstanding` line
+   naming the pull request that was never merged. Open a pull request from the
+   branch yourself, or file work to redo it, and delete the branch once you have.
+   Nothing sweeps it for you: it is preserved work, and the convergence sweep only
+   ever removes a branch whose work the target provably carries.
 
 ## What became of the runs, and why one failed
 

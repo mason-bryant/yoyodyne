@@ -818,6 +818,7 @@ func reportPullRequest(writer io.Writer, outcome orchestrator.Outcome) {
 		fmt.Fprintf(writer, "pull request #%d (%s): %s\n", outcome.PullRequest.Number, state, outcome.PullRequest.URL)
 		if outcome.PullRequest.MergeQueued {
 			fmt.Fprintln(writer, "the forge merges it once the required checks pass; `yoyo reconcile` settles the run when it does")
+			fmt.Fprintln(writer, "the work item stays open until that merge is confirmed, and is handed back with a blocker if the forge drops it")
 		}
 	}
 	if outcome.PublishSkipped != "" {

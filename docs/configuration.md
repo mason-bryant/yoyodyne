@@ -1740,13 +1740,18 @@ With both on, a run works like this:
    lands minutes later, when your checks pass. The run reports the pull request
    as queued and finishes: your change is already in the local target branch,
    which is the authoritative one, and the run branch stays on the remote
-   because that is what the forge still has to merge. `yoyo reconcile` settles
-   it afterwards — it asks the forge, and either finishes the publication (merge
+   because that is what the forge still has to merge. The work item is the one
+   thing the run does **not** settle — it stays open, with the queued merge named
+   on it, because closing it as integrated would record a publication that has
+   not happened and may not. `yoyo reconcile` settles both afterwards: it asks
+   the forge, and either finishes the publication and closes the item (merge
    commit recorded, remote branch deleted, your local target branch caught up
    onto the forge's merge commit) or, if the forge dropped the queued merge
-   because something it required went unmet, reports an outstanding publication
-   on the work item for you. It never merges anything itself: a requirement that
-   stopped the forge is yours to satisfy.
+   because something it required went unmet, records an outstanding publication
+   and hands the item back to you with a blocker rather than closing it. It never
+   merges anything itself: a requirement that stopped the forge is yours to
+   satisfy, and re-arming a dropped merge is a bounded triage decision rather
+   than something a sweep does.
 
 `gh` is invoked by the harness and never by a developer or reviewer: no role is
 given a credential, a tool, or a request to push or merge. For the reviewer that

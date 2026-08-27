@@ -3019,8 +3019,9 @@ func (a *activeRun) integrate(ctx context.Context) error {
 	return nil
 }
 
-// finish records the outcome, closes an integrated item, makes the run durably
-// terminal, and only then removes what the run created.
+// finish records the outcome, closes an integrated item whose publication is
+// settled, makes the run durably terminal, and only then removes what the run
+// created.
 func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	p := a.pipeline
 	// The tracker is updated only once the work is durably where it belongs:
@@ -3029,14 +3030,23 @@ func (a *activeRun) finish(ctx context.Context) (Outcome, error) {
 	if _, err := p.Tracker.RecordOutcome(ctx, a.state.WorkItemID, renderOutcomeNotes(a.outcome)); err != nil {
 		return a.fail(fmt.Errorf("record successful run outcome: %w", err), runstate.StatusFailed)
 	}
-	if a.outcome.Integration != nil {
+	// An item closes as integrated once the promotion is where it is going to
+	// stay. A merge the forge only queued is not that yet: it lands minutes
+	// later, or the forge drops it because something the base branch requires
+	// went unmet, and closing here would record integrated for a publication
+	// that may never happen. So the closure waits for the forge's answer, which
+	// is the same step that already settles the queue — and until it arrives the
+	// item stays claimed with the queued merge named on it, rather than closed
+	// against a merge nobody has confirmed.
+	if a.outcome.Integration != nil && !a.mergeQueued() {
 		if _, err := p.Tracker.Complete(ctx, a.state.WorkItemID, completionReason(a.outcome)); err != nil {
 			return a.fail(fmt.Errorf("close integrated work item: %w", err), runstate.StatusFailed)
 		}
 		a.outcome.WorkItemClosed = true
 	}
-	// The item is priced once it is closed rather than before, so what the
-	// tracker carries beside a finished item is the price of finishing it.
+	// The item is priced when the run that spent it ends, whether or not the
+	// closure waits: a queued merge defers the closure to a later sweep, and that
+	// sweep does not re-read what this run cost.
 	a.recordPrice()
 
 	// The run becomes durably terminal before anything is destroyed. Cleanup is
@@ -4302,9 +4312,19 @@ func renderDivergedTargetNotes(outcome Outcome, catchup gitworktree.Catchup, rem
 		fmt.Sprintf("Local %s: %s", catchup.TargetBranch, nonEmpty(catchup.LocalCommit, "an unresolved commit")),
 		fmt.Sprintf("%s %s: %s", remote, catchup.TargetBranch, nonEmpty(catchup.RemoteCommit, "no such branch")),
 		"The checks passed and the reviewer approved; nothing here says the change is wrong. The branch and worktree are preserved, and reconciling the two target branches is what this needs before the change can be promoted.",
+		divergedTargetRecovery,
 	}
 	return strings.Join(append(lines, renderReviewNotes(outcome)...), "\n")
 }
+
+// divergedTargetRecovery is the route out of a target branch that has gone a
+// different way from the remote's, named wherever that divergence is reported. It
+// is the one repository state the harness will not decide, so a report of it that
+// says only that a person is needed leaves them to invent the steps: which side
+// is the shared truth, where the unpublished promotions go so nothing is lost,
+// and how the branch is moved without racing a promotion. Those steps are written
+// down, and every report of the divergence says where.
+const divergedTargetRecovery = "Recovery: follow \"Unwedging a target branch that diverged from the forge\" in docs/operations.md. It preserves the local-only promotions on their own branch, puts the target back onto the remote's history, and leaves that branch for you to republish; the harness will not do it unasked, because which history is right is yours to say."
 
 // renderPromotedDivergenceNotes describes the same divergence found one step too
 // late: the local target branch already carries the promotion. It says that
@@ -4325,6 +4345,7 @@ func renderPromotedDivergenceNotes(outcome Outcome, integration gitworktree.Inte
 		"Worktree: " + outcome.WorktreePath,
 		fmt.Sprintf("Promoted commit: %s, onto local %s at %s", integration.SourceCommit, integration.TargetBranch, integration.TargetCommit),
 		fmt.Sprintf("%s %s: %s", remote, integration.TargetBranch, nonEmpty(catchup.RemoteCommit, "could not be resolved")),
+		divergedTargetRecovery,
 	}
 	if outcome.PullRequest != nil {
 		lines = append(lines, fmt.Sprintf("Pull request left unmerged: #%d %s", outcome.PullRequest.Number, outcome.PullRequest.URL))
@@ -4500,9 +4521,9 @@ func renderOutcomeNotes(outcome Outcome) string {
 	if outcome.Integration != nil {
 		headline = "Yoyodyne run passed checks, was approved by an independent reviewer, and was integrated automatically."
 	}
-	// These notes are recorded before cleanup, because the item is closed first
-	// and only a closed item's artifacts are removed. Cleanup can still fail, so
-	// say it is scheduled rather than predicting that it happened.
+	// These notes are recorded before cleanup, because the promotion is settled
+	// first and only a promoted change's artifacts are removed. Cleanup can still
+	// fail, so say it is scheduled rather than predicting that it happened.
 	worktree := "Worktree: " + outcome.WorktreePath
 	if outcome.Integration != nil {
 		worktree = "Worktree (cleanup pending): " + outcome.WorktreePath

@@ -429,10 +429,12 @@ when it is off and nothing is holding the pull request back the harness just
 merges, so only a repository that has something to wait for and no way to wait
 for it is reported as unpublishable, naming the setting. Administrator override
 is never used to get past a protection rule. A run whose merge is queued that
-way reports the pull request as queued and finishes;
-[`yoyo reconcile`](operations.md#recovering-interrupted-runs) settles it once the forge has
-merged, or reports an outstanding publication if the forge dropped the queued
-merge. A repository with no configured remote publishes nothing and behaves
+way reports the pull request as queued and finishes, leaving the work item open
+because nothing has yet merged the change anywhere but locally;
+[`yoyo reconcile`](operations.md#recovering-interrupted-runs) settles it once the
+forge has merged — closing the item then — or, if the forge dropped the queued
+merge, records an outstanding publication and hands the item back with a
+blocker. A repository with no configured remote publishes nothing and behaves
 exactly as a purely local project does.
 
 Merging belongs to `approvals.integration`, so the two settings compose rather
