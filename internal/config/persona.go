@@ -91,6 +91,38 @@ func (l directoryPersonaLoader) load(personaPath string) (string, string, error)
 	return string(data), resolved, nil
 }
 
+// firstPersonaLoader reads each persona from the first directory that has it,
+// for the one configuration shape whose personas have two possible homes: a
+// config.yaml outside a .yoyodyne directory, which keeps them beside itself and
+// kept them in a .yoyodyne sibling before that was so.
+//
+// It is a fallback rather than a search: what a directory refuses -- a persona
+// that traverses out of it, one that is not a Markdown file, one too large --
+// it refuses in every directory, so nothing here loosens what one of them will
+// read. The failure reported is the first loader's, because the first directory
+// is where the persona belongs and naming the last one looked in would send an
+// operator to the wrong place.
+type firstPersonaLoader struct {
+	loaders []personaLoader
+}
+
+func (l firstPersonaLoader) load(personaPath string) (string, string, error) {
+	var first error
+	for _, loader := range l.loaders {
+		text, source, err := loader.load(personaPath)
+		if err == nil {
+			return text, source, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	if first == nil {
+		return "", "", fmt.Errorf("persona %q cannot be resolved: no persona directory was available", personaPath)
+	}
+	return "", "", first
+}
+
 // unavailablePersonaLoader stands in for a layer with no persona directory, so
 // a configuration decoded from a stream reports why its persona cannot be read
 // instead of resolving one relative to the process working directory.

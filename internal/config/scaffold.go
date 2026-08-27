@@ -334,7 +334,8 @@ approvals:
 # Every agent is stated in full: nothing about them is inherited. A model
 # selector that names a family, such as "opus", floats to that family's current
 # default; an exact identifier such as claude-opus-5 pins a version. Persona
-# paths are relative to this .yoyodyne directory and must be Markdown inside it.
+# paths are relative to the directory this file is in and must be Markdown
+# inside it.
 # Each agent names the account it runs under, from the mapping above. Delete an
 # agent to remove it, edit one to change it.
 agents:

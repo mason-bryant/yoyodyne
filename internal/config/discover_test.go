@@ -78,8 +78,9 @@ func TestDiscoverFallsBackToTheLegacyFile(t *testing.T) {
 	if got != path {
 		t.Fatalf("Discover() = %q, want %q", got, path)
 	}
-	if want := project; personaDirectory(got) != filepath.Join(want, DirectoryName) {
-		t.Fatalf("persona directory = %q", personaDirectory(got))
+	directories := personaDirectories(got)
+	if want := filepath.Join(project, DirectoryName); len(directories) != 1 || directories[0] != want {
+		t.Fatalf("persona directories = %v, want only %q", directories, want)
 	}
 }
 
@@ -200,6 +201,63 @@ func TestDiscoverFindsOneConfigurationFromEveryWorktreeOfARepository(t *testing.
 	}
 }
 
+// A submodule carries the same kind of `.git` file a linked worktree does, and
+// is the opposite case: a checkout of its own, with its own history and its own
+// checks, so it is keyed as itself. Following its pointer the way a worktree's
+// is followed would key it by `<super>/.git/modules`, which is not a checkout at
+// all and which every submodule of one superproject would share -- so a
+// configuration written for one would be discovered from the next.
+func TestASubmoduleIsAConfigurableCheckoutOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	superproject := gitRepository(t)
+	var submodules []string
+	for _, name := range []string{"first", "second"} {
+		submodule := filepath.Join(superproject, name)
+		// What `git submodule add` leaves behind: a `.git` file pointing into the
+		// superproject's modules directory, and -- unlike a linked worktree -- no
+		// `commondir` beside what it points at.
+		administrative := filepath.Join(superproject, ".git", "modules", name)
+		if err := os.MkdirAll(administrative, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		if err := os.MkdirAll(submodule, 0o700); err != nil {
+			t.Fatalf("MkdirAll() error = %v", err)
+		}
+		pointer := "gitdir: " + filepath.Join("..", ".git", "modules", name) + "\n"
+		if err := os.WriteFile(filepath.Join(submodule, ".git"), []byte(pointer), 0o600); err != nil {
+			t.Fatalf("WriteFile() error = %v", err)
+		}
+		submodules = append(submodules, submodule)
+
+		root, err := RepositoryRoot(submodule)
+		if err != nil {
+			t.Fatalf("RepositoryRoot(%q) error = %v", submodule, err)
+		}
+		if root != submodule {
+			t.Errorf("RepositoryRoot(%q) = %q, want the submodule's own checkout", submodule, root)
+		}
+	}
+	if ExternalDirectory(submodules[0]) == ExternalDirectory(submodules[1]) {
+		t.Fatalf("two submodules of one superproject share the directory %q", ExternalDirectory(submodules[0]))
+	}
+
+	// End to end, which is what the mis-resolution would actually have cost: a
+	// configuration written for one submodule is not discovered from the other.
+	host := blank(t)
+	want := writeExternalProject(t, host, submodules[0], minimalProjectConfig)
+	got, err := discoverOn(host, submodules[0])
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if got != want {
+		t.Errorf("Discover() = %q, want %q", got, want)
+	}
+	if _, err := discoverOn(host, submodules[1]); err == nil {
+		t.Error("the second submodule was configured by the first submodule's configuration")
+	}
+}
+
 // Two checkouts of the same project on one machine are two projects to
 // configure, so the key is the checkout rather than its name.
 func TestExternalConfigurationsAreKeyedByTheCheckout(t *testing.T) {
@@ -308,6 +366,15 @@ func TestNotFoundNamesNoExternalPathOutsideARepository(t *testing.T) {
 	}
 }
 
+// developerPersonaOverride replaces one inherited persona with a file of the
+// project's own, so a test can say which directory that file was read from.
+const developerPersonaOverride = minimalProjectConfig + `agents:
+  developer:
+    persona:
+      version: project-1
+      path: personas/developer.md
+`
+
 // The personas of a configuration kept outside a repository are beside it, which
 // is what makes the directory `init --external` writes self-contained.
 func TestPersonasResolveBesideAnExternalConfiguration(t *testing.T) {
@@ -315,19 +382,9 @@ func TestPersonasResolveBesideAnExternalConfiguration(t *testing.T) {
 
 	repository := gitRepository(t)
 	host := blank(t)
-	path := writeExternalProject(t, host, repository, minimalProjectConfig+`agents:
-  developer:
-    persona:
-      version: project-1
-      path: personas/developer.md
-`)
-	if err := os.MkdirAll(filepath.Join(filepath.Dir(path), "personas"), 0o700); err != nil {
-		t.Fatalf("MkdirAll() error = %v", err)
-	}
+	path := writeExternalProject(t, host, repository, developerPersonaOverride)
 	body := "# Developer\n\nKept on this machine.\n"
-	if err := os.WriteFile(filepath.Join(filepath.Dir(path), "personas", "developer.md"), []byte(body), 0o600); err != nil {
-		t.Fatalf("WriteFile() error = %v", err)
-	}
+	writePersona(t, filepath.Dir(path), body)
 
 	loaded, err := Load(path)
 	if err != nil {
@@ -335,6 +392,54 @@ func TestPersonasResolveBesideAnExternalConfiguration(t *testing.T) {
 	}
 	if got := loaded.Agents["developer"].Persona.Text; got != body {
 		t.Errorf("developer persona = %q, want the file beside the configuration", got)
+	}
+}
+
+// The other half of that rule, and the reason it is a fallback rather than a
+// move: a configuration somebody placed by hand and named with --config kept its
+// personas in a .yoyodyne directory beside it, and goes on reading them. Where
+// both exist, the one beside the file wins, because that is the directory this
+// layout is written and moved as one.
+func TestPersonasStillResolveFromTheSiblingDirectoryOfAPlacedConfiguration(t *testing.T) {
+	t.Parallel()
+
+	placed := t.TempDir()
+	path := filepath.Join(placed, FileName)
+	if err := os.WriteFile(path, []byte(developerPersonaOverride), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	sibling := "# Developer\n\nWhere it was before.\n"
+	writePersona(t, filepath.Join(placed, DirectoryName), sibling)
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := loaded.Agents["developer"].Persona.Text; got != sibling {
+		t.Errorf("developer persona = %q, want the one in the %s directory beside it", got, DirectoryName)
+	}
+
+	beside := "# Developer\n\nBeside the configuration.\n"
+	writePersona(t, placed, beside)
+	loaded, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := loaded.Agents["developer"].Persona.Text; got != beside {
+		t.Errorf("developer persona = %q, want the file beside the configuration to win", got)
+	}
+}
+
+// writePersona puts the developer persona the override above names under one
+// directory.
+func writePersona(t *testing.T, directory, body string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Join(directory, "personas"), 0o700); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "personas", "developer.md"), []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 }
 

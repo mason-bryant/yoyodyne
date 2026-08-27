@@ -317,7 +317,10 @@ func externalKeyName(name string) string {
 // A linked worktree is resolved to the repository it was added from rather than
 // treated as a repository of its own, because it is the same project: a run's
 // worktree, and a check or a hook that shells out to `yoyo` from inside one,
-// must find the configuration the checkout it came from is configured by.
+// must find the configuration the checkout it came from is configured by. A
+// submodule is the other way about — a checkout of its own, configured on its
+// own — and every other `.git` file is read as one of those rather than guessed
+// at.
 func RepositoryRoot(startDirectory string) (string, error) {
 	start, err := filepath.Abs(startDirectory)
 	if err != nil {
@@ -335,10 +338,11 @@ func RepositoryRoot(startDirectory string) (string, error) {
 				return "", err
 			}
 			if common == "" {
-				// A pointer this does not understand is left as the worktree it was
-				// found in rather than refused: an unreadable marker is not a reason
-				// for every command to stop, and the worktree is still a directory a
-				// configuration can be keyed by.
+				// Everything else a `.git` file marks is the root of its own
+				// checkout: a submodule, a clone made with --separate-git-dir, and a
+				// pointer this does not understand. Each is answered as the directory
+				// the file was found in, which is the checkout somebody is standing
+				// in and the one they would configure.
 				return directory, nil
 			}
 			return filepath.Dir(common), nil
@@ -354,9 +358,21 @@ func RepositoryRoot(startDirectory string) (string, error) {
 }
 
 // commonGitDirectory reads the repository directory a linked worktree's `.git`
-// file points at. Git writes `gitdir: <path>` there, naming the worktree's own
-// administrative directory, and puts the path of the repository they all share
-// in a `commondir` file beside it. Anything else is answered with nothing.
+// file points at, and answers with nothing for a `.git` file that is not a
+// linked worktree's.
+//
+// The pointer alone does not say which it is. Git writes `gitdir: <path>` in the
+// `.git` file of a linked worktree, of a submodule, and of a clone made with
+// --separate-git-dir. What marks a linked worktree is the `commondir` file
+// beside the directory it points at, naming the repository every worktree of it
+// shares, so that is what is followed and nothing else is.
+//
+// A submodule has no such file, and guessing from its pointer costs more than
+// not answering: `gitdir: ../.git/modules/sub` would resolve to
+// `/super/.git/modules`, which is not a checkout at all and which every
+// submodule of that superproject would resolve to alike. A submodule is a
+// checkout in its own right -- its own history, its own remote, its own
+// checks -- so it is keyed as the directory it is.
 func commonGitDirectory(marker string) (string, error) {
 	content, err := os.ReadFile(marker)
 	if err != nil {
@@ -366,26 +382,26 @@ func commonGitDirectory(marker string) (string, error) {
 	if !found {
 		return "", nil
 	}
-	worktree := strings.TrimSpace(pointer)
-	if worktree == "" {
+	administrative := strings.TrimSpace(pointer)
+	if administrative == "" {
 		return "", nil
 	}
-	if !filepath.IsAbs(worktree) {
-		worktree = filepath.Join(filepath.Dir(marker), worktree)
+	if !filepath.IsAbs(administrative) {
+		administrative = filepath.Join(filepath.Dir(marker), administrative)
 	}
-	common, err := os.ReadFile(filepath.Join(worktree, "commondir"))
+	common, err := os.ReadFile(filepath.Join(administrative, "commondir"))
 	if errors.Is(err, os.ErrNotExist) {
-		return filepath.Clean(worktree), nil
+		return "", nil
 	}
 	if err != nil {
 		return "", fmt.Errorf("read the repository directory of the worktree at %q: %w", filepath.Dir(marker), err)
 	}
 	shared := strings.TrimSpace(string(common))
 	if shared == "" {
-		return filepath.Clean(worktree), nil
+		return "", nil
 	}
 	if !filepath.IsAbs(shared) {
-		shared = filepath.Join(worktree, shared)
+		shared = filepath.Join(administrative, shared)
 	}
 	return filepath.Clean(shared), nil
 }
@@ -408,15 +424,40 @@ func ProjectDirectory(configPath string) string {
 	return directory
 }
 
-// personaDirectory is where a configuration file's project personas live. A
-// configuration inside .yoyodyne uses that directory, and so does one in a
-// directory of its own outside the repository: in both, the personas are beside
-// the file. A legacy configuration uses the .yoyodyne directory of the same
-// project, which is where migrating it would put them.
-func personaDirectory(configPath string) string {
+// personaDirectories are the directories a configuration file's project personas
+// may be in, in the order they are looked for.
+//
+// A configuration inside .yoyodyne uses that directory, and a legacy
+// .yoyodyne.yaml uses the .yoyodyne directory of the same project, which is
+// where migrating it would put them. Both are one place.
+//
+// A config.yaml somewhere else — the layout `init --external` writes — keeps its
+// personas beside it, which is what makes that directory self-contained and
+// movable. The .yoyodyne sibling is still looked in after it, and only after it:
+// somebody who placed a configuration by hand before this existed and named it
+// with --config kept their personas there, and a rule that stopped reading them
+// would break a working installation to tidy up a layout.
+func personaDirectories(configPath string) []string {
 	directory := filepath.Dir(configPath)
-	if filepath.Base(directory) == DirectoryName || filepath.Base(configPath) == FileName {
-		return directory
+	if filepath.Base(directory) == DirectoryName {
+		return []string{directory}
 	}
-	return filepath.Join(directory, DirectoryName)
+	if filepath.Base(configPath) == FileName {
+		return []string{directory, filepath.Join(directory, DirectoryName)}
+	}
+	return []string{filepath.Join(directory, DirectoryName)}
+}
+
+// personaLoaderFor reads the personas of one configuration file, from wherever
+// that file keeps them.
+func personaLoaderFor(configPath string) personaLoader {
+	directories := personaDirectories(configPath)
+	if len(directories) == 1 {
+		return directoryPersonaLoader{root: directories[0]}
+	}
+	loaders := make([]personaLoader, 0, len(directories))
+	for _, directory := range directories {
+		loaders = append(loaders, directoryPersonaLoader{root: directory})
+	}
+	return firstPersonaLoader{loaders: loaders}
 }

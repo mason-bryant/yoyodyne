@@ -83,7 +83,7 @@ func LoadResolved(path string) (Resolved, error) {
 	if err != nil {
 		return Resolved{}, err
 	}
-	resolved, err := resolveDocument(document, absolute, directoryPersonaLoader{root: personaDirectory(absolute)})
+	resolved, err := resolveDocument(document, absolute, personaLoaderFor(absolute))
 	if err != nil {
 		return Resolved{}, err
 	}

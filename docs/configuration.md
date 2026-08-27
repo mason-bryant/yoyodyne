@@ -3002,9 +3002,17 @@ Persona rules:
 
 - `version` is a free-form revision label recorded in the effective
   configuration, so a change of guidance is visible in diagnostics.
-- `path` is relative to the project `.yoyodyne` directory, and must name a
-  Markdown file inside it. Absolute paths, `..` traversal, and symlinks that
-  escape the directory are rejected.
+- `path` is relative to the directory the configuration file is in, and must name
+  a Markdown file inside it. Absolute paths, `..` traversal, and symlinks that
+  escape the directory are rejected. For the ordinary project that is the
+  `.yoyodyne` directory, and for a configuration
+  [kept outside the repository](#keeping-the-configuration-outside-the-repository)
+  it is the directory `init --external` wrote, which is what lets that directory
+  be moved as one. A `.yoyodyne.yaml` uses the `.yoyodyne` directory beside it,
+  which is where migrating it would put the personas; and a `config.yaml` placed
+  by hand somewhere of its own falls back to a `.yoyodyne` directory beside it
+  when the persona is not there, so an arrangement that predates this goes on
+  loading.
 - A persona is limited to 32 KiB. It is role guidance, not a document to paste
   into every prompt.
 
