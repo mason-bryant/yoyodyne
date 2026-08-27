@@ -543,6 +543,11 @@ func (p *streamParser) parseResult(envelope streamEnvelope) error {
 	p.result.FinalText = envelope.Result
 	p.result.IsError = envelope.IsError
 	p.result.CostUSD = envelope.TotalCostUSD
+	// The terminal is where Claude Code prices the invocation, so reaching one is
+	// exactly what makes the cost known. An invocation that never reaches one --
+	// a killed process, a connection that went away mid-reply -- leaves this
+	// false, and what it spent is recorded as unknown rather than as nothing.
+	p.result.CostReported = true
 	p.result.Usage = append([]byte(nil), envelope.Usage...)
 	p.result.StopReason = envelope.TerminalReason
 	if p.result.StopReason == "" {

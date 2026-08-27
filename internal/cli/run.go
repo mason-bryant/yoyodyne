@@ -124,7 +124,13 @@ type components struct {
 	// limit is exhausted for an account and read as a fact about one product's
 	// line stopping: the processes that meet one — a conversation, a review —
 	// have no run between them to write it on.
-	usageLimits  *runstate.UsageLimitStore
+	usageLimits *runstate.UsageLimitStore
+	// spend is the cost log every provider invocation this process makes lands
+	// in. It is built under the product beside the usage limits, and for the
+	// mirror-image reason: that log says when the harness could not spend, and
+	// this one says what it did spend, one line per invocation, whether the
+	// invocation was a run's, a review's, a conversation's, or an exchange's.
+	spend        *runstate.SpendStore
 	worktrees    *gitworktree.Manager
 	redactValues []string
 }
@@ -203,6 +209,10 @@ func buildComponents(configPath string) (components, error) {
 	if err != nil {
 		return components{}, err
 	}
+	spendLog, err := runstate.NewSpendStore(stateRoot, cfg.Product.ID)
+	if err != nil {
+		return components{}, err
+	}
 	worktrees, err := gitworktree.New(gitworktree.Options{
 		Runner:                processRunner,
 		RepositoryRoot:        repository,
@@ -229,6 +239,7 @@ func buildComponents(configPath string) (components, error) {
 		intake:        intake,
 		watch:         watch,
 		usageLimits:   usageLimits,
+		spend:         spendLog,
 		worktrees:     worktrees,
 		redactValues:  execution.SensitiveEnvironmentValues(os.Environ()),
 	}, nil
@@ -277,6 +288,9 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 			Backend: claudecode.Backend{Runner: processRunner},
 			Model:   agentModel(cfg, domain.RoleReviewer),
 			Persona: agentForRole(cfg, domain.RoleReviewer).Persona.Text,
+			// The reviewer's invocation is its own spend and lands in the same log
+			// the developer's does, charged to the review rather than to the change.
+			Spend: parts.spend,
 		},
 		// The publisher is the harness's own forge access, wired here so that no
 		// agent is ever asked to invoke it and nothing about it reaches a prompt
@@ -323,6 +337,11 @@ func pipelineFrom(parts components) orchestrator.Pipeline {
 		// the item it was for is priced across every run ever made for it, and the
 		// price is put where the tracker carries it.
 		Prices: ledgerFrom(parts),
+		// Where every provider invocation this run makes says what it spent, as it
+		// spends it. It is the same log the conversations and the exchanges write
+		// to, because what the operator asked to see is what the harness spends on
+		// their behalf rather than what any one of its parts does.
+		Spend: parts.spend,
 		// Where a run that ends on a durable blocker is put in front of the
 		// development manager. It is wired here rather than delivered into a
 		// prompt for the same reason the directives are: what has stopped moving

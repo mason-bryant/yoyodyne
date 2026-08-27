@@ -25,6 +25,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/exchange"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
+	"github.com/mason-bryant/yoyodyne/internal/spend"
 )
 
 // exchangeAnswerTimeout bounds one answering invocation. It is shorter than a
@@ -163,7 +164,18 @@ type exchangeVoice struct {
 	// met here would stop an exchange and leave no trace anywhere — and an
 	// exhausted limit is hours in which nothing happens anywhere, which is exactly
 	// what somebody not watching this conversation needs to be told.
-	usageLimits  *runstate.UsageLimitStore
+	usageLimits *runstate.UsageLimitStore
+	// spend is where what a round costs is written down. An answering round is a
+	// provider invocation with neither a run nor a conversation behind it, so
+	// without this it would be the one invocation the harness makes whose cost
+	// nothing durable records at all.
+	//
+	// It is the log's interface rather than the store itself, as it is everywhere
+	// else the harness wires one. A store built and found wanting is a build
+	// failure rather than a nil handed on, so the type is the interface for
+	// uniformity rather than for safety: one hazard guarded at three sites and not
+	// the fourth is a hazard nobody can reason about.
+	spend        spend.Log
 	productID    domain.ProductID
 	redactValues []string
 }
@@ -179,7 +191,23 @@ func (v exchangeVoice) Answer(ctx context.Context, question exchange.Question) (
 			question.Role, name, agent.Backend)
 	}
 	prompt := execution.NewRedactor(v.redactValues...).Redact(renderQuestion(question))
-	result, err := v.provider.Run(ctx, backend.RunRequest{
+	// The round goes through the meter, so what it spends is one line in the cost
+	// log beside every other provider invocation the harness makes, charged to
+	// the exchange because that is the only record it belongs to.
+	provider := spend.Metered{
+		Provider: v.provider,
+		Log:      v.spend,
+		Attribution: spend.Attribution{
+			ProductID:      v.productID,
+			Agent:          name,
+			Phase:          runstate.SpendPhaseExchange,
+			AccountAlias:   v.config.AccountAlias(),
+			ConfigRevision: v.config.Revision(),
+			Backend:        agent.Backend,
+			ExchangeID:     question.ExchangeID,
+		},
+	}
+	result, err := provider.Run(ctx, backend.RunRequest{
 		// The exchange is the record this invocation belongs to, so it is what the
 		// provider is told the invocation is: an answering round has no run and no
 		// conversation of its own.
@@ -297,6 +325,7 @@ func conversationExchanges(parts components, role domain.AgentRole, provider cha
 			provider:     provider,
 			repository:   parts.repository,
 			usageLimits:  parts.usageLimits,
+			spend:        parts.spend,
 			productID:    parts.config.Product.ID,
 			redactValues: parts.redactValues,
 		},

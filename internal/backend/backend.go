@@ -189,10 +189,17 @@ type RunResult struct {
 	FinalText     string
 	IsError       bool
 	CostUSD       float64
-	Usage         []byte
-	Process       execution.ProcessResult
-	LastEvent     uint64
-	StopReason    string
+	// CostReported says the provider actually told the harness what this
+	// invocation cost. It is separate from CostUSD because a float has no way to
+	// say it was never set: an invocation the provider ended without pricing and
+	// one it priced at nothing are the same zero, and they are opposite facts to
+	// anything adding costs up. A plugin sets it exactly when the provider named
+	// an amount, whatever the amount was and however the invocation ended.
+	CostReported bool
+	Usage        []byte
+	Process      execution.ProcessResult
+	LastEvent    uint64
+	StopReason   string
 	// UsageLimit is set when the provider reported an exhausted usage limit
 	// during this invocation. It is separate from IsError because the two call
 	// for opposite responses: a failure ends the run, an exhausted limit asks

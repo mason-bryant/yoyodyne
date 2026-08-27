@@ -185,6 +185,33 @@ are no affected runs to name: not because its invocations announced themselves,
 but because none of them was ever written into a run's log at all. The sweep in
 `internal/execution/terminal_test.go` is what keeps that set of writers closed.
 
+### Every provider spend, one line
+
+Beside all of that there is an append-only cost log, one line per provider
+invocation, written the moment the provider says what that invocation cost. It
+lives at `<state root>/products/<product id>/spend.jsonl`, and every process the
+harness runs appends to it: the developer's first attempt and every repair after
+it, every review including a branch review, every management-conversation turn,
+and every round of an inter-role exchange.
+
+Each line carries the role and the configured agent that spent it, the phase, the
+amount and its classification, the account alias and the configuration revision
+in force, the run, conversation, or exchange the invocation belonged to — and the
+work item, where the invocation was made for one — the backend, the requested and
+resolved models, and when it happened.
+
+Two things it does deliberately. An invocation the provider ended without pricing
+is classified `unknown` rather than recorded as zero or left out, because a zero
+meaning "nobody was told" understates every total it enters by however much was
+really spent. And nothing here aggregates: adding the lines up is yours, and any
+later query builds on the same lines rather than on a rollup something decided
+for you in advance — which is also what makes the log evidence about what each
+model charges rather than only about what they charge together.
+
+None of the prices above change with it. `yoyo cost` still reads a run's event
+log, which is what lets it answer for runs that finished long before this log
+existed; this is the record that does not have to be reassembled from one.
+
 `/diff` says what a run changed. It reads the run's own durable record rather
 than shelling out to git, and that is what makes it survive success: a run is
 cleaned up once it integrates, its worktree removed and its branch deleted, so
