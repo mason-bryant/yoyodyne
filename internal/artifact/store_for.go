@@ -6,6 +6,10 @@ import "github.com/mason-bryant/yoyodyne/internal/config"
 // is the one place the configuration's homes become a store, shared by the
 // commands and by the repository tests, so a home added to the configuration
 // cannot be read by one and silently unknown to the other.
+//
+// What it assembles is the three artifact homes, and the invariants directory
+// excluded from them because its files carry the identity scheme this one was
+// modeled on rather than this one.
 func StoreFor(repositoryRoot string, product config.Product) Store {
 	return Store{
 		RepositoryRoot: repositoryRoot,

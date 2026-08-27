@@ -651,6 +651,46 @@ func TestTheAuditSeparatesWorkWithNoGoalFromWorkWhoseGoalIsWrong(t *testing.T) {
 	}
 }
 
+// The audit read by a program says what it judged and what was wrong with the
+// goals it judged against, and it does not say what those goals link upward to.
+// The pair belongs to `goals list`, which is the report the goals themselves are
+// in: the upstream half on its own is a list with nothing here to resolve it
+// against.
+func TestTheAuditCarriesNoBriefGoalsForNothingHereToBeReadAgainst(t *testing.T) {
+	t.Parallel()
+
+	goals := goal.Set{
+		Sources:    []string{"v1-goals"},
+		Goals:      []goal.Goal{{Statement: "Maintain a traceable chain.", ArtifactID: "v1-goals", InForce: true}},
+		BriefGoals: []goal.BriefGoal{{Name: "Intent in, software out", ArtifactID: "brief", Path: "docs/product/brief.md"}},
+		Problems:   []goal.Problem{{Path: "docs/product/goals/v2-goals.md", Reason: "no goals under its Goals heading"}},
+	}
+	attributions := []itemAttribution{
+		{WorkItemID: "ifd.1", Title: "Attributed work", Attribution: goals.Attribute("Maintain a traceable chain.")},
+	}
+
+	encoded, err := json.Marshal(attributionOutput(attributions, goals))
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	// The field names are the operator-facing contract, so the test reads them by
+	// name rather than through goalsOutput.
+	var decoded map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v over %s", err, encoded)
+	}
+	if _, carried := decoded["brief_goals"]; carried {
+		t.Fatalf("the audit carried the upstream half of the link: %s", encoded)
+	}
+	// What it does carry, so dropping the pair has not quietly dropped anything a
+	// reader of this report was reading.
+	for _, want := range []string{"attributions", "problems"} {
+		if _, carried := decoded[want]; !carried {
+			t.Fatalf("the audit carried no %q: %s", want, encoded)
+		}
+	}
+}
+
 func TestTheAuditReportsNothingCheckedRatherThanNothingFound(t *testing.T) {
 	t.Parallel()
 

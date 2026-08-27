@@ -307,9 +307,7 @@ func artifactPolicy(approvals config.Approvals) artifact.Policy {
 }
 
 // artifactStore is how the configured directories become a store, in one place
-// rather than at each call site: the three artifact homes, and the invariants
-// directory excluded from them because its files carry the identity scheme this
-// one was modeled on rather than this one.
+// rather than at each call site.
 func artifactStore(repositoryRoot string, product config.Product) artifact.Store {
 	return artifact.StoreFor(repositoryRoot, product)
 }
