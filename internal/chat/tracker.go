@@ -991,13 +991,20 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// that happened rather than as one that did not: the item is in the queue
 		// either way, and saying otherwise would be worse than saying nothing.
 		s.recordDirectiveOutcome(ctx, outcome, prompting, creation, created)
+		// A child of work whose change is still on a preserved branch waits for
+		// that change, whatever the role decomposing believed about where the
+		// substrate is. It is added here rather than left to be linked afterwards
+		// for the reason the executor is set here: an item is selectable the moment
+		// it is in the queue, so a gate a second action would add is a window in
+		// which the item reads as the next thing to pull.
+		gating := s.gateOnParentSubstrate(ctx, action.parent(), created.ID)
 		answering := outcome.answeringClause()
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s%s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), answering)
+			outcome.applied("%s at priority %d: %s%s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), answering, gating)
 			return
 		}
-		outcome.applied("%s: %s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), answering)
+		outcome.applied("%s: %s%s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), answering, gating)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not

@@ -159,12 +159,14 @@ type Options struct {
 	// be read is never spent through as though it were empty.
 	Triage TriageBudgets
 	// Stoppages is what the harness recorded about the runs triage decides
-	// about, read for one thing: whether the run a decision names is the item's
-	// own stopped work. It is here because a decision names both and nothing else
-	// makes them agree — two docket entries transposed put each decision's
-	// reasoning on the other item. It is optional like the rest, and a
-	// conversation without one records a decision unchecked rather than appearing
-	// to have checked it.
+	// about, read for two things: whether the run a decision names is the item's
+	// own stopped work, and whether the item a decomposition hangs a child under
+	// has a change that never landed. It is here because a decision names both
+	// and nothing else makes them agree — two docket entries transposed put each
+	// decision's reasoning on the other item — and because nothing in the tracker
+	// has ever known where a change is. It is optional like the rest, and a
+	// conversation without one records a decision unchecked, and decomposes
+	// ungated, rather than appearing to have done either.
 	Stoppages Stoppages
 	// Exchanges is the inter-role ask channel: how a question this role cannot
 	// answer itself reaches the role that can, without the operator relaying it

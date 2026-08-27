@@ -112,7 +112,8 @@ type TriageBudgets interface {
 }
 
 // Stoppages is what the harness durably recorded about the runs triage decides
-// about. One thing is read from it: the work item a run was made for.
+// about. Two things are read from it: the work item a run was made for, and
+// where a work item's own change actually is.
 //
 // A decision names two things that have to agree — the item it lands on, and
 // the run whose stoppage it settles — and a conversation working a docket of
@@ -121,11 +122,22 @@ type TriageBudgets interface {
 // decided, which is worse than either reading as undecided: the reasoning is
 // about a change nobody looking at that item can see.
 //
+// The second is the same records read for the other half of deciding about a
+// stoppage, which is what gets carved out of it: a child written against a
+// change that is still on a preserved branch has no substrate, and nothing in
+// the tracker has ever known where a change is. See substrate.go.
+//
 // It is optional like the rest, and a conversation without one records a
-// decision unchecked rather than appearing to have checked it.
+// decision unchecked rather than appearing to have checked it, and decomposes
+// without the substrate gate rather than appearing to have applied it.
 type Stoppages interface {
 	// WorkItemOf reports the work item the named run was made for.
 	WorkItemOf(ctx context.Context, runID string) (string, error)
+	// UnlandedChange reports the change one work item's own runs made that never
+	// reached the integration target, and whether there is one at all. Work the
+	// harness never ran, and work whose change is on the target branch, both
+	// report none: neither leaves a child of it standing on anything missing.
+	UnlandedChange(ctx context.Context, workItemID string) (UnlandedChange, bool, error)
 }
 
 // EscalationError reports an escalation that carried no report. It is the

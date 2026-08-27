@@ -437,30 +437,52 @@ func (s *Store) Recorded() ([]State, error) {
 	return s.scan("recorded", func(State) bool { return true })
 }
 
-// Latest reports the most recently started run recorded for one work item,
-// whatever became of it. It is how somebody asks what the harness last did to a
-// piece of work without holding, adopting, or otherwise deciding anything about
-// the run: reading a record is not acting on it, so a run a live process owns is
-// as readable here as one that finished months ago.
-func (s *Store) Latest(workItemID string) (State, error) {
+// Runs lists every run recorded for one work item, most recently started first,
+// whatever became of each. It is how somebody asks what the harness has done to
+// a piece of work without holding, adopting, or otherwise deciding anything
+// about any of it: reading a record is not acting on it, so a run a live process
+// owns is as readable here as one that finished months ago.
+//
+// The order is the point rather than a convenience. What is true of a work
+// item's change now is decided by the most recent run that says anything about
+// it, and that is not always the most recent run — a re-run that produced
+// nothing says nothing, and what stands is what the run before it left. A caller
+// walking the item's history has to walk it in one agreed direction, and runs
+// are identified by a random string, so a caller sorting them itself would be a
+// second definition of "most recent" that could come to disagree with this one.
+// Runs started at the same instant are ordered by identifier, so two readings of
+// one directory never come back in different orders.
+func (s *Store) Runs(workItemID string) ([]State, error) {
 	id := strings.TrimSpace(workItemID)
 	if id == "" {
-		return State{}, errors.New("a work item is required to find its latest run")
+		return nil, errors.New("a work item is required to find its runs")
 	}
 	states, err := s.scan("recorded", func(state State) bool { return state.WorkItemID == id })
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(states, func(i, j int) bool {
+		if states[i].StartedAt.Equal(states[j].StartedAt) {
+			return states[i].RunID < states[j].RunID
+		}
+		return states[i].StartedAt.After(states[j].StartedAt)
+	})
+	return states, nil
+}
+
+// Latest reports the most recently started run recorded for one work item,
+// whatever became of it. It is the first of the runs above, and is stated as its
+// own question because most callers have exactly that question: what did the
+// harness last do to this work.
+func (s *Store) Latest(workItemID string) (State, error) {
+	states, err := s.Runs(workItemID)
 	if err != nil {
 		return State{}, err
 	}
 	if len(states) == 0 {
-		return State{}, fmt.Errorf("%w: %s", ErrNoRecordedRun, id)
+		return State{}, fmt.Errorf("%w: %s", ErrNoRecordedRun, strings.TrimSpace(workItemID))
 	}
-	latest := states[0]
-	for _, state := range states[1:] {
-		if state.StartedAt.After(latest.StartedAt) {
-			latest = state
-		}
-	}
-	return latest, nil
+	return states[0], nil
 }
 
 // ReviewRounds counts the review rounds one work item has accumulated across
