@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -127,6 +128,122 @@ func TestDoctorJSONCarriesTheSameFindingsWithRemedies(t *testing.T) {
 		if finding.Status != doctor.StatusOK && strings.TrimSpace(finding.Remedy) == "" {
 			t.Fatalf("finding %q is %s in JSON with no remedy to act on", finding.Check, finding.Status)
 		}
+	}
+}
+
+// TestDoctorExitsOneAsAReportAndLeavesTheRepositoryAlone holds the other claim
+// skills/yoyo-setup/SKILL.md makes about this command: its exit 1 is the report
+// rather than a failure to retry, and running it is read-only against the
+// operator's repository. An agent told to read the JSON either way and told not
+// to retry on 1 is acting on both, and neither is visible in the report itself.
+func TestDoctorExitsOneAsAReportAndLeavesTheRepositoryAlone(t *testing.T) {
+	// The one thing a diagnosis writes is the harness's own state root, which is
+	// outside the repository and pointed somewhere disposable here.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	repository := t.TempDir()
+	t.Chdir(repository)
+	before := projectTree(t, repository)
+
+	var stdout, stderr bytes.Buffer
+	code := Run([]string{"doctor", "--json"}, &stdout, &stderr, "v1.2.3")
+
+	if code != 1 {
+		t.Fatalf("Run() code = %d, want 1 for an installation that cannot run work; stderr = %q", code, stderr.String())
+	}
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+	}
+	if report.Healthy() {
+		t.Fatalf("doctor exited 1 over a report it calls healthy: %#v", report)
+	}
+	if changed := describeTreeChange(before, projectTree(t, repository)); changed != "" {
+		t.Fatalf("diagnosing an installation changed the repository:\n%s", changed)
+	}
+
+	// A second run of the same command reaches the same verdict on the same
+	// checks, which is what makes "do not retry a command because it exited 1"
+	// advice rather than a gamble.
+	var again bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, &again, &stderr, "v1.2.3"); code != 1 {
+		t.Fatalf("Run() code = %d on a second diagnosis of the same installation, want 1", code)
+	}
+	var retried doctor.Report
+	if err := json.Unmarshal(again.Bytes(), &retried); err != nil {
+		t.Fatalf("Unmarshal() error = %v, output = %q", err, again.String())
+	}
+	if retried.Status != report.Status || len(retried.Findings) != len(report.Findings) {
+		t.Fatalf("retrying doctor reached a different verdict: %s over %d findings, was %s over %d",
+			retried.Status, len(retried.Findings), report.Status, len(report.Findings))
+	}
+	for index, finding := range retried.Findings {
+		if was := report.Findings[index]; finding.Check != was.Check || finding.Status != was.Status {
+			t.Errorf("retrying doctor made %s of %s, was %s of %s", finding.Status, finding.Check, was.Status, was.Check)
+		}
+	}
+}
+
+// TestDoctorSeparatesWhatItCouldNotDoFromTheDiagnosis is the other half of the
+// same claim, and it is held against this command rather than against setup's
+// because skills/yoyo-setup/SKILL.md makes it about both. An agent reading that
+// document treats exit 1 as a report to parse and not to retry, so a command
+// that exited 1 having never made a diagnosis would send it looking for JSON
+// nothing wrote; and a bad `--config`, which looks like a misuse, is deliberately
+// on the other side of the line, because being told the configuration is missing
+// is what an agent runs this for.
+func TestDoctorSeparatesWhatItCouldNotDoFromTheDiagnosis(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	for name, args := range map[string][]string{
+		"a flag it does not have": {"doctor", "--repair", "--json"},
+		"a positional argument":   {"doctor", "everything"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := Run(args, &stdout, &stderr, "v1.2.3"); code != 2 {
+				t.Fatalf("code = %d, want 2 rather than the status a diagnosis carries", code)
+			}
+			if strings.TrimSpace(stdout.String()) != "" {
+				t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
+			}
+			if strings.TrimSpace(stderr.String()) == "" {
+				t.Fatal("doctor refused without saying why")
+			}
+		})
+	}
+
+	// A report nothing could write is on the same side of the line: the exit
+	// status is all a caller has left, and 1 would promise it a report to read.
+	var stderr bytes.Buffer
+	if code := Run([]string{"doctor", "--json"}, unwritable{}, &stderr, "v1.2.3"); code != 2 {
+		t.Fatalf("code = %d for a report that could not be written, want 2", code)
+	}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Error("doctor gave up on the report without saying why on standard error")
+	}
+
+	// And the case that looks like a misuse and is not. A configuration that is
+	// not there is the first thing this command exists to say, so it is a finding
+	// with a remedy under an exit status that comes with the report.
+	var stdout bytes.Buffer
+	stderr.Reset()
+	missing := filepath.Join(t.TempDir(), config.DirectoryName, config.FileName)
+	if code := Run([]string{"doctor", "--json", "--config", missing}, &stdout, &stderr, "v1.2.3"); code != 1 {
+		t.Fatalf("code = %d for a configuration that is not there, want the diagnosis; stderr = %q", code, stderr.String())
+	}
+	var report doctor.Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("doctor exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+	}
+	var told bool
+	for _, finding := range report.Findings {
+		if finding.Check == "configuration" && finding.Status == doctor.StatusProblem && finding.Remedy != "" {
+			told = true
+		}
+	}
+	if !told {
+		t.Fatalf("the report says nothing about the configuration it was pointed at: %#v", report.Findings)
 	}
 }
 

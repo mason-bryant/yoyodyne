@@ -4,11 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
@@ -434,9 +438,11 @@ func TestSetupLeavesAStoredTokenPairExactlyAsItIs(t *testing.T) {
 	}
 }
 
-// A walk with nobody at the terminal is the other way this is used -- a second
-// machine, a script, a colleague's checkout -- and naming the channel is how the
-// optional tier is answered without being asked.
+// A walk that answers itself is the other way this is used -- a second machine,
+// a script, a colleague's checkout -- and naming the channel is how the optional
+// tier is answered without being asked. Somebody is still at the terminal, which
+// is why the keychain step runs here: what leaves it to a later walk is `--json`,
+// below.
 func TestSetupWalksTheOptionalTierWithoutAskingWhenTheChannelIsNamed(t *testing.T) {
 	t.Parallel()
 
@@ -461,6 +467,43 @@ func TestSetupWalksTheOptionalTierWithoutAskingWhenTheChannelIsNamed(t *testing.
 	}
 	if !report.Diagnosis.Healthy() {
 		t.Fatalf("an unattended walk left the installation unable to run work:%s", renderSetupReport(report))
+	}
+}
+
+// The one step that hands the terminal to another program, on a walk nobody is
+// watching. `--json` is what puts a walk in this state, and skills/yoyo-setup/SKILL.md
+// tells an agent that storing a Slack token is always left to a terminal the
+// operator is at -- which is a promise about `security add-generic-password -w`
+// never being run here, since it prompts for the token itself and would hang an
+// agent that had answered every other question with --yes.
+func TestSetupLeavesTheKeychainToAWalkSomebodyIsWatching(t *testing.T) {
+	t.Parallel()
+
+	world := newSetupWorld(t)
+	world.answers = "\n\n"
+	world.walk()
+
+	// The walk `--json --yes` is: every question answered with what setup
+	// proposes, nothing written to anybody, and the channel named so the optional
+	// tier is reached at all.
+	world.slackChannel = "C0123456789"
+	world.defaults = true
+	world.unattended = true
+	world.runner.commands = nil
+	report := world.walk()
+
+	if step := world.step(report, stepSlack); step.Status != setupDone {
+		t.Fatalf("slack step = %s (%s), want the walk to have reached the tokens", step.Status, step.Summary)
+	}
+	step := world.step(report, stepSlackSecrets)
+	if step.Status != setupHandedOff {
+		t.Fatalf("slack-secrets step = %s (%s), want it left to a terminal somebody is at", step.Status, step.Summary)
+	}
+	if step.Remedy == "" {
+		t.Error("the step nobody could be prompted for says nothing about what would do it")
+	}
+	if world.runner.ran("add-generic-password") {
+		t.Fatal("setup prompted for a token on a terminal it was not writing to")
 	}
 }
 
@@ -582,24 +625,144 @@ func TestSetupChangesNothingWhenThereIsNobodyToAsk(t *testing.T) {
 
 // The report a script reads carries the same account as the terminal does, and
 // asking for it is not consent to change anything.
+//
+// This runs the command rather than a walk assembled in a test, because what it
+// holds is a claim skills/yoyo-setup/SKILL.md makes about the command: that
+// everything up to and including `yoyo setup --json` is read-only against the
+// operator's repository. An agent following that document runs this first, with
+// its session's own terminal on the other end of stdin, so a question asked here
+// is not a wrong answer -- it is a command that never returns, in the hands of
+// the one audience with nobody beside them to notice.
 func TestSetupJSONAsksNothingAndChangesNothing(t *testing.T) {
-	t.Parallel()
+	// The state root is redirected out of the real one because the diagnosis at
+	// the end of the walk creates it, and this walk uses the tools this machine
+	// actually has rather than a runner a test wrote.
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
 
-	project := t.TempDir()
+	// Both states a repository is in when somebody points this at it, because the
+	// write each of them leaves setup to decline is a different step. The blank
+	// one is where a newcomer's agent runs the command first, and the write it
+	// declines there -- the project's own configuration -- is the largest one
+	// setup makes.
+	for name, tc := range map[string]struct {
+		arrange func(*testing.T, string)
+		// declined is the step this state gives setup something to write, which
+		// has to be reported as left undone rather than never reached: the
+		// filesystem shows the write did not happen, and this shows the report
+		// an agent is the one reading said so.
+		declined string
+	}{
+		"a repository with nothing configured in it yet": {
+			arrange:  func(*testing.T, string) {},
+			declined: stepConfiguration,
+		},
+		"a project configured before the artifact-home indexes existed": {
+			arrange: func(t *testing.T, project string) {
+				if _, _, err := initializeProject(project, "calc", false); err != nil {
+					t.Fatalf("initializeProject() error = %v", err)
+				}
+				if err := os.RemoveAll(filepath.Join(project, "docs")); err != nil {
+					t.Fatalf("RemoveAll() error = %v", err)
+				}
+			},
+			declined: stepArtifactReadmes,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			project := filepath.Join(t.TempDir(), "calc")
+			if err := os.MkdirAll(project, 0o755); err != nil {
+				t.Fatalf("MkdirAll() error = %v", err)
+			}
+			tc.arrange(t, project)
+			before := projectTree(t, project)
+
+			stdin := &unreadInput{}
+			var stdout, stderr bytes.Buffer
+			code := runSetup(context.Background(), []string{"--directory", project, "--json"}, stdin, &stdout, &stderr, "test")
+
+			if stdin.wasRead() {
+				t.Fatal("setup --json read the operator's input, so an agent that ran it against a terminal would wait there forever")
+			}
+			if changed := describeTreeChange(before, projectTree(t, project)); changed != "" {
+				t.Fatalf("setup --json changed the project it was only asked about:\n%s", changed)
+			}
+			if strings.Contains(stdout.String(), "[Y/n]") || strings.Contains(stdout.String(), "[y/N]") {
+				t.Fatalf("a question reached the machine-readable report: %q", stdout.String())
+			}
+
+			// And the exit status is the other half of the same claim: 1 is the
+			// diagnosis, so the report is on stdout to be read rather than a
+			// failure to retry the command over.
+			if code != 1 {
+				t.Fatalf("code = %d, want 1 from the diagnosis of a project that cannot run work; stdout = %q", code, stdout.String())
+			}
+			var report setupReport
+			if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+				t.Fatalf("setup exited 1 without a report to act on: %v, stdout = %q", err, stdout.String())
+			}
+			if report.SchemaVersion != setupSchemaVersion || len(report.Steps) == 0 || len(report.Diagnosis.Findings) == 0 {
+				t.Fatalf("the report on exit 1 is not one an agent could act on: %#v", report)
+			}
+
+			var declined setupStep
+			for _, step := range report.Steps {
+				if step.Step == tc.declined {
+					declined = step
+				}
+			}
+			if declined.Status != setupSkipped {
+				t.Errorf("%s step = %s (%s), want the write it could not ask about left undone",
+					tc.declined, declined.Status, declined.Summary)
+			}
+			if declined.Remedy == "" {
+				t.Errorf("the %s step nobody was asked about says nothing about what would do it", tc.declined)
+			}
+		})
+	}
+}
+
+// The other ways this command exits nonzero, kept apart from the diagnosis on
+// purpose. An agent is told to read the report on exit 1, which is worth nothing
+// if a command that never reached a diagnosis exits 1 too: it would go looking
+// for a report on stdout that nothing wrote. These are every remaining nonzero
+// return this command has that is not the diagnosis.
+func TestSetupExitsTwoWhenItCouldNotDoWhatItWasAsked(t *testing.T) {
+	t.Setenv("YOYODYNE_STATE_HOME", t.TempDir())
+
+	nowhere := filepath.Join(t.TempDir(), "nowhere")
 	var stdout, stderr bytes.Buffer
-	code := runSetup(context.Background(), []string{"--directory", project, "--json"}, strings.NewReader(""), &stdout, &stderr, "test")
+	code := runSetup(context.Background(), []string{"--directory", nowhere, "--json"}, strings.NewReader(""), &stdout, &stderr, "test")
 
-	if code == 0 {
-		t.Fatalf("setup --json on a blank project exited 0, stdout = %q", stdout.String())
+	if code != 2 {
+		t.Fatalf("code = %d for a directory that is not there, want 2 rather than the status a diagnosis carries", code)
 	}
-	if _, err := os.Stat(filepath.Join(project, config.DirectoryName)); !os.IsNotExist(err) {
-		t.Error("setup --json wrote a configuration")
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
 	}
-	if !strings.HasPrefix(strings.TrimSpace(stdout.String()), "{") {
-		t.Fatalf("stdout is not machine-readable: %q", stdout.String())
+	if !strings.Contains(stderr.String(), nowhere) {
+		t.Fatalf("stderr = %q, want it to name the directory that is not there", stderr.String())
 	}
-	if strings.Contains(stdout.String(), "[Y/n]") {
-		t.Fatalf("a question reached the machine-readable report: %q", stdout.String())
+
+	// A flag it does not have, which the flag package refuses before the walk
+	// begins.
+	stdout.Reset()
+	stderr.Reset()
+	if code := runSetup(context.Background(), []string{"--repair", "--json"}, strings.NewReader(""), &stdout, &stderr, "test"); code != 2 {
+		t.Fatalf("code = %d for a flag setup does not have, want 2", code)
+	}
+	if strings.TrimSpace(stdout.String()) != "" {
+		t.Fatalf("stdout = %q, want nothing an agent would read as a report", stdout.String())
+	}
+
+	// And a report nothing could write, which is the one case where the walk did
+	// happen and the exit status is all that is left to say so.
+	stderr.Reset()
+	code = runSetup(context.Background(), []string{"--directory", t.TempDir(), "--json"}, strings.NewReader(""), unwritable{}, &stderr, "test")
+	if code != 2 {
+		t.Fatalf("code = %d for a report that could not be written, want 2", code)
+	}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Error("setup gave up on the report without saying why on standard error")
 	}
 }
 
@@ -613,6 +776,79 @@ func TestSetupRefusesPositionalArguments(t *testing.T) {
 	if !strings.Contains(stderr.String(), "Usage: yoyo setup") {
 		t.Fatalf("stderr = %q, want the usage", stderr.String())
 	}
+}
+
+// unreadInput is the operator's terminal on a walk nobody is sitting at. It
+// answers nothing and remembers being asked, because a read from it is the hang
+// itself: a real terminal would block here rather than return.
+type unreadInput struct{ read atomic.Bool }
+
+func (i *unreadInput) Read([]byte) (int, error) {
+	i.read.Store(true)
+	return 0, io.EOF
+}
+
+func (i *unreadInput) wasRead() bool { return i.read.Load() }
+
+// unwritable is stdout that takes nothing, which is the one way a report does
+// not reach whoever asked for it however well the walk went.
+type unwritable struct{}
+
+func (unwritable) Write([]byte) (int, error) { return 0, errors.New("stdout is closed") }
+
+// projectTree is every path under a directory and what is in it. "Changes
+// nothing" is checked against the whole project rather than against the one
+// directory a test thought to look in, since the write worth catching is the one
+// nobody predicted.
+func projectTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+
+	tree := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			tree[relative+string(filepath.Separator)] = ""
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		tree[relative] = string(content)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("WalkDir() error = %v", err)
+	}
+	return tree
+}
+
+// describeTreeChange says what happened to a project, so a failure names the
+// file rather than only reporting that something moved.
+func describeTreeChange(before, after map[string]string) string {
+	var changed []string
+	for path, content := range after {
+		was, found := before[path]
+		switch {
+		case !found:
+			changed = append(changed, "wrote "+path)
+		case was != content:
+			changed = append(changed, "rewrote "+path)
+		}
+	}
+	for path := range before {
+		if _, found := after[path]; !found {
+			changed = append(changed, "removed "+path)
+		}
+	}
+	sort.Strings(changed)
+	return strings.Join(changed, "\n")
 }
 
 // The block is written where there is none and edited where there is one, in
@@ -735,9 +971,13 @@ type setupWorld struct {
 	defaults      bool
 	// closed is the walk with nobody behind it: what `--json` without `--yes`
 	// puts the questioner in, and what an input that has run out reaches.
-	closed  bool
-	answers string
-	out     bytes.Buffer
+	closed bool
+	// unattended is the other half of what `--json` sets, and it is separate
+	// because `--json --yes` answers every question and still has nobody at the
+	// terminal a keychain would prompt on.
+	unattended bool
+	answers    string
+	out        bytes.Buffer
 }
 
 func newSetupWorld(t *testing.T) *setupWorld {
@@ -782,6 +1022,7 @@ func (w *setupWorld) walk() setupReport {
 		homeDir:      func() (string, error) { return w.project, nil },
 		goos:         w.goos,
 		stdin:        strings.NewReader(w.answers),
+		unattended:   w.unattended,
 		ask:          &questioner{reader: bufio.NewReader(strings.NewReader(w.answers)), out: &w.out, defaults: w.defaults, closed: w.closed},
 	}
 	return walk.converge(context.Background())
