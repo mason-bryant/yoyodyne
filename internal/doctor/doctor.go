@@ -34,12 +34,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mason-bryant/yoyodyne/internal/artifacthome"
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/backend/claudecode"
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/publish"
+	"github.com/mason-bryant/yoyodyne/internal/repowrite"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -229,6 +231,7 @@ func Diagnose(ctx context.Context, env Environment) Report {
 	report.Findings = append(report.Findings, diagnosis.checkTracker(ctx, repository))
 	report.Findings = append(report.Findings, diagnosis.checkStateRoot())
 	report.Findings = append(report.Findings, diagnosis.checkChecks(resolved, repository)...)
+	report.Findings = append(report.Findings, diagnosis.checkArtifactHomes(project, repository, resolved))
 	report.Findings = append(report.Findings, diagnosis.checkProviders(ctx, resolved)...)
 	report.Findings = append(report.Findings, diagnosis.checkForge(ctx, resolved, repository))
 	report.Findings = append(report.Findings, diagnosis.checkSlack(ctx, resolved, installed)...)
@@ -524,6 +527,56 @@ func (d *diagnosis) checkChecks(resolved config.Resolved, repository string) []F
 		Summary: fmt.Sprintf("%s configured, and every command resolves here", countOf(len(resolved.Config.Checks), "check")),
 		Detail:  strings.Join(resolved.Config.Checks, "; "),
 	}}
+}
+
+// checkArtifactHomes asks whether every directory of governed documents says at
+// its door what is filed there, whose it is, and whether the operator may edit
+// one by hand. `yoyo init` writes those indexes; this is what notices a project
+// configured before they existed, a home that moved, and one somebody deleted.
+//
+// It is a warning rather than a problem, and the line is this package's own: an
+// undocumented directory stops no run, refuses no invocation, and leaves an
+// installation that works. What it costs is paid by the next person to open the
+// directory, which is exactly the cost a warning is for.
+func (d *diagnosis) checkArtifactHomes(project, repository string, resolved config.Resolved) Finding {
+	const check = "artifact-readmes"
+	root, err := repowrite.NewRoot(repository)
+	if err != nil {
+		return Finding{
+			Check:   check,
+			Status:  StatusWarning,
+			Summary: "the artifact homes could not be looked at, so nothing here says whether they are documented",
+			Detail:  err.Error(),
+			Remedy:  "yoyo setup" + inDirectory(project),
+		}
+	}
+	statuses := artifacthome.Inspect(root, resolved.Config)
+	if described := artifacthome.Describe(statuses); described != "" {
+		summary := fmt.Sprintf("%s of %d without an index saying what is filed there, who owns it, and whether you may edit it by hand", countOf(unwritten(statuses), "artifact home"), len(statuses))
+		return Finding{
+			Check:   check,
+			Status:  StatusWarning,
+			Summary: summary,
+			Detail:  described,
+			Remedy:  "yoyo setup" + inDirectory(project),
+		}
+	}
+	return Finding{
+		Check:   check,
+		Status:  StatusOK,
+		Summary: fmt.Sprintf("every one of the %s says what is filed there, who owns it, and the hand-edit policy", countOf(len(statuses), "artifact home")),
+		Detail:  strings.Join(artifacthome.Paths(statuses), "; "),
+	}
+}
+
+func unwritten(statuses []artifacthome.Status) int {
+	count := 0
+	for _, status := range statuses {
+		if !status.Written() {
+			count++
+		}
+	}
+	return count
 }
 
 // checkProviders asks, for each backend the project's agents actually name,
