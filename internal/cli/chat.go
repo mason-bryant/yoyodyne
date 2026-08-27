@@ -421,6 +421,12 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	for _, problem := range briefing.Problems {
 		fmt.Fprintf(stderr, "warning: %s\n", problem)
 	}
+	// Provider below is the backend the agent named rather than the adapter that
+	// launches it: a conversation record has to say which provider answered it,
+	// and a project that declared its own has a different answer from the
+	// built-in. Providers is the set that name is checked against, so a
+	// conversation on a backend nothing can run is refused before the provider is
+	// invoked rather than on its first turn.
 	session, err := chat.Open(chat.Options{
 		Role:    role,
 		Backend: provider,
@@ -505,12 +511,6 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		Model:          agent.Model,
 		Persona:        agent.Persona.Text,
 		Agent:          name,
-		// Provider is the backend the agent named rather than the adapter that
-		// launches it: a conversation record has to say which provider answered it,
-		// and a project that declared its own has a different answer from the
-		// built-in. Providers is the set that name is checked against, so a
-		// conversation on a backend nothing can run is refused before the provider
-		// is invoked rather than on its first turn.
 		Provider:       agent.Backend,
 		Providers:      providerRegistry(cfg),
 		Repository:     repository,
