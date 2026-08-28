@@ -391,7 +391,7 @@ func TestTheDeveloperContractSaysHowToProposeAChange(t *testing.T) {
 	// where a persona cannot weaken it — and repeated on a repair attempt for the
 	// same reason the rest of the contract is.
 	for name, prompt := range map[string]string{
-		"first attempt": developerPrompt("", "", "# Assigned work item\n"),
+		"first attempt": developerPrompt("", "", "# Assigned work item\n", ""),
 		"check repair":  checkRepairPrompt("", runstate.CheckFailure{Command: "go test ./...", ExitCode: 1}, 1, 2),
 	} {
 		for _, required := range []string{amendment.Fence, "A proposal is not an edit you have written in advance"} {

@@ -144,6 +144,29 @@ documents makes into itself. Nothing is scoped out. The method that produced
 them is stated with each set so the executing run can re-derive rather than
 trust, because anything landed between drafting and execution adds rows.
 
+**Which tracker file to sweep.** The Tier 1 rule above turns on which work items
+cite an anchor, so the sweep is only as good as the tracker state it reads — and
+the copy of `.beads/issues.jsonl` inside a run's worktree is whatever the last
+commit carrying one held, which on yoyodyne-ifd.117 was four days old and did not
+contain the item that run was executing. A run is now told, at the end of its own
+prompt, the absolute path of the tracker's export outside the worktree, **when
+that file was last written**, and when the run asked for it. That is the file to
+search, and the worktree's copy is not.
+
+Read the age before trusting the sweep. It is stated rather than assumed because
+`bd export` completing proves nothing: beads keeps the dump only where a project
+turns it on. A dump written well before the run began, or a run told it has no
+current view at all, means the sweep cannot be made — report it unmade rather
+than sweeping the stale copy, because an anchor wrongly ruled Tier 3 is exactly
+the silently-dangling fragment this policy exists to prevent.
+
+The same holds if the file cannot be opened. It sits outside the worktree and is
+reached with `Read`, `Grep`, or `Glob` rather than the shell; a run that is
+refused the read has no tracker state at all, and **the sweep is then unmade, not
+approximate**. Say so, and leave the anchors at the tier the last run established
+rather than re-deriving them from the worktree's committed copy — a Tier 1 anchor
+demoted on stale evidence is unrecoverable in a way an unmade sweep is not.
+
 ### Citations of `docs/configuration.md` anchors
 
 With the document each moves to and its tier. **Re-derived on 2026-08-24** for

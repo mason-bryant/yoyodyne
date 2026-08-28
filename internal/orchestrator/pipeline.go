@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -38,6 +40,13 @@ const maxCommitSubjectBytes = 72
 type WorkTracker interface {
 	Show(ctx context.Context, id string) (beads.WorkItem, error)
 	Claim(ctx context.Context, id string) (beads.WorkItem, error)
+	// Export asks the tracker to write out its passive dump of the work items,
+	// which is the only view of the tracker a run has: the store itself is a
+	// database outside the worktree that takes locks even to read. Nothing a run
+	// does depends on it, so a refusal is carried into what the run is told about
+	// its own view rather than failing the work — and neither does a nil return
+	// prove a dump exists, which is why the caller goes on to look.
+	Export(ctx context.Context) error
 	RecordOutcome(ctx context.Context, id, notes string) (beads.WorkItem, error)
 	// Block records a durable blocker. The harness uses it when a run stops on
 	// something no further attempt of its own can resolve.
@@ -716,6 +725,10 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		return run.fail(fmt.Errorf("assemble claimed work item context: %w", err), runstate.StatusFailed)
 	}
 	run.context = bundle.Text
+	// The tracker's export is refreshed after the claim rather than before it, so
+	// what the run can read of the tracker includes the item it was given, in the
+	// state claiming it left behind.
+	tracker := p.trackerView(ctx)
 	worktree, err := p.Worktrees.Create(ctx, gitworktree.CreateRequest{
 		RunID:        runID,
 		WorkItemID:   workItemID,
@@ -738,7 +751,7 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	run.outcome.Status = runstate.StatusRunning
 	run.outcome.Phase = run.state.Phase
 
-	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, run.deliveredInvariants().Text(), bundle.Text), ""); err != nil {
+	if err := run.develop(ctx, developerPrompt(developer.Persona.Text, run.deliveredInvariants().Text(), bundle.Text, tracker), ""); err != nil {
 		return run.stop(ctx, err)
 	}
 	return run.verifyReviewAndFinish(ctx)
@@ -886,8 +899,11 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// counted against the budget, so it is re-run rather than re-counted, with
 	// the same session and the same repair input it was given.
 	if state.Phase == runstate.PhaseDeveloping {
+		// A resumed attempt gets its own refresh for the reason the first one does:
+		// what it may read of the tracker is meant to be no older than the moment
+		// this process picked the run up, not the moment the interrupted one did.
 		prompt, err := resumedDeveloperPrompt(state, p.developer().Persona.Text, run.deliveredInvariants().Text(), bundle.Text,
-			protectedpath.Protect(p.Config), run.repairBudget())
+			p.trackerView(ctx), protectedpath.Protect(p.Config), run.repairBudget())
 		if err != nil {
 			return run.fail(err, runstate.StatusFailed)
 		}
@@ -908,7 +924,7 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 // findings beside a failing check. A run that recorded none of the three never
 // had a failure returned to it — it paused before or during its first attempt —
 // so what it is owed is that attempt.
-func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle string, protected protectedpath.Set, limit int) (string, error) {
+func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle, tracker string, protected protectedpath.Set, limit int) (string, error) {
 	switch {
 	case state.PathRefusal != nil:
 		return pathRefusalRepairPrompt(invariants, *state.PathRefusal, protected, state.RepairAttempts, limit), nil
@@ -917,7 +933,7 @@ func resumedDeveloperPrompt(state runstate.State, persona, invariants, bundle st
 	case len(state.ReviewFindingDetails) > 0:
 		return repairPrompt(invariants, state.ReviewSummary, state.ReviewFindingDetails, state.RepairAttempts, limit)
 	default:
-		return developerPrompt(persona, invariants, bundle), nil
+		return developerPrompt(persona, invariants, bundle, tracker), nil
 	}
 }
 
@@ -4029,8 +4045,15 @@ A proposal is not a report and not a work item. A report says what somebody shou
 
 // developerPrompt places the immutable contract first, the configured persona
 // second as guidance subordinate to it, then the architectural invariants that
-// constrain the change, and the work item context last.
-func developerPrompt(persona, invariants, bundle string) string {
+// constrain the change, then the work item context, and the run's view of the
+// work tracker last of all.
+//
+// The tracker section is last rather than beside the other standing context
+// because it names an absolute path on the machine the run is on. Everything in
+// front of the work item is the prefix a provider charges the cached rate for,
+// and a machine-specific path in it would be a path every prompt carries and no
+// two checkouts share.
+func developerPrompt(persona, invariants, bundle, tracker string) string {
 	var prompt strings.Builder
 	prompt.WriteString(developerContract)
 	prompt.WriteString("\n\n")
@@ -4041,7 +4064,157 @@ func developerPrompt(persona, invariants, bundle string) string {
 	}
 	prompt.WriteString(deliveredInvariantSection(invariants))
 	prompt.WriteString(bundle)
+	if trimmed := strings.TrimSpace(tracker); trimmed != "" {
+		prompt.WriteString("\n")
+		prompt.WriteString(trimmed)
+		prompt.WriteString("\n")
+	}
 	return prompt.String()
+}
+
+// trackerView asks the tracker to refresh its passive export and renders what
+// this run may read of the tracker: where the dump is and how old it is, or why
+// there is nothing current to read at all.
+//
+// The age is reported rather than judged, and that is the whole design. A clean
+// `bd export` is not proof of freshness: the JSONL dump is optional in beads, so
+// in a project that keeps none the export completes and writes nothing, and
+// treating the command's exit code as evidence would tell a run its four-day-old
+// file was current — the ifd.117 failure with a harness voice behind it. What the
+// filesystem can actually prove is when the file was last written, so that is
+// what the run is given, beside the moment it asked.
+//
+// It never fails a run and never returns nothing. A run whose view is old still
+// has that view, and what made the old one dangerous was never its age — it was
+// that the run had no way to know. Both answers below are that sentence.
+//
+// The path named is outside the worktree, which rests on the developer's reading
+// tools being unscoped. That is the harness's own posture rather than an
+// assumption about the provider — internal/backend/claudecode grants Read, Glob,
+// and Grep without a path scope while confining Edit and Write to the worktree,
+// and TestADeveloperRunReadsOutsideItsWorktreeAndWritesOnlyInside holds it there
+// so a later change cannot revoke it quietly. What the harness cannot prove from
+// here is that the provider's own sandbox permits the read when it is tried, so
+// the section tells the developer to report a refused read and treat the sweep as
+// unmade. That is the difference from ifd.117 that survives even the bad case:
+// the wrong answer there was silent, and this one cannot be.
+func (p Pipeline) trackerView(ctx context.Context) string {
+	if err := p.Tracker.Export(ctx); err != nil {
+		return staleTrackerSection(fmt.Sprintf("it could not be refreshed for this run (%s)", singleLineCause(err)))
+	}
+	root, err := filepath.Abs(p.Repository)
+	if err != nil {
+		return staleTrackerSection(fmt.Sprintf("the export was asked for, but where it would be written could not be resolved (%s)", singleLineCause(err)))
+	}
+	// Where the dump is, is inferred from the repository this pipeline runs over
+	// rather than asked of the tracker, because WorkTracker has no way to ask: the
+	// client writes wherever its own working directory is, and nothing in the
+	// interface reports it. The two are the same in every wiring the harness makes
+	// — internal/cli builds the client with Dir set to this same repository — so
+	// this is a coupling to record rather than a bug. A wiring that broke it would
+	// stat a path the export never lands at and report no readable dump while a
+	// current one sat elsewhere, which is the safe direction to be wrong in.
+	path := filepath.Join(root, beads.ExportPath)
+	// The dump is proved to be there rather than assumed. A project that keeps no
+	// JSONL export, or has moved it in its own Beads configuration, has nothing at
+	// the path above however cleanly the export ran, and naming a file that is not
+	// there would be exactly the confident wrong answer this exists to stop.
+	info, err := os.Stat(path)
+	if err != nil {
+		return staleTrackerSection(fmt.Sprintf("this project keeps no readable tracker dump at %s (%s)", path, singleLineCause(err)))
+	}
+	if !info.Mode().IsRegular() {
+		return staleTrackerSection(fmt.Sprintf("%s is not a regular file", path))
+	}
+	return currentTrackerSection(path, info.ModTime(), p.clock().Now())
+}
+
+// currentTrackerSection says where the tracker's dump is, when it was last
+// written, and what the copy in the worktree is instead — the worktree copy
+// being the one a developer finds by looking and the one this repository's own
+// documentation cites by path.
+//
+// The age is stated before the path is used rather than after, because it is
+// what decides whether the answer to "which work items cite this" is worth
+// having at all.
+func currentTrackerSection(path string, writtenAt, now time.Time) string {
+	return fmt.Sprintf(`# The work tracker as this run started
+
+The tracker's own store is a database outside your worktree that takes a lock
+even to read, so nothing inside this run can open it. What a run reads instead is
+the passive export beside it, which this run asked the tracker to refresh once
+the work item you were given had been claimed.
+
+Read it at %s.
+It was last written %s (%s), and this run asked for it at %s.
+
+Weigh those two before you rely on it. A dump written within this run's lifetime
+is the tracker as it stands, including your own item. One written well before it
+is a dump the refresh did not actually rewrite — beads keeps this file only where
+a project asks it to — so treat what you take from it as unverified and say so,
+rather than reporting it as a sweep of the tracker.
+
+That path is outside your worktree, so open it with Read, Grep, or Glob, which
+are granted to you unscoped for exactly this. Your shell is confined by an
+OS-level sandbox and may refuse a path outside the worktree; that is a limit on
+Bash rather than on you.
+
+**If you cannot read it at all, that is a finding, not an inconvenience.** Say so
+in your summary, report it, and treat any question about which work items cite
+something as unanswered. Do not fall back to the copy at %s inside your worktree:
+it is the last one anybody committed, which can be days old and can be missing
+work admitted since — answering from it is the silent wrong answer this section
+exists to prevent, and it is worse than saying you could not look.
+
+The file is read-only and no part of your change either way; nothing you wrote to
+it would be kept.
+`, path, trackerDumpAge(writtenAt, now), writtenAt.UTC().Format(time.RFC3339), now.UTC().Format(time.RFC3339), beads.ExportPath)
+}
+
+// trackerDumpAge renders how long before now a dump was written, in the coarsest
+// unit that still answers the only question being asked of it: whether this is
+// the tracker as it stands or the tracker as it stood days ago.
+func trackerDumpAge(writtenAt, now time.Time) string {
+	elapsed := now.Sub(writtenAt)
+	switch {
+	case elapsed < 0:
+		// A file dated in the future says the clock moved, not that the dump is
+		// fresh, and reading it as "0 minutes old" would be the friendliest
+		// possible lie.
+		return "at a time later than now, so this machine's clock disagrees with itself about it"
+	case elapsed < time.Minute:
+		return "less than a minute ago"
+	case elapsed < time.Hour:
+		return fmt.Sprintf("about %d minute(s) ago", int(elapsed.Minutes()))
+	case elapsed < 24*time.Hour:
+		return fmt.Sprintf("about %d hour(s) ago", int(elapsed.Hours()))
+	default:
+		return fmt.Sprintf("about %d day(s) ago", int(elapsed.Hours()/24))
+	}
+}
+
+// staleTrackerSection says the run has no current view of the tracker and what
+// that means for an answer taken from the copy it does have. Reporting the cause
+// is the point: a sweep made against an export nobody could refresh is a sweep
+// whose result has to be stated as unverified rather than as a finding.
+func staleTrackerSection(cause string) string {
+	return fmt.Sprintf(`# The work tracker as this run started
+
+This run has no current view of the work tracker: %s. The tracker's own store is
+a database outside your worktree that takes a lock even to read, so there is
+nothing else to fall back to.
+
+The copy at %s inside your worktree is the last one anybody committed, which can
+be days old and can be missing work admitted since — including the item you were
+given. Treat anything you take from it as unverified and say so, rather than
+reporting it as a sweep of the tracker.
+`, cause, beads.ExportPath)
+}
+
+// singleLineCause folds a failure onto one line so a section that is otherwise
+// two paragraphs of prose cannot be pushed apart by a multi-line error.
+func singleLineCause(err error) string {
+	return strings.Join(strings.Fields(err.Error()), " ")
 }
 
 // deliveredInvariantSection is how the invariants enter a developer prompt. It is

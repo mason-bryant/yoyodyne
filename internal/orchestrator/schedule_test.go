@@ -1892,6 +1892,11 @@ func (h *realScheduleHarness) Claim(_ context.Context, id string) (beads.WorkIte
 	return h.setStatus(id, "in_progress")
 }
 
+// Export writes nothing. These items live in memory rather than in a tracker
+// with a dump beside it, so what the runs get is the answer a project whose
+// export is not where beads.ExportPath says gets: no current view, said so.
+func (h *realScheduleHarness) Export(context.Context) error { return nil }
+
 func (h *realScheduleHarness) RecordOutcome(_ context.Context, id, _ string) (beads.WorkItem, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()

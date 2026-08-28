@@ -25,6 +25,14 @@ const defaultTimeout = 30 * time.Second
 // problem as a bd failure.
 const MaxPriority = 4
 
+// ExportPath is where Beads writes the passive dump Export asks for, relative to
+// the repository the tracker lives in. It is Beads' own default rather than
+// anything the harness picks, and a project that keeps no dump at all — the
+// shipped default — or has moved it in .beads/config.yaml has nothing here
+// however cleanly an export ran. That is why every caller proves the file is
+// there, and how old it is, rather than trusting an export to have put it there.
+const ExportPath = ".beads/issues.jsonl"
+
 type WorkItem struct {
 	ID                 string
 	Title              string
@@ -423,6 +431,26 @@ func (c Client) Claim(ctx context.Context, id string) (WorkItem, error) {
 		return WorkItem{}, err
 	}
 	return decodeSingleWorkItem(data)
+}
+
+// Export asks the tracker to write out its passive JSONL dump of the work
+// items. It is the one call here made for a reader other than this client: the
+// store is a database that takes locks even to read, so a process that cannot
+// open it — a run inside its sandbox is the one this exists for — reads the dump
+// instead, and between exports the dump says whatever it said last.
+//
+// It changes no work item and admits nothing, which is why it is safe to ask for
+// at the start of a run that is about to read the dump.
+//
+// A nil return is not a promise that a dump now exists. The JSONL export is
+// optional in beads and off unless a project turns it on, and `bd export` in a
+// project that keeps none completes without writing anything —
+// TestExportConformance records that, having been written the other way first
+// and refuted. So a caller that needs to know how current the dump is has to
+// look at the file; nothing about this call answers it.
+func (c Client) Export(ctx context.Context) error {
+	_, err := c.run(ctx, "export")
+	return err
 }
 
 func (c Client) RecordOutcome(ctx context.Context, id, notes string) (WorkItem, error) {

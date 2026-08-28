@@ -811,6 +811,30 @@ func TestAnUnrecognizedExecutorIsRefusedOnAWriteAndSurvivesARead(t *testing.T) {
 	}
 }
 
+// TestExportAsksBdForNothingButAnExport pins the command, because the command
+// is the whole of what Export is. It carries no flags on purpose: where the dump
+// goes is the project's own Beads configuration to say, and a flag here would
+// quietly overrule a project that had moved it.
+func TestExportAsksBdForNothingButAnExport(t *testing.T) {
+	t.Parallel()
+
+	runner := &fakeRunner{responses: []string{""}}
+	if err := (Client{Runner: runner}).Export(context.Background()); err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if len(runner.args) != 1 || !slices.Equal(runner.args[0], []string{"export"}) {
+		t.Fatalf("Export() ran %v, want a single bd export", runner.args)
+	}
+
+	refusing := &fakeRunner{results: []execution.ProcessResult{
+		{Status: execution.ProcessFailed, ExitCode: 1, Stderr: "the tracker database is locked"},
+	}}
+	err := (Client{Runner: refusing}).Export(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("Export() over a refusing bd error = %v, want the refusal carried", err)
+	}
+}
+
 type fakeRunner struct {
 	responses []string
 	results   []execution.ProcessResult

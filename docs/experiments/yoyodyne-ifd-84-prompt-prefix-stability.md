@@ -36,6 +36,14 @@ Four places in the harness invoke a provider, and each assembles its own prompt.
 | `internal/chat/chat.go` — conversation turn | role contract, admission clause, role persona | product briefing (first turn only), harness activity, proposals, reports, tracker results, operator message |
 | `internal/cli/exchange.go` — exchange answer | answering contract, role persona | the question and its earlier rounds |
 
+The table is the tree on the audit date. One row has changed since:
+yoyodyne-ifd.158 added a section to the developer prompt naming where the
+tracker's export is and when it was last written, and put it **after** the
+work-item bundle for this document's reason — it carries both an absolute path on
+the machine the run is on and a timestamp, so no two runs would share it and every
+byte behind it would be off the shared prefix. The order is otherwise as
+recorded, and the finding below still holds.
+
 Three findings, and only one of them was worth changing.
 
 **The contracts and personas are already first everywhere.** That is not luck —

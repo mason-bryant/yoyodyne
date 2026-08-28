@@ -2,6 +2,8 @@ package beads
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -150,6 +152,71 @@ func TestExecutorMetadataConformance(t *testing.T) {
 	}
 	if marked.Executor != domain.ConversationWith(domain.RoleArchitect) {
 		t.Fatalf("Update() executor = %q, want bd to echo the marker it set", marked.Executor)
+	}
+}
+
+// TestExportConformance checks what the run-start refresh may assume about bd
+// and a scripted runner can only restate: that `export` is a command bd has and
+// completes, and that where it does produce the dump at ExportPath, the dump
+// carries what the tracker holds right now.
+//
+// The second half is conditional because the first version of this test asserted
+// it outright and bd refuted it: in a project freshly `bd init`ed, `bd export`
+// exits zero and no file appears at ExportPath. The JSONL dump is optional in
+// beads — `.beads/config.yaml` ships it commented out and calls it "Disabled by
+// default" — so a project that has not enabled it has no dump for an export to
+// rewrite, and bd is under no obligation to invent one.
+//
+// That refutation is the reason the harness stats the file and reports how old
+// it is rather than treating a clean export as proof of freshness. This test is
+// what would tell us the world had changed: if bd starts writing the dump
+// unasked, the branch below stops being skipped and starts holding the stronger
+// claim.
+//
+// It is skipped where bd is not installed, which is a statement about the
+// machine running the tests rather than about the check being optional.
+func TestExportConformance(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("bd"); err != nil {
+		t.Skipf("bd is not installed: %v", err)
+	}
+
+	project := filepath.Join(t.TempDir(), "tracker")
+	runCommand(t, t.TempDir(), "git", "init", "-q", "-b", "main", project)
+	runCommand(t, project, "git", "config", "user.email", "yoyodyne@example.invalid")
+	runCommand(t, project, "git", "config", "user.name", "Yoyodyne Test")
+	runCommand(t, project, "bd", "init")
+
+	client := Client{Runner: execution.OSProcessRunner{}, Dir: project, Timeout: conformanceTimeout}
+	ctx := context.Background()
+
+	admitted, err := client.Create(ctx, NewWorkItem{
+		Title:       "Read a fresh export",
+		Description: "The item must be in the dump the export writes.",
+		Type:        "task",
+	})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	// The command itself is unconditional: a run asks for this on every start, and
+	// a bd that refused it would put every run on the no-current-view path.
+	if err := client.Export(ctx); err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+
+	dump, err := os.ReadFile(filepath.Join(project, ExportPath))
+	if errors.Is(err, os.ErrNotExist) {
+		t.Logf("bd export wrote no dump at %s in a default project, so the harness is right not to assume one", ExportPath)
+		return
+	}
+	if err != nil {
+		t.Fatalf("read %s after an export: %v", ExportPath, err)
+	}
+	// The item was admitted after bd init and before the export, so a dump without
+	// it is one written from something other than what the tracker holds now.
+	if !strings.Contains(string(dump), admitted.ID) {
+		t.Fatalf("the export does not carry %s, so it is not the tracker as it stands: %s", admitted.ID, dump)
 	}
 }
 
