@@ -311,6 +311,7 @@ func (w conversationWork) list(ctx context.Context, status string) ([]chat.WorkI
 			Title:    item.Title,
 			Status:   item.Status,
 			Priority: item.Priority,
+			Parked:   item.Parking.Parked(),
 		}
 		// The price comes from the tracker along with everything else about the
 		// item, because the tracker is where a completed run put it. An item

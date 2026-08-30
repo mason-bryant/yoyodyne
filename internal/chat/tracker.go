@@ -113,10 +113,24 @@ const (
 	actionUpdate       = "update"
 	actionReparent     = "reparent"
 	actionReprioritize = "reprioritize"
-	actionLink         = "link"
-	actionUnlink       = "unlink"
-	actionClose        = "close"
-	actionRetire       = "retire"
+	// actionPark takes admitted work out of reach without taking it out of the
+	// backlog, and actionUnpark puts it back. They exist because the decision was
+	// already being made and had nowhere to live: work deferred by a scope
+	// decision was being expressed as the bottom of the order, which reads as
+	// "parked" to the person who set it and as "last" to everything that pulls.
+	// A queue that drains reaches "last", and on 2026-08-27 one did, spending
+	// $34.38 on a run of work that had been deferred months earlier.
+	//
+	// Neither takes an argument. The parking reason is the action's own "reason",
+	// exactly as a retirement's is: what the work is parked for and why it is
+	// being parked are the same sentence, and asking for both would get the same
+	// words twice.
+	actionPark   = "park"
+	actionUnpark = "unpark"
+	actionLink   = "link"
+	actionUnlink = "unlink"
+	actionClose  = "close"
+	actionRetire = "retire"
 	// actionTriage records what the development manager decided about work that
 	// stopped moving. It is the one action whose subject is an event rather than
 	// an item — a run that ended on a blocker, a publication the forge never
@@ -141,11 +155,13 @@ const (
 var trackerActionArguments = map[string][]string{
 	actionRead:         {},
 	actionSurvey:       {},
-	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "directive"},
+	actionCreate:       {"title", "description", "goal", "parent", "priority", "class", "executor", "parked", "directive"},
 	actionAttribute:    {"goal"},
 	actionUpdate:       {"title", "description", "note", "executor"},
 	actionReparent:     {"parent"},
 	actionReprioritize: {"priority"},
+	actionPark:         {},
+	actionUnpark:       {},
 	actionLink:         {"depends_on"},
 	actionUnlink:       {"depends_on"},
 	actionClose:        {},
@@ -158,8 +174,8 @@ var trackerActionArguments = map[string][]string{
 // so a refusal names exactly what was available.
 var trackerActionNames = []string{
 	actionRead, actionSurvey, actionCreate, actionAttribute, actionUpdate, actionReparent,
-	actionReprioritize, actionLink, actionUnlink, actionClose, actionRetire, actionTriage,
-	actionHandle,
+	actionReprioritize, actionPark, actionUnpark, actionLink, actionUnlink, actionClose,
+	actionRetire, actionTriage, actionHandle,
 }
 
 // providerPathClause is what every role that writes an item's text is told
@@ -210,6 +226,16 @@ type TrackerAction struct {
 	// was written for were admitted before anything could say what executes them.
 	// It is optional in both places, and work that names none is a developer run.
 	Executor domain.WorkItemExecutor `json:"executor,omitempty"`
+	// Parked is why work is being admitted already parked, and is taken by a
+	// creation and by nothing else. Parking work that already exists is "park",
+	// whose own reason is the parking reason; a creation needs this because its
+	// reason is the provenance of the admission and cannot be both.
+	//
+	// It is taken at admission rather than left to a park in the next turn for the
+	// reason the executor is: the identifier a creation assigns comes back on the
+	// turn after, so an item admitted now and parked then is pullable across the
+	// whole gap between them.
+	Parked domain.WorkItemParking `json:"parked,omitempty"`
 	// Directive names the durable directive this admission answers, where the
 	// work is being admitted because somebody directed it. It is taken by a
 	// creation and by nothing else, and it is optional there: most work is
@@ -493,6 +519,7 @@ func (a TrackerAction) validateArguments() []error {
 		if named := strings.TrimSpace(a.Directive); named != "" && !directive.ValidReference(named) {
 			problems = append(problems, fmt.Errorf("directive %q is not a directive identifier; name one exactly as it was recorded, or by any prefix of it that names exactly one", named))
 		}
+		problems = append(problems, parkingProblem("parked", a.Parked))
 	case actionAttribute:
 		problems = append(problems, a.goalProblems()...)
 	case actionUpdate:
@@ -513,6 +540,12 @@ func (a TrackerAction) validateArguments() []error {
 		if a.Priority == nil {
 			problems = append(problems, errors.New("reprioritize requires \"priority\""))
 		}
+	case actionPark:
+		// The reason is what gets stored, so it is held to what the parking can
+		// hold rather than only to what an action's reason may be. A reason refused
+		// here changes nothing, which is the right end to refuse it at: a parking
+		// the tracker silently shortened is a decision recorded as half of itself.
+		problems = append(problems, parkingProblem("reason", domain.WorkItemParking(a.Reason)))
 	case actionLink, actionUnlink:
 		if strings.TrimSpace(a.DependsOn) == "" {
 			problems = append(problems, fmt.Errorf("%s requires \"depends_on\", the item this one waits for", a.Action))
@@ -633,6 +666,9 @@ func (a TrackerAction) arguments() []string {
 	if strings.TrimSpace(string(a.Executor)) != "" {
 		carried = append(carried, "executor")
 	}
+	if a.Parked.Parked() {
+		carried = append(carried, "parked")
+	}
 	if strings.TrimSpace(a.Directive) != "" {
 		carried = append(carried, "directive")
 	}
@@ -659,6 +695,25 @@ func (a TrackerAction) parent() string {
 		return ""
 	}
 	return strings.TrimSpace(*a.Parent)
+}
+
+// parkingProblem refuses a parking the tracker could not hold as it was written.
+// The field is named by the caller because the same words arrive under two
+// names — a creation's "parked" and a park's own "reason" — and a refusal that
+// named the wrong one would send the product manager to edit a field it did not
+// send. An empty parking is nothing being parked and is never a problem.
+func parkingProblem(field string, parking domain.WorkItemParking) error {
+	reason := parking.Reason()
+	if reason == "" {
+		return nil
+	}
+	if strings.ContainsAny(reason, "\r\n") {
+		return fmt.Errorf("%s is the parking reason and cannot span lines", field)
+	}
+	if len(reason) > domain.MaxWorkItemParkingBytes {
+		return fmt.Errorf("%s is the parking reason at %d bytes, limit is %d", field, len(reason), domain.MaxWorkItemParkingBytes)
+	}
+	return nil
 }
 
 func boundTrackerText(field, value string, limit int, required bool) error {
@@ -892,6 +947,13 @@ func refuseWhenClosed(action, id, status string) string {
 	switch action {
 	case actionReprioritize:
 		return fmt.Sprintf("%s is closed, so where it sits in the queue is no longer a decision about what happens next; its priority was left as it is", id)
+	case actionPark:
+		return fmt.Sprintf("%s is closed and has left the backlog, so nothing was going to select it and there was nothing to park", id)
+	case actionUnpark:
+		// Releasing closed work is the more misleading of the two to carry out: it
+		// would report work put back into a queue it is no longer in, and the
+		// product manager would go on expecting it to be pulled.
+		return fmt.Sprintf("%s is closed and has left the backlog, so releasing it would put it back into nothing; its parking was left as it is", id)
 	case actionClose:
 		return fmt.Sprintf("%s is already closed, so there was nothing to close", id)
 	case actionRetire:
@@ -977,6 +1039,12 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			// marker added by a second action is a window in which the item can be
 			// pulled for a run that cannot execute it.
 			Executor: domain.WorkItemExecutor(strings.TrimSpace(string(action.Executor))),
+			// The parking is set here for the same reason and against the same
+			// window. It is the one part of an admission whose whole purpose is that
+			// nothing pulls the item, so admitting it unparked and parking it on the
+			// next turn would leave it pullable across exactly the gap the marker
+			// exists to close.
+			Parking:  domain.WorkItemParking(strings.TrimSpace(action.Parked.Reason())),
 			Priority: action.Priority,
 		})
 		if err != nil {
@@ -999,12 +1067,20 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 		// which the item reads as the next thing to pull.
 		gating := s.gateOnParentSubstrate(ctx, action.parent(), created.ID)
 		answering := outcome.answeringClause()
+		// Work admitted parked says so where the admission is reported. An item in
+		// the backlog that nothing will pull is a different thing to have admitted
+		// from one that will be pulled next, and the operator reads this line rather
+		// than the item.
+		parked := ""
+		if action.Parked.Parked() {
+			parked = ", parked so nothing selects it until it is released: " + singleLine(action.Parked.Reason(), maxTrackerFailureBytes)
+		}
 		if action.Priority != nil {
-			outcome.applied("%s at priority %d: %s%s%s",
-				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), answering, gating)
+			outcome.applied("%s at priority %d: %s%s%s%s",
+				creation.applied(created.ID), *action.Priority, singleLine(created.Title, maxSurveyTitleBytes), parked, answering, gating)
 			return
 		}
-		outcome.applied("%s: %s%s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), answering, gating)
+		outcome.applied("%s: %s%s%s%s", creation.applied(created.ID), singleLine(created.Title, maxSurveyTitleBytes), parked, answering, gating)
 	case actionAttribute:
 		// The attribution is appended rather than written over what is there. The
 		// goal a creation recorded cannot be rewritten, and rewriting it is not
@@ -1056,6 +1132,32 @@ func (s *Session) carryOutTrackerAction(ctx context.Context, outcome *TrackerOut
 			return
 		}
 		outcome.applied("set %s to priority %d", id, priority)
+	case actionPark:
+		// The reason is the parking, and it is also appended to the notes. The
+		// marker is what selection reads and the note is what somebody reading the
+		// item finds, and they are written together because a parking whose reason
+		// only exists in a conversation transcript is the state this replaced.
+		parking := domain.WorkItemParking(strings.TrimSpace(action.Reason))
+		change := beads.WorkItemChange{
+			Parking:     &parking,
+			AppendNotes: s.trackerProvenance("Parked", action.Reason),
+		}
+		if _, err := s.options.Tracker.Update(ctx, id, change); err != nil {
+			outcome.fail(err)
+			return
+		}
+		outcome.applied("parked %s, so nothing selects it until it is released: %s", id, singleLine(parking.Reason(), maxTrackerFailureBytes))
+	case actionUnpark:
+		released := domain.WorkItemParking("")
+		change := beads.WorkItemChange{
+			Parking:     &released,
+			AppendNotes: s.trackerProvenance("Released from parking", action.Reason),
+		}
+		if _, err := s.options.Tracker.Update(ctx, id, change); err != nil {
+			outcome.fail(err)
+			return
+		}
+		outcome.applied("released %s back into the queue, where it is selected in the order its priority puts it", id)
 	case actionLink:
 		dependsOn := strings.TrimSpace(action.DependsOn)
 		if err := s.options.Tracker.AddBlocker(ctx, id, dependsOn); err != nil {
@@ -1516,6 +1618,14 @@ func renderWorkItemEvidence(item beads.WorkItem, goals goal.Set) string {
 	// every item would bury the one line that changes what happens to it.
 	if !item.Executor.DeveloperRun() {
 		fmt.Fprintf(&rendered, "executor: %s, so the harness never selects it for a developer run\n", item.Executor)
+	}
+	// Whether the work is to be started, said only where somebody has decided it
+	// is not. Like the executor above it changes what happens to the item, and
+	// unlike the priority beside it, it is not something a reader can infer from
+	// anything else on the item.
+	if item.Parking.Parked() {
+		fmt.Fprintf(&rendered, "parked: %s — no pull selects it however far the queue drains, until it is released\n",
+			singleLine(item.Parking.Reason(), domain.MaxWorkItemParkingBytes))
 	}
 	if item.Assignee != "" {
 		fmt.Fprintf(&rendered, "assignee: %s\n", singleLine(item.Assignee, maxSurveyTitleBytes))

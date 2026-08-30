@@ -388,6 +388,85 @@ func TestSchedulerNeverSelectsWorkAConversationCarries(t *testing.T) {
 	}
 }
 
+// The selection this guard exists for, replayed exactly: a queue drained to the
+// bottom, and the Codex backend sitting there — open, at the lowest priority,
+// reported by the tracker as ready, with a free developer slot and an unattended
+// watch session. That is what happened on 2026-08-27, and it cost $34.38 for a
+// run that failed at work a scope decision had put off the critical path months
+// earlier. The deferral was expressed as priority 4, which reads as "last" to
+// everything that pulls, so nothing about the pull was wrong.
+//
+// Parked, the same pass selects nothing. Draining to the bottom now finds
+// nothing at the bottom, and the pass says which item it passed over and that
+// releasing it is a decision rather than a wait.
+func TestSchedulerNeverSelectsParkedWorkHoweverFarTheQueueDrains(t *testing.T) {
+	t.Parallel()
+
+	codex := beads.WorkItem{
+		ID: "yoyodyne-ifd.6", Title: "Add the thin Codex developer and reviewer backend",
+		Status: "open", Priority: 4,
+		Parking: "off the critical path by the scope decision; released when a second backend is wanted",
+	}
+	harness := newScheduleHarness(codex)
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want a drained queue to select nothing parked: %s", schedule.Started, schedule.Render())
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want the pass to have drained rather than stopped for anything else", schedule.Stopped)
+	}
+	if len(schedule.Deferred) != 1 || schedule.Deferred[0].WorkItemID != codex.ID {
+		t.Fatalf("deferred = %#v, want the parked item named rather than counted among the unready", schedule.Deferred)
+	}
+	// Half the criterion is saying why. Parking is not a wait: an operator told
+	// only that it was not pulled would go looking for a blocker to clear.
+	reason := schedule.Deferred[0].Reason
+	for _, required := range []string{"parked", "however far the queue drains", "off the critical path by the scope decision"} {
+		if !strings.Contains(reason, required) {
+			t.Fatalf("deferred reason = %q, want it to contain %q", reason, required)
+		}
+	}
+	// It is still admitted work in the product manager's order; what it is not is
+	// pullable.
+	if schedule.Admitted != 1 || schedule.Pullable != 0 {
+		t.Fatalf("backlog = %d admitted, %d pullable, want it queued and unpullable", schedule.Admitted, schedule.Pullable)
+	}
+	if !strings.Contains(schedule.Render(), codex.ID+" was not pulled") {
+		t.Fatalf("rendered = %q, want the pass readable by an operator", schedule.Render())
+	}
+}
+
+// Parking one item does not stop the pass: the slot goes to the next thing in
+// the order rather than being spent on it or idled beside it. This is the other
+// half of the parked set staying out of reach — a scheduler that stalled on a
+// parked item would be a worse failure than the one it replaced.
+func TestSchedulerCarriesOnPastParkedWork(t *testing.T) {
+	t.Parallel()
+
+	parked := beads.WorkItem{
+		ID: "yoyodyne-ifd.77", Title: "First-class external configuration",
+		Status: "open", Priority: 0,
+		Parking: "deferred until team mode is scoped",
+	}
+	ordinary := beads.WorkItem{ID: "yoyodyne-ifd.188", Title: "Parked work is unschedulable", Status: "open", Priority: 1}
+	harness := newScheduleHarness(parked, ordinary)
+
+	schedule, err := Scheduler{Open: harness.open}.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if len(schedule.Started) != 1 || schedule.Started[0].WorkItemID != ordinary.ID {
+		t.Fatalf("started = %#v, want the pass to carry on past the parked item: %s", schedule.Started, schedule.Render())
+	}
+	if schedule.Stopped != ScheduleDrained {
+		t.Fatalf("stopped = %q, want the pass to have drained", schedule.Stopped)
+	}
+}
+
 // A marked item does not stop the pass: the slot it would have taken goes to the
 // next thing in the order rather than being spent on it or idled beside it.
 func TestSchedulerCarriesOnPastWorkAConversationCarries(t *testing.T) {

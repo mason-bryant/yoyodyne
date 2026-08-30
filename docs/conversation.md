@@ -46,7 +46,9 @@ Work leaves the backlog in one of two ways, and both are recorded on the item.
 only way admitted work leaves the queue without being done: there is no delete
 and no third way, so scope you asked for cannot quietly disappear from the
 queue — it is withdrawn in the open, with a reason, and the item afterwards says
-it was retired rather than finished.
+it was retired rather than finished. Work you still want and do not want started
+does neither: it is **parked**, which stops it being selected without taking it
+out of the backlog, and is described below.
 
 A specification opens with an introduction saying what the thing is and why it
 exists, and states the goals that serve it after that introduction. That shape
@@ -93,7 +95,8 @@ It has no tools: no filesystem, no commands, no network. What it has instead are
 capabilities the harness performs on its behalf. The first is the work tracker,
 through a fixed set of named operations the harness carries
 out for it — read an item in full, survey the open queue, create, attribute to a
-goal, update, reparent, reprioritize, link and unlink a dependency, close, and
+goal, update, reparent, reprioritize, park and unpark, link and unlink a
+dependency, close, and
 retire. One further operation is about none of that: `handle` records
 what became of a report another role filed, which is how the pile it is shown
 [stops being asked about](reporting.md#who-reads-them-and-what-became-of-each-one). Every
@@ -356,6 +359,24 @@ rounds on an item no developer could execute — with those rounds counted again
 the item's cap, so a second mis-selection would have escalated work nobody had
 started. [How work flows](work.md#letting-the-harness-choose-the-work) is the
 selection side of it.
+
+An item also says whether it is to be started at all. Work you still want and do
+not want picked up yet — deferred by a scope decision, waiting on something
+outside the harness — is **parked**, with `park`, and the reason you give is what
+the item then says about itself. A parked item keeps its place in your order and
+is never selected however far the queue drains; it is listed as parked wherever
+the queue is shown, so you can see what you parked rather than inferring it; and
+`unpark` puts it back. `parked` on a creation admits work already parked, which
+matters because a creation's identifier does not reach the product manager until
+its next turn.
+
+A low priority is not parking, and that distinction is what this cost to learn.
+Priority 4 was being used as parking by convention, which reads as "last" to
+everything that pulls rather than "never" — and `--watch` drains queues routinely.
+On 2026-08-27 one drained to the bottom, started work a scope decision had
+deferred months earlier, and the run failed having cost $34.38. Parking is not
+retroactive either: an item parked by convention stays selectable until it is
+parked in fact.
 
 Work it will not attach to a goal is not proposed and not quietly dropped
 either — it stops and asks you, and the three cases stay apart because you
@@ -684,7 +705,7 @@ project rewrites any persona it likes and the boundaries do not move:
 
 | Role | Reads the tracker | Writes to the tracker | Its own documents |
 | --- | --- | --- | --- |
-| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, closes, retires | brief and goals: proposes, never writes |
+| product manager | yes | admits (governed by [`approvals.work_items`](configuration.md#what-reaches-the-queue)), orders, attributes, parks and releases, closes, retires | brief and goals: proposes, never writes |
 | architect | yes | nothing | designs, decisions, invariants: decides, and you record |
 | development manager | yes | creates and links **only underneath admitted work**; records triage decisions on stopped work | none |
 | developer, reviewer | yes | nothing | none |

@@ -62,6 +62,11 @@ type WorkItem struct {
 	// replaces, and the whole point of this one is that nothing chooses the item
 	// after it is set.
 	Executor domain.WorkItemExecutor
+	// Parking is why this item is deliberately not to be pulled, and is empty for
+	// the queued work that is. It is metadata for the same reason the executor is,
+	// and it is a different question from the executor: this one says the work is
+	// not to be started now, not that no run could start it.
+	Parking domain.WorkItemParking
 }
 
 // Cost is the provider-reported price of every run made for one work item. It
@@ -99,6 +104,19 @@ const goalWitnessKey = "yoyodyne_goal_recorded"
 // notes could replace would be a marker that stops working exactly when
 // somebody records an outcome on the item.
 const executorKey = "yoyodyne_executor"
+
+// parkedKey is where the tracker records that an item is parked, and why. It is
+// metadata for the reason the executor is — selection reads it, and notes are
+// what the next writer replaces — and it is the whole of the parking rather than
+// a flag beside a reason kept elsewhere: the reason is what says whether
+// releasing the work is right, and a marker that outlived its reason would be
+// back to a parking nobody can account for.
+//
+// The key is absent from work that is not parked, and released work carries it
+// with nothing in it. Both read as unparked, which is what lets a release be
+// written the same way everything else here is written — one value set on the
+// item — rather than needing the tracker to forget a key.
+const parkedKey = "yoyodyne_parked"
 
 // witnessValue is what the witness holds for one goal: the statement itself
 // where it fits, and a bare "1" where it does not. The bound is the one a goals
@@ -181,6 +199,12 @@ type NewWorkItem struct {
 	// marker added in a later call is a window in which the harness can pull the
 	// item for a run nothing can execute.
 	Executor domain.WorkItemExecutor
+	// Parking is why work is being admitted already parked, and is empty for the
+	// work that is admitted to be pulled. It is set here rather than afterwards
+	// for the reason the executor is: an item is chosen from the moment it is
+	// admitted, and a marker added by a later call is a window in which a
+	// draining queue can pull work somebody has just said not to do.
+	Parking domain.WorkItemParking
 	// Priority is where the item is admitted in the backlog's order. It is a
 	// pointer because zero is the highest Beads priority rather than an absent
 	// one, and because admitting work without saying where it goes is a real
@@ -203,6 +227,12 @@ type WorkItemChange struct {
 	// long as there was no way to say so, and an item that cannot acquire the
 	// marker afterwards is an item that keeps being chosen for a run.
 	Executor domain.WorkItemExecutor
+	// Parking is why the item is not to be pulled, applied only when it is set.
+	// It is a pointer because parking and releasing are different requests and
+	// leaving the parking alone is a third: a nil parking changes nothing, an
+	// empty one releases the item back into the queue, and a stated one parks it
+	// with that as the reason.
+	Parking *domain.WorkItemParking
 	// Priority is a pointer because zero is the highest Beads priority rather
 	// than an absent one.
 	Priority *int
@@ -301,6 +331,9 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if executor := strings.TrimSpace(string(item.Executor)); executor != "" {
 		entries[executorKey] = executor
 	}
+	if parking := item.Parking.Reason(); parking != "" {
+		entries[parkedKey] = parking
+	}
 	if len(entries) > 0 {
 		metadata, err := creationMetadata(entries)
 		if err != nil {
@@ -345,6 +378,13 @@ func (c Client) Create(ctx context.Context, item NewWorkItem) (WorkItem, error) 
 	if executor := strings.TrimSpace(string(item.Executor)); executor != "" && string(created.Executor) != executor {
 		return WorkItem{}, fmt.Errorf("bd created work item %s with executor %q, want %q", created.ID, created.Executor, executor)
 	}
+	// The parking is read back for the same reason and against the same risk: an
+	// item admitted as parked is in the queue and pullable the moment this
+	// returns, so a caller told the work was parked would have admitted exactly
+	// the item a draining queue is free to take.
+	if parking := item.Parking.Reason(); parking != "" && created.Parking.Reason() != parking {
+		return WorkItem{}, fmt.Errorf("bd created work item %s parked %q, want %q", created.ID, created.Parking, parking)
+	}
 	// The requested priority is deliberately not read back, for the reason the
 	// parent is not read back after an update: an unset field and a field bd's
 	// response does not carry are indistinguishable here, and refusing a creation
@@ -379,6 +419,12 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	if executor := strings.TrimSpace(string(change.Executor)); executor != "" {
 		args = append(args, "--set-metadata="+executorKey+"="+executor)
 	}
+	// A release sets the key to nothing rather than removing it, so parking and
+	// releasing are one write with one shape. What matters afterwards is what the
+	// item reads as, and both an absent key and an empty one read as unparked.
+	if change.Parking != nil {
+		args = append(args, "--set-metadata="+parkedKey+"="+change.Parking.Reason())
+	}
 	if change.Priority != nil {
 		args = append(args, "--priority="+strconv.Itoa(*change.Priority))
 	}
@@ -410,6 +456,17 @@ func (c Client) Update(ctx context.Context, id string, change WorkItemChange) (W
 	// was covered by exactly the guard it is not covered by.
 	if executor := strings.TrimSpace(string(change.Executor)); executor != "" && string(item.Executor) != executor {
 		return WorkItem{}, fmt.Errorf("work item %s executor is %q after being updated, want %q", item.ID, item.Executor, executor)
+	}
+	// The parking is read back in both directions, because both directions have
+	// something resting on them. A parking that did not take leaves work the
+	// operator was told is parked sitting pullable in a queue that drains; a
+	// release that did not take leaves work nobody can start and no error saying
+	// so, which is the harder of the two to ever notice.
+	if change.Parking != nil && item.Parking.Reason() != change.Parking.Reason() {
+		if change.Parking.Parked() {
+			return WorkItem{}, fmt.Errorf("work item %s is parked %q after being updated, want %q", item.ID, item.Parking, change.Parking.Reason())
+		}
+		return WorkItem{}, fmt.Errorf("work item %s is still parked %q after being released", item.ID, item.Parking)
 	}
 	return item, nil
 }
@@ -723,7 +780,30 @@ func convertWorkItem(raw rawWorkItem) (WorkItem, error) {
 	item.Cost = costFromMetadata(raw.Metadata)
 	item.GoalWitness = goalWitnessIn(raw.Metadata)
 	item.Executor = executorIn(raw.Metadata)
+	item.Parking = parkingIn(raw.Metadata)
 	return item, nil
+}
+
+// parkingIn reads why the tracker records an item as parked. An absent key and
+// an empty value are both unparked, which is what work nobody ever parked and
+// work somebody released both look like.
+//
+// Anything but a string is read as unparked, and that is the opposite of how the
+// executor beside it is read, deliberately. An unreadable executor is carried
+// through because the safe answer there is "no run may take this"; here the
+// unreadable case is a value the harness never writes, and treating one as a
+// parking would take an item out of the queue with nothing to say why or how to
+// get it back.
+func parkingIn(metadata map[string]json.RawMessage) domain.WorkItemParking {
+	raw, present := metadata[parkedKey]
+	if !present {
+		return ""
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return ""
+	}
+	return domain.WorkItemParking(strings.TrimSpace(value))
 }
 
 // executorIn reads what the tracker records about who carries an item's
@@ -875,6 +955,7 @@ func (n NewWorkItem) validate() error {
 		problems = append(problems, fmt.Errorf("priority %d is outside 0..%d", *n.Priority, MaxPriority))
 	}
 	problems = append(problems, executorProblem(n.Executor)...)
+	problems = append(problems, parkingProblem(n.Parking)...)
 	if len(problems) > 0 {
 		return fmt.Errorf("invalid new work item: %w", errors.Join(problems...))
 	}
@@ -887,10 +968,13 @@ func (c WorkItemChange) validate() error {
 		strings.TrimSpace(c.Description) == "" &&
 		strings.TrimSpace(c.AppendNotes) == "" &&
 		strings.TrimSpace(string(c.Executor)) == "" &&
-		c.Priority == nil && c.Parent == nil {
+		c.Priority == nil && c.Parent == nil && c.Parking == nil {
 		problems = append(problems, errors.New("an update must change something"))
 	}
 	problems = append(problems, executorProblem(c.Executor)...)
+	if c.Parking != nil {
+		problems = append(problems, parkingProblem(*c.Parking)...)
+	}
 	if strings.ContainsAny(c.Title, "\r\n") {
 		problems = append(problems, errors.New("title cannot span lines"))
 	}
@@ -936,6 +1020,28 @@ func executorProblem(executor domain.WorkItemExecutor) []error {
 	}
 	return []error{fmt.Errorf("executor %q is not one the harness recognizes; the executors there are: %s",
 		executor, strings.Join(named, ", "))}
+}
+
+// parkingProblem refuses a parking reason the tracker could not hold as one
+// value on one line. An empty parking is a release and is never a problem.
+//
+// It is checked where it is written rather than folded on the way in, because
+// what is being stored is somebody's account of a decision: a reason silently
+// cut short, or one that reads as parked-for-nothing after the newlines are
+// squeezed out, is worse than a refusal that says to write it shorter.
+func parkingProblem(parking domain.WorkItemParking) []error {
+	reason := parking.Reason()
+	if reason == "" {
+		return nil
+	}
+	var problems []error
+	if strings.ContainsAny(reason, "\r\n") {
+		problems = append(problems, errors.New("a parking reason cannot span lines"))
+	}
+	if len(reason) > domain.MaxWorkItemParkingBytes {
+		problems = append(problems, fmt.Errorf("a parking reason of %d bytes exceeds the %d byte bound", len(reason), domain.MaxWorkItemParkingBytes))
+	}
+	return problems
 }
 
 // ValidateIssueID reports whether a string can name a Beads issue. It is
