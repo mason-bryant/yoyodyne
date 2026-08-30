@@ -153,6 +153,10 @@ type TriageCounters struct {
 	// repeated after some other round of the same item had been counted would be a
 	// second run judging an attempt of the first, which is not a thing the harness
 	// can produce.
+	//
+	// It is cleared by a round given back, which is what makes the return honest:
+	// a record still naming an attempt whose round is no longer counted would make
+	// the next review of that attempt free.
 	LastRound string `json:"last_round,omitempty"`
 	// Overrides are the operator's recorded decisions to cross this item's caps,
 	// in the order they were recorded. They are the one thing that gets past a cap
@@ -457,6 +461,51 @@ func (s *TriageStore) RecordReviewRound(ctx context.Context, workItemID, attempt
 		counters.LastRound = attemptID
 		return nil
 	})
+}
+
+// ReturnReviewRound gives back the round one developer attempt's review was
+// counted as, and reports whether there was one to give back. It is the only
+// thing that ever lowers the count, and it exists for one reason: a round whose
+// diff was empty because the environment handed it nothing is a round the item
+// did not cost. Charging it walks the item toward a cap on the harness's
+// failures rather than on its own, which is an escalation that reads afterwards
+// as work nobody could finish.
+//
+// It is deliberately not the mirror of RecordReviewRound. That one never
+// refuses, because a round is something that happened; this one refuses
+// everything except the round at the head of the record, so it can only ever
+// give back a round this attempt is the one that counted. A caller naming an
+// attempt the record does not stand at gets its counters back unchanged and is
+// told nothing was returned, rather than a decrement against somebody else's
+// round.
+//
+// What it does not touch is the grant. A grant is a decision the development
+// manager recorded, and it still stands after an environmental refusal — what
+// was never spent is the run's carrying it out, which the run's own record says.
+// The commitment a grant wrote stays for the same reason: the rounds it promised
+// are still promised.
+func (s *TriageStore) ReturnReviewRound(ctx context.Context, workItemID, attemptID string, at time.Time) (TriageCounters, bool, error) {
+	if strings.TrimSpace(attemptID) == "" {
+		return TriageCounters{}, false, errors.New("a developer attempt is required to return the round its review was counted as")
+	}
+	returned := false
+	counters, err := s.update(ctx, workItemID, at, func(counters *TriageCounters) error {
+		if counters.LastRound != attemptID || counters.ReviewRounds < 1 {
+			return errNoTriageChange
+		}
+		counters.ReviewRounds--
+		// The head is cleared with the round it named. Leaving it would leave the
+		// record saying a round was counted for an attempt whose round has been
+		// given back, which is the one reading that makes the next review of the
+		// same attempt free.
+		counters.LastRound = ""
+		returned = true
+		return nil
+	})
+	if err != nil {
+		return TriageCounters{}, false, err
+	}
+	return counters, returned, nil
 }
 
 // GrantRepair records a repair grant and reports what it came to. The grant is

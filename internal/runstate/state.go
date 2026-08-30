@@ -495,6 +495,14 @@ type RepairContinuation struct {
 	// words it was recorded in. It is absent only on a re-entry of a run that
 	// carried none, which nothing here produces.
 	SupersededBlocker string `json:"superseded_blocker,omitempty"`
+	// Returned says the round this continuation bought was environmentally
+	// refused, so the grant it came out of was never actually spent on anything.
+	// It is what keeps the attempts still counting toward this run's own budget —
+	// the run did spend an attempt slot on the refusal — while leaving the item's
+	// grant where it was, which is the two different questions the same number
+	// answered before: what this run may still do, and what triage has already
+	// handed the item. See environmental.go.
+	Returned bool `json:"returned,omitempty"`
 }
 
 // Validate reports every contract violation in the recorded continuation at once.
@@ -693,6 +701,14 @@ type State struct {
 	// read from the two together. Absent is every run nothing continued, which is
 	// all of them until triage does.
 	RepairContinuations []RepairContinuation `json:"repair_continuations,omitempty"`
+	// Environmental is why this run's round delivered nothing, where the answer
+	// is the environment rather than the work: a worktree that held none of the
+	// change, a checkout the harness does not own, a sandbox that could not be
+	// entered, a build older than the decision it carried out. It is what a round
+	// is classified environmental by at settle, which is what stops the harness's
+	// own failures spending the item's budgets. Absent is every run nothing
+	// refused, which is nearly all of them. See environmental.go.
+	Environmental *EnvironmentalRefusal `json:"environmental,omitempty"`
 	// IntegrationRetries counts the promotions this run has re-prepared after
 	// losing a race for its target branch: the change replayed onto where the
 	// target went, re-checked, and re-reviewed. It is recorded before the retry
@@ -991,6 +1007,11 @@ func (s State) Validate() error {
 			problems = append(problems, fmt.Errorf("repair_continuations[%d]: %w", index, err))
 		}
 	}
+	if s.Environmental != nil {
+		if err := s.Environmental.Validate(); err != nil {
+			problems = append(problems, fmt.Errorf("environmental: %w", err))
+		}
+	}
 	if s.ReviewRounds < 0 {
 		problems = append(problems, errors.New("review_rounds cannot be negative"))
 	}
@@ -1202,6 +1223,46 @@ func (s State) GrantedRepairAttempts() int {
 		granted += continuation.GrantedAttempts
 	}
 	return granted
+}
+
+// CarriedOutRepairAttempts is how much of the item's repair grant this run has
+// actually consumed. It is the same sum as above minus the continuations whose
+// round the environment refused, because a round handed an empty worktree bought
+// the item nothing and must not read afterwards as a grant that was used.
+//
+// The two are deliberately not one number. This run's own budget still counts a
+// refused continuation — the attempt slot was spent, and a run whose attempts
+// and budget disagreed would hand a developer a prompt saying which attempt of
+// how many this is and be wrong. What the item was charged is a different
+// question, and it is this one.
+func (s State) CarriedOutRepairAttempts() int {
+	carried := 0
+	for _, continuation := range s.RepairContinuations {
+		if continuation.Returned {
+			continue
+		}
+		carried += continuation.GrantedAttempts
+	}
+	return carried
+}
+
+// ReturnGrantedRound gives back the granted repair round the most recent
+// continuation consumed, and reports whether there was one to give back. It is
+// the run's half of settling an environmental round: the item's own record keeps
+// the grant, and this is what stops the grant reading as carried out.
+//
+// The most recent continuation is the whole of what can be returned, because it
+// is the one that bought the round now settling. An earlier one bought a round
+// that was already judged on its own merits.
+func (s *State) ReturnGrantedRound() bool {
+	last := len(s.RepairContinuations) - 1
+	// A settle asked twice for the same round finds the return already made: the
+	// record is what the caller wanted it to be, and nothing more is given back.
+	if last < 0 || s.RepairContinuations[last].Returned {
+		return false
+	}
+	s.RepairContinuations[last].Returned = true
+	return true
 }
 
 // RepairBudget is how many repair attempts this run may make in total: what the

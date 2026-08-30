@@ -410,6 +410,7 @@ func (d Docketer) stoppedRunEntry(state runstate.State, now time.Time) (triage.E
 		Findings:      docketFindings(state.ReviewFindingDetails),
 		Check:         docketCheck(state.CheckFailure),
 		Artifacts:     docketArtifacts(state),
+		Environmental: docketEnvironmental(state.Environmental),
 		Counters:      counters,
 	}
 	if err := entry.Validate(); err != nil {
@@ -562,6 +563,31 @@ func docketFindings(findings []runstate.Finding) []triage.Finding {
 		})
 	}
 	return docketed
+}
+
+// docketEnvironmental carries the run's account of a round the environment
+// refused onto the entry. It is written into the entry rather than joined where
+// the docket is read, unlike the decisions beside it, because it is settled as
+// the run ends: what a development manager needs from it is what the counters on
+// the entry already do or do not include, and that was decided before the entry
+// was made.
+func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environmental {
+	if refused == nil {
+		return nil
+	}
+	return &triage.Environmental{
+		Cause:         string(refused.Cause),
+		Detail:        refused.Detail,
+		Settled:       refused.Settled,
+		Refused:       refused.Refused,
+		RoundReturned: refused.RoundReturned,
+		GrantReturned: refused.GrantReturned,
+		Problem:       refused.Problem,
+		// The accounting sentence is carried rather than re-derived from the flags
+		// beside it, so the docket, the thread, and the run's own notes say the same
+		// words about what this round cost.
+		Account: refused.Describe(),
+	}
 }
 
 func docketCheck(failure *runstate.CheckFailure) *triage.Check {

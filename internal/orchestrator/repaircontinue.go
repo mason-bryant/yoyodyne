@@ -492,6 +492,14 @@ func (c RepairContinuer) granted(workItemID string) (repairGrant, error) {
 // actually bought: a continuation is written before the developer is invoked, so
 // an attempt nobody made still counts, which is the direction that keeps one
 // decision from starting two continuations.
+//
+// A continuation whose round the environment refused is the one exception, and
+// it is not an exception to that rule so much as the rule read properly: the
+// attempt was made and bought nothing, because the round was handed an empty
+// worktree rather than the change it was granted to repair. Counting it spends a
+// grant on the harness's own failure and refuses the next handback of an item
+// that has had nothing — which is how three items advanced toward escalation in
+// one night. The run's settle marks those, and this is what reads the mark.
 func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 	recorded, err := c.Runs.Recorded()
 	if err != nil {
@@ -500,7 +508,7 @@ func (c RepairContinuer) carriedOut(workItemID string) (int, error) {
 	carried := 0
 	for _, state := range recorded {
 		if state.WorkItemID == workItemID {
-			carried += state.GrantedRepairAttempts()
+			carried += state.CarriedOutRepairAttempts()
 		}
 	}
 	return carried, nil
@@ -608,6 +616,11 @@ func (c RepairContinuer) supersedeOnRun(prior runstate.State, granted repairGran
 	// The failure the run ended on describes the stoppage this supersedes, and a
 	// run that is going again has not failed.
 	continued.Failure = ""
+	// The environmental refusal on the record belongs to the round this
+	// supersedes, and that round has already settled and been paid back. Leaving
+	// it would make the next round inherit a classification it has not earned, and
+	// the settle would find the class already decided and give back nothing.
+	continued.Environmental = nil
 	continued.Status = runstate.StatusRunning
 	continued.Phase = runstate.PhaseDeveloping
 	continued.CompletedAt = nil

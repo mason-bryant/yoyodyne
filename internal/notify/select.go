@@ -590,9 +590,30 @@ func blocked(state runstate.State) bool {
 // only read where nothing else said why the run stopped.
 func blockerText(state runstate.State) string {
 	if failure := strings.TrimSpace(state.Failure); failure != "" {
-		return failure
+		return environmentallyRefused(state) + failure
 	}
 	return strings.TrimSpace(state.PublishFailure)
+}
+
+// environmentallyRefused says a round the environment refused before the words
+// the run stopped on, where that is what happened. It goes first because it
+// changes how the rest reads: a thread carrying only the failure reads as an
+// item that has just spent another round toward its cap, and where the round was
+// refused the opposite is true.
+//
+// What it says is the record's own sentence rather than a second reading of the
+// same flags. The accounting has five states and one of them — a return the
+// settle decided on and could not write — is the one a thread must not get
+// wrong, so it is derived once, in the record, and phrased around here.
+//
+// It is silent on every ordinary stoppage, and on a run that recorded a cause
+// and delivered a change anyway, because that round spent as any round does.
+func environmentallyRefused(state runstate.State) string {
+	refused := state.Environmental
+	if refused == nil || !refused.Refused {
+		return ""
+	}
+	return refused.Describe() + " — "
 }
 
 func mergeQueued(state runstate.State) bool {
