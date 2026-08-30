@@ -2,6 +2,7 @@ package slack
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +196,146 @@ func TestAReplyInTheAsksThreadIsTheDecision(t *testing.T) {
 	}
 	if !strings.HasPrefix(answer.Text, "<@"+testOperator+"> ") {
 		t.Fatalf("answer = %q, want it to tag whoever decided", answer.Text)
+	}
+}
+
+// Answering in the conversation instead of in the ask's thread is what a phone
+// notification invites, so it is the likeliest reply this surface gets. Nothing
+// can be recorded from it — which ask it answers is exactly what the thread was
+// carrying — but the one thing that must not happen is silence: a decision
+// somebody believes they made, lost without a word, is the failure this whole
+// tier exists to end.
+func TestADecisionTypedOutsideTheAsksThreadIsAnsweredRatherThanDropped(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newDecidingSink(t, testOperator)
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "text": "1",
+		"ts": "1750000001.000200", "channel": testDMChannel,
+	}))
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 0 {
+		t.Fatalf("recorded %+v, want nothing recorded from a reply that named no ask", recorded)
+	}
+	answer := onlyPost(t, posts)
+	if answer.Channel != testDMChannel || answer.ThreadTS != "" {
+		t.Fatalf("answer = %#v, want it where they typed rather than in a thread they are not looking at", answer)
+	}
+	// What was not recorded first, then what to do about it, naming the ask so the
+	// instruction is followable in a conversation holding more than one.
+	for _, wanted := range []string{"Nothing was recorded", "inside the thread", testStopped} {
+		if !strings.Contains(answer.Text, wanted) {
+			t.Fatalf("answer = %q, want it to carry %q", answer.Text, wanted)
+		}
+	}
+}
+
+// A message in a conversation this sink has never asked anything in is somebody
+// starting their own, and it is left alone: there is no ask to point them at.
+func TestAMessageInAConversationTheSinkNeverAskedInIsLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	sink, _, posts := newDecidingSink(t, testOperator)
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "text": "hello",
+		"ts": "1750000001.000200", "channel": "D0SOMEBODYELSE",
+	}))
+
+	if len(posts.requests) != 0 {
+		t.Fatalf("posts = %#v, want nothing said in a conversation this sink never asked in", posts.requests)
+	}
+}
+
+// A message in the reporting channel that is not in a thread is still somebody
+// talking in the channel. Letting the un-threaded direct message through must
+// not have made the app answer conversations between people.
+func TestAMessageInTheChannelOutsideAThreadIsStillLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, posts := newDecidingSink(t, testOperator)
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "text": "ambiguous: anything",
+		"ts": "1750000001.000200", "channel": "C1",
+	}))
+
+	recorded, err := directives.List()
+	if err != nil {
+		t.Fatalf("List() error = %v", err)
+	}
+	if len(recorded) != 0 || len(posts.requests) != 0 {
+		t.Fatalf("recorded %+v and said %#v, want somebody talking in the channel left alone", recorded, posts.requests)
+	}
+}
+
+// The map is the one record here that would otherwise grow forever, so it is
+// bounded — and the bound never drops the state somebody is being asked about
+// now, because dropping that is asking them the same question twice.
+func TestTheOldestAsksAreForgottenAndTheStandingOneNeverIs(t *testing.T) {
+	t.Parallel()
+
+	decisions := DecisionMap{Decisions: map[string]Decision{}}
+	// One standing state, asked of two people, and a long history behind it. The
+	// standing pair is deliberately the oldest in the map: age is what decides
+	// what goes, so if being the standing state did not protect them they would be
+	// the first two dropped.
+	for _, member := range []string{testOperator, testStranger} {
+		decisions.Record(Decision{
+			Mark: testStoppedMark, Member: member,
+			Channel: "D" + member, ThreadTS: "1760000000.000000",
+			AskedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		})
+	}
+	for round := 0; round < maxRememberedAsks+10; round++ {
+		decisions.Record(Decision{
+			Mark: fmt.Sprintf("idle:%d", round), Member: testOperator,
+			Channel: "D" + testOperator, ThreadTS: fmt.Sprintf("17500000%02d.000000", round),
+			AskedAt: time.Date(2026, 8, round/24+1, round%24, 0, 0, 0, time.UTC),
+		})
+	}
+
+	if !decisions.Forget(testStoppedMark, maxRememberedAsks) {
+		t.Fatal("Forget() dropped nothing, want a map past its bound cut back")
+	}
+	if len(decisions.Decisions) != maxRememberedAsks {
+		t.Fatalf("kept %d asks, want the map held to %d", len(decisions.Decisions), maxRememberedAsks)
+	}
+	for _, member := range []string{testOperator, testStranger} {
+		if !decisions.AskedOf(testStoppedMark, member) {
+			t.Fatalf("%s is no longer recorded as asked about the standing state, want it never forgotten", member)
+		}
+	}
+	// The oldest of the rest are what went.
+	if _, found := decisions.Lookup("D"+testOperator, "1750000000.000000"); found {
+		t.Fatal("the oldest ask survived, want the oldest dropped first")
+	}
+	// A map inside its bound is left alone, so nothing is rewritten for nothing.
+	if decisions.Forget(testStoppedMark, maxRememberedAsks) {
+		t.Fatal("Forget() dropped something from a map already inside its bound")
+	}
+}
+
+// A reply into an ask whose state has since cleared is still a decision, so the
+// thread stays answerable rather than being pruned the moment the line moves.
+func TestAnAskWhoseStateHasClearedIsStillAnswerable(t *testing.T) {
+	t.Parallel()
+
+	sink, directives, _ := newDecidingSink(t, testOperator)
+	// The line moved on: a different state is standing, and it is asked about.
+	asking := &Ask{Mark: "hold:2026-08-30T09:00:00Z", Stopped: "the operator is holding all harness activity", Ready: 7, Options: testOptions}
+	sink.ask(context.Background(), asking)
+
+	sink.steering.handle(context.Background(), envelopeFor(map[string]any{
+		"type": "message", "user": testOperator, "text": "1",
+		"ts": "1750000001.000200", "thread_ts": testDMThreadTS, "channel": testDMChannel,
+	}))
+
+	recorded := onlyDirective(t, directives)
+	if !strings.Contains(recorded.Text, testStopped) {
+		t.Fatalf("recorded text = %q, want the earlier ask still answerable after its state cleared", recorded.Text)
 	}
 }
 

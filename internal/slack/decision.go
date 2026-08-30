@@ -100,19 +100,36 @@ func parseDecision(raw string, options int) (choice, error) {
 	return choice{option: chosen, said: said}, nil
 }
 
-// decideThread answers one reply that arrived somewhere other than the channel
+// decideThread answers one message that arrived somewhere other than the channel
 // this sink reports in, which is a direct message.
 //
-// A thread this sink asked nothing in is left alone, for the reason a channel
-// thread it never opened is: somebody messaging the app about something else is
-// having their own conversation, and an app that answered it would be talking
-// over them. The decision map is the whole of the correlation — it is what says
-// a thread was an ask, which state it was about, and what the numbers in it
-// stood for.
+// A conversation this sink asked nothing in is left alone, for the reason a
+// channel thread it never opened is: somebody messaging the app about something
+// else is having their own conversation, and an app that answered it would be
+// talking over them. The decision map is the whole of the correlation — it is
+// what says a thread was an ask, which state it was about, and what the numbers
+// in it stood for.
+//
+// A message typed in the conversation rather than in the ask's thread is
+// answered rather than dropped, and it is the case worth being careful about. It
+// is the likeliest way somebody answers at all: a phone notification opens the
+// flat conversation, so the reply that took the least effort to send is the one
+// that lands outside the thread. Nothing can be recorded from it — which ask it
+// answers is exactly what the thread was carrying, and a conversation may hold
+// several — so what it gets is the one thing that is never acceptable to
+// withhold: being told it was not recorded, and where to say it again.
 func (s *steering) decideThread(ctx context.Context, message inboundMessage) {
 	decisions, err := s.sink.store.LoadDecisions()
 	if err != nil {
 		s.sink.log("a reply arrived in a direct message but what was asked there could not be read, so it was not acted on: %v", err)
+		return
+	}
+	if message.threadTS == "" {
+		latest, found := decisions.Latest(message.channel)
+		if !found {
+			return
+		}
+		s.answerDecision(ctx, message, misplaced(latest))
 		return
 	}
 	asked, found := decisions.Lookup(message.channel, message.threadTS)
@@ -120,6 +137,19 @@ func (s *steering) decideThread(ctx context.Context, message inboundMessage) {
 		return
 	}
 	s.answerDecision(ctx, message, s.decide(asked, message, time.Now()))
+}
+
+// misplaced is what somebody is told when they answered in the conversation
+// instead of in the thread that asked.
+//
+// It says what was not recorded before it says what to do, because the first
+// thing they need is that the decision they believe they made has not been
+// made. Naming the ask is what makes the instruction followable in a
+// conversation that holds more than one: "reply in the thread" is useless
+// advice when there are three of them.
+func misplaced(latest Decision) string {
+	return fmt.Sprintf("Nothing was recorded: a decision has to be a reply inside the thread that asked, and this was said in the conversation instead. "+
+		"The ask about %s is above — reply under that message and what you say is recorded.", latest.Stopped)
 }
 
 // decide is what one reply to an ask does, and the sentence that says so. Every

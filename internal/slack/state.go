@@ -46,6 +46,16 @@ const (
 	// one stopped line, so anything near this bound is a file something other
 	// than the sink has written.
 	maxRecordBytes = 4 << 20
+	// maxRememberedAsks bounds the decision map, which is the one record here that
+	// would otherwise grow forever: every stopped state is marked with the moment
+	// it began, so a line that stops and restarts all day is a new entry per
+	// operator every time, and nothing else ever removes one.
+	//
+	// It is a count rather than an age because what it has to guarantee is that
+	// the file keeps loading. A few dozen is far more than the handful of states
+	// anybody can still usefully answer about, and the one that is standing now is
+	// kept whatever the count says.
+	maxRememberedAsks = 64
 )
 
 // Store is the sink's own durable state for one product.
@@ -363,12 +373,90 @@ func (m DecisionMap) AskedOf(mark, member string) bool {
 	return false
 }
 
+// Latest reports the most recent ask this sink made in one conversation, which
+// is what a message typed in that conversation rather than in a thread most
+// likely meant to answer. Ties are settled by the thread it was asked in, so two
+// asks recorded in the same instant name the same one of themselves every time
+// rather than whichever the map happened to hand back first.
+func (m DecisionMap) Latest(channel string) (Decision, bool) {
+	var latest Decision
+	found := false
+	for _, asked := range m.Decisions {
+		if asked.Channel != channel || strings.TrimSpace(asked.Mark) == "" {
+			continue
+		}
+		if found && !laterAsk(asked, latest) {
+			continue
+		}
+		latest, found = asked, true
+	}
+	return latest, found
+}
+
+// laterAsk reports the more recent of two asks. The thread settles a tie, so the
+// order is total and a map walked in two different orders answers the same.
+func laterAsk(asked, held Decision) bool {
+	if asked.AskedAt.Equal(held.AskedAt) {
+		return asked.ThreadTS > held.ThreadTS
+	}
+	return asked.AskedAt.After(held.AskedAt)
+}
+
 // Record remembers one ask.
 func (m *DecisionMap) Record(asked Decision) {
 	if m.Decisions == nil {
 		m.Decisions = map[string]Decision{}
 	}
 	m.Decisions[decisionKey(asked.Channel, asked.ThreadTS)] = asked
+}
+
+// Forget drops the oldest asks beyond what one map keeps, and reports whether it
+// dropped any, so a map with nothing to forget is not rewritten.
+//
+// It is bounded rather than pruned to what is current, because the two things
+// this map is for expire at different moments. Not asking somebody twice about
+// the state they are looking at needs only the standing mark, and that is what
+// is never dropped. But an ask stays answerable after its state clears — a
+// decision made an hour late is still a decision, and dropping the thread it was
+// made in would turn it into silence — so what is kept behind the standing one
+// is a window of recent asks rather than none.
+//
+// A hard count is what makes it a bound. Every mark carries the moment its state
+// began, so a line that stops and restarts all day is a new mark every time, and
+// a map that only ever grew would eventually pass maxRecordBytes — at which
+// point it stops loading, nobody is asked, and no reply is read. That failure is
+// silent in both directions, which is the one this whole tier exists to avoid.
+func (m *DecisionMap) Forget(standing string, keep int) bool {
+	if len(m.Decisions) <= keep {
+		return false
+	}
+	stale := make([]string, 0, len(m.Decisions))
+	for key, asked := range m.Decisions {
+		// The state somebody is being asked about now is never forgotten, whatever
+		// the bound says: dropping it is asking them the same question again.
+		if asked.Mark != standing {
+			stale = append(stale, key)
+		}
+	}
+	// Oldest first, and by key where two were asked in the same instant, so a
+	// pass drops the same entries twice over rather than whichever the map
+	// happened to walk first.
+	sort.Slice(stale, func(i, j int) bool {
+		first, second := m.Decisions[stale[i]], m.Decisions[stale[j]]
+		if first.AskedAt.Equal(second.AskedAt) {
+			return stale[i] < stale[j]
+		}
+		return first.AskedAt.Before(second.AskedAt)
+	})
+	dropped := false
+	for _, key := range stale {
+		if len(m.Decisions) <= keep {
+			break
+		}
+		delete(m.Decisions, key)
+		dropped = true
+	}
+	return dropped
 }
 
 // decisionKey is one ask's identity: the thread it was said in, qualified by the

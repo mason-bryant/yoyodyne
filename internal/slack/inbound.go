@@ -151,6 +151,13 @@ func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
 		s.decideThread(ctx, message)
 		return
 	}
+	// A message in the reporting channel that is not in a thread is somebody
+	// talking in the channel rather than steering a topic. There is nothing to
+	// correlate it through and nothing it could be scoped to, and answering it
+	// would make the app talk over a conversation between people.
+	if message.threadTS == "" {
+		return
+	}
 	s.steerThread(ctx, message)
 }
 
@@ -434,17 +441,21 @@ type inboundMessage struct {
 	channel  string
 }
 
-// readInbound reads a message a person typed in a thread, and reports whether
-// the envelope was one at all.
+// readInbound reads a message a person typed, and reports whether the envelope
+// was one at all.
 //
 // What it refuses is as important as what it accepts. A message with a subtype
 // or a bot id is not a person typing — an edit, a join, a file share, and above
 // all this sink's own posts, which arrive back on the same connection and would
-// otherwise be read as instructions the harness gave itself. A message with no
-// thread is somebody talking in a conversation rather than answering something
-// said in it: every thread this reads is one this sink opened, in the channel or
-// in a direct message, and a message that is not in one is correlated to nothing
-// whichever conversation it is in.
+// otherwise be read as instructions the harness gave itself.
+//
+// Whether it was said inside a thread is reported rather than refused, and that
+// is deliberate. In the reporting channel a message in no thread is somebody
+// talking in the channel and there is nothing to correlate it through; in a
+// direct message there is, because the conversation is itself with one person
+// this sink asked something. Refusing here would make those one case and lose
+// the second, which is the likeliest way somebody answers a notification: a
+// phone opens the conversation, not the thread.
 func readInbound(envelope socketEnvelope) (inboundMessage, bool) {
 	if envelope.Type != socketEventsAPI || len(envelope.Payload) == 0 {
 		return inboundMessage{}, false
@@ -471,16 +482,19 @@ func readInbound(envelope socketEnvelope) (inboundMessage, bool) {
 	if strings.TrimSpace(event.Channel) == "" || strings.TrimSpace(event.User) == "" {
 		return inboundMessage{}, false
 	}
-	// A thread's own opening message carries its own timestamp as the thread's,
-	// and this sink wrote every one of those.
-	if strings.TrimSpace(event.ThreadTS) == "" || event.ThreadTS == event.TS {
-		return inboundMessage{}, false
+	// A message in no thread carries no thread timestamp, and a thread's own
+	// opening message carries its own. Both say the same thing — this was not said
+	// inside a thread — so both are reported as no thread, and one value means one
+	// fact rather than a caller having to know the second spelling.
+	threadTS := strings.TrimSpace(event.ThreadTS)
+	if threadTS == strings.TrimSpace(event.TS) {
+		threadTS = ""
 	}
 	return inboundMessage{
 		user:     strings.TrimSpace(event.User),
 		text:     event.Text,
 		ts:       event.TS,
-		threadTS: event.ThreadTS,
+		threadTS: threadTS,
 		channel:  strings.TrimSpace(event.Channel),
 	}, true
 }

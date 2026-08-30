@@ -448,7 +448,11 @@ The context is threaded under that line, with the answers numbered:
 
 **Your reply in that thread is the decision.** There is no button and nothing to
 type at a terminal: a number takes the option it names, and anything else is
-recorded in your own words. Either way it lands as one operational directive in
+recorded in your own words. It does have to be *in the thread* — a conversation
+can hold several asks, and the thread is what says which one you are answering.
+Answer in the conversation instead, which is what tapping a phone notification
+opens, and you are told so and pointed at the ask: nothing is recorded, and you
+are never left thinking you decided something you did not. Either way it lands as one operational directive in
 the same record `yoyo directive record` writes and every run consults — unscoped,
 because what you were asked about is the whole line rather than one item — and it
 carries what was asked, which option you took, and the words you typed, so
@@ -727,6 +731,11 @@ command line whenever the digest is not enough.
   beside the thread map and has the same shape of limit: a sink started fresh
   against a state root that has none asks about a state that is still standing
   once more. What that costs is a repeated question rather than a lost one.
+- **Old asks are eventually forgotten.** The map keeps the state you are being
+  asked about now and the most recent few dozen behind it, so it cannot grow
+  until it stops loading. An ask stays answerable well after its state clears — a
+  decision made late is still a decision — but a thread from months ago
+  eventually stops being read, and a reply into one gets no answer.
 - **Nothing is carried out from a direct message.** A decision is recorded as a
   directive and read by the runs that follow; the harness does not lift its own
   holds or start a watch session because somebody answered. `yoyo directive list`

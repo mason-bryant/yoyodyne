@@ -81,6 +81,19 @@ func (s *Sink) ask(ctx context.Context, asking *Ask) {
 			asking.Since.UTC().Format(time.RFC3339), err)
 		return
 	}
+	// This is the only thing that adds to that map, so it is the only place that
+	// has to bound it. The state being asked about now is never forgotten, and
+	// what goes is the oldest of the rest — asks whose state cleared long enough
+	// ago that nobody is still about to answer them.
+	//
+	// A write that fails here is read past rather than returned on: the pruning is
+	// housekeeping, the asking is the point, and the map carried on with below is
+	// the pruned one either way — so the next entry recorded persists it.
+	if asked.Forget(asking.Mark, maxRememberedAsks) {
+		if err := s.store.SaveDecisions(asked); err != nil {
+			s.log("the oldest asks could not be forgotten, so the decision map is larger than it should be: %v", err)
+		}
+	}
 	for _, member := range s.operators() {
 		if ctx.Err() != nil {
 			return
