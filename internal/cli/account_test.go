@@ -86,7 +86,7 @@ func TestThePoolStandsDownAnAccountThatHasSpentItsWeeklyBudget(t *testing.T) {
 	saveRun(t, store, overspent)
 	appendRunCost(t, store, overspent.RunID, 12)
 
-	budgeted := twoAccounts(config.Account{WeeklyBudgetUSD: 10}, config.Account{})
+	budgeted := twoAccounts(config.Account{WeeklyBudgetUSD: budgetOf(10)}, config.Account{})
 	pool := accountPool{
 		config:    budgeted,
 		stateRoot: stateRoot,
@@ -172,3 +172,7 @@ func TestTheLoginRemedyIsTheOneTheDiagnosisPrints(t *testing.T) {
 func twoAccounts(one, two config.Account) config.Config {
 	return config.Config{Accounts: map[string]config.Account{"one": one, "two": two}}
 }
+
+// budgetOf states a weekly budget, which is a pointer so that a budget of
+// nothing and no budget at all stay different things.
+func budgetOf(amount float64) *float64 { return &amount }

@@ -2892,21 +2892,36 @@ accounts:
 ```
 
 - **`pool`** is `active` or `reserved`, and defaults to `active`. The active
-  accounts are round-robined a run at a time; a reserved one is served from only
-  when no active account can be. A mapping whose every account is reserved is
-  refused, because a pool with an empty active half is one every run falls out
+  accounts are round-robined, one account per run; a reserved one is served from
+  only when no active account can be. A mapping whose every account is reserved
+  is refused, because a pool with an empty active half is one every run falls out
   of.
 - **`weekly_budget_usd`** is optional. It stands an account down once the runs
   that named it have cost that much over the seven days behind now, read from
-  what those runs actually cost rather than from a price table. An account with
-  no budget is unbudgeted on purpose: spend on it until the provider's own limit
-  stops us. A negative budget is refused; zero is a way to stand an account down
-  without removing it.
+  what those runs actually cost rather than from a price table. Leaving it out is
+  unbudgeted on purpose: spend on that account until the provider's own limit
+  stops us.
+
+  Writing `weekly_budget_usd: 0` is not the same as leaving it out, and means
+  what it reads as — nothing may be spent on this account — so it is how an
+  account is stood down while it stays in the mapping and keeps its login. A
+  negative budget is refused, because it says nothing the zero does not say more
+  plainly.
 
 **The rotation's cursor is the run records.** Each run already writes down the
 account it spent, so the pool takes the first active alias after the one the last
 run recorded. Nothing else is kept, which is why the rotation survives a crash, a
 second process, and a machine that was off for a week.
+
+The cursor is read when a run starts and written when that run's record is
+reserved, and those are not one step. Two runs starting in the same moment can
+therefore read the same cursor and be served by the same account, and the
+rotation resumes from whichever of them recorded last. It is a rotation over
+time rather than a strict alternation, so with several developers running
+concurrently expect the split across a day to be even and any individual pair of
+simultaneous starts not to be. Nothing is lost when it happens: both runs are
+attributed to the account they actually spent, and a budget that account has
+already exhausted still excludes it, because that is read at the same moment.
 
 **A run is affined to the account it started on.** The account is chosen once,
 before the work item is claimed, and recorded on the run. Every invocation that

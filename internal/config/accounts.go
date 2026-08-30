@@ -39,12 +39,30 @@ type Account struct {
 	// actually cost. An account at or over its budget is passed over while the
 	// pool has anywhere else to go.
 	//
-	// It is optional, and absent means unbudgeted: spend on this account until
-	// the provider's own limit stops us. That is the operator's stated default
+	// It is a pointer so that a budget of nothing and no budget at all stay
+	// different things, because they are opposite instructions and a float has no
+	// way to tell them apart. Absent means unbudgeted: spend on this account until
+	// the provider's own limit stops us, which is the operator's stated default
 	// rather than an oversight — the subscription already has a limit, and a
 	// second one the harness invents would stop work the provider was still
-	// willing to serve.
-	WeeklyBudgetUSD float64 `yaml:"weekly_budget_usd,omitempty" json:"weekly_budget_usd,omitempty"`
+	// willing to serve. A stated `0` means what it reads as: nothing may be spent
+	// here, so the account is stood down while it stays in the mapping.
+	//
+	// Reading a stated zero as unbudgeted is the one mistake this shape exists to
+	// prevent. It is the number an operator types to stop spending, and treating
+	// it as "no limit" would put the account back in full rotation at exactly the
+	// moment they meant to take it out.
+	WeeklyBudgetUSD *float64 `yaml:"weekly_budget_usd,omitempty" json:"weekly_budget_usd,omitempty"`
+}
+
+// Budgeted reports an account the operator has put a weekly limit on, and what
+// that limit is. An account with no budget stated is bounded by the provider's
+// own limit and by nothing here.
+func (a Account) Budgeted() (float64, bool) {
+	if a.WeeklyBudgetUSD == nil {
+		return 0, false
+	}
+	return *a.WeeklyBudgetUSD, true
 }
 
 // AccountPool is which half of the pool an account is in.
@@ -234,7 +252,7 @@ func (c Config) AgentAccountAlias(name string) string {
 // nothing was going to be excluded by the answer.
 func (c Config) HasAccountBudgets() bool {
 	for _, alias := range c.AccountAliases() {
-		if c.Accounts[alias].WeeklyBudgetUSD > 0 {
+		if _, budgeted := c.Accounts[alias].Budgeted(); budgeted {
 			return true
 		}
 	}
@@ -335,10 +353,13 @@ func (c Config) rotate(aliases []string, lastServed string) []string {
 
 // withinBudget reports an account the pool may still spend. An account with no
 // budget stated is always within it: what bounds that account is the provider's
-// own limit, which is the operator's stated intent rather than an omission.
+// own limit, which is the operator's stated intent rather than an omission. An
+// account budgeted at nothing never is, because nothing spent is not less than
+// nothing allowed — which is how a stated zero stands an account down while
+// leaving it in the mapping.
 func (c Config) withinBudget(alias string, spentUSD map[string]float64) bool {
-	budget := c.Accounts[alias].WeeklyBudgetUSD
-	if budget <= 0 {
+	budget, budgeted := c.Accounts[alias].Budgeted()
+	if !budgeted {
 		return true
 	}
 	return spentUSD[alias] < budget
@@ -355,11 +376,16 @@ func describeAliases(aliases []string) string {
 	return strings.Join(quoted, ", ")
 }
 
+// describeBudgets says what each account in an order has spent against what it
+// was allowed. Every account it is given is a budgeted one, because it is only
+// reached once none of them could be served and an unbudgeted account can never
+// be the one that failed — so a stated budget is read directly rather than
+// guarded for a case that would mean the caller had changed.
 func (c Config) describeBudgets(aliases []string, spentUSD map[string]float64) string {
 	described := make([]string, 0, len(aliases))
 	for _, alias := range aliases {
-		described = append(described, fmt.Sprintf("%s spent %.2f of %.2f",
-			alias, spentUSD[alias], c.Accounts[alias].WeeklyBudgetUSD))
+		budget, _ := c.Accounts[alias].Budgeted()
+		described = append(described, fmt.Sprintf("%s spent %.2f of %.2f", alias, spentUSD[alias], budget))
 	}
 	return strings.Join(described, "; ")
 }
@@ -380,13 +406,13 @@ func (c Config) accountProblems() []string {
 		if !account.Pool.Valid() {
 			problems = append(problems, fmt.Sprintf("accounts.%s.pool is %q, and an account is %q or %q", alias, account.Pool, PoolActive, PoolReserved))
 		}
-		// A negative budget is not a stricter budget: it is a number no spend can
-		// be under, which takes the account out of the pool while reading as a
-		// limit on it. Nothing is said about zero, which is the same thing said
-		// deliberately — an account budgeted at nothing is one the operator has
-		// stood down without removing.
-		if account.WeeklyBudgetUSD < 0 {
-			problems = append(problems, fmt.Sprintf("accounts.%s.weekly_budget_usd cannot be negative", alias))
+		// A negative budget is refused because it says nothing a zero does not say
+		// more plainly: no spend can be under it either way, so it is a way of
+		// standing the account down that reads as a limit on it. Zero is permitted
+		// and means exactly that — nothing may be spent here — which is why the two
+		// are not folded together.
+		if budget, budgeted := account.Budgeted(); budgeted && budget < 0 {
+			problems = append(problems, fmt.Sprintf("accounts.%s.weekly_budget_usd cannot be negative; 0 is how an account is stood down while it stays in the mapping", alias))
 		}
 	}
 	// A pool with nothing in its active half is a pool nothing rotates: every run

@@ -196,13 +196,16 @@ else
   exit 1
 fi
 
+# Only the new entry is printed, and the existing mapping is left alone. This
+# script does not read the configuration, so it does not know what the account
+# already there is called -- a project whose single account is aliased "work"
+# would be handed a "default" it never declared, and pasting that would make a
+# three-account pool out of a two-account one.
 cat <<CONFIG
 
-Add this to the accounts mapping in .yoyodyne/config.yaml, keeping the entry
-that is already there:
+Add this entry to the accounts mapping in .yoyodyne/config.yaml, alongside the
+one that is already there -- whatever it is called -- rather than replacing it:
 
-accounts:
-  default: {}
   $alias_arg:
     pool: $pool_arg
 CONFIG

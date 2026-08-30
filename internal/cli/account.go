@@ -54,6 +54,18 @@ type accountPool struct {
 // otherwise — would otherwise price a week of runs on every start to arrive at
 // an answer that could exclude nobody, and would acquire a new way for a run to
 // fail: an event log that cannot be read.
+//
+// The cursor is read here and written when the caller reserves the run's record,
+// and nothing holds the two together, so two runs starting in the same moment
+// can read the same cursor and be served by the same account. That is a known
+// bound on the rotation rather than an oversight, and it is bounded in turn: it
+// costs an uneven split across a burst and nothing else, because each run is
+// still attributed to the account it actually spent and an exhausted budget
+// still excludes at the same moment it is read. Serializing it would mean a
+// lease held across the choice and the reservation, which is a heavier mechanism
+// than the unevenness it would remove — and the choice deliberately happens
+// before anything is claimed, so that a pool with nothing left refuses without
+// taking a work item.
 func (p accountPool) ChooseAccount() (config.AccountEndpoint, error) {
 	lastServed, err := p.runs.LastAccountAlias()
 	if err != nil {

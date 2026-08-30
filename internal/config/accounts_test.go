@@ -204,7 +204,6 @@ func TestAPoolWithNoActiveAccountIsRefused(t *testing.T) {
 	for name, layer := range map[string]string{
 		"every account reserved": "accounts:\n  work:\n    pool: reserved\n  personal:\n    pool: reserved\n",
 		"a half that is neither": "accounts:\n  work:\n    pool: standby\n",
-		"a budget below nothing": "accounts:\n  work:\n    weekly_budget_usd: -1\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -352,6 +351,57 @@ func TestAnUnbudgetedAccountIsNeverStoodDownForMoney(t *testing.T) {
 	}
 	if chosen.Alias != "one" {
 		t.Fatalf("ChooseAccount() = %q, want the unbudgeted account regardless of spend", chosen.Alias)
+	}
+}
+
+// A budget of nothing and no budget at all are opposite instructions, and the
+// number an operator types to stop spending is `0`. Reading it as "no limit" is
+// the one mistake here that would put an account back in full rotation at the
+// moment they meant to take it out, so the two are held apart deliberately.
+func TestABudgetOfNothingStandsAnAccountDownAndAnAbsentOneDoesNot(t *testing.T) {
+	t.Parallel()
+
+	stoodDown := mustDecodeConfig(t, accountConfig("accounts:\n  one:\n    weekly_budget_usd: 0\n  two: {}\n"))
+	if _, budgeted := stoodDown.Accounts["one"].Budgeted(); !budgeted {
+		t.Fatal("a stated budget of 0 read as no budget at all")
+	}
+	if _, budgeted := stoodDown.Accounts["two"].Budgeted(); budgeted {
+		t.Fatal("an account that stated no budget read as budgeted")
+	}
+	// Stating one anywhere is what makes the pool price the week at all, and a
+	// zero has to count: it is the only budget that excludes without any spend.
+	if !stoodDown.HasAccountBudgets() {
+		t.Fatal("HasAccountBudgets() = false, want a stated budget of 0 to count as one")
+	}
+	// Nothing has been spent on either account, and the one budgeted at nothing is
+	// still passed over — which is the whole of what standing it down means.
+	chosen, err := stoodDown.ChooseAccount("/state", "", nil)
+	if err != nil {
+		t.Fatalf("ChooseAccount() error = %v", err)
+	}
+	if chosen.Alias != "two" {
+		t.Fatalf("ChooseAccount() = %q, want the account that was not stood down", chosen.Alias)
+	}
+
+	// With every account stood down there is nowhere to send a run, and the
+	// refusal says so rather than serving one anyway.
+	everyone := mustDecodeConfig(t, accountConfig("accounts:\n  one:\n    weekly_budget_usd: 0\n  two:\n    weekly_budget_usd: 0\n"))
+	if _, err := everyone.ChooseAccount("/state", "", nil); err == nil {
+		t.Fatal("ChooseAccount() error = nil, want a pool with every account stood down to refuse")
+	}
+}
+
+// A negative budget says nothing a zero does not say more plainly, and reads as
+// a limit while behaving as a removal, so it is refused where it is written.
+func TestANegativeBudgetIsRefusedAndNamesTheZeroThatMeansIt(t *testing.T) {
+	t.Parallel()
+
+	_, err := Decode(strings.NewReader(accountConfig("accounts:\n  work:\n    weekly_budget_usd: -1\n")))
+	if err == nil {
+		t.Fatal("Decode() error = nil, want a negative budget refused")
+	}
+	if !strings.Contains(err.Error(), "0 is how an account is stood down") {
+		t.Fatalf("Decode() error = %v, want it to name what to write instead", err)
 	}
 }
 
