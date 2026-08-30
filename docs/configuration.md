@@ -2896,11 +2896,15 @@ accounts:
   only when no active account can be. A mapping whose every account is reserved
   is refused, because a pool with an empty active half is one every run falls out
   of.
-- **`weekly_budget_usd`** is optional. It stands an account down once the runs
-  that named it have cost that much over the seven days behind now, read from
-  what those runs actually cost rather than from a price table. Leaving it out is
-  unbudgeted on purpose: spend on that account until the provider's own limit
-  stops us.
+- **`weekly_budget_usd`** is optional. It stands an account down once **this
+  product's** runs that named it have cost that much over the seven days behind
+  now, read from what those runs actually cost rather than from a price table.
+  The scope is worth knowing: the figure comes from this product's run records,
+  so two Yoyodyne products on one machine sharing a subscription each bound it
+  separately and the account can be spent to twice the stated figure. Budget for
+  the product rather than for the subscription, or state the budget in only one
+  of them. Leaving it out is unbudgeted on purpose: spend on that account until
+  the provider's own limit stops us.
 
   Writing `weekly_budget_usd: 0` is not the same as leaving it out, and means
   what it reads as — nothing may be spent on this account — so it is how an

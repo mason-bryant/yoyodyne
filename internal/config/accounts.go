@@ -35,9 +35,12 @@ type Account struct {
 	// both of them — which is what naming a second one is usually for.
 	Pool AccountPool `yaml:"pool,omitempty" json:"pool,omitempty"`
 	// WeeklyBudgetUSD is what the operator is willing to spend on this account
-	// over the seven days behind now, read from what the runs that named it
-	// actually cost. An account at or over its budget is passed over while the
-	// pool has anywhere else to go.
+	// over the seven days behind now, read from what this product's runs that
+	// named it actually cost. An account at or over its budget is passed over
+	// while the pool has anywhere else to go.
+	//
+	// The scope is one product, because the run records a budget is read from are
+	// the product's own. Two products sharing a subscription bound it separately.
 	//
 	// It is a pointer so that a budget of nothing and no budget at all stay
 	// different things, because they are opposite instructions and a float has no

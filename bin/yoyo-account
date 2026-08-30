@@ -18,10 +18,18 @@
 # account in from a browser already signed in as the first one silently gives
 # you the first one twice.
 #
+# It reports nothing about which accounts exist or whether they are signed in.
+# `yoyo doctor` answers that, from the configuration, an alias at a time, with
+# the login to run for one that is not - and it is deliberately the only thing
+# that answers it. A checker here would enumerate provider homes on disk rather
+# than the accounts the project declares, so it would miss the configured alias
+# nobody has signed in to yet, which is the exact state worth catching, and it
+# would call a home left behind by a removed alias healthy. Two answers to one
+# question is a disagreement only the operator can settle.
+#
 #   yoyo-account                     ask for everything
 #   yoyo-account --alias personal    name the alias up front
-#   yoyo-account --list              show the accounts this machine has homes for
-#   yoyo-account --check             say whether each home is authenticated
+#   yoyo doctor                      say whether each configured account is signed in
 
 set -euo pipefail
 
@@ -29,16 +37,12 @@ usage() { awk 'NR==1{next} /^#/{sub(/^# ?/,""); print; next} {exit}' "$0"; }
 
 alias_arg=""
 pool_arg=""
-list_only=0
-check_only=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
     --alias) alias_arg="${2:?--alias needs a value}"; shift 2 ;;
     --pool) pool_arg="${2:?--pool needs a value}"; shift 2 ;;
-    -l|--list) list_only=1; shift ;;
-    --check) check_only=1; shift ;;
     --) shift; break ;;
     *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -68,42 +72,6 @@ home_for() {
     *) printf '%s\n' "$accounts/$1" ;;
   esac
 }
-
-# Whether one provider home is signed in. `claude auth status --json` is what the
-# harness asks, so this reports what the harness would find rather than a second
-# opinion about it.
-authenticated() {
-  local home="$1" out
-  if [ -n "$home" ]; then
-    out="$(CLAUDE_CONFIG_DIR="$home" claude auth status --json 2>/dev/null || true)"
-  else
-    out="$(claude auth status --json 2>/dev/null || true)"
-  fi
-  printf '%s' "$out" | grep -q '"loggedIn"[[:space:]]*:[[:space:]]*true'
-}
-
-describe() {
-  local name="$1" home="$2" where
-  where="${home:-signed in where this machine is}"
-  if authenticated "$home"; then
-    printf '  %-20s authenticated   %s\n' "$name" "$where"
-  else
-    printf '  %-20s NOT signed in   %s\n' "$name" "$where"
-  fi
-}
-
-if [ "$list_only" = 1 ] || [ "$check_only" = 1 ]; then
-  echo "provider homes on this machine:"
-  describe default ""
-  if [ -d "$accounts" ]; then
-    for home in "$accounts"/*/; do
-      [ -d "$home" ] || continue
-      name="$(basename "$home")"
-      describe "$name" "${home%/}"
-    done
-  fi
-  exit 0
-fi
 
 command -v claude >/dev/null 2>&1 || {
   echo "claude is not on PATH; install it first: npm install -g @anthropic-ai/claude-code" >&2
@@ -185,16 +153,14 @@ mkdir -p "$home"
 chmod 700 "$home"
 echo
 echo "signing in, with CLAUDE_CONFIG_DIR=$home"
+# Whether the login took is the provider's own answer and then `yoyo doctor`'s.
+# Nothing here re-decides it: a login that failed exits non-zero and stops this
+# script under `set -e`, and a login that succeeded is confirmed by the one thing
+# that reads the configuration to do it.
 CLAUDE_CONFIG_DIR="$home" claude auth login
 
 echo
-if authenticated "$home"; then
-  echo "\"$alias_arg\" is signed in, in $home"
-else
-  echo "\"$alias_arg\" is still not signed in. Run this again, or by hand:" >&2
-  echo "  CLAUDE_CONFIG_DIR=$home claude auth login" >&2
-  exit 1
-fi
+echo "\"$alias_arg\" was signed in, in $home"
 
 # Only the new entry is printed, and the existing mapping is left alone. This
 # script does not read the configuration, so it does not know what the account
@@ -214,10 +180,13 @@ if [ -n "$budget" ]; then
 fi
 cat <<'NEXT'
 
-Then check both of them:
+Then check every configured account -- which is what says whether this one took,
+and the only thing that answers it:
 
   yoyo doctor
 
-Every run from then on records the account it was served by, and `yoyo status`
-says it back.
+It reports each alias the configuration declares, whether it is authenticated,
+which half of the pool it is in, and the login to run for one that is not. Every
+run from then on records the account it was served by, and `yoyo status` says it
+back.
 NEXT

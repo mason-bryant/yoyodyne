@@ -652,8 +652,13 @@ The script asks the three questions and runs the login:
 
 ```sh
 bash bin/yoyo-account            # asks for the alias, the pool, and an optional weekly budget
-bash bin/yoyo-account --check    # says whether each provider home on this machine is signed in
 ```
+
+It signs an account in and prints the entry to add; it reports nothing about
+which accounts exist or whether they are signed in. `yoyo doctor` answers that
+and is the only thing that does — it reads the configuration, so it knows about
+an alias you declared and have not signed in to yet, which is the state worth
+catching and the one a checker working from directories on disk would miss.
 
 Or by hand, which is the same three steps:
 
