@@ -195,16 +195,26 @@ func (c Config) AccountAlias() string {
 	}
 }
 
-// AgentAccountAlias is the account one configured agent runs under: the one its
-// entry names, or — where it names none, which is every agent in a project with
-// a single account — the configuration's own.
+// AgentAccountAlias is the account one configured agent's own invocations are
+// made under: the one its entry names, or — where it names none, which is every
+// agent in a project with a single account — the configuration's own.
+//
+// What this answers for is an invocation that belongs to an agent rather than to
+// a work item: a conversation, an exchange round, and a branch review. Those sit
+// still while runs rotate, because a conversation lasts for weeks and an agent
+// that moved between accounts each turn would have no provider session left to
+// resume. A run is not one of them — it belongs to the item it serves, and the
+// pool is what chooses for it, so nothing in the run pipeline reads this.
+//
+// That split is why a per-agent entry does not pin a run. `yoyo init` writes
+// `account: default` onto every agent it generates, so honouring the entry for
+// runs would leave a scaffolded project rotating nothing the day it declared a
+// second account — pooling configured and doing nothing. Taking an account out
+// of the rotation is what the reserved half is for.
 //
 // A pooled project whose agent named no account is served by the first of the
-// active half rather than by the rotation. That is deliberate and it is the one
-// place the pool does not rotate: what this answers for is a conversation, which
-// belongs to its agent and lasts for weeks, and an agent that moved between
-// accounts each turn would have no provider session left to resume. Runs
-// rotate; conversations sit still.
+// active half, which is a stable choice rather than a rotating one for the same
+// reason.
 func (c Config) AgentAccountAlias(name string) string {
 	if alias := strings.TrimSpace(c.Agents[name].Account); alias != "" {
 		return alias

@@ -2920,9 +2920,21 @@ agent and lasts for weeks, so it is held under the account that agent's entry
 names, or under the first active account where it names none. An agent that moved
 between accounts each turn would have no provider session left to resume.
 
-**Which roles run where is still yours.** An agent whose entry names an `account`
-runs under that one and nothing chooses at run time; the pool is what serves the
-agents that name none.
+**A per-agent `account` governs that agent's own invocations, not the runs it
+serves.** Under a pool the split is by what the invocation belongs to rather than
+by which role makes it: a conversation, an exchange round, and a branch review
+belong to their agent and are made under the account that agent's entry names, or
+under the first active account where it names none. A run belongs to the work
+item, so it is served by the rotation whichever agent's entry the developer and
+reviewer invocations came from.
+
+That is deliberate rather than an omission. `yoyo init` writes `account: default`
+onto every agent it generates, so honouring the per-agent entry for runs would
+mean that adding a second account to a project the harness scaffolded rotated
+nothing at all — pooling would read as configured and do nothing, which is the
+one failure that looks exactly like success. Taking an account out of the
+rotation is what `pool: reserved` is for, and standing one down is what
+`weekly_budget_usd` is for.
 
 **A pool with nothing left to spend refuses before it claims anything.** When
 every account is over its weekly budget, the run is refused at the point the

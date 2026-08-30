@@ -11,10 +11,12 @@ package cli
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -136,6 +138,32 @@ func TestAProjectWithOneAccountIsAnsweredWithoutPricingAnything(t *testing.T) {
 	}
 	if chosen.Alias != "work" || chosen.Directory != "" {
 		t.Fatalf("ChooseAccount() = %#v, want the lone account in the machine's own home", chosen)
+	}
+}
+
+// An operator meets an unauthenticated account from two directions — `yoyo
+// doctor` reporting it, and a conversation refusing to open on it — and has to
+// be handed the same command by both. Two spellings of one remedy is a question
+// about which of them is real, and the one that omitted the `mkdir` would fail
+// for exactly the alias this is a remedy for: one that has never been signed in,
+// whose provider home therefore does not exist yet.
+func TestTheLoginRemedyIsTheOneTheDiagnosisPrints(t *testing.T) {
+	t.Parallel()
+
+	pooled := config.AccountEndpoint{Alias: "second", Directory: "/state/accounts/second"}
+	remedy := accountLoginCommand(pooled)
+	if want := doctor.AccountLoginCommand(pooled.Directory); remedy != want {
+		t.Fatalf("the conversation's remedy = %q, want the diagnosis's %q", remedy, want)
+	}
+	if !strings.Contains(remedy, "mkdir -p") || !strings.Contains(remedy, pooled.Directory) {
+		t.Fatalf("remedy = %q, want it to create and name the home the alias signs in to", remedy)
+	}
+
+	// The default alias signs in where the machine already does, so its remedy is
+	// the provider's own and has no home to make.
+	lone := accountLoginCommand(config.AccountEndpoint{Alias: config.DefaultAccountAlias})
+	if lone != "claude auth login" {
+		t.Fatalf("the default alias remedy = %q, want the provider's own login", lone)
 	}
 }
 

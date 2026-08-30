@@ -11,24 +11,20 @@ package cli
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/mason-bryant/yoyodyne/internal/config"
+	"github.com/mason-bryant/yoyodyne/internal/doctor"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
 // accountLoginCommand is what an operator runs to sign one configured account
-// in. The default account authenticates where the machine already does, so its
-// command is the provider's own; every other alias has a provider home of its
-// own, and the command names it. It is a command rather than a description for
-// the reason every remedy in `yoyo doctor` is one: what is printed under a
-// problem should be what to run.
+// in. It is the diagnosis's own command rather than a second spelling of it:
+// `yoyo doctor` reports an account that is not authenticated and a conversation
+// refuses to open on one, and an operator who met that condition from either
+// direction has to be handed the same thing to run.
 func accountLoginCommand(account config.AccountEndpoint) string {
-	if strings.TrimSpace(account.Directory) == "" {
-		return "claude auth login"
-	}
-	return "CLAUDE_CONFIG_DIR=" + shellQuote(account.Directory) + " claude auth login"
+	return doctor.AccountLoginCommand(account.Directory)
 }
 
 // weeklyBudgetWindow is the seven days a weekly budget is measured over. It is a

@@ -700,7 +700,7 @@ func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, descrip
 	check := "account:" + alias
 	membership := cfg.Accounts[alias].Membership()
 	directory := endpoint.Directory
-	login := accountLoginCommand(directory)
+	login := AccountLoginCommand(directory)
 	availability, err := (claudecode.Backend{Runner: d.env.Runner, Binary: descriptor.Binary, ConfigDir: directory}).CheckAvailability(ctx)
 	switch {
 	case err != nil:
@@ -739,10 +739,18 @@ func (d *diagnosis) checkAccount(ctx context.Context, cfg config.Config, descrip
 	}
 }
 
-// accountLoginCommand is what signs one account in. The default alias
+// AccountLoginCommand is what signs one account in. The default alias
 // authenticates where the machine already does, so its command is the
-// provider's own; every other alias names the home it is signing in to.
-func accountLoginCommand(directory string) string {
+// provider's own; every other alias names the home it is signing in to, and
+// creates it, because an alias that has never been signed in is exactly the case
+// this is a remedy for and its home does not exist yet.
+//
+// It is exported because it is the answer to a question two surfaces ask: this
+// diagnosis reports an account that is not authenticated, and a conversation
+// refuses to open on one. An operator who met the same condition twice and was
+// handed two different commands would have to work out which of them was the
+// real one, so there is one command and both read it from here.
+func AccountLoginCommand(directory string) string {
 	if strings.TrimSpace(directory) == "" {
 		return "claude auth login"
 	}
