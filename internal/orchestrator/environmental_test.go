@@ -1,24 +1,33 @@
 package orchestrator
 
-// Tonight's three cases, replayed against a real repository.
+// A round the environment refused, against a real repository.
 //
-// Each of them was an item that had been granted a repair, dispatched into a
+// The field cases were items that had been granted a repair, dispatched into a
 // clean worktree by a build that did not carry the gate the grant relied on, and
 // charged for the round anyway. The grant was gone, the item was one step nearer
 // its cap, and the escalation that followed reads afterwards as work nobody could
-// finish. These tests are that sequence with the accounting asserted: the run
-// refuses, the round is classified environmental, and the item stands exactly
-// where it stood before it.
+// finish.
+//
+// Four tests, and each asserts a different half of the class. The first is that
+// sequence with the accounting asserted: the run refuses, the round is classified
+// environmental, and the item stands exactly where it stood before it. The second
+// is the same failure repeated past what the round budget has room for, which is
+// the bound the item asks for rather than one case of it. The third is the
+// conjunction from the other side — an empty delivery with no environmental
+// cause still spends. The fourth is a cause the harness recognizes from the
+// failure alone rather than from a refusal site of its own.
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
 
@@ -226,6 +235,69 @@ func TestAnEmptyDeliveryWithNoEnvironmentalCauseStillSpends(t *testing.T) {
 	if invocations := len(provider.requestsForRole(domain.RoleDeveloper)); invocations == 0 {
 		t.Fatal("no developer was invoked, so this is not the empty delivery the test is about")
 	}
+}
+
+// A cause the harness recognizes from the failure that ended the run rather than
+// from a refusal site of its own. A worktree that could not be cut from the
+// primary checkout is the environment refusing the round as squarely as an empty
+// handback is, and it reaches the class through the sentinel the refusing package
+// declares rather than through a message somebody could reword.
+func TestARoundTurnedAwayByThePrimaryCheckoutIsRefusedEnvironmentally(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	provider := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a developer was invoked in %s, and no worktree was ever cut for this run", request.WorkingDirectory)
+		return nil
+	}, approveVerdict)
+	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+	starting.NewRunID = runstate.NewRunID
+	starting.Worktrees = dirtyPrimaryWorktrees{starting.Worktrees}
+
+	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() started work in a checkout no worktree could be cut from")
+	}
+	if outcome.Environmental == nil {
+		t.Fatalf("outcome = %#v, want the round classified by the cause its failure names", outcome)
+	}
+	if outcome.Environmental.Cause != runstate.CauseDirtyPrimary {
+		t.Fatalf("environmental cause = %q, want %q", outcome.Environmental.Cause, runstate.CauseDirtyPrimary)
+	}
+	if !outcome.Environmental.Settled || !outcome.Environmental.Refused {
+		t.Fatalf("environmental = %#v, want the round settled and refused", outcome.Environmental)
+	}
+	// It reached nothing that spends — no worktree, no reviewer, no grant — so
+	// there was nothing to give back, and the record says that rather than
+	// claiming a return.
+	if outcome.Environmental.RoundReturned || outcome.Environmental.GrantReturned {
+		t.Fatalf("environmental = %#v, want a round that reached nothing that spends to have returned nothing", outcome.Environmental)
+	}
+	if outcome.Environmental.Problem != "" {
+		t.Fatalf("the settle reported a problem it did not have: %s", outcome.Environmental.Problem)
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 || counters.RepairGrants != 0 {
+		t.Fatalf("counters = %#v, want an item charged nothing for a round the environment turned away", counters)
+	}
+}
+
+// dirtyPrimaryWorktrees passes the readiness gate and then refuses to cut a
+// worktree, which is the window that gate cannot close: the checkout is the
+// harness's to read at the moment it is asked and somebody's to write into a
+// moment later. It is also the only route to the refusal that ends a run — the
+// gate before the claim turns a run away before there is any run to record
+// anything on.
+type dirtyPrimaryWorktrees struct {
+	WorktreeManager
+}
+
+func (dirtyPrimaryWorktrees) Create(context.Context, gitworktree.CreateRequest) (gitworktree.Worktree, error) {
+	return gitworktree.Worktree{}, fmt.Errorf("%w: primary repository has uncommitted changes: notes.txt", gitworktree.ErrPrimaryNotReady)
 }
 
 // continueOnGrant records what carrying out a repair grant records on the run

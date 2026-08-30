@@ -244,6 +244,13 @@ var (
 	// never resolves a conflict, because which side of one is right is a
 	// judgement about the product rather than a Git operation.
 	ErrRebaseConflict = errors.New("change cannot be replayed onto the moved integration target")
+	// ErrPrimaryNotReady reports the primary checkout carrying uncommitted state
+	// the harness does not own, so no worktree may be cut from it and no change
+	// may be promoted into it. It is a sentinel rather than only a message because
+	// a caller has to tell it from every other reason a Git operation refused: a
+	// round turned away by this delivered nothing because the environment was
+	// wrong, which is a different fact about the work than a change that failed.
+	ErrPrimaryNotReady = errors.New("the primary checkout is not as the harness left it")
 )
 
 type ChangeSummary struct {
@@ -496,7 +503,12 @@ func (m *Manager) ValidateReady(ctx context.Context) error {
 		return err
 	}
 	if len(unexpected) > 0 {
-		return fmt.Errorf("primary repository has uncommitted changes: %s", strings.Join(unexpected, ", "))
+		// Named by the sentinel as well as in words: a caller deciding what a
+		// refused round cost has to tell a dirty checkout from every other reason a
+		// Git operation can refuse, and the message alone is not something to match
+		// on. The repository failures above are deliberately not wrapped in it —
+		// "there is no repository here" is not a checkout somebody left dirty.
+		return fmt.Errorf("%w: primary repository has uncommitted changes: %s", ErrPrimaryNotReady, strings.Join(unexpected, ", "))
 	}
 	return nil
 }

@@ -95,6 +95,7 @@ func TestAnEnvironmentalRefusalIsHeldToWhatCouldHaveWrittenIt(t *testing.T) {
 		Cause:         CauseHandbackMissingChange,
 		Detail:        "the worktree holds no change at all against the base commit the run recorded",
 		RecordedAt:    time.Now(),
+		Settled:       true,
 		Refused:       true,
 		GrantReturned: true,
 	}
@@ -112,13 +113,52 @@ func TestAnEnvironmentalRefusalIsHeldToWhatCouldHaveWrittenIt(t *testing.T) {
 		name   string
 		broken EnvironmentalRefusal
 	}{
-		{name: "a cause nothing declared", broken: EnvironmentalRefusal{Cause: "the-network-was-slow", RecordedAt: time.Now()}},
-		{name: "a return with no refusal", broken: EnvironmentalRefusal{Cause: CauseDirtyPrimary, RecordedAt: time.Now(), RoundReturned: true}},
+		{name: "a cause nothing declared", broken: EnvironmentalRefusal{Cause: "the-network-was-slow", RecordedAt: time.Now(), Settled: true}},
+		{name: "a return with no refusal", broken: EnvironmentalRefusal{Cause: CauseDirtyPrimary, RecordedAt: time.Now(), Settled: true, RoundReturned: true}},
+		{name: "a refusal no settle made", broken: EnvironmentalRefusal{Cause: CauseDirtyPrimary, RecordedAt: time.Now(), Refused: true}},
 		{name: "no moment", broken: EnvironmentalRefusal{Cause: CauseSandboxSpawnFailure}},
 	} {
 		if err := test.broken.Validate(); err == nil {
 			t.Errorf("Validate() accepted %s", test.name)
 		}
+	}
+}
+
+// Describe never claims an accounting that did not happen. The three readings
+// that would mislead an operator are the ones asserted: a round nothing has
+// decided about yet, a refusal that reached nothing to give back, and a refusal
+// whose return could not be written — where the item's counters really are
+// higher than the round cost it.
+func TestAnEnvironmentalRefusalDescribesOnlyWhatItActuallyGaveBack(t *testing.T) {
+	t.Parallel()
+
+	unsettled := EnvironmentalRefusal{Cause: CauseSandboxSpawnFailure, RecordedAt: time.Now()}
+	if described := unsettled.Describe(); !strings.Contains(described, "has not settled") {
+		t.Fatalf("Describe() = %q, want an undecided round said as one", described)
+	}
+
+	nothingToReturn := EnvironmentalRefusal{Cause: CauseDirtyPrimary, RecordedAt: time.Now(), Settled: true, Refused: true}
+	described := nothingToReturn.Describe()
+	if !strings.Contains(described, "reached nothing that spends") {
+		t.Fatalf("Describe() = %q, want a refusal with nothing to give back said as one", described)
+	}
+	if strings.Contains(described, "was returned") {
+		t.Fatalf("Describe() = %q claims a return it never made", described)
+	}
+
+	unpaid := EnvironmentalRefusal{
+		Cause:      CauseHandbackMissingChange,
+		RecordedAt: time.Now(),
+		Settled:    true,
+		Refused:    true,
+		Problem:    "the review round attempt run-a#3 was charged could not be returned",
+	}
+	described = unpaid.Describe()
+	if !strings.Contains(described, "could not be written") || !strings.Contains(described, "counters are higher") {
+		t.Fatalf("Describe() = %q, want the one state where the counters are wrong said plainly", described)
+	}
+	if strings.Contains(described, "stands where it did") || strings.Contains(described, "was returned") {
+		t.Fatalf("Describe() = %q tells a reader the item stands where it did while its counters say otherwise", described)
 	}
 }
 
@@ -133,6 +173,7 @@ func TestAnEnvironmentalRefusalSurvivesTheRunRecord(t *testing.T) {
 		Cause:         CauseStaleBinaryDispatch,
 		Detail:        "the build that dispatched this round predates the gate the grant relied on",
 		RecordedAt:    time.Now().UTC().Truncate(time.Second),
+		Settled:       true,
 		Refused:       true,
 		RoundReturned: true,
 		GrantReturned: true,
@@ -154,7 +195,7 @@ func TestAnEnvironmentalRefusalSurvivesTheRunRecord(t *testing.T) {
 	if !recorded.RecordedAt.Equal(state.Environmental.RecordedAt) {
 		t.Fatalf("loaded recorded_at = %s, want %s", recorded.RecordedAt, state.Environmental.RecordedAt)
 	}
-	if !recorded.Refused || !recorded.RoundReturned || !recorded.GrantReturned {
+	if !recorded.Settled || !recorded.Refused || !recorded.RoundReturned || !recorded.GrantReturned {
 		t.Fatalf("loaded environmental = %#v, want what the settle gave back to have survived the write", recorded)
 	}
 }

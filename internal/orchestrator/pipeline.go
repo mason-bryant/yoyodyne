@@ -831,7 +831,17 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// process left it, still resumable, rather than spending an attempt on work
 	// that could not be integrated afterwards anyway.
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
-		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
+		refused := fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err)
+		// The round this would have been is turned away by the environment, so the
+		// run says so rather than leaving the reason in an error a caller prints
+		// once. Nothing is charged here — the run is untouched and resumable — and
+		// the settle records exactly that.
+		if named, environmental := environmentalCauseOf(err); environmental {
+			if recordErr := p.refuseDispatchEnvironmentally(state, named, err.Error()); recordErr != nil {
+				refused = errors.Join(refused, recordErr)
+			}
+		}
+		return Outcome{}, refused
 	}
 	// The invariants are re-read rather than carried in run state: they are the
 	// repository's current constraints, and a resumed attempt must be held to what
@@ -1760,9 +1770,13 @@ func (a *activeRun) recordEnvironmentalRefusal(cause runstate.EnvironmentalCause
 // both carry it, and the round stays spent until somebody looks.
 func (a *activeRun) settleEnvironmentalRound() {
 	refusal := a.state.Environmental
-	if refusal == nil || refusal.Refused {
+	if refusal == nil || refusal.Settled {
 		return
 	}
+	// Whatever this concludes, it concludes once. A round is settled where it
+	// ends, and a later round of the same run is judged on its own evidence rather
+	// than inheriting a cause recorded before it.
+	refusal.Settled = true
 	settleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	delivered, err := a.roundDelivered(settleCtx)
@@ -1792,8 +1806,8 @@ func (a *activeRun) settleEnvironmentalRound() {
 	}
 	refusal.RoundReturned = returned
 	// And the granted repair round the continuation consumed, which is the budget
-	// tonight's three cases actually burned: the grant itself still stands, and
-	// this is what stops the run's record saying it was carried out.
+	// the field cases actually burned: the grant itself still stands, and this is
+	// what stops the run's record saying it was carried out.
 	refusal.GrantReturned = a.state.ReturnGrantedRound()
 	a.outcome.Environmental = refusal
 }
@@ -1804,14 +1818,71 @@ func (a *activeRun) settleEnvironmentalRound() {
 // own durable record, which is the same worktree the handback gate asked about
 // and the only account of it that survives the process that made it.
 func (a *activeRun) roundDelivered(ctx context.Context) (bool, error) {
+	// A run with no worktree recorded delivered nothing, and that is proved rather
+	// than assumed: the harness never gave it anywhere to deliver to. It is the
+	// state a run refused before its worktree could be cut is in, which is exactly
+	// a round the environment turned away.
 	if a.state.WorktreePath == "" || a.state.BaseCommit == "" {
-		return false, errors.New("the run recorded no worktree and base commit to read its change against")
+		return false, nil
 	}
 	changed, err := a.pipeline.Worktrees.ChangedPaths(ctx, worktreeOf(a.state))
 	if err != nil {
 		return false, err
 	}
 	return len(changed) > 0, nil
+}
+
+// environmentalCauseOf reports the environmental cause a failure names, where it
+// names one. It is how the causes the harness recognizes from the failure alone
+// reach the record: a run turned away because the primary checkout was not the
+// harness's to cut from, and one whose provider invocation the machine never
+// started at all. Both are the environment rather than the work, and neither has
+// a refusal site of its own to record at — they surface as the error that ends
+// the run.
+//
+// Nothing here guesses. A cause is named only by a sentinel the refusing package
+// declares, so a message somebody rewords cannot silently move a round into or
+// out of a class that returns budget.
+func environmentalCauseOf(failure error) (runstate.EnvironmentalCause, bool) {
+	switch {
+	case errors.Is(failure, gitworktree.ErrPrimaryNotReady):
+		return runstate.CauseDirtyPrimary, true
+	case errors.Is(failure, execution.ErrProcessNotStarted):
+		return runstate.CauseSandboxSpawnFailure, true
+	default:
+		return "", false
+	}
+}
+
+// refuseDispatchEnvironmentally records, on a run the harness turned away before
+// it entered it at all, that the environment is what turned it away.
+//
+// It exists for the one refusal outside the run's own machinery: a resumed run
+// turned back because the repository is not in a state anything may be resumed
+// against. The dispatch never became a round, so what it delivered is nothing —
+// not because a worktree is empty, which is how a round that ran is measured, but
+// because nothing ran. That is why the class is settled here without asking the
+// worktree: the worktree holds whatever earlier rounds left, and none of it is
+// this dispatch's.
+//
+// It gives nothing back, and says so. Nothing was charged: the run stays exactly
+// as the interrupted process left it, with its attempt and its grant still live
+// and still to be spent when it is resumed. What this buys is not an accounting
+// correction but the record and the surfaces saying what happened, which is
+// otherwise lost in an error a caller prints once.
+//
+// A record that could not be written is reported beside the refusal rather than
+// in place of it: the refusal stands either way, and the run is untouched.
+func (p Pipeline) refuseDispatchEnvironmentally(state runstate.State, cause runstate.EnvironmentalCause, detail string) error {
+	turned := &activeRun{pipeline: p, state: state}
+	turned.recordEnvironmentalRefusal(cause, detail)
+	turned.state.Environmental.Settled = true
+	turned.state.Environmental.Refused = true
+	turned.state.UpdatedAt = p.clock().Now()
+	if err := p.Store.Save(turned.state); err != nil {
+		return fmt.Errorf("record the environmental refusal of run %s: %w", state.RunID, err)
+	}
+	return nil
 }
 
 // blockOnRefusedPaths ends a run whose repair budget was spent still touching
@@ -3517,6 +3588,18 @@ func (a *activeRun) pauseForOperatorHold(paused operatorHoldPause) (Outcome, err
 // durable state, the reported outcome, and the work item when the run holds it.
 func (a *activeRun) fail(cause error, status runstate.Status) (Outcome, error) {
 	p := a.pipeline
+	// A failure that names an environmental cause is recorded as one here, which
+	// is where the causes with no refusal site of their own reach the record: a
+	// worktree that could not be cut from the primary checkout, a provider
+	// invocation the machine never started. A refusal site that already recorded
+	// one knew more than the error does and is left alone; a settled record
+	// belongs to a round that has already ended, so it does not stand in the way
+	// of this one.
+	if a.state.Environmental == nil || a.state.Environmental.Settled {
+		if named, environmental := environmentalCauseOf(cause); environmental {
+			a.recordEnvironmentalRefusal(named, cause.Error())
+		}
+	}
 	// This is where a round settles, so it is where the environment refusing one
 	// is decided and paid back. It happens before the terminal write below, so the
 	// record that ends the run carries the classification, and before the docket

@@ -30,6 +30,14 @@ const (
 	ProcessStalled ProcessStatus = "stalled"
 )
 
+// ErrProcessNotStarted reports a process the operating system never began
+// running: the binary could not be executed, or the sandbox it would have run
+// in refused to spawn it. It is a sentinel rather than only a message because a
+// caller has to tell it from a process that ran and failed — nothing was asked
+// and nothing answered, so what the invocation would have produced is not
+// evidence about the work but about the machine.
+var ErrProcessNotStarted = errors.New("the process was never started")
+
 type Stream string
 
 const (
@@ -149,7 +157,7 @@ func (r OSProcessRunner) Run(ctx context.Context, command Command, observer Outp
 
 	result := ProcessResult{StartedAt: clock.Now(), ExitCode: -1}
 	if err := process.Start(); err != nil {
-		return result, fmt.Errorf("start %q: %w", command.Name, err)
+		return result, fmt.Errorf("%w: start %q: %w", ErrProcessNotStarted, command.Name, err)
 	}
 
 	outputs := make(chan Output)

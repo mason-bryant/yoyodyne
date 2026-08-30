@@ -601,6 +601,14 @@ func blockerText(state runstate.State) string {
 // item that has just spent another round toward its cap, and the opposite is
 // true — the round was returned and the item stands where it did.
 //
+// It says what was actually given back rather than a claim about "budget". Two
+// of the cases are exactly where a claim would be false: a round refused before
+// it reached anything that spends had nothing to give back, and a round whose
+// return the settle decided on and could not write leaves the item's counters
+// genuinely higher than what it cost. Telling a reader "spent no budget" in the
+// second one is the misreading this whole class exists to prevent, so it is the
+// one thing this says loudest.
+//
 // It is silent on every ordinary stoppage, and on a run that recorded a cause
 // and delivered a change anyway, because that round spent as any round does.
 func environmentallyRefused(state runstate.State) string {
@@ -608,7 +616,19 @@ func environmentallyRefused(state runstate.State) string {
 	if refused == nil || !refused.Refused {
 		return ""
 	}
-	return fmt.Sprintf("environmentally refused (%s), so this round spent no budget and counted toward no cap — ", refused.Cause)
+	if strings.TrimSpace(refused.Problem) != "" {
+		return fmt.Sprintf("environmentally refused (%s), and what it should have been given back could not be written, so this item's counters are higher than the round cost it — ", refused.Cause)
+	}
+	switch {
+	case refused.RoundReturned && refused.GrantReturned:
+		return fmt.Sprintf("environmentally refused (%s), so the review round it was charged and the granted repair round it consumed were both returned — ", refused.Cause)
+	case refused.RoundReturned:
+		return fmt.Sprintf("environmentally refused (%s), so the review round it was charged was returned — ", refused.Cause)
+	case refused.GrantReturned:
+		return fmt.Sprintf("environmentally refused (%s), so the granted repair round it consumed was returned — ", refused.Cause)
+	default:
+		return fmt.Sprintf("environmentally refused (%s), and it reached nothing that spends, so there was nothing to give back — ", refused.Cause)
+	}
 }
 
 func mergeQueued(state runstate.State) bool {

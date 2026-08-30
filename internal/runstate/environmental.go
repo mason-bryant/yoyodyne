@@ -68,8 +68,17 @@ const (
 	// CauseStaleBinaryDispatch is a round dispatched by a build of the harness
 	// older than the one the decision was made against, so the gates the decision
 	// relied on were not in the binary that carried it out. It is the cause that
-	// spent tonight's three rounds, and the one that is hardest to see from the
-	// round's own record: everything downstream of it looks perfectly valid.
+	// spent the three rounds this class was built for, and the one that is hardest
+	// to see: a stale build does not refuse, it proceeds, and everything
+	// downstream of it looks perfectly valid.
+	//
+	// Nothing writes it yet, and that is a gap rather than an oversight. There is
+	// no refusal site to hang it on, because the failure is precisely the absence
+	// of one; recognizing it needs the harness to record which build reserved a run
+	// and which build carried out each triage decision, and to compare the two at
+	// dispatch. Until that exists a round refused this way is caught by whichever
+	// of the causes above its symptom trips — which is how the field cases reached
+	// this class, as handback-missing-change.
 	CauseStaleBinaryDispatch EnvironmentalCause = "stale-binary-dispatch"
 )
 
@@ -109,9 +118,10 @@ func (c EnvironmentalCause) Title() string {
 // The cause is written where the refusal is decided, because that is the only
 // place that knows which one it was. Everything after it is written at settle,
 // which is the first point the other half of the definition — an empty
-// delivery — can be asked. A record carrying a cause and nothing else is a run
-// that has not settled yet, or one whose settle could not read the worktree, and
-// Problem is what tells those apart.
+// delivery — can be asked. Settled is what says the round got that far at all,
+// and Problem is what says a settle that got there could not finish: those are
+// three different states, and a reader shown one as another decides an
+// escalation against a figure the harness knows is wrong.
 type EnvironmentalRefusal struct {
 	Cause EnvironmentalCause `json:"cause"`
 	// Detail is the harness's own account of what it found, folded to a line. It
@@ -120,6 +130,12 @@ type EnvironmentalRefusal struct {
 	// it.
 	Detail     string    `json:"detail,omitempty"`
 	RecordedAt time.Time `json:"recorded_at"`
+	// Settled says the round this cause belongs to has ended and the class was
+	// decided on it. It is what makes the settle one-shot: a cause recorded on a
+	// round the harness turned away without charging it is settled there and then,
+	// so a later round of the same run that happens to deliver nothing is judged on
+	// its own evidence instead of inheriting this one's.
+	Settled bool `json:"settled,omitempty"`
 	// Refused says the settle found both halves of the definition and classified
 	// the round environmental. It is false on a round that recorded a cause and
 	// delivered a change anyway, which spends exactly as any other round does —
@@ -156,40 +172,66 @@ func (r EnvironmentalRefusal) Validate() error {
 	if r.RecordedAt.IsZero() {
 		problems = append(problems, errors.New("recorded_at is required"))
 	}
-	// Something given back is something that was classified, and nothing else
-	// writes either flag. A record the other way round could not have been written
-	// by the settle, which is the only thing that writes them.
+	// Something given back is something that was classified, and a classification
+	// is something a settle made. A record the other way round could not have been
+	// written by the settle, which is the only thing that writes any of the three.
 	if (r.RoundReturned || r.GrantReturned) && !r.Refused {
 		problems = append(problems, errors.New("a round or grant returned requires the refusal that returned it"))
+	}
+	if r.Refused && !r.Settled {
+		problems = append(problems, errors.New("a refused round requires the settle that classified it"))
 	}
 	return errors.Join(problems...)
 }
 
 // Describe says what one refusal came to, the way a reader of a docket entry or
 // a thread reads it: which environmental failure it was, and what the item was
-// therefore not charged. A refusal that returned nothing says so rather than
-// staying silent, because "environmentally refused" with no accounting after it
-// is exactly the sentence a reader would take on trust.
+// therefore not charged.
+//
+// It never says "spent nothing" on a figure it did not actually give back. A
+// refusal that returned nothing says so, because "environmentally refused" with
+// no accounting after it is exactly the sentence a reader takes on trust; and a
+// refusal whose return could not be written says that loudest of all, because
+// that is the one state where the item's counters really are higher than what it
+// cost and nothing has corrected them.
 func (r EnvironmentalRefusal) Describe() string {
-	if !r.Refused {
-		return fmt.Sprintf("%s (%s), and the round delivered a change all the same, so it spent as any round does",
-			r.Cause, r.Cause.Title())
-	}
-	returned := "so it spent no budget and counted toward no cap"
+	named := fmt.Sprintf("%s (%s)", r.Cause, r.Cause.Title())
+	described := ""
 	switch {
-	case r.RoundReturned && r.GrantReturned:
-		returned = "so the review round it was charged and the granted repair round it consumed were both returned"
-	case r.RoundReturned:
-		returned = "so the review round it was charged was returned; no repair grant had been consumed"
-	case r.GrantReturned:
-		returned = "so the granted repair round it consumed was returned; no review round had been charged"
+	case !r.Settled:
+		described = fmt.Sprintf("environmental cause recorded: %s; the round it belongs to has not settled, so nothing has been decided about what it cost", named)
+	case !r.Refused && strings.TrimSpace(r.Problem) != "":
+		described = fmt.Sprintf("environmental cause recorded: %s, and whether the round delivered anything could not be read, so it spent as any round does", named)
+	case !r.Refused:
+		described = fmt.Sprintf("environmental cause recorded: %s, and the round delivered a change all the same, so it spent as any round does", named)
+	case strings.TrimSpace(r.Problem) != "":
+		described = fmt.Sprintf("environmentally refused: %s, and what it should have been given back could not be written, so this item's counters are higher than the round cost it", named)
+	default:
+		described = fmt.Sprintf("environmentally refused: %s, %s", named, r.returned())
 	}
-	described := fmt.Sprintf("environmentally refused: %s (%s), %s", r.Cause, r.Cause.Title(), returned)
 	if detail := strings.TrimSpace(r.Detail); detail != "" {
 		described += " — " + detail
 	}
 	if problem := strings.TrimSpace(r.Problem); problem != "" {
-		described += "; what could not be returned: " + problem
+		described += "; " + problem
 	}
 	return described
+}
+
+// returned is what a refused round actually gave back, said only where the
+// return was written. Either figure can be absent on a real refusal — a round
+// turned away before any reviewer was asked was charged no review round, and one
+// no grant bought consumed no granted round — so the four cases are stated apart
+// rather than collapsed into a claim about "budget".
+func (r EnvironmentalRefusal) returned() string {
+	switch {
+	case r.RoundReturned && r.GrantReturned:
+		return "so the review round it was charged and the granted repair round it consumed were both returned"
+	case r.RoundReturned:
+		return "so the review round it was charged was returned; no repair grant had been consumed"
+	case r.GrantReturned:
+		return "so the granted repair round it consumed was returned; no review round had been charged"
+	default:
+		return "and it reached nothing that spends, so there was nothing to give back"
+	}
 }

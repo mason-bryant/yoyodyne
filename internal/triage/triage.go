@@ -181,9 +181,11 @@ type Publication struct {
 type Environmental struct {
 	Cause  string `json:"cause"`
 	Detail string `json:"detail,omitempty"`
-	// Refused says the round was classified environmental and its budgets given
-	// back. False is a cause recorded on a round that delivered a change anyway,
-	// which spent exactly as any round does, or on one whose settle could not tell.
+	// Settled says the round the cause belongs to has ended and the class was
+	// decided on it; Refused says the class applied. False for Refused is a cause
+	// recorded on a round that delivered a change anyway, which spent exactly as
+	// any round does, or on one whose settle could not tell.
+	Settled       bool `json:"settled,omitempty"`
 	Refused       bool `json:"refused,omitempty"`
 	RoundReturned bool `json:"round_returned,omitempty"`
 	GrantReturned bool `json:"grant_returned,omitempty"`
@@ -607,8 +609,19 @@ func (e Entry) renderEnvironmental() string {
 		return ""
 	}
 	if !refused.Refused {
-		return indented(fmt.Sprintf("Environmental cause recorded (%s)", refused.Cause),
-			"The round delivered a change all the same, so it spent as any round does and the counters below are what this item has cost.\n"+refused.Detail)
+		said := []string{"The round delivered a change all the same, so it spent as any round does and the counters below are what this item has cost."}
+		switch {
+		case !refused.Settled:
+			said = []string{"The round this belongs to has not settled, so nothing has been decided about what it cost and the counters below are what the item has been charged so far."}
+		case strings.TrimSpace(refused.Problem) != "":
+			said = []string{"Whether the round delivered anything could not be read, so it was left spent and the counters below include it."}
+		}
+		for _, line := range []string{refused.Detail, refused.Problem} {
+			if trimmed := strings.TrimSpace(line); trimmed != "" {
+				said = append(said, trimmed)
+			}
+		}
+		return indented(fmt.Sprintf("Environmental cause recorded (%s)", refused.Cause), strings.Join(said, "\n"))
 	}
 	var rendered strings.Builder
 	fmt.Fprintf(&rendered, "      Environmentally refused (%s): %s\n", refused.Cause, environmentalReturn(*refused))
@@ -617,7 +630,7 @@ func (e Entry) renderEnvironmental() string {
 	}
 	if problem := strings.TrimSpace(refused.Problem); problem != "" {
 		rendered.WriteString(indented("This refusal could not be paid back in full",
-			problem+"\nThe counters below therefore include a round this item did not cost: read them as one higher than the item stands at."))
+			problem+"\nThe counters below therefore include a round this item did not cost: read them as higher than the item stands at."))
 	}
 	return rendered.String()
 }
@@ -627,6 +640,13 @@ func (e Entry) renderEnvironmental() string {
 // refused before any reviewer was asked had no round to give back, and a reader
 // who saw "refused" and no accounting would take the accounting on trust.
 func environmentalReturn(refused Environmental) string {
+	// A return the settle decided on and could not write is the one state where
+	// the counters really are higher than what the item cost, so it is said here
+	// rather than only in the block below: a reader who takes in the headline and
+	// nothing else must not come away believing the item stands where it did.
+	if strings.TrimSpace(refused.Problem) != "" {
+		return "what it should have been given back could not be written, so the counters below are higher than this round cost the item"
+	}
 	switch {
 	case refused.RoundReturned && refused.GrantReturned:
 		return "the review round it was charged and the granted repair round it consumed were both returned, so this item stands where it did before the round"
@@ -635,7 +655,7 @@ func environmentalReturn(refused Environmental) string {
 	case refused.GrantReturned:
 		return "the granted repair round it consumed was returned, and no review round had been charged, so this item stands where it did before the round"
 	default:
-		return "the round reached nothing that spends, so this item stands where it did before it"
+		return "it reached nothing that spends, so this item stands where it did before it"
 	}
 }
 

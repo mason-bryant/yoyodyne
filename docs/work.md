@@ -86,7 +86,17 @@ delivered a change anyway spends as any round does — and an empty delivery wit
 no cause recorded spends too, so laziness cannot hide in the class. Where it
 applies, the run's record, the docket entry, and the thread all say so beside the
 counters, because a stoppage whose last round was refused means something
-different about how close the item is to its cap.
+different about how close the item is to its cap — including the one case where
+the harness classified the round and could not write the return, which every one
+of those surfaces says out loud rather than claiming the item stands where it did.
+
+Three of those four causes are recognized today. The last one is not: a stale
+build does not refuse, it proceeds, so there is no refusal to hang the cause on,
+and recognizing it needs the harness to record which build reserved a run and
+which build carried out each triage decision and to compare the two at dispatch.
+Until that exists a stale dispatch reaches the class only through whichever
+symptom it trips — which is how the field cases reached it, as a handback holding
+none of its change.
 
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the

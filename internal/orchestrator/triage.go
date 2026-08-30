@@ -578,6 +578,7 @@ func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environ
 	return &triage.Environmental{
 		Cause:         string(refused.Cause),
 		Detail:        refused.Detail,
+		Settled:       refused.Settled,
 		Refused:       refused.Refused,
 		RoundReturned: refused.RoundReturned,
 		GrantReturned: refused.GrantReturned,
