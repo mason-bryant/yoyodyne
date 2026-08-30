@@ -427,6 +427,57 @@ the sink cannot read — no `bd` on the machine it runs on, say — costs that o
 message: the sink says so in its own log and asks again at the next interval,
 rather than guessing a number in either direction.
 
+**And that state is the one thing the sink asks you about directly.** The same
+moment it first says a line has stopped in the channel, it opens a direct message
+with each operator — everybody in `operators` with a bound Slack member id, one
+conversation each — and puts the decision to them:
+
+> **Nothing is being started, and it is waiting on you.** intake is held — the
+> harness held intake after runs kept blocking. 4 admitted items are ready to
+> pull behind it — reply in this thread to decide.
+
+The context is threaded under that line, with the answers numbered:
+
+> Stopped by: intake is held — the harness held intake after runs kept blocking
+> Since: 2026-08-30T02:02:00Z
+> Ready to pull: 4
+>
+> Reply with a number:
+> 1. release intake so admitted work can be chosen again
+> 2. keep intake held; let what is running finish and choose nothing new
+
+**Your reply in that thread is the decision.** There is no button and nothing to
+type at a terminal: a number takes the option it names, and anything else is
+recorded in your own words. Either way it lands as one operational directive in
+the same record `yoyo directive record` writes and every run consults — unscoped,
+because what you were asked about is the whole line rather than one item — and it
+carries what was asked, which option you took, and the words you typed, so
+somebody reading it weeks later can reconstruct the decision. The thread answers
+you by name with the directive's identifier.
+
+The two halves of that are worth being plain about. Nothing acts on your answer
+by itself: choosing "release intake" records that you decided to, and does not
+release intake — the switches stay yours, and a chat message that could throw
+them would be a second thing deciding what the harness does. And you are asked
+once per state per person, however long it stands: the channel repeats it every
+`--heartbeat`, which is a room you scroll, while a direct message repeated hourly
+is what gets an app muted.
+
+Each operator is asked separately rather than in one conversation, because a
+decision addressed to a room is one everybody can reasonably assume somebody else
+is making. Somebody who is not in `operators` replying in one of these threads is
+told so and nothing is recorded, the same way a channel reply from them is. And
+if the workspace refuses the direct message — an app somebody has never opened,
+a workspace that does not let its apps message people — the channel still says
+the line is stopped, the pass finishes normally, and the ask is tried again at
+the next heartbeat.
+
+This needs `im:write` and `im:history` and the `message.im` event, which the
+checked-in manifest asks for. An app installed from an older manifest has none of
+them: reporting is unaffected and nobody is ever asked, which shows up as the
+`slack refused conversations.open: missing_scope` line in the sink's own log.
+Reinstalling from the current manifest is what fixes it.
+
 The queue changing comes from the conversations you hold with the product
 manager and the development manager, read from the same durable records `yoyo
 status` reads. A conversation's log is mostly the turn itself, and none of that
@@ -671,7 +722,15 @@ command line whenever the digest is not enough.
   `yoyo directive list` is the check, and the reply can simply be sent again.
 - **Who may steer is read when the sink starts.** Granting somebody
   `direct-work` reaches the channel when the sink is next restarted, not while it
-  is running.
+  is running. The same holds for who is asked to decide a stopped line.
+- **An ask is remembered by the machine that made it.** The decision map is
+  beside the thread map and has the same shape of limit: a sink started fresh
+  against a state root that has none asks about a state that is still standing
+  once more. What that costs is a repeated question rather than a lost one.
+- **Nothing is carried out from a direct message.** A decision is recorded as a
+  directive and read by the runs that follow; the harness does not lift its own
+  holds or start a watch session because somebody answered. `yoyo directive list`
+  shows what was recorded.
 
 ## When it does not work
 
@@ -686,6 +745,8 @@ command line whenever the digest is not enough.
 | `the status mark on <item> could not be set` | Usually `reactions.add: missing_scope` — an app installed before the manifest asked for `reactions:write`. Reinstall it from *OAuth & Permissions* and the marks appear on the next pass, without the items having to move again. The messages are unaffected either way, and this is said once rather than every pass. |
 | `Your manifest has Socket Mode enabled, which requires additional setup` | Slack cannot mint the app-level token until the app exists. Create the app, then generate that token under *Basic Information* and turn Socket Mode on if it is still off. |
 | `slack refused apps.connections.open: invalid_auth` | The app-level token is missing, wrong, or lacks `connections:write`. Generate a new one on *Basic Information*. |
+| `the stopped line could not be put to <member>` | Usually `conversations.open: missing_scope` — an app installed before the manifest asked for `im:write`. Reinstall it from *OAuth & Permissions* and the next heartbeat asks. Reporting into the channel is unaffected, and until it is fixed the stopped line is said there and nobody is asked. |
+| A decision reply that is never answered | The app can open the direct message but cannot read the reply: `im:history` and the `message.im` event are what carry it back. Reinstall from the current manifest. Nothing was recorded, so answer again once it is. |
 | `Slack will keep refusing this until somebody changes something in the workspace` | One of the four above. It is said once and then retried quietly, so fix it and watch for the line that says messages are being accepted again. |
 | `another Slack sink is already running for this product` | You started a second one. The first is still reporting; nothing was lost. |
 | Slack says it is `not displaying some messages sent by this application` | Slack suppressed messages for volume, and suppressed ones are hidden rather than delayed. The sink paces itself below that threshold, so seeing this means something else is posting as the same app into the same channel — a second sink, or another integration sharing the app. What was suppressed is still in the durable records. |

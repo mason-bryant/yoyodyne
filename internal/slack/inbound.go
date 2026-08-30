@@ -123,7 +123,10 @@ func newSteering(sink *Sink, directives Directives, operators []string) *steerin
 }
 
 // handle reads one inbound envelope and, where it is a reply in a thread this
-// sink opened, answers it in that thread.
+// sink opened, answers it in that thread. Which conversation it arrived in says
+// which of the two things it is: a reply in the reporting channel steers the
+// work item its thread is about, and a reply in a direct message is the answer
+// to a decision this sink asked for there.
 //
 // It reports nothing to its caller and stops nothing when it fails. Reporting is
 // an observation rather than a gate in both directions: a reply that could not be
@@ -131,14 +134,29 @@ func newSteering(sink *Sink, directives Directives, operators []string) *steerin
 // connection carries on reading. What an operator must never get is silence, so
 // every path out of here either answers in the thread or says why it could not.
 func (s *steering) handle(ctx context.Context, envelope socketEnvelope) {
-	message, ok := readInbound(envelope, s.sink.channel)
+	message, ok := readInbound(envelope)
 	if !ok {
 		return
 	}
 	if !s.first(message.ts) {
 		return
 	}
+	// Which conversation it arrived in is which half it belongs to, and the two
+	// are not variations of each other. A reply in the reporting channel is about
+	// the thread's work item and is scoped to it; a reply anywhere else is in a
+	// direct message, which this sink only ever opens to ask an operator to decide
+	// something about the whole line. The channel is the sink's own, so the test
+	// is exact rather than a guess about what a conversation id looks like.
+	if message.channel != s.sink.channel {
+		s.decideThread(ctx, message)
+		return
+	}
+	s.steerThread(ctx, message)
+}
 
+// steerThread answers one reply in a thread in the reporting channel, recording
+// what it asked for against the work item that thread is about.
+func (s *steering) steerThread(ctx context.Context, message inboundMessage) {
 	// The thread map is the correlation: a reply carries the timestamp of the
 	// message its thread hangs from, and that message is the one this sink posted
 	// to open a topic. A thread this sink did not open is somebody's own
@@ -400,25 +418,34 @@ func (s *steering) first(ts string) bool {
 }
 
 // inboundMessage is one Slack message event reduced to what this reads: who said
-// it, what they said, and which thread they said it in.
+// it, what they said, which thread they said it in, and which conversation that
+// thread is in.
+//
+// The conversation is carried rather than checked away here because it is what
+// says which half of this connection the message belongs to: the reporting
+// channel is a reply about a work item, and anything else is a direct message
+// answering an ask. Deciding that inside the reader would put the routing in the
+// one place that cannot see either map.
 type inboundMessage struct {
 	user     string
 	text     string
 	ts       string
 	threadTS string
+	channel  string
 }
 
-// readInbound reads a message a person typed in one of this sink's threads, and
-// reports whether the envelope was one at all.
+// readInbound reads a message a person typed in a thread, and reports whether
+// the envelope was one at all.
 //
 // What it refuses is as important as what it accepts. A message with a subtype
 // or a bot id is not a person typing — an edit, a join, a file share, and above
 // all this sink's own posts, which arrive back on the same connection and would
 // otherwise be read as instructions the harness gave itself. A message with no
-// thread is somebody talking in the channel rather than steering a topic. And a
-// message in another channel is not this sink's business even when one workspace
-// runs two.
-func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool) {
+// thread is somebody talking in a conversation rather than answering something
+// said in it: every thread this reads is one this sink opened, in the channel or
+// in a direct message, and a message that is not in one is correlated to nothing
+// whichever conversation it is in.
+func readInbound(envelope socketEnvelope) (inboundMessage, bool) {
 	if envelope.Type != socketEventsAPI || len(envelope.Payload) == 0 {
 		return inboundMessage{}, false
 	}
@@ -441,7 +468,7 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 	if event.Type != "message" || event.Subtype != "" || strings.TrimSpace(event.BotID) != "" {
 		return inboundMessage{}, false
 	}
-	if event.Channel != channel || strings.TrimSpace(event.User) == "" {
+	if strings.TrimSpace(event.Channel) == "" || strings.TrimSpace(event.User) == "" {
 		return inboundMessage{}, false
 	}
 	// A thread's own opening message carries its own timestamp as the thread's,
@@ -454,6 +481,7 @@ func readInbound(envelope socketEnvelope, channel string) (inboundMessage, bool)
 		text:     event.Text,
 		ts:       event.TS,
 		threadTS: event.ThreadTS,
+		channel:  strings.TrimSpace(event.Channel),
 	}, true
 }
 

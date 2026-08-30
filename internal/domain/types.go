@@ -218,6 +218,49 @@ func (e WorkItemExecutor) DeveloperRun() bool {
 	return strings.TrimSpace(string(e)) == ""
 }
 
+// WorkItemParking is why admitted work is deliberately not to be pulled. It is
+// a status the harness reads rather than a place in the order, and it is a
+// separate axis from the executor above: parked work may be perfectly ordinary
+// developer work, and what makes it unschedulable is a decision somebody took
+// about when rather than anything about what could carry it.
+//
+// It exists because the decision was being expressed as a priority, and a
+// priority is not a decision anything can read that way. The product manager's
+// own convention put deferred-by-decision work at the bottom of the order, which
+// meant "parked" to whoever set it and "last" to everything that read it — and a
+// queue that drains, which watch mode makes routine, reaches the bottom. On
+// 2026-08-27 it did, and a run of work that had been deferred by a scope
+// decision started, failed, and cost $34.38. Nothing was wrong with the
+// selection: the scheduler pulled the highest-priority ready item there was.
+// What was wrong was that the deferral lived somewhere selection could not look.
+//
+// So it is the reason itself rather than a flag. A flag would record that
+// somebody parked the work and lose why, which is the half that decides whether
+// releasing it is right — and a parked item nobody can account for is the same
+// unaccountable state the recorded selection reason exists to prevent on the
+// other side of the choice. The absent parking is ordinary queued work, which is
+// nearly all of it.
+type WorkItemParking string
+
+// MaxWorkItemParkingBytes bounds the reason. It is generous enough to say what
+// decided the parking and what would release it, and small enough to stay one
+// line of a listing and one value of tracker metadata.
+const MaxWorkItemParkingBytes = 480
+
+// Parked reports admitted work the harness must not select, whatever the queue
+// depth. It is asked wherever work is chosen, and the empty parking answers
+// false, which is what every item admitted before this existed carries.
+func (p WorkItemParking) Parked() bool {
+	return strings.TrimSpace(string(p)) != ""
+}
+
+// Reason is why the work is parked, and is empty for work that is not. It is
+// what a listing shows beside a parked item and what a deferral names, because
+// "parked" on its own sends whoever reads it looking for the decision.
+func (p WorkItemParking) Reason() string {
+	return strings.TrimSpace(string(p))
+}
+
 var identifierPattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$`)
 
 func ValidateIdentifier(kind, value string) error {

@@ -115,6 +115,12 @@ type WorkItemSummary struct {
 	// it. It is absent from an item nothing has priced yet, which is not the same
 	// as an item that cost nothing.
 	Cost *ItemCost `json:"cost,omitempty"`
+	// Parked reports work somebody has deliberately taken out of reach. It is
+	// here because a survey is what the queue's owner orders from, and the
+	// priority beside it is exactly what parking must not be read off: an item
+	// listed at the bottom of the order looks like the next-but-last thing to be
+	// pulled, and a parked one is not going to be pulled at all.
+	Parked bool `json:"parked,omitempty"`
 }
 
 // ItemCost is the provider-reported price of one work item, summed over every
@@ -593,6 +599,12 @@ func renderWorkItemGroup(theme console.Theme, label string, state console.State,
 	for _, item := range listed {
 		identifier := theme.State(state, pad("["+item.ID+"]", width))
 		title := singleLine(item.Title, maxSurveyTitleBytes)
+		// Parked work is marked against its priority, because the priority is what
+		// it would otherwise be mistaken for. The item says why; what this column
+		// has to carry is that the number beside it decides nothing here.
+		if item.Parked {
+			title = "(parked) " + title
+		}
 		if prices == 0 {
 			fmt.Fprintf(&rendered, "  %s p%d %s\n", identifier, item.Priority, title)
 			continue

@@ -180,6 +180,42 @@ func (a *API) Post(ctx context.Context, message Message) (string, error) {
 	return response.TS, nil
 }
 
+// conversationRequest is the wire shape of conversations.open. It names one
+// member and no more: what this app opens a conversation for is a decision
+// addressed to one person, and a group conversation would put an ask meant for
+// each of them into a room where the first answer looks like everybody's.
+type conversationRequest struct {
+	Users string `json:"users"`
+}
+
+// OpenDM reports the direct message channel this app shares with one member,
+// opening it if this is the first thing ever said to them.
+//
+// It is asked afresh whenever there is something to say rather than remembered.
+// Slack answers with the same channel every time, so nothing is saved by keeping
+// it, and a channel id kept across an app being reinstalled is an identifier
+// this app can no longer post into — which would be a decision the operator is
+// never asked for, silently.
+func (a *API) OpenDM(ctx context.Context, member string) (string, error) {
+	trimmed := strings.TrimSpace(member)
+	if trimmed == "" {
+		return "", errors.New("a member is required to open a direct message with them")
+	}
+	var response struct {
+		apiResponse
+		Channel struct {
+			ID string `json:"id"`
+		} `json:"channel"`
+	}
+	if err := a.call(ctx, "conversations.open", a.botToken, conversationRequest{Users: trimmed}, &response); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(response.Channel.ID) == "" {
+		return "", errors.New("conversations.open returned no channel, so there is nowhere to ask this")
+	}
+	return response.Channel.ID, nil
+}
+
 // reactionRequest is the wire shape of reactions.add and reactions.remove. Both
 // take the same three fields, because both name one reaction on one message.
 type reactionRequest struct {

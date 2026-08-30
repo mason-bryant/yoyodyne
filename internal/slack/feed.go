@@ -99,6 +99,17 @@ type Batch struct {
 	// A run that finishes with nothing left to say still has to stop reading as
 	// working.
 	Statuses map[string]notify.Status
+	// Asking is the decision the operators are owed about a line that has stopped,
+	// nil on every pass over a line that is moving. It is beside the deliveries
+	// rather than among them because a delivery is something said into the
+	// channel, and this is a question put to named people in a direct message —
+	// same reading of the same records, different audience and a different act.
+	//
+	// Whether each of them has already been asked is the sink's to know, so this
+	// is produced while the state stands rather than once: the reading cannot
+	// remember who was told, and a feed that tried to would be keeping the record
+	// of a message it does not send.
+	Asking *Ask
 }
 
 // Feed is where the sink's messages come from. It is polled rather than
@@ -290,11 +301,12 @@ func (f *HarnessFeed) Poll(ctx context.Context, cursors Cursors) (Batch, error) 
 	}
 	batch.Deliveries = append(batch.Deliveries, f.holdDeliveries(cursors.Streams[productStream], held)...)
 
-	beat, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
+	beat, asking, err := f.heartbeatDeliveries(ctx, cursors.Streams[heartbeatStream], held, sessions, inFlight, batch.Streams)
 	if err != nil {
 		return Batch{}, err
 	}
 	batch.Deliveries = append(batch.Deliveries, beat...)
+	batch.Asking = asking
 	return batch, nil
 }
 

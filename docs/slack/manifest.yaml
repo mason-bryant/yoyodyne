@@ -36,6 +36,22 @@
 #                          can remove it and the two message events below, and
 #                          replies then never arrive.
 #   groups:history         the same, for a private channel.
+#   im:write               open a direct message with an operator. It is used for
+#                          one thing: a line that has stopped — everything held,
+#                          intake held, the watch session idle or gone — is put
+#                          to each operator personally, with the options
+#                          numbered, because that state costs an hour of the
+#                          machine doing nothing for every hour nobody sees it.
+#                          Remove it and the channel still says the line is
+#                          stopped; nobody is asked.
+#   im:history             read the reply that answers one of those asks. The
+#                          reply is the decision: it is recorded as an
+#                          operational directive in the same record every run
+#                          reads, and nothing is carried out on its own.
+#
+# The message events are scoped to conversations this app is in, so what it can
+# read is the channel it was invited to and the direct messages it opened —
+# never anybody else's.
 #
 # Socket Mode is on and there is no request URL, which is the point: the harness
 # runs on operators' machines behind NAT, and the Events API would demand a
@@ -57,6 +73,11 @@ display_information:
     somebody the project has authorized by name, is recorded as a directive
     against that item. Nobody else's reply changes anything, and a project that
     has authorized nobody is steered by nobody.
+
+    One thing it asks rather than reports. When the line stops — everything
+    held, intake held, or nothing choosing work — it messages each authorized
+    person directly with the options numbered, and their reply in that thread is
+    the decision, recorded where every run reads it.
   background_color: "#1f2933"
 features:
   bot_user:
@@ -72,11 +93,14 @@ oauth_config:
       - reactions:write
       - channels:history
       - groups:history
+      - im:write
+      - im:history
 settings:
   event_subscriptions:
     bot_events:
       - message.channels
       - message.groups
+      - message.im
   interactivity:
     # Buttons and menus are a control surface, and this app is a reporting one.
     is_enabled: false

@@ -145,9 +145,11 @@ type Titles interface {
 // pacer is shared on purpose, since a pace two callers each advanced from their
 // own reading of it is not a pace, and it holds a mutex for exactly that. The
 // API is an HTTP client, which is safe to use from several goroutines. And the
-// store is read from both and written from one: the delivery pass owns the thread
-// map, and the acknowledgment path is structurally unable to write it, because
-// the poster it is given cannot open a thread (see `poster.opens`).
+// store is read from both and written from one per record: the delivery pass
+// owns the thread map and the decision map, and the acknowledgment path is
+// structurally unable to write either — the poster it is given cannot open a
+// thread (see `poster.opens`), and answering an ask records a directive rather
+// than revising the ask.
 type Sink struct {
 	channel string
 	// appearance is how this product's speakers appear here: its own id after
@@ -491,6 +493,13 @@ func (s *Sink) pass(ctx context.Context) error {
 	// the record rather than driven by what was posted: a run that finished with
 	// nothing left to say still has to stop reading as working.
 	s.mark(ctx, &threads, batch.Statuses)
+
+	// A line that has stopped is put to the operators themselves, after the
+	// channel has been told the same thing. The order is that way round because
+	// the channel is the account and this is the ask: somebody who opens the
+	// direct message and goes to look should find the state already said where the
+	// work is discussed, rather than arriving ahead of it.
+	s.ask(ctx, batch.Asking)
 
 	// Cursors for streams that no longer exist are dropped only after a pass
 	// that read them all, so a feed that failed halfway never looks like a

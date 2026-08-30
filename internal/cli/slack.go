@@ -334,6 +334,15 @@ naming what stopped it, how long it has stood, and how much is waiting. It stops
 the moment the state clears, and a line that is idle with nothing ready says
 nothing at all: silence has to mean nothing to do rather than waiting on you.
 
+That state is also the one thing the sink asks about directly. When it first says
+a line has stopped, it opens a direct message with each operator -- a brief top
+line carrying the ask, and the context with the answers numbered threaded under
+it -- and the reply in that thread is the decision. A number takes the option it
+names and anything else is recorded in your own words; either way it lands as one
+unscoped operational directive in the record every run consults. Nothing is
+carried out on its own: deciding to release intake records that you decided to,
+and the switches stay yours. Each person is asked once per state.
+
 It needs both tokens in its own environment and takes them from nowhere else:
 
   export SLACK_BOT_TOKEN=xoxb-...

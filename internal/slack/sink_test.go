@@ -1074,10 +1074,13 @@ type fixedFeed struct {
 	// reading rather than a history: a test moves it and polls again exactly as a
 	// record moving underneath the sink would.
 	statuses map[string]notify.Status
+	// asking is the decision this pass owes the operators, which the heartbeat
+	// derives in a real feed and a test states outright.
+	asking *Ask
 }
 
 func (f *fixedFeed) Poll(_ context.Context, cursors Cursors) (Batch, error) {
-	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses}
+	batch := Batch{Streams: map[string]struct{}{}, Statuses: f.statuses, Asking: f.asking}
 	for _, delivery := range f.deliveries {
 		batch.Streams[delivery.Stream] = struct{}{}
 		if delivery.Cursor.Position <= cursors.Streams[delivery.Stream].Position {
@@ -1119,6 +1122,13 @@ type recordedPosts struct {
 	// an app installed before the manifest asked for the scope, which is what
 	// every workspace looks like the first time it runs a sink that marks.
 	refuseMarks string
+	// opened is every member a direct message was opened with, in order, which is
+	// what says an ask reached each operator separately rather than one of them.
+	opened []string
+	// refuseDMs, when set, is the error every conversations.open is refused with —
+	// somebody who has never opened this app, or a workspace that does not allow
+	// its apps to message people.
+	refuseDMs string
 	// allow, when set, is how many posts this workspace accepts before it
 	// starts refusing — which is how a test puts an outage exactly where it
 	// matters. It has to refuse every attempt rather than one, because a
@@ -1137,7 +1147,25 @@ func (r *recordedPosts) handle(writer http.ResponseWriter, request *http.Request
 		return
 	}
 	body, _ := io.ReadAll(request.Body)
-	if method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]; strings.HasPrefix(method, "reactions.") {
+	method := request.URL.Path[strings.LastIndex(request.URL.Path, "/")+1:]
+	// Opening a direct message answers with the conversation this app shares with
+	// that member, which Slack gives back the same every time. The id is derived
+	// from the member so a test can say which person a post was addressed to.
+	if method == "conversations.open" {
+		var opening conversationRequest
+		if err := json.Unmarshal(body, &opening); err != nil {
+			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})
+			return
+		}
+		if r.refuseDMs != "" {
+			writeJSON(writer, map[string]any{"ok": false, "error": r.refuseDMs})
+			return
+		}
+		r.opened = append(r.opened, opening.Users)
+		writeJSON(writer, map[string]any{"ok": true, "channel": map[string]any{"id": "D" + opening.Users}})
+		return
+	}
+	if strings.HasPrefix(method, "reactions.") {
 		var reaction reactionRequest
 		if err := json.Unmarshal(body, &reaction); err != nil {
 			writeJSON(writer, map[string]any{"ok": false, "error": "invalid_request"})

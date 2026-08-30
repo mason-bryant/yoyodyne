@@ -529,6 +529,18 @@ It stops the moment the state clears, says nothing while a run is in flight, and
 stays completely silent on an idle line with nothing ready — silence has to keep
 meaning nothing to do, which is what makes the times it does not worth reading.
 
+That state is also the one thing the sink asks you about rather than reports. At
+the same moment it first says the line has stopped, it opens a direct message
+with each operator: a brief top line carrying the ask, and the context with the
+answers numbered threaded under it. **The reply in that thread is the decision**
+— a number takes the option it names, anything else is recorded in your own
+words, and either way it lands as one unscoped operational directive in the
+record every run consults, carrying what was asked, what you chose, and what you
+said. Nothing is carried out on its own: deciding to release intake records that
+you decided to, and the switch stays yours. Each person is asked once per state,
+because a direct message repeated hourly is what gets an app muted, and the
+channel is where the repetition belongs.
+
 Every message ends by saying whose move follows it. A thread is a narrative and a
 narrative goes quiet — a run takes an hour, an item sits in the queue overnight,
 work routed to a role waits on somebody opening a conversation — and the silence
