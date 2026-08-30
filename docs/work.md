@@ -71,6 +71,23 @@ repair that would continue the change and the re-run that would start over
 deliberately, because a fresh worktree off the target branch looks perfectly
 valid and a developer given one delivers an empty change or reinvents the work.
 
+Not every round an item is charged for is one it cost. A round whose diff is
+empty **and** whose run recorded an environmental cause — the worktree it was
+handed held none of the change, the primary checkout carried state the harness
+does not own, the sandbox could not be entered, the build that dispatched it
+predated the decision it was carrying out — is an **environmental refusal**: the
+environment handed the round nothing, so as the run settles the harness gives
+back the review round it was charged against the item's cap and the granted
+repair round the continuation consumed. The grant itself still stands and can be
+carried out again once somebody puts the change back, and no sequence of these
+walks an item toward an escalation it never earned. Both halves of that are
+required. A cause on its own excuses nothing — a round that recorded one and
+delivered a change anyway spends as any round does — and an empty delivery with
+no cause recorded spends too, so laziness cannot hide in the class. Where it
+applies, the run's record, the docket entry, and the thread all say so beside the
+counters, because a stoppage whose last round was refused means something
+different about how close the item is to its cap.
+
 What happens on approval depends on `approvals.integration`. This repository
 sets it to `automatic`, so a run that passes its checks and is approved by the
 reviewer is committed, fast-forwarded into the target branch, closed in Beads,

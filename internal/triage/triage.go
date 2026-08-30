@@ -168,6 +168,31 @@ type Publication struct {
 	ApprovedAt time.Time `json:"approved_at"`
 }
 
+// Environmental is a round the environment refused rather than the work failing,
+// as the run recorded it. It is declared here rather than imported from the
+// durable run schema for the reason Finding is: what reaches a development
+// manager must not change shape because the harness's own schema was refactored.
+//
+// It is the one thing on an entry that changes what the counters beside it mean.
+// A stoppage whose last round was environmentally refused is an item that spent
+// nothing on that round, so a development manager reading the counters alone
+// would see an item one round closer to its cap than it is — and would decide an
+// escalation the item never earned.
+type Environmental struct {
+	Cause  string `json:"cause"`
+	Detail string `json:"detail,omitempty"`
+	// Refused says the round was classified environmental and its budgets given
+	// back. False is a cause recorded on a round that delivered a change anyway,
+	// which spent exactly as any round does, or on one whose settle could not tell.
+	Refused       bool `json:"refused,omitempty"`
+	RoundReturned bool `json:"round_returned,omitempty"`
+	GrantReturned bool `json:"grant_returned,omitempty"`
+	// Problem is a return the settle decided on and could not write, which is the
+	// one case where the counters above are higher than what the item actually
+	// cost and nothing has corrected them.
+	Problem string `json:"problem,omitempty"`
+}
+
 // Counters are what the item has already spent, beside what the project
 // configured it may spend. Both halves travel together on purpose: a
 // development manager that sees five rounds without seeing the cap of four
@@ -330,7 +355,13 @@ type Entry struct {
 	Summary     string       `json:"summary,omitempty"`
 	Artifacts   Artifacts    `json:"artifacts"`
 	Publication *Publication `json:"publication,omitempty"`
-	Counters    Counters     `json:"counters"`
+	// Environmental is the environment having refused this stoppage's last round,
+	// when it did. It is written into the entry rather than joined where the docket
+	// is read, unlike the re-run and the overrides beside it, because it is not a
+	// decision made afterwards: it is settled as the run ends, which is before the
+	// entry exists.
+	Environmental *Environmental `json:"environmental,omitempty"`
+	Counters      Counters       `json:"counters"`
 	// Rerun is the re-run already claimed against this entry's own stoppage, when
 	// there is one. It is joined to the entry where the docket is read rather
 	// than written into the log: an entry is recorded once as the work stops, and
@@ -449,6 +480,17 @@ func (e Entry) Validate() error {
 			problems = append(problems, fmt.Errorf("check: output is %d bytes, limit is %d", len(e.Check.Output), MaxCheckOutputBytes))
 		}
 	}
+	if e.Environmental != nil {
+		if strings.TrimSpace(e.Environmental.Cause) == "" {
+			problems = append(problems, errors.New("environmental: the cause is required, because what it excuses the item is decided by which one it was"))
+		}
+		if len(e.Environmental.Detail) > MaxMessageBytes {
+			problems = append(problems, fmt.Errorf("environmental: detail is %d bytes, limit is %d", len(e.Environmental.Detail), MaxMessageBytes))
+		}
+		if len(e.Environmental.Problem) > MaxMessageBytes {
+			problems = append(problems, fmt.Errorf("environmental: problem is %d bytes, limit is %d", len(e.Environmental.Problem), MaxMessageBytes))
+		}
+	}
 	// Each class is held to the evidence that makes it the thing it claims to
 	// be. An entry that cannot say what stopped is an entry nobody can act on,
 	// which is worse than no entry: it looks like coverage.
@@ -518,6 +560,10 @@ func (e Entry) Render() string {
 	if e.Publication != nil {
 		rendered.WriteString(e.renderPublication())
 	}
+	// Said before the counters rather than after them, because it is what the
+	// counters mean rather than a remark about them: a development manager who
+	// read the figures first has already decided how close this item is to its cap.
+	rendered.WriteString(e.renderEnvironmental())
 	fmt.Fprintf(&rendered, "      Triage counters: %d of %s review round(s) used%s; %d repair attempt(s) spent in this run; a grant would hand it %d\n",
 		e.Counters.ReviewRounds, capFigure(e.Counters.ReviewRoundsCap), roundsNote(e.Counters),
 		e.Counters.RepairAttempts, e.Counters.RepairGrantAttempts)
@@ -545,6 +591,52 @@ func (e Entry) renderDecisions() string {
 	rendered.WriteString(e.renderRerunStanding())
 	rendered.WriteString(e.renderRearmStanding())
 	return rendered.String()
+}
+
+// renderEnvironmental says the environment refused this stoppage's last round,
+// and what the item was therefore not charged for it. It is silent on every
+// ordinary stoppage, which is nearly all of them.
+//
+// A refusal whose return could not be written says so in the same breath. That
+// is the one state where the counters below it are higher than what the item
+// actually cost and nothing has corrected them, and a reader who is not told
+// will decide an escalation against a figure the harness knows is wrong.
+func (e Entry) renderEnvironmental() string {
+	refused := e.Environmental
+	if refused == nil {
+		return ""
+	}
+	if !refused.Refused {
+		return indented(fmt.Sprintf("Environmental cause recorded (%s)", refused.Cause),
+			"The round delivered a change all the same, so it spent as any round does and the counters below are what this item has cost.\n"+refused.Detail)
+	}
+	var rendered strings.Builder
+	fmt.Fprintf(&rendered, "      Environmentally refused (%s): %s\n", refused.Cause, environmentalReturn(*refused))
+	if detail := strings.TrimSpace(refused.Detail); detail != "" {
+		rendered.WriteString(indented("What the harness found", detail))
+	}
+	if problem := strings.TrimSpace(refused.Problem); problem != "" {
+		rendered.WriteString(indented("This refusal could not be paid back in full",
+			problem+"\nThe counters below therefore include a round this item did not cost: read them as one higher than the item stands at."))
+	}
+	return rendered.String()
+}
+
+// environmentalReturn says what a refused round actually gave back. A refusal
+// that returned nothing is stated as such rather than left implied: a round
+// refused before any reviewer was asked had no round to give back, and a reader
+// who saw "refused" and no accounting would take the accounting on trust.
+func environmentalReturn(refused Environmental) string {
+	switch {
+	case refused.RoundReturned && refused.GrantReturned:
+		return "the review round it was charged and the granted repair round it consumed were both returned, so this item stands where it did before the round"
+	case refused.RoundReturned:
+		return "the review round it was charged was returned, and no repair grant had been consumed, so this item stands where it did before the round"
+	case refused.GrantReturned:
+		return "the granted repair round it consumed was returned, and no review round had been charged, so this item stands where it did before the round"
+	default:
+		return "the round reached nothing that spends, so this item stands where it did before it"
+	}
 }
 
 // renderOverrides says which of this item's caps an operator crossed, and who
