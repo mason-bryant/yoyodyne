@@ -3,6 +3,7 @@ package slack
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -381,6 +382,35 @@ func TestASessionWithNothingToCompareIsNotReportedAsStale(t *testing.T) {
 	harness.poll(t, cursors)
 }
 
+// The build revision is the yoyodyne binary's and the repository is the
+// product's, and those are one history only where the product is the harness's
+// own source. Everywhere else the repository has never held that revision, there
+// is no count to say, and nothing is wrong — so the channel hears nothing at all
+// and the sink's log says why once per build rather than every hour for the life
+// of the process.
+func TestABuildFromAnotherRepositoryIsSilentRatherThanCountedOrNagged(t *testing.T) {
+	t.Parallel()
+
+	harness := newTestHarness(t, time.Time{})
+	harness.ready(2)
+	var said []string
+	harness.feed.Log = func(format string, args ...any) { said = append(said, format) }
+	harness.feed.Deployments = unrelatedDeployments{}
+	harness.watchedBuild(t, runstate.WatchWatching, "watching the backlog until stopped", moment, staleResidentBuild)
+
+	cursors := harness.poll(t, harness.start(), notify.KindWatchStarted)
+	if len(said) != 1 {
+		t.Fatalf("the sink said %v about a build from another repository, want it said once", said)
+	}
+	for hour := 0; hour < 4; hour++ {
+		harness.now = harness.now.Add(time.Hour)
+		cursors = harness.poll(t, cursors)
+	}
+	if len(said) != 1 {
+		t.Fatalf("the sink said %v, want an installation that is behaving told about once", said)
+	}
+}
+
 // A repository that cannot be read leaves the sink unable to tell a session
 // running what is deployed from one running a binary from before the fix. It must
 // not guess in either direction, so it is said once where the sink says everything
@@ -520,4 +550,13 @@ type brokenDeployments struct{}
 
 func (brokenDeployments) Behind(context.Context, string) (int, error) {
 	return 0, errors.New("git rev-list failed: bad revision")
+}
+
+// unrelatedDeployments is the ordinary answer for every product that is not the
+// harness's own source: the repository this sink is pointed at has never held the
+// revision the session's binary was built from.
+type unrelatedDeployments struct{}
+
+func (unrelatedDeployments) Behind(context.Context, string) (int, error) {
+	return 0, fmt.Errorf("%w: not in /some-other-product", ErrUnrelatedBuild)
 }

@@ -26,16 +26,17 @@
 #                          without any of them being opened. Without it the
 #                          messages are unaffected and the marks are simply
 #                          absent.
-#   im:write               open a direct message with an operator the project
-#                          authorized by name. It is used for one class of
-#                          message and only that one: the harness itself being
-#                          degraded — the session choosing work running a binary
-#                          from long before the fixes it is about to spend rounds
-#                          rediscovering. A channel is somewhere somebody chooses
-#                          to look, and that is exactly what nobody thinks to look
-#                          for at three in the morning. Without it the message is
-#                          still in the channel and the refusal is said in the
-#                          sink's log.
+#   im:write               open the direct conversation with an operator the
+#                          project authorized by name, which is what
+#                          `conversations.open` needs and what the message is then
+#                          posted into. It is used for one class of message and
+#                          only that one: the harness itself being degraded — the
+#                          session choosing work running a binary from long before
+#                          the fixes it is about to spend rounds rediscovering. A
+#                          channel is somewhere somebody chooses to look, and that
+#                          is exactly what nobody thinks to look for at three in
+#                          the morning. Without it the message is still in the
+#                          channel and the refusal is said in the sink's log.
 #   channels:history       read replies in the thread the sink opened, in public
 #                          channels. It is what carries a reply back to the
 #                          machine the harness runs on: a reply from somebody the

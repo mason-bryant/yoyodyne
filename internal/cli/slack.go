@@ -231,6 +231,12 @@ func buildSlackSink(configPath string, poll, heartbeat time.Duration, version st
 			// so a fix merged after it started is not in it until somebody restarts
 			// it — and nothing else in the record says so while it goes on choosing
 			// work and spending rounds against defects that are already dead.
+			//
+			// It is the product's repository, which is the harness's own source only
+			// where the harness is the product — the self-hosting case this was
+			// written for. Nothing here asserts that: the reading refuses a build
+			// the repository does not hold, so a product that is somebody else's
+			// gets silence rather than a count taken from an unrelated history.
 			Deployments: repositoryDeployments{
 				repository: repository,
 				runner:     execution.OSProcessRunner{},
@@ -295,7 +301,7 @@ func (b readyBacklog) Ready(ctx context.Context) (int, error) {
 	return len(items), nil
 }
 
-// repositoryDeployments answers how far the repository has moved past one build,
+// repositoryDeployments answers how far one repository has moved past one build,
 // which is what says whether the session choosing work is executing the harness
 // that is deployed or one from before the last few fixes landed.
 //
@@ -303,6 +309,16 @@ func (b readyBacklog) Ready(ctx context.Context) (int, error) {
 // reason a conversation's freshness does: the question is what the repository
 // holds that the build did not, and a commit's own date answers a different one.
 // It is asked at most once per heartbeat and never on the path of anything.
+//
+// The repository it is given is the product's, and the build it is asked about is
+// the revision the yoyodyne binary was built from. Those are one history in
+// exactly one case — the harness developing itself, which is where the stall this
+// exists for happened — and nothing about a product configuration makes it so.
+// So the relationship is not assumed anywhere: it is asked of Git, once per
+// comparison, and a build this repository has never held is reported as
+// ErrUnrelatedBuild rather than counted. Counting anyway is the failure that
+// matters, because "31 harness changes" derived from somebody else's history is a
+// number an operator would act on.
 type repositoryDeployments struct {
 	repository string
 	runner     execution.ProcessRunner
@@ -322,14 +338,20 @@ func (d repositoryDeployments) Behind(ctx context.Context, build string) (int, e
 	if !buildRevision.MatchString(build) {
 		return 0, fmt.Errorf("%q is not a revision the repository could be asked about", build)
 	}
-	result, err := d.runner.Run(ctx, execution.Command{
-		Name:    "git",
-		Args:    []string{"rev-list", "--count", build + "..HEAD"},
-		Dir:     d.repository,
-		Timeout: d.timeout,
-	}, nil)
+	// Whether this repository is the one that binary came out of, asked rather
+	// than assumed. Git answering that it has no such commit is the whole of the
+	// check: an object name is its own content, so a repository that holds it is
+	// the repository that history is in.
+	held, err := d.git(ctx, "cat-file", "-e", build+"^{commit}")
 	if err != nil {
-		return 0, fmt.Errorf("run Git command: %w", err)
+		return 0, err
+	}
+	if held.Status != execution.ProcessSucceeded {
+		return 0, fmt.Errorf("%w: %s is not in %s", slack.ErrUnrelatedBuild, build, d.repository)
+	}
+	result, err := d.git(ctx, "rev-list", "--count", build+"..HEAD")
+	if err != nil {
+		return 0, err
 	}
 	if result.Status != execution.ProcessSucceeded {
 		return 0, fmt.Errorf("git rev-list failed: %s", singleLine(firstNonEmpty(result.Stderr, result.Stdout)))
@@ -339,6 +361,19 @@ func (d repositoryDeployments) Behind(ctx context.Context, build string) (int, e
 		return 0, fmt.Errorf("git rev-list did not answer with a count: %s", singleLine(result.Stdout))
 	}
 	return count, nil
+}
+
+func (d repositoryDeployments) git(ctx context.Context, args ...string) (execution.ProcessResult, error) {
+	result, err := d.runner.Run(ctx, execution.Command{
+		Name:    "git",
+		Args:    args,
+		Dir:     d.repository,
+		Timeout: d.timeout,
+	}, nil)
+	if err != nil {
+		return execution.ProcessResult{}, fmt.Errorf("run Git command: %w", err)
+	}
+	return result, nil
 }
 
 // slackAPI reads the two tokens. A missing one is refused here, before anything

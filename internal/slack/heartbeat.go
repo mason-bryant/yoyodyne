@@ -29,6 +29,7 @@ package slack
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -72,6 +73,21 @@ type Backlog interface {
 	Ready(ctx context.Context) (int, error)
 }
 
+// ErrUnrelatedBuild reports a build the repository has never held: the session's
+// binary and the repository being asked come from two different histories.
+//
+// It is a distinct answer rather than one more failure because it means something
+// different and calls for something different. A binary is built from the
+// harness's own repository, and the repository a sink is pointed at is the
+// product's — the same one the tracker and the worktrees use. Those are one
+// history only where the product under management is the harness itself, which is
+// how the harness develops itself and is not a constraint anything can enforce on
+// somebody else's product. Everywhere else the count is not a number about this
+// product's work, and there is nothing to say: an ordinary failure would be said
+// again every interval about an installation that is behaving exactly as it
+// should.
+var ErrUnrelatedBuild = errors.New("the build is not a revision this repository holds")
+
 // Deployments is how far the repository has moved past one build. It is a count
 // rather than the changes themselves for the reason the backlog is a count: the
 // count is the whole of what a heartbeat says, and which changes they were is a
@@ -80,7 +96,8 @@ type Backlog interface {
 // A comparison that cannot be made is an error rather than a zero. A session
 // reported as current because the repository would not answer is exactly the
 // false all-clear this exists to end, so the caller says so and asks again at the
-// next interval.
+// next interval. A comparison that is not this repository's to make at all is
+// ErrUnrelatedBuild, which is not a failure and is not retried at somebody.
 type Deployments interface {
 	Behind(ctx context.Context, build string) (int, error)
 }
@@ -227,7 +244,21 @@ func (f *HarnessFeed) residentDeliveries(ctx context.Context, cursor Cursor, ses
 	}
 
 	behind, err := f.Deployments.Behind(ctx, build)
-	if err != nil {
+	switch {
+	case errors.Is(err, ErrUnrelatedBuild):
+		// The session's binary was built from one repository and this sink is
+		// pointed at another, which is every product that is not the harness's own
+		// source. There is no count to say and nothing is wrong, so the channel
+		// hears nothing at all — and the sink's own log says it once per build,
+		// because an operator who expected this line needs to know why it is not
+		// there and does not need to be told every hour for the life of the
+		// process.
+		if !armed.Has(unrelatedMark) {
+			armed = armed.With(unrelatedMark)
+			f.say("the watch session's build %s is not a revision this product's repository holds, so how old the session is cannot be measured here; that comparison is only this sink's to make where the product is the harness's own source", shortBuild(build))
+		}
+		return []Delivery{{Stream: residentStream, Cursor: armed}}, nil
+	case err != nil:
 		// A repository that cannot be read leaves the sink unable to tell a session
 		// running what is deployed from one running a binary from before the fix,
 		// and it must not guess in either direction. So it is said where the sink

@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,16 +12,19 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/notify"
+	"github.com/mason-bryant/yoyodyne/internal/slack"
 )
 
-// How far a running session is behind is counted against the revision its binary
-// was built from, which is the question — what does the repository hold that the
-// build did not — rather than an elapsed time, which answers a different one.
-func TestHowFarBehindASessionIsCountedFromItsBuild(t *testing.T) {
+// The build revision comes from the yoyodyne binary and the repository comes from
+// the product configuration, so the reading asks Git whether they are the same
+// history before it counts anything, and counts against the recorded revision
+// rather than against a time — the question is what the repository holds that the
+// build did not, and a commit's own date answers a different one.
+func TestHowFarBehindASessionIsCountedOnlyAgainstItsOwnHistory(t *testing.T) {
 	t.Parallel()
 
 	build := "4c1f2b3a9d8e7f6a5b4c3d2e1f0099887766554433221100aabbccddeeff0011"
-	runner := &countingGit{stdout: "7\n"}
+	runner := &countingGit{answers: []gitAnswer{{}, {stdout: "7\n"}}}
 	deployments := repositoryDeployments{repository: "/repo", runner: runner, timeout: time.Second}
 
 	behind, err := deployments.Behind(context.Background(), build)
@@ -29,52 +34,103 @@ func TestHowFarBehindASessionIsCountedFromItsBuild(t *testing.T) {
 	if behind != 7 {
 		t.Fatalf("behind = %d, want 7", behind)
 	}
-	want := "rev-list --count " + build + "..HEAD"
-	if got := strings.Join(runner.args, " "); got != want {
+	want := []string{
+		"cat-file -e " + build + "^{commit}",
+		"rev-list --count " + build + "..HEAD",
+	}
+	if got := runner.asked(); !slices.Equal(got, want) {
 		t.Fatalf("asked git %q, want %q", got, want)
 	}
 }
 
-// A repository that will not answer is an error rather than a zero, because a
-// session reported as current by a comparison that never happened is the false
-// all-clear the whole line exists to end. A build that is not a revision is
-// refused here rather than handed to Git.
+// A binary built somewhere else is the ordinary state of every product that is
+// not the harness's own source: the sink is pointed at the product's repository
+// and the session's revision is not in it. That is reported as its own answer, so
+// nothing counts commits out of an unrelated history and calls them harness
+// changes, and nothing treats a healthy installation as a fault.
+func TestABuildTheRepositoryDoesNotHoldIsNotCountedAgainstIt(t *testing.T) {
+	t.Parallel()
+
+	runner := &countingGit{answers: []gitAnswer{{failed: true}}}
+	deployments := repositoryDeployments{repository: "/some-other-product", runner: runner, timeout: time.Second}
+
+	_, err := deployments.Behind(context.Background(), strings.Repeat("a", 40))
+	if !errors.Is(err, slack.ErrUnrelatedBuild) {
+		t.Fatalf("Behind() error = %v, want it reported as an unrelated build", err)
+	}
+	if len(runner.commands) != 1 {
+		t.Fatalf("asked git %q, want the count never attempted", runner.asked())
+	}
+}
+
+// A repository that will not answer the count is an error rather than a zero,
+// because a session reported as current by a comparison that never happened is
+// the false all-clear the whole line exists to end. A build that is not a
+// revision is refused here rather than handed to Git.
 func TestARepositoryOrABuildThatCannotAnswerIsRefusedRatherThanCountedAsCurrent(t *testing.T) {
 	t.Parallel()
 
 	refusing := repositoryDeployments{
 		repository: "/repo",
-		runner:     &countingGit{failed: true, stderr: "fatal: bad revision"},
+		runner:     &countingGit{answers: []gitAnswer{{}, {failed: true, stderr: "fatal: bad revision"}}},
 		timeout:    time.Second,
 	}
-	if _, err := refusing.Behind(context.Background(), strings.Repeat("a", 40)); err == nil {
+	_, err := refusing.Behind(context.Background(), strings.Repeat("a", 40))
+	if err == nil {
 		t.Fatal("Behind() error = nil, want a comparison that could not be made reported as one")
 	}
-	asked := &countingGit{stdout: "0\n"}
+	// It is a failure to be retried and said, not the quiet answer an unrelated
+	// build gets: this repository does hold the revision and could not count.
+	if errors.Is(err, slack.ErrUnrelatedBuild) {
+		t.Fatalf("Behind() error = %v, want a repository that broke told apart from one this build is not from", err)
+	}
+	asked := &countingGit{}
 	misbuilt := repositoryDeployments{repository: "/repo", runner: asked, timeout: time.Second}
 	if _, err := misbuilt.Behind(context.Background(), "--upload-pack=touch /tmp/x"); err == nil {
 		t.Fatal("Behind() error = nil, want a build that is not a revision refused")
 	}
-	if asked.args != nil {
-		t.Fatalf("git was asked %v, want nothing run at all", asked.args)
+	if len(asked.commands) != 0 {
+		t.Fatalf("git was asked %v, want nothing run at all", asked.asked())
 	}
 }
 
-// countingGit is a Git that answers whatever a test needs and remembers what it
-// was asked, which is where the shape of the question is checked.
-type countingGit struct {
-	args   []string
+// gitAnswer is what the stand-in Git says to one call.
+type gitAnswer struct {
 	stdout string
 	stderr string
 	failed bool
 }
 
+// countingGit is a Git that answers whatever a test needs, in order, and
+// remembers what it was asked — which is where the shape of the questions and
+// the fact that the second one is never reached are both checked. A call past
+// the end of the answers succeeds saying nothing, which is what `cat-file -e`
+// does when the object is there.
+type countingGit struct {
+	answers  []gitAnswer
+	commands [][]string
+}
+
 func (g *countingGit) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
-	g.args = command.Args
-	if g.failed {
-		return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 128, Stderr: g.stderr}, nil
+	index := len(g.commands)
+	g.commands = append(g.commands, command.Args)
+	if index >= len(g.answers) {
+		return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
 	}
-	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: g.stdout}, nil
+	answer := g.answers[index]
+	if answer.failed {
+		return execution.ProcessResult{Status: execution.ProcessFailed, ExitCode: 1, Stderr: answer.stderr}, nil
+	}
+	return execution.ProcessResult{Status: execution.ProcessSucceeded, Stdout: answer.stdout}, nil
+}
+
+// asked is every call as one line each, which is what a failure prints.
+func (g *countingGit) asked() []string {
+	said := make([]string, 0, len(g.commands))
+	for _, command := range g.commands {
+		said = append(said, strings.Join(command, " "))
+	}
+	return said
 }
 
 // The two tokens belong to this process's environment and to nowhere else. A

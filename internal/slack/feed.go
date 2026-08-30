@@ -64,6 +64,12 @@ const (
 	// is already the cursor's standing state: a different build is a different
 	// cursor, and the mark goes with it.
 	escalatedMark = "escalated"
+	// unrelatedMark records having said, in the sink's own log, that the build a
+	// session is running belongs to a repository this sink is not pointed at. It
+	// is marked for the same reason the escalation is: it is true for as long as
+	// that build stands, and a log line repeated every hour about an installation
+	// that is behaving is noise rather than an account.
+	unrelatedMark = "unrelated"
 )
 
 // Delivery is one step of one stream: what to say, and the cursor that records

@@ -545,6 +545,19 @@ too late. It is silent on a session running what is deployed, and on one whose
 binary recorded no revision at all, which is a comparison nobody can make rather
 than a session that is current.
 
+**It is a self-hosting line, and it says so rather than assuming it.** The
+revision is the one the `yoyo` binary was built from, and the repository it is
+counted against is the product's — the same one the tracker and the worktrees use.
+Those are one history only where the product under management is the harness's own
+source, which is how Yoyodyne develops itself and is not true of any other
+product. Nothing asserts it: the sink asks the repository whether it holds that
+revision before it counts anything, and where it does not there is no number to
+say, so the channel hears nothing and the sink's log says why once per build. A
+count taken from an unrelated history would be a number an operator would act on,
+which is worse than the silence. Measuring a resident against a harness repository
+that is not the product's would need that repository named in configuration, and
+nothing names it today.
+
 Far enough behind — twenty changes — it stops being a line worth reading and
 becomes a degraded harness, said as a warning and sent as a direct message to each
 person the project granted direct-work, once per build. That needs the `im:write`

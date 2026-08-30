@@ -826,6 +826,11 @@ func (p *poster) Post(ctx context.Context, message notify.Message) error {
 // that will not open a direct message — a missing scope, somebody who has left —
 // costs the escalation and not the record, and the refusal is said in the sink's
 // own log where an operator setting this up is looking.
+//
+// It is two calls per operator, which is what Slack documents: the conversation
+// is opened and the message goes to the channel that comes back. Both go through
+// the pacer, because what a workspace counts is calls and it does not care which
+// of them were the interesting ones.
 func (p *poster) deliver(ctx context.Context, message notify.Message, emoji, url string) {
 	sink := p.sink
 	for _, member := range p.direct {
@@ -833,10 +838,16 @@ func (p *poster) deliver(ctx context.Context, message notify.Message, emoji, url
 		if member == "" {
 			continue
 		}
+		conversation, err := sink.openConversation(ctx, member)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			sink.log("a direct conversation with %s could not be opened, so %s stands in the channel alone: %v", member, message.Kind, err)
+			continue
+		}
 		if _, err := sink.post(ctx, Message{
-			// Slack takes a member id where a channel goes and opens the direct
-			// conversation itself, so nothing here has to remember one.
-			Channel:   member,
+			Channel:   conversation,
 			Text:      renderText(message),
 			Username:  message.Identity.Name,
 			IconEmoji: emoji,
@@ -850,6 +861,15 @@ func (p *poster) deliver(ctx context.Context, message notify.Message, emoji, url
 		}
 		sink.log("said %s to %s directly", message.Kind, member)
 	}
+}
+
+// openConversation asks the workspace for the direct conversation with one
+// member, at the pace the workspace sustains.
+func (s *Sink) openConversation(ctx context.Context, member string) (string, error) {
+	if err := s.pace.wait(ctx); err != nil {
+		return "", err
+	}
+	return s.api.OpenConversation(ctx, member)
 }
 
 // openThread posts the message a topic's thread hangs from. It names the topic
