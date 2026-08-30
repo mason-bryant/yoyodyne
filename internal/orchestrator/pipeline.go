@@ -504,6 +504,14 @@ func (e ExistingRunError) Error() string {
 // happened in. Error delegates to the wrapped failure verbatim, so wrapping a
 // refusal in this changes what the harness knows about it and never changes what
 // it says.
+//
+// It goes innermost, around the bare cause, with whatever context a site was
+// already adding left wrapped around the outside. errors.As finds it at any
+// depth, so nothing is lost by putting it there — and what is gained is that Err
+// is the cause alone. A marker wrapped around a message that already names the
+// condition would have the operator's line say the condition twice and then spend
+// its length bound doing it, which is the reason-cut-off failure this item exists
+// to end, arriving by the door marked report.
 type EnvironmentRefusedError struct {
 	Condition string
 	Err       error
@@ -522,19 +530,37 @@ func (e EnvironmentRefusedError) Error() string {
 
 func (e EnvironmentRefusedError) Unwrap() error { return e.Err }
 
-// describe is the refusal in one operator-facing line: the condition, and the
-// machine's own words for it where they add anything.
+// describe is the refusal in one operator-facing line: the condition this step
+// named, and the machine's own words for what went wrong.
+//
+// The length bound falls on the cause alone. The condition is a fixed phrase
+// written a few lines from here, so its length is known and it is not the part
+// that can run away; the cause arrives from somewhere else at whatever length it
+// likes. A bound spread across the pair spends the budget on the words that could
+// have been guessed and truncates the ones nobody can — which is a line that says
+// something has stopped without saying why, on exactly the refusals that most
+// need it.
 func (e EnvironmentRefusedError) describe() string {
 	condition := strings.TrimSpace(e.Condition)
-	if condition == "" || e.Err == nil {
-		return e.Error()
+	if e.Err == nil {
+		return condition
 	}
-	return condition + ": " + e.Err.Error()
+	cause := singleLine(e.Err.Error(), maxBlockedDetailBytes)
+	if condition == "" {
+		return cause
+	}
+	return condition + ": " + cause
 }
 
 // refusedByEnvironment marks a failure as the machine's. It is a helper rather
 // than a literal at each site so that adding a refusal to the pre-reservation
 // path is one call rather than a decision somebody has to remember to make.
+//
+// Wrap the bare cause with it and leave any context the site was already adding
+// on the outside — fmt.Errorf("...: %w", refusedByEnvironment(condition, err)) —
+// so that the message stays exactly what it was and the condition is said once.
+// The condition is what cannot happen in an operator's terms, and it should not
+// restate the sentence the wrap around it already carries.
 func refusedByEnvironment(condition string, err error) error {
 	return EnvironmentRefusedError{Condition: condition, Err: err}
 }
@@ -653,8 +679,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
-		return Outcome{}, refusedByEnvironment("what is already in flight could not be read",
-			fmt.Errorf("adopt run in flight: %w", err))
+		return Outcome{}, fmt.Errorf("adopt run in flight: %w",
+			refusedByEnvironment("what is already in flight could not be read", err))
 	}
 	// Nothing is in flight for this item, so what follows would start something
 	// new — which is the one thing an intake hold stops. It is asked here rather
@@ -684,11 +710,11 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	// that has none.
 	invariants, err := p.loadInvariants()
 	if err != nil {
-		return Outcome{}, refusedByEnvironment("the repository's invariants could not be read", err)
+		return Outcome{}, err
 	}
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
-		return Outcome{}, refusedByEnvironment("the repository is not ready for an isolated run",
-			fmt.Errorf("repository is not ready for an isolated run: %w", err))
+		return Outcome{}, fmt.Errorf("repository is not ready for an isolated run: %w",
+			refusedByEnvironment("the repository is not ready for an isolated run", err))
 	}
 	// An automatic run is written against exactly the branch it will be promoted
 	// into, so the integration target is fixed before any work starts and never
@@ -700,8 +726,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if p.automatic() || publishing {
 		targetBranch, err = p.Worktrees.CurrentBranch(ctx)
 		if err != nil {
-			return Outcome{}, refusedByEnvironment("the branch work would be promoted into could not be resolved",
-				fmt.Errorf("resolve integration target: %w", err))
+			return Outcome{}, fmt.Errorf("resolve integration target: %w",
+				refusedByEnvironment("the branch work would be promoted into could not be resolved", err))
 		}
 		baseRef = targetBranch
 	}
@@ -746,8 +772,8 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		if errors.As(err, &existing) {
 			return Outcome{}, ExistingRunError{State: existing.State}
 		}
-		return Outcome{}, refusedByEnvironment("the run could not be reserved in durable state",
-			fmt.Errorf("reserve developer run: %w", err))
+		return Outcome{}, fmt.Errorf("reserve developer run: %w",
+			refusedByEnvironment("the run could not be reserved in durable state", err))
 	}
 	defer reservation.Release()
 	run := &activeRun{
@@ -822,15 +848,15 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// process left it, still resumable, rather than spending an attempt on work
 	// that could not be integrated afterwards anyway.
 	if err := p.Worktrees.ValidateReady(ctx); err != nil {
-		return Outcome{}, refusedByEnvironment("the repository is not ready to resume a run",
-			fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID, err))
+		return Outcome{}, fmt.Errorf("repository is not ready to resume run %s: %w", state.RunID,
+			refusedByEnvironment("the repository is not ready to resume a run", err))
 	}
 	// The invariants are re-read rather than carried in run state: they are the
 	// repository's current constraints, and a resumed attempt must be held to what
 	// holds now rather than to what held when the interrupted process started.
 	invariants, err := p.loadInvariants()
 	if err != nil {
-		return Outcome{}, refusedByEnvironment("the repository's invariants could not be read", err)
+		return Outcome{}, err
 	}
 	// A run reserved before either was recorded acquires them as it is picked up,
 	// which is the best either can be: the account is the one this process is
@@ -1153,7 +1179,11 @@ func (p Pipeline) loadInvariants() (invariant.Set, error) {
 	store := invariant.Store{RepositoryRoot: p.Repository, Directory: p.Config.Product.Invariants}
 	set, err := store.Load()
 	if err != nil {
-		return invariant.Set{}, fmt.Errorf("load architectural invariants: %w", err)
+		// The refusal is declared here rather than at the two callers, because this
+		// is where it is known to be about the repository rather than about the item
+		// either caller was starting.
+		return invariant.Set{}, fmt.Errorf("load architectural invariants: %w",
+			refusedByEnvironment("the repository's invariants could not be read", err))
 	}
 	return set, nil
 }

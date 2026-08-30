@@ -1166,7 +1166,9 @@ func blockedReason(err error) string {
 	}
 	var refused EnvironmentRefusedError
 	if errors.As(err, &refused) {
-		return "runs cannot start: " + singleLine(refused.describe(), maxBlockedDetailBytes)
+		// describe bounds the cause itself; bounding it again here is what would
+		// spend the budget on the condition and cut the reason off the end.
+		return "runs cannot start: " + refused.describe()
 	}
 	return "runs cannot start: " + singleLine(err.Error(), maxBlockedDetailBytes)
 }
