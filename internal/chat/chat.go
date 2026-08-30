@@ -912,6 +912,12 @@ func (s *Session) takeTurn(ctx context.Context, prompt string) (string, error) {
 		LastSequence:     lastSequence,
 		RedactValues:     s.options.RedactValues,
 		EventSink:        sink,
+		// The account this conversation is held under, so what the invocation
+		// records and what its cost line says are the same alias. Where that
+		// account authenticates is on the backend value rather than here: a
+		// conversation is opened against one account and stays there, so the
+		// provider home was settled before the first turn.
+		AccountAlias: s.options.AccountAlias,
 		// The reply is shown as the provider writes it where somebody is
 		// watching. It is the same text this turn is built from, redacted and
 		// recorded before it arrives here, so nothing about what is recorded

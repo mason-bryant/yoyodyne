@@ -612,18 +612,23 @@ func wrapScaffoldComment(builder *strings.Builder, first, continued, text string
 }
 
 // renderScaffoldAccounts writes the provider accounts the agents below run
-// under. There is one, and it is written out rather than left to the harness
-// default for the reason everything else here is: the file states what runs.
+// under. A new project has one, and it is written out rather than left to the
+// harness default for the reason everything else here is: the file states what
+// runs.
 func renderScaffoldAccounts(builder *strings.Builder, effective Config) {
 	builder.WriteString(`
 # The provider accounts this project runs agents under, keyed by the alias each
-# one is known by here. Yoyodyne runs one: the agents below are each assigned to
-# it, every run records the alias it ran under, and every surface that reports a
-# run says it back. The alias is the whole of what an entry is for -- the harness
-# invokes the provider with the credentials this machine is already signed in
-# with, so there is nothing here that selects between logins. Rename the alias to
-# whatever you call this account; a second entry is what pooling work across
-# accounts will be, and it is refused until that exists.
+# one is known by here. A new project has one: the agents below are each assigned
+# to it, every run records the alias it ran under, and every surface that reports
+# a run says it back. The alias is the whole of what an entry is for -- an entry
+# never holds a credential, because authentication is the provider's own and
+# lives on this machine. Rename the alias to whatever you call this account.
+#
+# A second entry pools the work: active accounts are round-robined a run at a
+# time, a reserved one is served from only when no active account can be, and
+# weekly_budget_usd stands an account down once the runs that named it have cost
+# that much over seven days. bin/yoyo-account signs a second account in and
+# prints the entry for it; docs/configuration.md#provider-accounts has the rest.
 accounts:
 `)
 	for _, alias := range effective.AccountAliases() {

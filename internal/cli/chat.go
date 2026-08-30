@@ -377,7 +377,20 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 	}
 
 	processRunner := parts.runner
+	// The conversation is held under the account its agent is configured for, and
+	// the availability below is asked of that same account: a check made against
+	// the machine's own login would report a conversation ready to open on an
+	// account nobody had signed in to.
+	account, err := cfg.Endpoint(parts.stateRoot, cfg.AgentAccountAlias(name))
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve the account %s agent %s runs under: %w", role, name, err)
+	}
+	// The provider is built from what the project declares — its adapter, its
+	// executable, and its dialect — and then pointed at the account's own
+	// provider home. The two are separate decisions: which provider runs the
+	// agent is the project's, and which login it runs under is this machine's.
 	provider := providerBackend(cfg, agent.Backend, processRunner)
+	provider.ConfigDir = account.Directory
 	availability, err := provider.CheckAvailability(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -386,7 +399,8 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		return nil, nil, errors.New("Claude Code is not installed")
 	}
 	if !availability.Authenticated {
-		return nil, nil, fmt.Errorf("Claude Code is not authenticated; run `claude auth login` before starting a conversation (auth method: %s)", availability.AuthMethod)
+		return nil, nil, fmt.Errorf("Claude Code is not authenticated for account %q; run `%s` before starting a conversation (auth method: %s)",
+			account.Alias, accountLoginCommand(account), availability.AuthMethod)
 	}
 
 	store, err := runstate.NewConversationStore(parts.stateRoot, cfg.Product.ID)
@@ -505,8 +519,11 @@ func openChat(ctx context.Context, role domain.AgentRole, agentName, configPath 
 		// is recorded. A conversation costs money and the record has to say so:
 		// what an operator asked to see is what the harness spends on their behalf,
 		// and the management conversation is part of that rather than beside it.
-		Spend:          parts.spend,
-		AccountAlias:   cfg.AccountAlias(),
+		Spend: parts.spend,
+		// The alias every turn's spend is charged to is the one this conversation
+		// was actually opened under, which under a pool is the agent's own rather
+		// than a configuration-wide single account there is none of.
+		AccountAlias:   account.Alias,
 		ConfigRevision: cfg.Revision(),
 		Model:          agent.Model,
 		Persona:        agent.Persona.Text,

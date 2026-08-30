@@ -152,6 +152,7 @@ func branchReviewerFrom(parts components, model string) orchestrator.BranchRevie
 		UsageLimits:  parts.usageLimits,
 		Repository:   parts.repository,
 		Config:       cfg,
+		StateRoot:    parts.stateRoot,
 		RedactValues: parts.redactValues,
 	}
 }

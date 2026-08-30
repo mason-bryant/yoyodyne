@@ -300,11 +300,61 @@ type Pipeline struct {
 	// Sleep waits out a usage-limit pause. It is a field so a test can drive a
 	// pause without spending the real time, and so the wait is always cut short
 	// by a cancelled context rather than holding the process past a shutdown.
-	Sleep        func(ctx context.Context, duration time.Duration) error
-	NewRunID     func() (string, error)
+	Sleep    func(ctx context.Context, duration time.Duration) error
+	NewRunID func() (string, error)
+	// Accounts chooses which of the configured provider accounts a fresh run is
+	// served by, and is optional. A pipeline wired without one runs every run
+	// under the configuration's single account, which is what a project with one
+	// has and is exactly the behaviour there was before pooling existed.
+	//
+	// It is consulted once, when a run is started. Everything after that reads the
+	// alias the run recorded: a resumed run, a repair attempt, and the review of
+	// the change are all the same run, and a run that changed account mid-flight
+	// would leave half its spend on one subscription and half on another with
+	// nothing saying so.
+	Accounts AccountChooser
+	// StateRoot is where everything durable that is not the repository lives. The
+	// pipeline needs it because a pooled alias authenticates in a provider home
+	// under it, and that path is this machine's business rather than the
+	// configuration's — which is why it is wired here rather than written down in
+	// a file that is versioned with the repository.
+	StateRoot    string
 	Repository   string
 	Config       config.Config
 	RedactValues []string
+}
+
+// AccountChooser picks the provider account the next run is served by. It is an
+// interface rather than the configuration's own method because choosing needs
+// evidence the configuration does not hold — what each account has already spent
+// this week, and which one the last run used — and that evidence is in the run
+// records.
+type AccountChooser interface {
+	ChooseAccount() (config.AccountEndpoint, error)
+}
+
+// chooseAccount is the account a fresh run is served by. A pipeline with no
+// chooser wired runs under the configuration's single account, which is what a
+// project with one has; a pooled configuration with no chooser names no account
+// and is refused here, before anything is claimed, rather than starting a run
+// nothing could attribute.
+func (p Pipeline) chooseAccount() (config.AccountEndpoint, error) {
+	if p.Accounts != nil {
+		return p.Accounts.ChooseAccount()
+	}
+	return p.Config.Endpoint(p.StateRoot, p.Config.AccountAlias())
+}
+
+// accountFor is where an alias a run already recorded authenticates. An alias
+// the configuration no longer declares is still the alias that run spent, and
+// the run is not worth failing over a mapping edited underneath it: the
+// invocation is made where that alias authenticates, and the record goes on
+// saying which account it was.
+func (p Pipeline) accountFor(alias string) config.AccountEndpoint {
+	if endpoint, err := p.Config.Endpoint(p.StateRoot, alias); err == nil {
+		return endpoint
+	}
+	return config.AccountEndpoint{Alias: alias, Directory: config.AccountConfigDirectory(p.StateRoot, alias)}
 }
 
 type Outcome struct {
@@ -653,6 +703,13 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
+	// Which account will serve this run is settled before anything is claimed, so
+	// a pool with nothing left to spend refuses here rather than after a work item
+	// has been taken and a worktree cut for it.
+	account, err := p.chooseAccount()
+	if err != nil {
+		return Outcome{}, fmt.Errorf("choose the provider account for this run: %w", err)
+	}
 	now := p.clock().Now()
 	state := runstate.State{
 		SchemaVersion: runstate.StateSchemaVersion,
@@ -671,8 +728,10 @@ func (p Pipeline) Run(ctx context.Context, workItemID string) (Outcome, error) {
 		// answer is in hand. Everything that reads the record afterwards reads only
 		// the record, and neither can be recovered from it later — a configuration
 		// is edited, and an account nobody recorded is an account nobody can bill
-		// the run to.
-		AccountAlias:   p.Config.AccountAlias(),
+		// the run to. Under a pool it is also what the run is affined to: every
+		// invocation this run goes on to make reads the alias back off the record
+		// rather than asking the pool a second time.
+		AccountAlias:   account.Alias,
 		ConfigRevision: p.Config.Revision(),
 		Status:         runstate.StatusPending,
 		StartedAt:      now,
@@ -781,7 +840,14 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 	// re-stamping would quietly replace evidence about the run with a reading of
 	// the file as it stands now.
 	if state.AccountAlias == "" {
-		state.AccountAlias = p.Config.AccountAlias()
+		// The pool is asked here rather than only at the start, because a record
+		// written before the alias was carried has no account to be affined to and
+		// this process is about to spend one. A pool that cannot choose leaves the
+		// record as it found it: a resume is not worth refusing over an attribution
+		// that was already missing.
+		if account, err := p.chooseAccount(); err == nil {
+			state.AccountAlias = account.Alias
+		}
 	}
 	if state.ConfigRevision == "" {
 		state.ConfigRevision = p.Config.Revision()
@@ -1825,6 +1891,15 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 	return cause
 }
 
+// account is where this run's invocations are made. It is read off the run's own
+// record rather than chosen again, which is what affinity means here: a repair
+// attempt, a resumed attempt, and the review of the change are all the same run,
+// and a run that moved between accounts mid-flight would leave its spend split
+// across subscriptions with nothing saying so.
+func (a *activeRun) account() config.AccountEndpoint {
+	return a.pipeline.accountFor(a.state.AccountAlias)
+}
+
 // attemptDevelopment makes one developer invocation.
 //
 // It goes through the meter rather than straight at the backend, so that what
@@ -1834,6 +1909,7 @@ func (a *activeRun) blockOnSpentRelaunchBudget(ctx context.Context, failure back
 func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID string) (backend.RunResult, error) {
 	p := a.pipeline
 	developer := p.developer()
+	account := a.account()
 	a.state.ProviderModel = developer.Model
 	a.outcome.ProviderModel = developer.Model
 	provider := spend.Metered{
@@ -1853,6 +1929,8 @@ func (a *activeRun) attemptDevelopment(ctx context.Context, prompt, sessionID st
 		LastSequence:     a.state.LastSequence,
 		RedactValues:     p.RedactValues,
 		EventSink:        a.sink,
+		AccountAlias:     account.Alias,
+		AccountConfigDir: account.Directory,
 	})
 }
 
@@ -3664,6 +3742,7 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 	if err != nil {
 		return "", providerEvidence{}, fmt.Errorf("assemble reviewed change: %w", err)
 	}
+	account := a.account()
 	result, reviewErr := p.Reviewer.Review(ctx, review.Request{
 		RunID:      a.state.RunID,
 		WorkItemID: a.state.WorkItemID,
@@ -3682,6 +3761,10 @@ func (a *activeRun) attemptReview(ctx context.Context) (review.Decision, provide
 		// the review rather than to the change: an item that was reviewed four
 		// times is where that distinction is the whole answer.
 		Spend: a.spendAttribution(domain.RoleReviewer, runstate.SpendPhaseReview),
+		// The review is made under the account the run is affined to, so what one
+		// piece of work cost is what one subscription was spent.
+		AccountAlias:     account.Alias,
+		AccountConfigDir: account.Directory,
 	})
 	if result.LastSequence > a.state.LastSequence {
 		a.state.LastSequence = result.LastSequence

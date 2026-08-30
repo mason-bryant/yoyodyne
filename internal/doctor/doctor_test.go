@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -910,8 +911,13 @@ func contains(values []string, want string) bool {
 // substring of the command it would have run.
 type scriptedRunner struct {
 	commands [][]string
-	replies  []scriptedReply
-	failures map[string]error
+	// invocations are the same commands whole, kept beside the flattened ones
+	// because some of what the harness decides is carried in the environment
+	// rather than in the arguments -- which provider home an account is asked
+	// about, for one -- and a flattened command line cannot show it.
+	invocations []execution.Command
+	replies     []scriptedReply
+	failures    map[string]error
 	// missing is shared with the world, so a program this machine does not have
 	// refuses to start here exactly as it would refuse to start for real: the
 	// adapters that ask a tool about itself distinguish "would not run" from
@@ -921,7 +927,12 @@ type scriptedRunner struct {
 }
 
 type scriptedReply struct {
-	match  string
+	match string
+	// env is an environment entry the command must also carry for this reply to
+	// be the one. It is empty for a reply that does not care, which is every
+	// reply about a machine with one provider home: two accounts are asked the
+	// same question and are told apart only by the home it is asked in.
+	env    string
 	result execution.ProcessResult
 }
 
@@ -929,6 +940,13 @@ type scriptedReply struct {
 // can override one of the healthy defaults by naming the same command.
 func (r *scriptedRunner) reply(match string, result execution.ProcessResult) {
 	r.replies = append([]scriptedReply{{match: match, result: result}}, r.replies...)
+}
+
+// replyInEnv registers an answer for one command asked with one environment
+// entry present, which is how a test says that this provider home answers
+// differently from that one.
+func (r *scriptedRunner) replyInEnv(match, env string, result execution.ProcessResult) {
+	r.replies = append([]scriptedReply{{match: match, env: env, result: result}}, r.replies...)
 }
 
 func (r *scriptedRunner) fail(match string, err error) {
@@ -941,6 +959,7 @@ func (r *scriptedRunner) fail(match string, err error) {
 func (r *scriptedRunner) Run(_ context.Context, command execution.Command, _ execution.OutputObserver) (execution.ProcessResult, error) {
 	invocation := append([]string{command.Name}, command.Args...)
 	r.commands = append(r.commands, invocation)
+	r.invocations = append(r.invocations, command)
 	joined := strings.Join(invocation, " ")
 	if r.missing[filepath.Base(command.Name)] {
 		return execution.ProcessResult{}, exec.ErrNotFound
@@ -951,9 +970,13 @@ func (r *scriptedRunner) Run(_ context.Context, command execution.Command, _ exe
 		}
 	}
 	for _, reply := range r.replies {
-		if strings.Contains(joined, reply.match) {
-			return reply.result, nil
+		if !strings.Contains(joined, reply.match) {
+			continue
 		}
+		if reply.env != "" && !slices.Contains(command.Env, reply.env) {
+			continue
+		}
+		return reply.result, nil
 	}
 	return execution.ProcessResult{Status: execution.ProcessSucceeded}, nil
 }
