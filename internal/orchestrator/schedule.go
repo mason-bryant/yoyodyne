@@ -41,6 +41,16 @@ package orchestrator
 // against the item's cap, so a second mis-selection would have escalated work
 // nobody had ever started.
 //
+// Parked work is the same shape and was measured the same way. An item the
+// product manager has deliberately taken out of reach is passed over rather than
+// started, decided in the backlog for the same reason, and said out loud here
+// for the same one. The cost that bought it: the parking used to be expressed as
+// the bottom of the priority order, which is a reading nothing that pulls
+// shares, and on 2026-08-27 a drained queue reached it and spent $34.38 on a run
+// of deferred work that failed. Nothing about that selection was wrong. What was
+// wrong was that the decision lived somewhere selection could not look, and a
+// watch session drains a queue every day it is quiet.
+//
 // # A pull re-reads the configuration
 //
 // The scheduler is the first thing in the harness that holds a configuration
@@ -356,18 +366,20 @@ type Started struct {
 
 // Deferred is one pullable item this pass declined to start, and why.
 //
-// Four things land here: an unresolved directive, an item whose unfinished
+// Five things land here: an unresolved directive, an item whose unfinished
 // children already carry its execution, an item that would have raced work
-// already in flight over the same epic or the same files, and an item whose
-// executor is a persona conversation rather than a developer run. Each is named
+// already in flight over the same epic or the same files, an item whose
+// executor is a persona conversation rather than a developer run, and an item
+// somebody parked. Each is named
 // against the item rather than counted, because each is a fact about that item
 // that nothing else in the harness would report — the first needs a person, and
 // the rest are the scheduler passing over something the tracker called ready.
 // The third is a wait rather than a refusal: the item is pulled at the
 // first pull where what it would have raced has ended, and the run that pulls it
-// records having waited. The last is the opposite of a wait, and says so: no
-// pull will ever take it, and what moves it is somebody opening the conversation
-// the item names. The other reasons an
+// records having waited. The last two are the opposite of a wait, and say so: no
+// pull will ever take either, and what moves them is somebody opening the
+// conversation the item names, or the product manager releasing the parking.
+// The other reasons an
 // item is not started — the tracker not calling it ready, a run for it already
 // being in flight, no free developer slot — are facts about the pass rather than
 // about any one item, and the counts on the schedule report them at that grain.
@@ -713,17 +725,15 @@ pulling:
 				break
 			}
 			if !entry.Ready {
-				// Unready entries are counted rather than listed, with one exception:
-				// an item no developer run can carry is not waiting for anything, so
-				// the count it would otherwise disappear into is the count of work that
-				// will become pullable, and it never will. It is named once, like every
-				// other deferral, and what it names is what somebody does about it.
-				if !entry.Executor.DeveloperRun() && !deferred[entry.ID] {
+				// Unready entries are counted rather than listed, with two exceptions:
+				// an item no developer run can carry, and an item somebody parked.
+				// Neither is waiting for anything, so the count they would otherwise
+				// disappear into — work that will become pullable — is a count neither
+				// of them will ever join. Each is named once, like every other
+				// deferral, and what it names is what somebody does about it.
+				if reason, named := passedOverReason(entry); named && !deferred[entry.ID] {
 					deferred[entry.ID] = true
-					schedule.Deferred = append(schedule.Deferred, Deferred{
-						WorkItemID: entry.ID,
-						Reason:     conversationExecutedReason(entry.Executor),
-					})
+					schedule.Deferred = append(schedule.Deferred, Deferred{WorkItemID: entry.ID, Reason: reason})
 				}
 				continue
 			}
@@ -1024,6 +1034,38 @@ func coveredReason(children []string) string {
 // on its own.
 func conversationExecutedReason(executor domain.WorkItemExecutor) string {
 	return fmt.Sprintf("its executor is %q rather than a developer run, so nothing a run can do would carry it out; the item is done in the conversation it names, and it is passed over here rather than waiting for anything", executor)
+}
+
+// passedOverReason says why an unready entry is being named rather than counted,
+// and says nothing for the entries that are counted. Two kinds are named: work no
+// run can carry, and work somebody parked. They are the two that are not waiting
+// for anything, and the order between them is the order the queue's own account
+// gives — an item that is both is one releasing the parking would not make
+// pullable, so what it is told is the thing that would still hold.
+func passedOverReason(entry backlog.Entry) (string, bool) {
+	switch {
+	case !entry.Executor.DeveloperRun():
+		return conversationExecutedReason(entry.Executor), true
+	case entry.Parking.Parked():
+		return parkedReason(entry.Parking), true
+	default:
+		return "", false
+	}
+}
+
+// parkedReason says that the work was deliberately taken out of reach, and says
+// what decided it. Like the executor above it is not a wait, and unlike every
+// other deferral here nothing clears it but a person releasing the item.
+//
+// It says the queue depth outright, because that is the misreading it exists to
+// end. Parking used to be expressed as the bottom of the order, which reads as
+// "last" to everything that pulls — so a queue with nothing else left took it,
+// and the run cost $34.38 to fail at work somebody had already decided to defer.
+// A pull that reaches a parked item now says it will never take it, however
+// little else there is.
+func parkedReason(parking domain.WorkItemParking) string {
+	return fmt.Sprintf("it is parked, so no pull selects it however far the queue drains and this is not a wait for anything: %s. Releasing it is the product manager's, and until they do it is passed over at every pull",
+		singleLine(parking.Reason(), maxScheduleReasonBytes))
 }
 
 // brakedReason says which brake stopped the line, because what an operator does

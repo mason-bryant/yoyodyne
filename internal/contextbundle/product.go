@@ -1159,8 +1159,16 @@ func renderWorkItems(items []beads.WorkItem, unavailable string) string {
 		if !item.Executor.DeveloperRun() {
 			executor = ", executor " + string(item.Executor)
 		}
-		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d, %s%s] %s\n",
-			item.ID, item.Status, item.Priority, item.IssueType, executor,
+		// Parked work says so beside its priority, which is the one place the
+		// difference has to be legible: the queue's owner is reading a column of
+		// priorities to decide what comes next, and work that is parked is work no
+		// priority in that column will ever get it pulled.
+		parked := ""
+		if item.Parking.Parked() {
+			parked = ", parked"
+		}
+		rendered.WriteString(fmt.Sprintf("- %s [%s, p%d%s, %s%s] %s\n",
+			item.ID, item.Status, item.Priority, parked, item.IssueType, executor,
 			singleLine(item.Title, maxWorkItemTitleBytes)))
 	}
 	if len(items) > len(listed) {

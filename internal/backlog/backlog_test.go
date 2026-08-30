@@ -179,6 +179,89 @@ func TestWorkAConversationCarriesIsNeverTheNextThingToPull(t *testing.T) {
 	}
 }
 
+// The failure this exists for: work deferred by a decision, sitting at the
+// bottom of the order with the tracker reporting it as perfectly pullable —
+// which it is, as far as dependencies go. Parking it takes it out of the ready
+// count entirely, so a queue that drains past everything above it still has
+// nothing to pull.
+func TestParkedWorkIsNeverPullableHoweverFarTheQueueDrains(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{
+		{ID: "yoyodyne-ifd.188", Title: "Parked work is unschedulable", Status: statusOpen, Priority: 1},
+		{
+			ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
+			Parking: "off the critical path by the scope decision; released when a second backend is wanted",
+		},
+	}, []string{"yoyodyne-ifd.188", "yoyodyne-ifd.6"})
+
+	parked := queue.Entries[1]
+	if parked.Ready {
+		t.Fatalf("parked work was reported ready: %#v", parked)
+	}
+	// It is passed over rather than taken out of the order: where the product
+	// manager put it is still where it is, and the reason travels with it.
+	if parked.Position != 2 || !parked.Parking.Parked() {
+		t.Fatalf("the entry moved or lost its parking: %#v", parked)
+	}
+	if queue.Ready() != 1 || queue.Parked() != 1 {
+		t.Fatalf("ready = %d, parked = %d; want the parked item counted apart from the pullable one", queue.Ready(), queue.Parked())
+	}
+
+	// The case that cost the money: everything above it is gone, and the drained
+	// queue still has nothing to pull rather than reaching the parked item.
+	drained := Order([]beads.WorkItem{{
+		ID: "yoyodyne-ifd.6", Title: "The thin Codex backend", Status: statusOpen, Priority: 4,
+		Parking: "off the critical path by the scope decision",
+	}}, []string{"yoyodyne-ifd.6"})
+	if next, ok := drained.Next(); ok {
+		t.Fatalf("a drained queue selected parked work: %#v", next)
+	}
+
+	rendered := queue.Render()
+	for _, required := range []string{
+		"backlog (2 admitted, 1 ready to pull, 1 parked):",
+		"2. [yoyodyne-ifd.6] p4 parked The thin Codex backend",
+		"parked, so no pull selects it however far the queue drains: off the critical path by the scope decision",
+	} {
+		if !strings.Contains(rendered, required) {
+			t.Fatalf("rendered backlog = %q, want it to contain %q", rendered, required)
+		}
+	}
+	// Parking is not a wait, and reading it as one would send somebody looking for
+	// a blocker to release rather than for the decision to revisit.
+	if strings.Contains(rendered, "waiting on") {
+		t.Fatalf("a parking was reported as a wait: %q", rendered)
+	}
+}
+
+// Parking and the executor are separate axes, and an item can carry both. What
+// it is told is the hold that would still stand after the other is lifted:
+// releasing the parking on work no run can carry would change nothing.
+func TestParkedWorkThatNoRunCouldCarryIsToldTheHoldThatWouldStillStand(t *testing.T) {
+	t.Parallel()
+
+	queue := Order([]beads.WorkItem{{
+		ID: "yoyodyne-ifd.138", Title: "Promote the brief", Status: statusOpen, Priority: 0,
+		Executor: domain.ConversationWith(domain.RoleArchitect),
+		Parking:  "waiting on the operator's answer about the goals",
+	}}, []string{"yoyodyne-ifd.138"})
+
+	entry := queue.Entries[0]
+	if entry.Ready {
+		t.Fatalf("work that is both parked and conversation-executed was reported ready: %#v", entry)
+	}
+	rendered := queue.Render()
+	if !strings.Contains(rendered, `its executor is "conversation:architect" rather than a developer run`) {
+		t.Fatalf("rendered backlog = %q", rendered)
+	}
+	// It is still marked as parked in the listing, because it is, and the count
+	// the operator reads has to include it.
+	if !strings.Contains(rendered, "p0 parked Promote the brief") || queue.Parked() != 1 {
+		t.Fatalf("rendered backlog = %q, parked = %d", rendered, queue.Parked())
+	}
+}
+
 // Readiness is the tracker's answer rather than one inferred from a listing.
 // A listing that carries no dependencies looks exactly like work with none, so
 // an item the tracker does not offer is held back whatever its listing shows —
