@@ -2700,6 +2700,12 @@ overrides are a monotonic account of who gave it more room and why. Lowering a c
 is a judgement about the project's pace rather than a decision about one item, and
 `review_rounds_cap` above is where that is made.
 
+That holds after the configuration moves, too. The ceiling in force for an item is
+the larger of the configured cap and its override, not the override — so raising
+`review_rounds_cap` from 4 to 10 over an item carrying an override to 8 gives that
+item 10 like every other, rather than pinning it to the 8 somebody once gave it. An
+override only ever adds room.
+
 **It is yours and nobody else's.** No role has a word for it: the development
 manager's triage vocabulary cannot produce one, and the actions that carry
 decisions out read overrides rather than write them. It is a terminal command for

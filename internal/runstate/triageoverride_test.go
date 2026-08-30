@@ -337,6 +337,54 @@ func TestTheLastOverrideOfABudgetIsTheOneInForce(t *testing.T) {
 	}
 }
 
+// An override is a raise measured against what stood when it was recorded, and
+// what stood is a configured cap that moves afterwards. So the ceiling in force
+// is the larger of the two rather than the override: raise
+// triage.review_rounds_cap over an item already carrying an override and an
+// assignment would drop that one item below every other, which is an override
+// lowering a cap — reported by every view as a raise, and the one thing this
+// record is not allowed to do.
+func TestAConfiguredRaisePastAnOverrideDoesNotLowerThatItemsCap(t *testing.T) {
+	t.Parallel()
+
+	store := newTriageStore(t)
+	ctx := context.Background()
+	const item = "yoyodyne-ifd.143"
+	spendRounds(t, store, item, 0, 5)
+	if _, err := store.Override(ctx, item, TriageOverride{
+		Budget:    TriageReviewRoundBudget,
+		Cap:       8,
+		DecidedBy: "mason",
+		Reason:    "REBUILD",
+	}, time.Now(), overrideCaps); err != nil {
+		t.Fatalf("Override() error = %v", err)
+	}
+	counters, err := store.Counters(item)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+
+	// The project then decides four rounds was mean and makes it ten. This item
+	// gets ten like every other, not the eight somebody once gave it.
+	raised := overrideCaps
+	raised.ReviewRounds = 10
+	if got := raised.Overridden(counters.Overrides).ReviewRounds; got != 10 {
+		t.Fatalf("Overridden() review round cap = %d, want the configured ceiling where it now stands above the override", got)
+	}
+	// And the guards agree, which is the half that matters: the item has spent
+	// five, so it has room under ten and would have none under eight-as-a-ceiling
+	// only if the override had been allowed to lower anything.
+	if _, err := store.GrantRepair(ctx, item, 4, time.Now(), raised); err != nil {
+		t.Fatalf("GrantRepair() under the raised configured cap error = %v", err)
+	}
+
+	// The override still raises where the configured cap is below it, which is the
+	// case it was recorded for.
+	if got := overrideCaps.Overridden(counters.Overrides).ReviewRounds; got != 8 {
+		t.Fatalf("Overridden() review round cap = %d, want the override where it stands above the configured ceiling", got)
+	}
+}
+
 // A record whose overrides do not strictly increase could not have been written
 // by the only thing that writes them, so it is refused where it is read rather
 // than obeyed. These are the figures the guards act on, and a hand-edited record

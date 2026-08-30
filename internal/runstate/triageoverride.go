@@ -154,27 +154,47 @@ func (o TriageOverride) Describe() string {
 // what every guard refuses against and what every view reports, so the cap that
 // refuses a decision and the cap an operator is shown are one number.
 //
-// The last override for a budget is the one in force. Nothing has to sort them,
-// because an override is only ever recorded where it raises what already stands:
-// the last word on a budget is also the largest.
+// It takes the larger of the configured ceiling and the override, rather than the
+// override, and that is the whole of what makes "never lowers" true rather than
+// only true on the day the override was written. An override is a raise measured
+// against what stood when it was recorded, and what stood is a configured cap that
+// can move afterwards: raise `triage.review_rounds_cap` from 4 to 10 over an item
+// carrying an override to 8, and an assignment would drop that one item to 8 while
+// every other item went to 10 — an override lowering a cap, reported as a raise by
+// every view, which is exactly the thing this record is not allowed to do.
+//
+// The overrides are folded in order and each takes the larger, so nothing has to
+// sort them and a later, smaller one cannot undo an earlier one. That the store
+// only ever records a raise is a separate guarantee and this does not lean on it.
 func (c TriageCaps) Overridden(overrides []TriageOverride) TriageCaps {
 	for _, override := range overrides {
 		switch override.Budget {
 		case TriageReviewRoundBudget:
-			c.ReviewRounds = override.Limit()
+			c.ReviewRounds = larger(c.ReviewRounds, override.Limit())
 		case TriageRepairGrantBudget:
-			c.RepairGrants = override.Limit()
+			c.RepairGrants = larger(c.RepairGrants, override.Limit())
 		case TriageRerunBudget:
-			c.Reruns = override.Limit()
+			c.Reruns = larger(c.Reruns, override.Limit())
 		case TriageMergeRearmBudget:
-			c.MergeRearms = override.Limit()
+			c.MergeRearms = larger(c.MergeRearms, override.Limit())
 		}
 	}
 	return c
 }
 
-// OverrideOf is the override in force on one budget, and whether there is one.
-// The last recorded is the one in force, for the reason Overridden gives.
+// larger is the ceiling in force where a configured one and an override disagree:
+// an override gives an item room and never takes it away.
+func larger(configured, override int) int {
+	if override > configured {
+		return override
+	}
+	return configured
+}
+
+// OverrideOf is the last override recorded against one budget, and whether there
+// is one. It answers who crossed this budget and when, which is what an
+// attribution needs; what ceiling is actually in force is Overridden's answer and
+// can be the configured one, where that has since been raised above the override.
 func (c TriageCounters) OverrideOf(budget string) (TriageOverride, bool) {
 	for index := len(c.Overrides) - 1; index >= 0; index-- {
 		if c.Overrides[index].Budget == budget {
