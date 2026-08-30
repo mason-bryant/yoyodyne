@@ -23,6 +23,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/config"
 	"github.com/mason-bryant/yoyodyne/internal/directive"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/review"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 	"github.com/mason-bryant/yoyodyne/internal/staleness"
@@ -1387,6 +1388,131 @@ func TestWatchingPullsAnItemAgainAfterItsBlockerIsReleased(t *testing.T) {
 	}
 }
 
+// The incident this was written for, replayed. A two-line hand edit sits
+// uncommitted in the primary checkout, which correctly refuses every run — and
+// the whole failure was that the refusal was invisible: the session marked every
+// ready item tried and idled over a full queue, and the operator diagnosed it by
+// hand, twice, days apart.
+//
+// So: nothing is started, the session names the state in words carrying the file
+// and the move that ends it, it says so once rather than once a poll, and the
+// moment the change is committed the work it was holding is pulled.
+func TestWatchingNamesADirtyPrimaryCheckoutRatherThanIdlingOverIt(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one", "yoyodyne-two")...)
+	harness.leaveUncommitted("docs/notes.md")
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 3 {
+			h.commit()
+		}
+		return sleeps < 5
+	}
+	sessions := &recordedSessions{}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep, Sessions: sessions}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+
+	const blocked = "runs cannot start: uncommitted changes in the primary checkout (docs/notes.md); commit or stash to release"
+	// The state is named on the schedule, and it is the sentence somebody acts on
+	// rather than a diagnosis they have to make.
+	if schedule.Blocked != blocked {
+		t.Fatalf("blocked = %q, want %q", schedule.Blocked, blocked)
+	}
+	if !strings.Contains(schedule.Render(), blocked) {
+		t.Fatalf("render = %q, want the stalled line named in it", schedule.Render())
+	}
+	// And it is the state the session recorded, where a reader who is not at its
+	// terminal finds it. Blocked while it stood rather than idle, said once across
+	// the three polls it stood for, and idle only afterwards — over a queue that
+	// really was empty by then, which is the one time that word is true.
+	want := []runstate.WatchState{
+		runstate.WatchWatching, runstate.WatchBlocked, runstate.WatchResumed,
+		runstate.WatchIdle, runstate.WatchStopped,
+	}
+	if got := sessions.states(); !sameStates(got, want) {
+		t.Fatalf("recorded states = %v, want %v", got, want)
+	}
+	if reason := sessions.said(runstate.WatchBlocked); reason != blocked {
+		t.Fatalf("blocked reason = %q, want %q", reason, blocked)
+	}
+	// Nothing was started while it stood, and both items were pulled once it was
+	// released — neither of them remembered as one this session had tried.
+	if len(harness.pullOrder()) != 2 {
+		t.Fatalf("pulled = %v, want both items started once the change was committed", harness.pullOrder())
+	}
+}
+
+// A drain meets the same refusal and stops on it rather than reporting an empty
+// queue. It is a foreground command somebody is waiting on, and "nothing more is
+// ready to pull" over a backlog that is entirely ready is the same lie the
+// session used to tell overnight.
+func TestDrainingStopsOnADirtyPrimaryCheckoutRatherThanReportingAnEmptyQueue(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.leaveUncommitted("docs/notes.md", "internal/thing.go")
+
+	schedule, err := (Scheduler{Open: harness.open}).Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if schedule.Stopped != ScheduleBlocked {
+		t.Fatalf("stopped = %q, want the pass stopped on what refuses every run", schedule.Stopped)
+	}
+	if !strings.Contains(schedule.Blocked, "docs/notes.md, internal/thing.go") {
+		t.Fatalf("blocked = %q, want every path in the way named", schedule.Blocked)
+	}
+	if len(schedule.Started) != 0 {
+		t.Fatalf("started = %#v, want nothing started under a machine that refuses every run", schedule.Started)
+	}
+}
+
+// The general rule, and the one the readiness gate above does not cover on its
+// own: a start the machine refused is never remembered as the item having been
+// tried. Here the checkout goes dirty under a run that had already begun, so the
+// refusal arrives as that run's failure — and the item is still pulled again
+// after the operator commits, without anybody editing it.
+func TestAStartTheMachineRefusedIsNotRememberedAsTheItemHavingBeenTried(t *testing.T) {
+	t.Parallel()
+
+	harness := newScheduleHarness(readyItems("yoyodyne-one")...)
+	harness.run = func(h *scheduleHarness, id string) (Outcome, error) {
+		// The edit lands after the pull's readiness read, so the refusal reaches
+		// the scheduler as this run's own failure rather than as the gate's.
+		h.leaveUncommitted("docs/notes.md")
+		return Outcome{}, errors.New("repository is not ready for an isolated run")
+	}
+	harness.onSleep = func(h *scheduleHarness, sleeps int) bool {
+		if sleeps == 1 {
+			h.commit()
+			// From here a start would succeed, so the only thing that could keep
+			// the item out of the queue is this session remembering it.
+			h.run = func(h *scheduleHarness, id string) (Outcome, error) { return h.complete(id), nil }
+		}
+		return sleeps < 3
+	}
+
+	scheduler := Scheduler{Open: harness.open, Watching: true, Sleep: harness.sleep}
+	schedule, err := scheduler.Schedule(context.Background())
+	if err != nil {
+		t.Fatalf("Schedule() error = %v", err)
+	}
+	if starts := len(harness.pullOrder()); starts != 2 {
+		t.Fatalf("the item was started %d time(s) (%v), want it tried again after the machine was put right", starts, harness.pullOrder())
+	}
+	if len(schedule.Started) != 2 || schedule.Started[1].Failure != "" {
+		t.Fatalf("started = %#v, want the second attempt to have run", schedule.Started)
+	}
+	// Nothing about the work failed, so the failure-storm brake counted nothing.
+	if schedule.BlockedInARow != 0 || schedule.Braked != nil {
+		t.Fatalf("blocked in a row = %d, braked = %#v, want a machine refusal to count as neither", schedule.BlockedInARow, schedule.Braked)
+	}
+}
+
 // A session nobody can read the state of still does its work, and says that
 // nobody can read it. The alternative is a session that stops working because
 // it could not be observed, which is the wrong way round.
@@ -1470,6 +1596,10 @@ type scheduleHarness struct {
 	// the scheduler re-reads them, and a test changes them under it.
 	blockedRuns int
 	prices      map[string]float64
+	// dirty is the uncommitted work sitting in the primary checkout, which is what
+	// the readiness gate refuses every run for. It is per pull like the rest: a
+	// test commits under a running session by clearing it.
+	dirty []string
 	// sleeps counts the intervals a watching scheduler waited out, and onSleep is
 	// how a test changes the world between polls. It reports whether the session
 	// carries on, so returning false is the operator stopping it.
@@ -1576,7 +1706,8 @@ func (h *scheduleHarness) open(context.Context) (Pull, error) {
 	h.mu.Unlock()
 	return Pull{
 		Tracker: h, Runs: h, Intake: h, Directives: h, Staleness: h,
-		Capacity: capacity, Start: h.start,
+		Environment: h,
+		Capacity:    capacity, Start: h.start,
 		// A minute is the shipped interval, and no test spends one: the sleep is
 		// the harness's own, so this is only what a watching pull is validated
 		// against.
@@ -1632,6 +1763,32 @@ func (h *scheduleHarness) Price(workItemID string) (runstate.ItemPrice, error) {
 		Runs:       []runstate.RunPrice{{RunID: "run-" + workItemID, WorkItemID: workItemID, CostUSD: cost}},
 		TotalUSD:   cost,
 	}, nil
+}
+
+// ValidateReady is the readiness gate: the machine refuses every run while
+// somebody's uncommitted work is sitting in the primary checkout.
+func (h *scheduleHarness) ValidateReady(context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.dirty) == 0 {
+		return nil
+	}
+	return gitworktree.PrimaryDirtyError{Paths: append([]string(nil), h.dirty...)}
+}
+
+// leaveUncommitted is the hand edit that stopped the line: two lines saved in
+// the primary checkout and never committed.
+func (h *scheduleHarness) leaveUncommitted(paths ...string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dirty = paths
+}
+
+// commit is the operator doing the one thing that releases the line.
+func (h *scheduleHarness) commit() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.dirty = nil
 }
 
 // admit puts work in the backlog, ready to pull. It is what a product manager

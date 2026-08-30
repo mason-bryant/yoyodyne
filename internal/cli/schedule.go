@@ -156,6 +156,10 @@ func openPull(configPath string) (orchestrator.Pull, error) {
 			product:    parts.config.Product,
 			tracker:    tracker,
 		},
+		// Whether the machine can start a run at all is read from the same
+		// worktree manager a run checks it with, so a session's account of what
+		// stopped the line and a run's own refusal can never disagree.
+		Environment:                 parts.worktrees,
 		Capacity:                    parts.config.Execution.MaxConcurrentDevelopers,
 		Poll:                        parts.config.Execution.WorkPoll.Duration(),
 		BlockedRunsBeforeIntakeHold: parts.config.Execution.BlockedRunsBeforeIntakeHold,

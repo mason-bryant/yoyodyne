@@ -126,9 +126,15 @@ const (
 	// braked needs somebody to look at what stopped the line — and stopping is
 	// said because a session that ended quietly is the case the rest of this
 	// exists to rule out.
+	// Blocked is separate from idle for the same reason braked is, and it is the
+	// separation the whole set was missing: a session that cannot start anything
+	// because the machine refuses it looks exactly like one with nothing to start,
+	// and the two need opposite things — one needs work admitted, the other needs
+	// somebody to put the checkout right.
 	KindWatchStarted Kind = "watch.started"
 	KindWatchIdle    Kind = "watch.idle"
 	KindWatchBraked  Kind = "watch.braked"
+	KindWatchBlocked Kind = "watch.blocked"
 	KindWatchResumed Kind = "watch.resumed"
 	KindWatchStopped Kind = "watch.stopped"
 	// A line that is choosing nothing while work is ready to be chosen. Every
@@ -189,6 +195,7 @@ func Kinds() []Kind {
 		KindWatchStarted,
 		KindWatchIdle,
 		KindWatchBraked,
+		KindWatchBlocked,
 		KindWatchResumed,
 		KindWatchStopped,
 		KindLineWaiting,
@@ -211,7 +218,7 @@ func (k Kind) Valid() bool {
 		KindReportFiled, KindProposalRaised, KindExchangeTurn, KindExchangeClosed,
 		KindDirectiveRecorded, KindDirectiveResolved, KindDirectiveCarriedOut, KindDirectiveRefused,
 		KindIntakeHeld, KindIntakeReleased, KindHoldPlaced, KindHoldLifted,
-		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchResumed, KindWatchStopped,
+		KindWatchStarted, KindWatchIdle, KindWatchBraked, KindWatchBlocked, KindWatchResumed, KindWatchStopped,
 		KindLineWaiting, KindCatchUpDigest:
 		return true
 	default:

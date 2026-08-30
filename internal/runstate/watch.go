@@ -15,9 +15,9 @@ package runstate
 // one per poll. A session idling overnight writes one line, not one a minute,
 // which is what makes the log readable and what makes the absence of a line
 // mean something. The states are few on purpose — choosing, idle, braked,
-// resumed, and stopped — because each one is a different thing for an operator
-// to do, and a state nobody would act on differently is noise in a log whose
-// value is that it is short.
+// blocked, resumed, and stopped — because each one is a different thing for an
+// operator to do, and a state nobody would act on differently is noise in a log
+// whose value is that it is short.
 
 import (
 	"bufio"
@@ -69,6 +69,15 @@ const (
 	// Which of the two is in the reason, because they need different things from
 	// whoever reads it.
 	WatchBraked WatchState = "braked"
+	// WatchBlocked is a session that would choose work and cannot start any: the
+	// machine itself refuses every run, for something like uncommitted changes
+	// sitting in the primary checkout. It is its own state rather than idle
+	// because the two are opposite facts about the same silence — idle is a queue
+	// with nothing in it and is waiting on the product manager, blocked is a queue
+	// with work in it and is waiting on whoever can put the machine right. Told
+	// apart only by a session's own terminal, the second reads as the first, which
+	// is a stall diagnosed by hand three times before this state existed.
+	WatchBlocked WatchState = "blocked"
 	// WatchResumed is a session choosing again after a brake lifted. It is its
 	// own state rather than a second "watching" so that the lift is legible: a
 	// hold that was placed and never lifted reads as one that is still in force.
@@ -82,7 +91,7 @@ const (
 
 func (s WatchState) Valid() bool {
 	switch s {
-	case WatchWatching, WatchIdle, WatchBraked, WatchResumed, WatchStopped:
+	case WatchWatching, WatchIdle, WatchBraked, WatchBlocked, WatchResumed, WatchStopped:
 		return true
 	default:
 		return false

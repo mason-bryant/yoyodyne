@@ -519,9 +519,14 @@ a workspace that refuses it costs the board and not one message.
 
 One message there is a state rather than an event, and it is the one an overnight
 asked for. A line that is **choosing nothing while work is ready** — intake held,
-everything held, the watch session idle, or no session running — says so again
-every `--heartbeat`, an hour by default, naming what stopped it, how long that has
-been true, and how much the tracker calls ready behind it. Everything else is a
+everything held, the watch session unable to start anything, the watch session
+idle, or no session running — says so again every `--heartbeat`, an hour by
+default, naming what stopped it, how long that has been true, and how much the
+tracker calls ready behind it. A session that cannot start anything is named
+apart from an idle one and says why in its own words, down to the file:
+`runs cannot start: uncommitted changes in the primary checkout (<file>); commit
+or stash to release`. The two look identical from outside and need opposite
+things — one waits on work being admitted, the other waits on you. Everything else is a
 transition and is said once, which is right for a thread and wrong for a night:
 "intake is held" posted at 00:02 is ten hours stale by the time anybody reads it,
 and the silence after it is indistinguishable from a healthy queue or a dead sink.

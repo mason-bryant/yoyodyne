@@ -257,10 +257,11 @@ func FromWatch(transition runstate.WatchTransition) (Notification, error) {
 	if !ok {
 		return Notification{}, fmt.Errorf("address watch session %s: %q is not a state anything says", transition.SessionID, transition.State)
 	}
-	// A braked session is the one an operator has to do something about: the
-	// line has stopped and it stays stopped until intake is released.
+	// A braked session and a blocked one are the two an operator has to do
+	// something about: the line has stopped, and it stays stopped until intake is
+	// released or until whatever the machine is refusing runs for is put right.
 	severity := report.SeverityNote
-	if kind == KindWatchBraked {
+	if kind == KindWatchBraked || kind == KindWatchBlocked {
 		severity = report.SeverityWarning
 	}
 	notification := productNotification(kind, transition.At, Detail{Reason: transition.Reason})
@@ -275,6 +276,7 @@ var watchKinds = map[runstate.WatchState]Kind{
 	runstate.WatchWatching: KindWatchStarted,
 	runstate.WatchIdle:     KindWatchIdle,
 	runstate.WatchBraked:   KindWatchBraked,
+	runstate.WatchBlocked:  KindWatchBlocked,
 	runstate.WatchResumed:  KindWatchResumed,
 	runstate.WatchStopped:  KindWatchStopped,
 }
