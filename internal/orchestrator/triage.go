@@ -583,6 +583,10 @@ func docketEnvironmental(refused *runstate.EnvironmentalRefusal) *triage.Environ
 		RoundReturned: refused.RoundReturned,
 		GrantReturned: refused.GrantReturned,
 		Problem:       refused.Problem,
+		// The accounting sentence is carried rather than re-derived from the flags
+		// beside it, so the docket, the thread, and the run's own notes say the same
+		// words about what this round cost.
+		Account: refused.Describe(),
 	}
 }
 

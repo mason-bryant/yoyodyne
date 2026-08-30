@@ -843,6 +843,16 @@ func (p Pipeline) resumeRun(ctx context.Context, state runstate.State, item bead
 		}
 		return Outcome{}, refused
 	}
+	// An environmental refusal on the record belongs to a round that is over: a
+	// dispatch something turned away before it reached this run, or a round an
+	// earlier process settled. This one is a fresh round and is classified on its
+	// own evidence, so the old record is cleared here — where every resume passes,
+	// rather than only on the repair-grant continuation that clears it for the same
+	// reason. Left standing it would reach the terminal record, the docket, and the
+	// thread of whatever this round turns out to be, telling an operator the item
+	// stands where it did while its counters say otherwise, which is the misreading
+	// this class exists to prevent, inverted.
+	state.Environmental = nil
 	// The invariants are re-read rather than carried in run state: they are the
 	// repository's current constraints, and a resumed attempt must be held to what
 	// holds now rather than to what held when the interrupted process started.

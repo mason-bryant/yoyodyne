@@ -189,6 +189,14 @@ type Environmental struct {
 	Refused       bool `json:"refused,omitempty"`
 	RoundReturned bool `json:"round_returned,omitempty"`
 	GrantReturned bool `json:"grant_returned,omitempty"`
+	// Account is the harness's own sentence about what this round cost the item,
+	// carried onto the entry rather than derived here from the flags above. The
+	// accounting has five states and one of them — a return the settle decided on
+	// and could not write — is the one a reader must not be told the opposite of,
+	// so it is derived once where the round settles and every surface says the
+	// same words. An entry written before this was carried has none, and the
+	// rendering says so rather than inventing an accounting for it.
+	Account string `json:"account,omitempty"`
 	// Problem is a return the settle decided on and could not write, which is the
 	// one case where the counters above are higher than what the item actually
 	// cost and nothing has corrected them.
@@ -492,6 +500,9 @@ func (e Entry) Validate() error {
 		if len(e.Environmental.Problem) > MaxMessageBytes {
 			problems = append(problems, fmt.Errorf("environmental: problem is %d bytes, limit is %d", len(e.Environmental.Problem), MaxMessageBytes))
 		}
+		if len(e.Environmental.Account) > MaxMessageBytes {
+			problems = append(problems, fmt.Errorf("environmental: account is %d bytes, limit is %d", len(e.Environmental.Account), MaxMessageBytes))
+		}
 	}
 	// Each class is held to the evidence that makes it the thing it claims to
 	// be. An entry that cannot say what stopped is an entry nobody can act on,
@@ -608,55 +619,17 @@ func (e Entry) renderEnvironmental() string {
 	if refused == nil {
 		return ""
 	}
-	if !refused.Refused {
-		said := []string{"The round delivered a change all the same, so it spent as any round does and the counters below are what this item has cost."}
-		switch {
-		case !refused.Settled:
-			said = []string{"The round this belongs to has not settled, so nothing has been decided about what it cost and the counters below are what the item has been charged so far."}
-		case strings.TrimSpace(refused.Problem) != "":
-			said = []string{"Whether the round delivered anything could not be read, so it was left spent and the counters below include it."}
-		}
-		for _, line := range []string{refused.Detail, refused.Problem} {
-			if trimmed := strings.TrimSpace(line); trimmed != "" {
-				said = append(said, trimmed)
-			}
-		}
-		return indented(fmt.Sprintf("Environmental cause recorded (%s)", refused.Cause), strings.Join(said, "\n"))
-	}
 	var rendered strings.Builder
-	fmt.Fprintf(&rendered, "      Environmentally refused (%s): %s\n", refused.Cause, environmentalReturn(*refused))
+	fmt.Fprintf(&rendered, "      Round: %s\n", nonEmpty(refused.Account,
+		fmt.Sprintf("environmental cause recorded: %s; what it cost this item is not recorded on this entry", refused.Cause)))
 	if detail := strings.TrimSpace(refused.Detail); detail != "" {
 		rendered.WriteString(indented("What the harness found", detail))
 	}
 	if problem := strings.TrimSpace(refused.Problem); problem != "" {
-		rendered.WriteString(indented("This refusal could not be paid back in full",
+		rendered.WriteString(indented("This round could not be paid back in full",
 			problem+"\nThe counters below therefore include a round this item did not cost: read them as higher than the item stands at."))
 	}
 	return rendered.String()
-}
-
-// environmentalReturn says what a refused round actually gave back. A refusal
-// that returned nothing is stated as such rather than left implied: a round
-// refused before any reviewer was asked had no round to give back, and a reader
-// who saw "refused" and no accounting would take the accounting on trust.
-func environmentalReturn(refused Environmental) string {
-	// A return the settle decided on and could not write is the one state where
-	// the counters really are higher than what the item cost, so it is said here
-	// rather than only in the block below: a reader who takes in the headline and
-	// nothing else must not come away believing the item stands where it did.
-	if strings.TrimSpace(refused.Problem) != "" {
-		return "what it should have been given back could not be written, so the counters below are higher than this round cost the item"
-	}
-	switch {
-	case refused.RoundReturned && refused.GrantReturned:
-		return "the review round it was charged and the granted repair round it consumed were both returned, so this item stands where it did before the round"
-	case refused.RoundReturned:
-		return "the review round it was charged was returned, and no repair grant had been consumed, so this item stands where it did before the round"
-	case refused.GrantReturned:
-		return "the granted repair round it consumed was returned, and no review round had been charged, so this item stands where it did before the round"
-	default:
-		return "it reached nothing that spends, so this item stands where it did before it"
-	}
 }
 
 // renderOverrides says which of this item's caps an operator crossed, and who

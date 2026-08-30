@@ -8,14 +8,16 @@ package orchestrator
 // its cap, and the escalation that followed reads afterwards as work nobody could
 // finish.
 //
-// Four tests, and each asserts a different half of the class. The first is that
-// sequence with the accounting asserted: the run refuses, the round is classified
+// Each test asserts a different part of the class. The first is that sequence
+// with the accounting asserted: the run refuses, the round is classified
 // environmental, and the item stands exactly where it stood before it. The second
 // is the same failure repeated past what the round budget has room for, which is
 // the bound the item asks for rather than one case of it. The third is the
 // conjunction from the other side — an empty delivery with no environmental
-// cause still spends. The fourth is a cause the harness recognizes from the
-// failure alone rather than from a refusal site of its own.
+// cause still spends. The last three are the two causes the harness recognizes
+// from the failure alone rather than from a refusal site of its own, and the
+// guarantee that a round turned away never lends its classification to the round
+// that follows it.
 
 import (
 	"context"
@@ -27,6 +29,7 @@ import (
 	"github.com/mason-bryant/yoyodyne/internal/backend"
 	"github.com/mason-bryant/yoyodyne/internal/beads"
 	"github.com/mason-bryant/yoyodyne/internal/domain"
+	"github.com/mason-bryant/yoyodyne/internal/execution"
 	"github.com/mason-bryant/yoyodyne/internal/gitworktree"
 	"github.com/mason-bryant/yoyodyne/internal/runstate"
 )
@@ -131,7 +134,7 @@ func TestAnEmptyDiffRoundTheEnvironmentRefusedSpendsNothing(t *testing.T) {
 		t.Fatalf("docket entry environmental = %#v, want the refusal carried onto it", entry.Environmental)
 	}
 	rendered := entry.Render()
-	for _, want := range []string{"Environmentally refused", string(runstate.CauseHandbackMissingChange), "stands where it did before the round"} {
+	for _, want := range []string{"environmentally refused", string(runstate.CauseHandbackMissingChange), "stands where it did before the round"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("the docket entry does not say %q:\n%s", want, rendered)
 		}
@@ -286,6 +289,124 @@ func TestARoundTurnedAwayByThePrimaryCheckoutIsRefusedEnvironmentally(t *testing
 	}
 }
 
+// The second cause the harness recognizes from the failure alone, and the one
+// whose evidence is the wrapping chain rather than a single call: a provider
+// invocation the machine never started travels from the process runner, through
+// the metered provider, through the record of the dead attempt, and out as the
+// error that ends the run. Every layer of that has to preserve the sentinel, and
+// this is what says it does.
+func TestAProviderInvocationTheMachineNeverStartedIsRefusedEnvironmentally(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	// What the sandbox refusing to spawn an agent looks like from here: the
+	// invocation returns the runner's sentinel and nothing was ever asked.
+	provider := roleBackend(func(backend.RunRequest) error {
+		return fmt.Errorf("%w: start %q: operation not permitted", execution.ErrProcessNotStarted, "claude")
+	}, approveVerdict)
+	starting := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, provider, []string{"exit 0"}), provider)
+	starting.NewRunID = runstate.NewRunID
+
+	outcome, err := starting.Run(context.Background(), tracker.item.ID)
+	if err == nil {
+		t.Fatal("Run() finished on an invocation the machine never started")
+	}
+	if outcome.Environmental == nil {
+		t.Fatalf("outcome = %#v, want the round classified: the sentinel did not survive the layers between the runner and the settle", outcome)
+	}
+	if outcome.Environmental.Cause != runstate.CauseSandboxSpawnFailure {
+		t.Fatalf("environmental cause = %q, want %q", outcome.Environmental.Cause, runstate.CauseSandboxSpawnFailure)
+	}
+	if !outcome.Environmental.Settled || !outcome.Environmental.Refused {
+		t.Fatalf("environmental = %#v, want the round settled and refused", outcome.Environmental)
+	}
+	if outcome.Environmental.Problem != "" {
+		t.Fatalf("the settle reported a problem it did not have: %s", outcome.Environmental.Problem)
+	}
+	// A worktree was cut and nothing was written into it, which is the empty
+	// delivery half of the definition met rather than assumed.
+	if outcome.WorktreePath == "" {
+		t.Fatal("no worktree was recorded, so the emptiness this classified on was not read from one")
+	}
+	counters, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if counters.ReviewRounds != 0 {
+		t.Fatalf("review rounds = %d, want an item charged nothing for an invocation that never ran", counters.ReviewRounds)
+	}
+}
+
+// The other half of the dispatch refusal: a run turned away by the environment
+// stays live and resumable, so the round it is eventually judged on is a
+// different one and must not inherit the refusal. A record left standing would
+// tell an operator the item stands where it did on a round that spent a review
+// round — the misreading this class exists to prevent, inverted.
+func TestAResumedRunDoesNotInheritADispatchTheEnvironmentTurnedAway(t *testing.T) {
+	t.Parallel()
+
+	repository, worktreeRoot, store := restartableFixture(t)
+	tracker := &fakeTracker{item: beads.WorkItem{ID: "yoyodyne-task", Title: "Task", Status: "open"}}
+	stopped := stopWithPreservedChange(t, repository, worktreeRoot, store, tracker, &memoryDocket{})
+	// Live again at the review, with its change preserved. This item has already
+	// spent rounds, which is what a stale refusal would contradict.
+	reEnterAt(t, store, tracker, stopped.RunID, runstate.PhaseReviewing)
+
+	turnedAway := roleBackend(func(request backend.RunRequest) error {
+		t.Errorf("a developer was invoked in %s by a dispatch the environment turned away", request.WorkingDirectory)
+		return nil
+	}, repairVerdict)
+	refusing := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, turnedAway, []string{"exit 0"}), turnedAway)
+	refusing.Worktrees = unreadyPrimaryWorktrees{refusing.Worktrees}
+	if _, err := refusing.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("Run() resumed against a checkout nothing may be resumed against")
+	}
+	turned, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if turned.Environmental == nil || turned.Environmental.Cause != runstate.CauseDirtyPrimary || !turned.Environmental.Refused {
+		t.Fatalf("environmental = %#v, want the turned-away dispatch recorded on the run", turned.Environmental)
+	}
+
+	spentBefore, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+
+	// The same run resumed once the checkout is the harness's again, and stopped
+	// for a reason of its own: the reviewer asks for repairs it has no budget left
+	// for.
+	judging := roleBackend(func(backend.RunRequest) error { return nil }, repairVerdict)
+	resumed := automatic(newSharedPipeline(t, repository, worktreeRoot, store, tracker, judging, []string{"exit 0"}), judging)
+	if _, err := resumed.Run(context.Background(), tracker.item.ID); err == nil {
+		t.Fatal("Run() finished a run whose reviewer kept asking for repairs")
+	}
+	ordinary, err := store.Load(stopped.RunID)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if ordinary.Environmental != nil {
+		t.Fatalf("the resumed round inherited a refusal from the dispatch before it: %#v", ordinary.Environmental)
+	}
+	if !ordinary.Status.Terminal() || ordinary.Blocker == "" {
+		t.Fatalf("resumed run = %#v, want it ended on a durable blocker of its own", ordinary)
+	}
+	// And the rounds this item has already spent are still spent. That is what the
+	// stale record would have contradicted: an ordinary stop announcing an
+	// environmental refusal tells a reader an item at three rounds stands where it
+	// did before them.
+	spentAfter, err := store.Triage().Counters(tracker.item.ID)
+	if err != nil {
+		t.Fatalf("Counters() error = %v", err)
+	}
+	if spentAfter.ReviewRounds < 1 || spentAfter.ReviewRounds != spentBefore.ReviewRounds {
+		t.Fatalf("review rounds = %d, want the %d this item had already spent left exactly as they were",
+			spentAfter.ReviewRounds, spentBefore.ReviewRounds)
+	}
+}
+
 // dirtyPrimaryWorktrees passes the readiness gate and then refuses to cut a
 // worktree, which is the window that gate cannot close: the checkout is the
 // harness's to read at the moment it is asked and somebody's to write into a
@@ -298,6 +419,17 @@ type dirtyPrimaryWorktrees struct {
 
 func (dirtyPrimaryWorktrees) Create(context.Context, gitworktree.CreateRequest) (gitworktree.Worktree, error) {
 	return gitworktree.Worktree{}, fmt.Errorf("%w: primary repository has uncommitted changes: notes.txt", gitworktree.ErrPrimaryNotReady)
+}
+
+// unreadyPrimaryWorktrees refuses the readiness gate itself, which is where a
+// resumed run is turned back: the dispatch never reaches the run, and the run
+// stays exactly as the process that stopped it left it.
+type unreadyPrimaryWorktrees struct {
+	WorktreeManager
+}
+
+func (unreadyPrimaryWorktrees) ValidateReady(context.Context) error {
+	return fmt.Errorf("%w: primary repository has uncommitted changes: notes.txt", gitworktree.ErrPrimaryNotReady)
 }
 
 // continueOnGrant records what carrying out a repair grant records on the run

@@ -598,16 +598,13 @@ func blockerText(state runstate.State) string {
 // environmentallyRefused says a round the environment refused before the words
 // the run stopped on, where that is what happened. It goes first because it
 // changes how the rest reads: a thread carrying only the failure reads as an
-// item that has just spent another round toward its cap, and the opposite is
-// true — the round was returned and the item stands where it did.
+// item that has just spent another round toward its cap, and where the round was
+// refused the opposite is true.
 //
-// It says what was actually given back rather than a claim about "budget". Two
-// of the cases are exactly where a claim would be false: a round refused before
-// it reached anything that spends had nothing to give back, and a round whose
-// return the settle decided on and could not write leaves the item's counters
-// genuinely higher than what it cost. Telling a reader "spent no budget" in the
-// second one is the misreading this whole class exists to prevent, so it is the
-// one thing this says loudest.
+// What it says is the record's own sentence rather than a second reading of the
+// same flags. The accounting has five states and one of them — a return the
+// settle decided on and could not write — is the one a thread must not get
+// wrong, so it is derived once, in the record, and phrased around here.
 //
 // It is silent on every ordinary stoppage, and on a run that recorded a cause
 // and delivered a change anyway, because that round spent as any round does.
@@ -616,19 +613,7 @@ func environmentallyRefused(state runstate.State) string {
 	if refused == nil || !refused.Refused {
 		return ""
 	}
-	if strings.TrimSpace(refused.Problem) != "" {
-		return fmt.Sprintf("environmentally refused (%s), and what it should have been given back could not be written, so this item's counters are higher than the round cost it — ", refused.Cause)
-	}
-	switch {
-	case refused.RoundReturned && refused.GrantReturned:
-		return fmt.Sprintf("environmentally refused (%s), so the review round it was charged and the granted repair round it consumed were both returned — ", refused.Cause)
-	case refused.RoundReturned:
-		return fmt.Sprintf("environmentally refused (%s), so the review round it was charged was returned — ", refused.Cause)
-	case refused.GrantReturned:
-		return fmt.Sprintf("environmentally refused (%s), so the granted repair round it consumed was returned — ", refused.Cause)
-	default:
-		return fmt.Sprintf("environmentally refused (%s), and it reached nothing that spends, so there was nothing to give back — ", refused.Cause)
-	}
+	return refused.Describe() + " — "
 }
 
 func mergeQueued(state runstate.State) bool {

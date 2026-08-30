@@ -184,54 +184,41 @@ func (r EnvironmentalRefusal) Validate() error {
 	return errors.Join(problems...)
 }
 
-// Describe says what one refusal came to, the way a reader of a docket entry or
-// a thread reads it: which environmental failure it was, and what the item was
-// therefore not charged.
+// Describe says what one refusal came to: which environmental failure it was,
+// and what the item was therefore charged or not charged for the round.
+//
+// It is the one derivation of that, and every surface phrases around it rather
+// than reading the flags again. The states are close enough to be got wrong
+// separately — and the one that matters most is the one a drift would silently
+// drop, because a refusal whose return could not be written is the single case
+// where the item's counters really are higher than what the round cost it. Three
+// copies of this would be three places for that case to go missing.
 //
 // It never says "spent nothing" on a figure it did not actually give back. A
 // refusal that returned nothing says so, because "environmentally refused" with
-// no accounting after it is exactly the sentence a reader takes on trust; and a
-// refusal whose return could not be written says that loudest of all, because
-// that is the one state where the item's counters really are higher than what it
-// cost and nothing has corrected them.
+// no accounting after it is exactly the sentence a reader takes on trust.
+//
+// It carries neither the detail nor the problem text. Those are evidence, and a
+// surface that wants them renders them beside this rather than inside it: a
+// docket entry has room for a block and a thread line does not.
 func (r EnvironmentalRefusal) Describe() string {
 	named := fmt.Sprintf("%s (%s)", r.Cause, r.Cause.Title())
-	described := ""
 	switch {
 	case !r.Settled:
-		described = fmt.Sprintf("environmental cause recorded: %s; the round it belongs to has not settled, so nothing has been decided about what it cost", named)
+		return fmt.Sprintf("environmental cause recorded: %s; the round it belongs to has not settled, so nothing has been decided about what it cost", named)
 	case !r.Refused && strings.TrimSpace(r.Problem) != "":
-		described = fmt.Sprintf("environmental cause recorded: %s, and whether the round delivered anything could not be read, so it spent as any round does", named)
+		return fmt.Sprintf("environmental cause recorded: %s, and whether the round delivered anything could not be read, so it spent as any round does", named)
 	case !r.Refused:
-		described = fmt.Sprintf("environmental cause recorded: %s, and the round delivered a change all the same, so it spent as any round does", named)
+		return fmt.Sprintf("environmental cause recorded: %s, and the round delivered a change all the same, so it spent as any round does", named)
 	case strings.TrimSpace(r.Problem) != "":
-		described = fmt.Sprintf("environmentally refused: %s, and what it should have been given back could not be written, so this item's counters are higher than the round cost it", named)
-	default:
-		described = fmt.Sprintf("environmentally refused: %s, %s", named, r.returned())
-	}
-	if detail := strings.TrimSpace(r.Detail); detail != "" {
-		described += " — " + detail
-	}
-	if problem := strings.TrimSpace(r.Problem); problem != "" {
-		described += "; " + problem
-	}
-	return described
-}
-
-// returned is what a refused round actually gave back, said only where the
-// return was written. Either figure can be absent on a real refusal — a round
-// turned away before any reviewer was asked was charged no review round, and one
-// no grant bought consumed no granted round — so the four cases are stated apart
-// rather than collapsed into a claim about "budget".
-func (r EnvironmentalRefusal) returned() string {
-	switch {
+		return fmt.Sprintf("environmentally refused: %s, and what it should have been given back could not be written, so this item's counters are higher than the round cost it", named)
 	case r.RoundReturned && r.GrantReturned:
-		return "so the review round it was charged and the granted repair round it consumed were both returned"
+		return fmt.Sprintf("environmentally refused: %s, so the review round it was charged and the granted repair round it consumed were both returned, and this item stands where it did before the round", named)
 	case r.RoundReturned:
-		return "so the review round it was charged was returned; no repair grant had been consumed"
+		return fmt.Sprintf("environmentally refused: %s, so the review round it was charged was returned and no repair grant had been consumed, and this item stands where it did before the round", named)
 	case r.GrantReturned:
-		return "so the granted repair round it consumed was returned; no review round had been charged"
+		return fmt.Sprintf("environmentally refused: %s, so the granted repair round it consumed was returned and no review round had been charged, and this item stands where it did before the round", named)
 	default:
-		return "and it reached nothing that spends, so there was nothing to give back"
+		return fmt.Sprintf("environmentally refused: %s, and it reached nothing that spends, so there was nothing to give back and this item stands where it did before the round", named)
 	}
 }
